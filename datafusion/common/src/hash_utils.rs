@@ -777,32 +777,30 @@ fn hash_generic_byte_view_array_with_hasher<T: ByteViewType, S: BuildHasher>(
     }
 }
 
-/// Hash dictionary array with compile-time specialization for null handling.
+/// Scatter pre-computed dictionary value hashes to key positions.
 ///
-/// Uses const generics to eliminate runtim branching in the hot loop:
+/// Uses const generics to eliminate runtime branching in the hot loop:
 /// - `HAS_NULL_KEYS`: Whether to check for null dictionary keys
 /// - `HAS_NULL_VALUES`: Whether to check for null dictionary values
 /// - `MULTI_COL`: Whether to combine with existing hash (true) or initialize (false)
+///
+/// Dictionary value hashing is done by the caller (`hash_dictionary` /
+/// `hash_dictionary_with_child_hashing`) so this function has no hasher
+/// type parameter — both the RandomState and custom-hasher paths call the
+/// exact same monomorphization, preserving codegen quality.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(never)]
-fn hash_dictionary_inner<
+fn hash_dictionary_scatter<
     K: ArrowDictionaryKeyType,
-    C: ChildHashing + ?Sized,
     const HAS_NULL_KEYS: bool,
     const HAS_NULL_VALUES: bool,
     const MULTI_COL: bool,
 >(
     array: &DictionaryArray<K>,
-    child_hashing: &C,
+    dict_hashes: &[u64],
     hashes_buffer: &mut [u64],
-) -> Result<()> {
-    // Hash each dictionary value once, and then use that computed
-    // hash for each key value to avoid a potentially expensive
-    // redundant hashing for large dictionary elements (e.g. strings)
+) {
     let dict_values = array.values();
-    let mut dict_hashes = vec![0; dict_values.len()];
-    child_hashing.create_hashes([dict_values], &mut dict_hashes)?;
-
     if HAS_NULL_KEYS {
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
             if let Some(key) = key {
@@ -828,64 +826,95 @@ fn hash_dictionary_inner<
             }
         }
     }
+}
+
+/// Dispatch to the correct `hash_dictionary_scatter` variant based on
+/// null presence and multi-column mode.
+#[cfg(not(feature = "force_hash_collisions"))]
+fn dispatch_dictionary_scatter<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    dict_hashes: &[u64],
+    hashes_buffer: &mut [u64],
+    multi_col: bool,
+) {
+    let has_null_keys = array.keys().null_count() != 0;
+    let has_null_values = array.values().null_count() != 0;
+
+    match (has_null_keys, has_null_values, multi_col) {
+        (false, false, false) => hash_dictionary_scatter::<K, false, false, false>(
+            array,
+            dict_hashes,
+            hashes_buffer,
+        ),
+        (false, false, true) => hash_dictionary_scatter::<K, false, false, true>(
+            array,
+            dict_hashes,
+            hashes_buffer,
+        ),
+        (false, true, false) => hash_dictionary_scatter::<K, false, true, false>(
+            array,
+            dict_hashes,
+            hashes_buffer,
+        ),
+        (false, true, true) => hash_dictionary_scatter::<K, false, true, true>(
+            array,
+            dict_hashes,
+            hashes_buffer,
+        ),
+        (true, false, false) => hash_dictionary_scatter::<K, true, false, false>(
+            array,
+            dict_hashes,
+            hashes_buffer,
+        ),
+        (true, false, true) => hash_dictionary_scatter::<K, true, false, true>(
+            array,
+            dict_hashes,
+            hashes_buffer,
+        ),
+        (true, true, false) => hash_dictionary_scatter::<K, true, true, false>(
+            array,
+            dict_hashes,
+            hashes_buffer,
+        ),
+        (true, true, true) => hash_dictionary_scatter::<K, true, true, true>(
+            array,
+            dict_hashes,
+            hashes_buffer,
+        ),
+    }
+}
+
+/// Hash the values in a dictionary array using the default RandomState path.
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_dictionary<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    multi_col: bool,
+) -> Result<()> {
+    // Hash each dictionary value once, and then use that computed
+    // hash for each key value to avoid a potentially expensive
+    // redundant hashing for large dictionary elements (e.g. strings)
+    let dict_values = array.values();
+    let mut dict_hashes = vec![0; dict_values.len()];
+    create_hashes([dict_values], random_state, &mut dict_hashes)?;
+    dispatch_dictionary_scatter(array, &dict_hashes, hashes_buffer, multi_col);
     Ok(())
 }
 
-/// Hash the values in a dictionary array
+/// Hash the values in a dictionary array using a custom hasher.
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_dictionary<K: ArrowDictionaryKeyType>(
+fn hash_dictionary_with_child_hashing<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
     child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
-    let has_null_keys = array.keys().null_count() != 0;
-    let has_null_values = array.values().null_count() != 0;
-
-    // Dispatcher based on null presence and multi-column mode
-    // Should reduce branching within hot loops
-    match (has_null_keys, has_null_values, multi_col) {
-        (false, false, false) => hash_dictionary_inner::<K, _, false, false, false>(
-            array,
-            child_hashing,
-            hashes_buffer,
-        ),
-        (false, false, true) => hash_dictionary_inner::<K, _, false, false, true>(
-            array,
-            child_hashing,
-            hashes_buffer,
-        ),
-        (false, true, false) => hash_dictionary_inner::<K, _, false, true, false>(
-            array,
-            child_hashing,
-            hashes_buffer,
-        ),
-        (false, true, true) => hash_dictionary_inner::<K, _, false, true, true>(
-            array,
-            child_hashing,
-            hashes_buffer,
-        ),
-        (true, false, false) => hash_dictionary_inner::<K, _, true, false, false>(
-            array,
-            child_hashing,
-            hashes_buffer,
-        ),
-        (true, false, true) => hash_dictionary_inner::<K, _, true, false, true>(
-            array,
-            child_hashing,
-            hashes_buffer,
-        ),
-        (true, true, false) => hash_dictionary_inner::<K, _, true, true, false>(
-            array,
-            child_hashing,
-            hashes_buffer,
-        ),
-        (true, true, true) => hash_dictionary_inner::<K, _, true, true, true>(
-            array,
-            child_hashing,
-            hashes_buffer,
-        ),
-    }
+    let dict_values = array.values();
+    let mut dict_hashes = vec![0; dict_values.len()];
+    child_hashing.create_hashes([dict_values], &mut dict_hashes)?;
+    dispatch_dictionary_scatter(array, &dict_hashes, hashes_buffer, multi_col);
+    Ok(())
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -1345,7 +1374,7 @@ fn hash_single_array(
             hash_array(&array, random_state, hashes_buffer, rehash)
         }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            array => hash_dictionary(array, &child_hashing, hashes_buffer, rehash)?,
+            array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,
             _ => unreachable!()
         }
         DataType::Struct(_) => {
@@ -1421,7 +1450,7 @@ fn hash_single_array_with_hasher<S: BuildHasher>(
             hash_array_with_hasher(&array, hash_builder, hashes_buffer, rehash)
         }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            array => hash_dictionary(array, &child_hashing, hashes_buffer, rehash)?,
+            array => hash_dictionary_with_child_hashing(array, &child_hashing, hashes_buffer, rehash)?,
             _ => unreachable!()
         }
         DataType::Struct(_) => {
