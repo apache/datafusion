@@ -490,7 +490,7 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
     fn rewrite(&self, mut expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         expr = expr
             .transform(|expr| {
-                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(column) = expr.downcast_ref::<Column>() {
                     let field_name = column.name();
                     if self
                         .physical_file_schema

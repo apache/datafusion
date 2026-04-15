@@ -95,8 +95,8 @@ impl LiteralLookupTable {
             .when_then_expr
             .iter()
             .map(|(when, then)| {
-                let when_maybe_literal = when.as_any().downcast_ref::<Literal>();
-                let then_maybe_literal = then.as_any().downcast_ref::<Literal>();
+                let when_maybe_literal = when.downcast_ref::<Literal>();
+                let then_maybe_literal = then.downcast_ref::<Literal>();
 
                 when_maybe_literal.zip(then_maybe_literal)
             })
@@ -142,7 +142,7 @@ impl LiteralLookupTable {
         };
 
         let else_value: ScalarValue = if let Some(else_expr) = &body.else_expr {
-            let literal = else_expr.as_any().downcast_ref::<Literal>()?;
+            let literal = else_expr.downcast_ref::<Literal>()?;
 
             literal.value().clone()
         } else {
