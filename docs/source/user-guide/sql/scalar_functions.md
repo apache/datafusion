@@ -281,10 +281,10 @@ cbrt(numeric_expression)
 
 ### `ceil`
 
-Returns the nearest integer greater than or equal to a number.
+Returns the nearest integer greater than or equal to a number. When a scale parameter is provided, rounds up to that number of decimal places.
 
 ```sql
-ceil(numeric_expression)
+ceil(numeric_expression[, scale])
 ```
 
 #### Arguments
@@ -300,6 +300,13 @@ ceil(numeric_expression)
 +------------+
 | 4.0        |
 +------------+
+
+> SELECT ceil(3.145, 2);
++-----------------+
+| ceil(3.145, 2)  |
++-----------------+
+| 3.15            |
++-----------------+
 ```
 
 ### `cos`
