@@ -26,6 +26,7 @@ pub mod from_utc_timestamp;
 pub mod last_day;
 pub mod make_dt_interval;
 pub mod make_interval;
+pub mod monthname;
 pub mod next_day;
 pub mod time_trunc;
 pub mod to_utc_timestamp;
@@ -52,6 +53,7 @@ make_udf_function!(extract::SparkSecond, second);
 make_udf_function!(last_day::SparkLastDay, last_day);
 make_udf_function!(make_dt_interval::SparkMakeDtInterval, make_dt_interval);
 make_udf_function!(make_interval::SparkMakeInterval, make_interval);
+make_udf_function!(monthname::SparkMonthName, monthname);
 make_udf_function!(next_day::SparkNextDay, next_day);
 make_udf_function!(time_trunc::SparkTimeTrunc, time_trunc);
 make_udf_function!(to_utc_timestamp::SparkToUtcTimestamp, to_utc_timestamp);
@@ -116,6 +118,11 @@ pub mod expr_fn {
         make_interval,
         "Make interval from years, months, weeks, days, hours, mins and secs.",
         years months weeks days hours mins secs
+    ));
+    export_functions!((
+        monthname,
+        "Returns the three-letter abbreviated month name from a date or timestamp.",
+        arg1
     ));
     // TODO: add once ANSI support is added:
     // "When both of the input parameters are not NULL and day_of_week is an invalid input, the function throws SparkIllegalArgumentException if spark.sql.ansi.enabled is set to true, otherwise NULL."
@@ -195,6 +202,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         make_dt_interval(),
         make_interval(),
         minute(),
+        monthname(),
         next_day(),
         second(),
         time_trunc(),
