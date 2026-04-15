@@ -1439,8 +1439,8 @@ impl SessionContext {
                 {
                     fsc.drop_table_entries(&Some(table_ref.clone()))?;
                 }
-                return Ok(true);
             }
+            return Ok(true);
         }
         Ok(false)
     }
