@@ -709,7 +709,19 @@ fn max_distinct_count(
     stats: &ColumnStatistics,
 ) -> Precision<usize> {
     match &stats.distinct_count {
-        &dc @ (Precision::Exact(_) | Precision::Inexact(_)) => dc,
+        &dc @ (Precision::Exact(_) | Precision::Inexact(_)) => {
+            // NDV can never exceed the number of rows
+            match num_rows {
+                Precision::Absent => dc,
+                _ => {
+                    if dc.get_value() <= num_rows.get_value() {
+                        dc
+                    } else {
+                        num_rows.to_inexact()
+                    }
+                }
+            }
+        }
         _ => {
             // The number can never be greater than the number of rows we have
             // minus the nulls (since they don't count as distinct values).
@@ -2392,6 +2404,22 @@ mod tests {
                 (10, Inexact(1), Inexact(10), Absent, Absent),
                 Some(Inexact(0)),
             ),
+            // NDV > num_rows: distinct count should be capped at row count
+            (
+                (5, Inexact(1), Inexact(100), Inexact(50), Absent),
+                (10, Inexact(1), Inexact(100), Inexact(50), Absent),
+                // max_distinct_count caps: left NDV=min(50,5)=5, right NDV=min(50,10)=10
+                // cardinality = (5 * 10) / max(5, 10) = 50 / 10 = 5
+                Some(Inexact(5)),
+            ),
+            // NDV > num_rows on one side only
+            (
+                (3, Inexact(1), Inexact(100), Inexact(100), Absent),
+                (10, Inexact(1), Inexact(100), Inexact(5), Absent),
+                // max_distinct_count caps: left NDV=min(100,3)=3, right NDV=min(5,10)=5
+                // cardinality = (3 * 10) / max(3, 5) = 30 / 5 = 6
+                Some(Inexact(6)),
+            ),
         ];
 
         for (left_info, right_info, expected_cardinality) in cases {
@@ -2531,11 +2559,14 @@ mod tests {
         //   y: min=0, max=100, distinct=None
         //
         // Join on a=c, b=d (ignore x/y)
+        // Right column d has NDV=2500 but only 2000 rows, so NDV is capped
+        // to 2000. join_selectivity = max(500, 2000) = 2000.
+        // Inner cardinality = (1000 * 2000) / 2000 = 1000
         let cases = vec![
-            (JoinType::Inner, 800),
+            (JoinType::Inner, 1000),
             (JoinType::Left, 1000),
             (JoinType::Right, 2000),
-            (JoinType::Full, 2200),
+            (JoinType::Full, 2000),
         ];
 
         let left_col_stats = vec![
@@ -3169,5 +3200,77 @@ mod tests {
         .unwrap();
         assert_eq!(cmp_nl.compare(0, 0), Ordering::Greater);
         assert_eq!(cmp_nl.compare(1, 1), Ordering::Less);
+    }
+
+    #[test]
+    fn test_max_distinct_count_preserves_precision_when_not_capped() {
+        assert_eq!(
+            max_distinct_count(
+                &Exact(10),
+                &ColumnStatistics {
+                    distinct_count: Exact(5),
+                    ..Default::default()
+                }
+            ),
+            Exact(5)
+        );
+        assert_eq!(
+            max_distinct_count(
+                &Exact(10),
+                &ColumnStatistics {
+                    distinct_count: Inexact(5),
+                    ..Default::default()
+                }
+            ),
+            Inexact(5)
+        );
+        // Inexact num_rows does not affect an exact NDV that is within bounds
+        assert_eq!(
+            max_distinct_count(
+                &Inexact(10),
+                &ColumnStatistics {
+                    distinct_count: Exact(5),
+                    ..Default::default()
+                }
+            ),
+            Exact(5)
+        );
+    }
+
+    #[test]
+    fn test_max_distinct_count_demotes_to_inexact_when_capped() {
+        // Exact NDV > Exact num_rows is an illegal state (NDV <= num_rows is a
+        // mathematical invariant), but the code handles it defensively by
+        // capping and demoting to inexact
+        assert_eq!(
+            max_distinct_count(
+                &Exact(10),
+                &ColumnStatistics {
+                    distinct_count: Exact(15),
+                    ..Default::default()
+                }
+            ),
+            Inexact(10)
+        );
+        assert_eq!(
+            max_distinct_count(
+                &Inexact(10),
+                &ColumnStatistics {
+                    distinct_count: Exact(15),
+                    ..Default::default()
+                }
+            ),
+            Inexact(10)
+        );
+        assert_eq!(
+            max_distinct_count(
+                &Exact(10),
+                &ColumnStatistics {
+                    distinct_count: Inexact(15),
+                    ..Default::default()
+                }
+            ),
+            Inexact(10)
+        );
     }
 }
