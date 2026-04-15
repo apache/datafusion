@@ -235,7 +235,7 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
                     table_size_bytes: cached.statistics.total_byte_size,
                     statistics_size_bytes: cached.statistics.heap_size(),
                     has_ordering: cached.ordering.is_some(),
-                    table_reference: path.table
+                    table_reference: path.table,
                 },
             );
         }
