@@ -639,7 +639,7 @@ mod tests {
         expr.downcast_ref::<CastExpr>().expect("Expected CastExpr")
     }
 
-    fn assert_cast_column(cast_expr: &CastExpr, name: &str, index: usize) {
+    fn assert_cast_input_column(cast_expr: &CastExpr, name: &str, index: usize) {
         let inner_col = cast_expr
             .expr()
             .downcast_ref::<Column>()
@@ -763,7 +763,7 @@ mod tests {
 
         let left_cast = assert_cast_expr(left.left());
         assert_eq!(left_cast.target_field().data_type(), &DataType::Int64);
-        assert_cast_column(left_cast, "a", 0);
+        assert_cast_input_column(left_cast, "a", 0);
 
         let right = outer
             .right()
@@ -1660,7 +1660,7 @@ mod tests {
         let cast_expr = assert_cast_expr(&result);
 
         // Verify the inner column points to the correct physical index (1)
-        assert_cast_column(cast_expr, "a", 1);
+        assert_cast_input_column(cast_expr, "a", 1);
 
         // Verify cast types
         assert_eq!(
@@ -1680,7 +1680,7 @@ mod tests {
         // Regression: this must still resolve against physical field `a` by name.
         let rewritten = adapter.rewrite(Arc::new(Column::new("a", 0))).unwrap();
         let cast_expr = assert_cast_expr(&rewritten);
-        assert_cast_column(cast_expr, "a", 1);
+        assert_cast_input_column(cast_expr, "a", 1);
         assert_eq!(cast_expr.target_field().data_type(), &DataType::Int64);
     }
 }

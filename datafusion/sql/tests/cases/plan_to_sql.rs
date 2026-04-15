@@ -2751,6 +2751,17 @@ fn test_unparse_window() -> Result<()> {
 }
 
 #[test]
+fn test_array_to_sql_postgres() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT [1, 2, 3, 4, 5]",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT ARRAY[1, 2, 3, 4, 5]",
+    );
+    Ok(())
+}
+
+#[test]
 fn test_like_filter() {
     let statement = generate_round_trip_statement(
         GenericDialect {},
