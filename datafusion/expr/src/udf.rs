@@ -587,7 +587,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// If you provide an implementation for [`Self::return_field_from_args`],
     /// DataFusion will not call `return_type` (this function). While it is
-    /// valid to to put [`unimplemented!()`] or [`unreachable!()`], it is
+    /// valid to put [`unimplemented!()`] or [`unreachable!()`], it is
     /// recommended to return [`DataFusionError::Internal`] instead, which
     /// reduces the severity of symptoms if bugs occur (an error rather than a
     /// panic).

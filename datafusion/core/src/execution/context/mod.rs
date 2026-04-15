@@ -254,7 +254,7 @@ where
 /// let state = SessionStateBuilder::new()
 ///     .with_config(config)
 ///     .with_runtime_env(runtime_env)
-///     // include support for built in functions and configurations
+///     // include support for built-in functions and configurations
 ///     .with_default_features()
 ///     .build();
 ///
@@ -1087,8 +1087,8 @@ impl SessionContext {
         }
     }
 
-    fn schema_doesnt_exist_err(&self, schemaref: &SchemaReference) -> Result<DataFrame> {
-        exec_err!("Schema '{schemaref}' doesn't exist.")
+    fn schema_doesnt_exist_err(&self, schema_ref: &SchemaReference) -> Result<DataFrame> {
+        exec_err!("Schema '{schema_ref}' doesn't exist.")
     }
 
     async fn set_variable(&self, stmt: SetVariable) -> Result<()> {
