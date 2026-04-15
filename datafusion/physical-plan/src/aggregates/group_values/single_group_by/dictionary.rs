@@ -21,7 +21,7 @@ use arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, BinaryViewArray,
     BinaryViewBuilder, DictionaryArray, LargeBinaryArray, LargeBinaryBuilder,
     LargeStringArray, LargeStringBuilder, PrimitiveArray, PrimitiveBuilder, StringArray,
-    StringBuilder, StringViewArray, StringViewBuilder,
+    StringBuilder, StringViewArray, StringViewBuilder, UInt64Array,
 };
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Int8Type, Int16Type, Int32Type,
@@ -68,6 +68,9 @@ pub struct GroupValuesDictionary<K: ArrowDictionaryKeyType + Send> {
     _phantom: PhantomData<K>,
     // keeps track of which values weve already seen. stored as -> <unique_value_hash:(initial_group_id, raw_bytes)>
     unique_dict_value_mapping: HashMap<u64, Vec<(usize, Vec<u8>)>>,
+    // fixed seeds ensure consistent hashing across GroupValuesDictionary instances
+    // this is critical for correct behavior in multi-partition aggregation where
+    // partial phase emits are re-interned by the final phase
     random_state: RandomState,
     null_group_id: Option<usize>, // cache the group id for nulls since they all map to the same group
 }
@@ -79,7 +82,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
             unique_dict_value_mapping: HashMap::new(),
             value_dt: data_type.clone(),
             _phantom: PhantomData,
-            random_state: RandomState::default(),
+            random_state: RandomState::with_seed(0),
             null_group_id: None,
         }
     }
@@ -88,11 +91,11 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
         create_hashes([Arc::clone(values)], &self.random_state, &mut hashes)?;
         Ok(hashes)
     }
-    fn keys_to_usize(keys: &PrimitiveArray<K>) -> Vec<Option<usize>> {
+    /*fn keys_to_usize(keys: &PrimitiveArray<K>) -> Vec<Option<usize>> {
         keys.iter()
             .map(|k| k.map(|v| v.to_usize().unwrap()))
             .collect()
-    }
+    }*/
 
     fn get_raw_bytes(values: &ArrayRef, index: usize) -> &[u8] {
         match values.data_type() {
@@ -179,24 +182,25 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
                 vec![0xFF, 0xFF, 0xFF, 0xFF]
             }
-            // for binary types any byte sequence is valid so we use a length-prefixed sentinel
-            // that is unlikely to appear in real data - 0xFF repeated to match the size
+            // TODO: binary types need a better sentinel
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
                 vec![0xFF, 0xFF, 0xFF, 0xFF]
             }
-            // for primitives use a value that is extremely unlikely to appear in real data
-            // we use the max value for each type as the sentinel
-            DataType::Int8 => i8::MAX.to_ne_bytes().to_vec(),
-            DataType::Int16 => i16::MAX.to_ne_bytes().to_vec(),
-            DataType::Int32 => i32::MAX.to_ne_bytes().to_vec(),
-            DataType::Int64 => i64::MAX.to_ne_bytes().to_vec(),
-            DataType::UInt8 => u8::MAX.to_ne_bytes().to_vec(),
-            DataType::UInt16 => u16::MAX.to_ne_bytes().to_vec(),
-            DataType::UInt32 => u32::MAX.to_ne_bytes().to_vec(),
-            DataType::UInt64 => u64::MAX.to_ne_bytes().to_vec(),
+            // for primitives use a byte sequence that is a different length than the native type
+            // a real i8 is always exactly 1 byte so 2 bytes can never match a real value
+            DataType::Int8 | DataType::UInt8 => vec![0xFF, 0xFF],
+            // a real i16/u16 is always exactly 2 bytes so 3 bytes can never match
+            DataType::Int16 | DataType::UInt16 => vec![0xFF, 0xFF, 0xFF],
+            // a real i32/u32/f32 is always exactly 4 bytes so 5 bytes can never match
+            DataType::Int32 | DataType::UInt32 => vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+            // a real i64/u64/f64 is always exactly 8 bytes so 9 bytes can never match
+            DataType::Int64 | DataType::UInt64 => {
+                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+            }
             other => unimplemented!("sentinel_repr not implemented for {other:?}"),
         }
     }
+
     #[inline]
     fn get_null_group_id(&mut self) -> usize {
         if let Some(group_id) = self.null_group_id {
@@ -412,6 +416,52 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
             ))),
         }
     }
+    fn normalize_dict_array(
+        values: &ArrayRef,
+        key_array: &PrimitiveArray<K>,
+    ) -> (ArrayRef, Vec<Option<usize>>) {
+        // maps old value index -> new canonical index
+        let mut old_to_new: Vec<Option<usize>> = vec![None; values.len()];
+        let mut canonical_indices: Vec<usize> = Vec::new();
+
+        for (i, slot) in old_to_new.iter_mut().enumerate() {
+            if values.is_null(i) {
+                continue;
+            }
+            let raw = Self::get_raw_bytes(values, i);
+            let canonical = canonical_indices
+                .iter()
+                .position(|&j| Self::get_raw_bytes(values, j) == raw);
+            if let Some(idx) = canonical {
+                *slot = Some(idx);
+            } else {
+                *slot = Some(canonical_indices.len());
+                canonical_indices.push(i);
+            }
+        }
+        // build new deduplicated values array using take
+        let indices = UInt64Array::from(
+            canonical_indices
+                .iter()
+                .map(|&i| i as u64)
+                .collect::<Vec<_>>(),
+        );
+        let new_values = arrow::compute::take(values.as_ref(), &indices, None).unwrap();
+
+        // remap keys
+        let new_keys: Vec<Option<usize>> = (0..key_array.len())
+            .map(|i| {
+                if key_array.is_null(i) {
+                    None
+                } else {
+                    let old_key = key_array.value(i).to_usize().unwrap();
+                    old_to_new[old_key]
+                }
+            })
+            .collect();
+
+        (new_values, new_keys)
+    }
 }
 
 impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> {
@@ -460,59 +510,67 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
         if key_array.is_empty() {
             return Ok(()); // nothing to intern, just return early
         }
-
+        let (values, keys_as_usize) = Self::normalize_dict_array(values, key_array);
+        let values = &values;
         // compute hashes for all values in the values array upfront
         // value_hashes[i] corresponds to values[i]
         let value_hashes = self.compute_value_hashes(values)?;
 
         // convert key array to Vec<usize> for cheap indexed access
         // avoids repeated .value(i).to_usize() calls in the hot loop
-        let keys_as_usize = Self::keys_to_usize(key_array);
+        //let keys_as_usize = Self::keys_to_usize(key_array);
 
-        // Pass 1: iterate values array (d iterations) and build key_to_group mapping
-        // this moves all expensive work (hashing, byte comparison, hashmap lookup) to d iterations
-        // key_to_group[i] = group_id for values[i]
-        let mut key_to_group: Vec<usize> = vec![0; values.len()];
-        for key_idx in 0..values.len() {
-            let hash = value_hashes[key_idx];
-            let group_id =
-                if let Some(entries) = self.unique_dict_value_mapping.get(&hash) {
-                    // non-null case - find matching entry by raw byte comparison
-                    let raw = Self::get_raw_bytes(values, key_idx);
-                    if let Some((group_id, _)) = entries
-                        .iter()
-                        .find(|(_, stored_bytes)| raw == stored_bytes.as_slice())
-                    {
-                        *group_id
-                    } else {
-                        // hash collision
-                        let new_group_id = self.seen_elements.len();
-                        let raw_bytes = raw.to_vec();
-                        self.seen_elements.push(raw_bytes.clone());
-                        self.unique_dict_value_mapping
-                            .get_mut(&hash)
-                            .unwrap()
-                            .push((new_group_id, raw_bytes));
-                        new_group_id
-                    }
-                } else {
-                    // completely new value
-                    let new_group_id = self.seen_elements.len();
-                    let raw_bytes = Self::get_raw_bytes(values, key_idx).to_vec();
-                    self.seen_elements.push(raw_bytes.clone());
-                    self.unique_dict_value_mapping
-                        .insert(hash, vec![(new_group_id, raw_bytes)]);
-                    new_group_id
-                };
-            key_to_group[key_idx] = group_id;
+        // Pass 1: iterate values array (d iterations) - build a mapping of value hash -> group id for all unique values in the dictionary
+        // this allows us to do a single hashmap lookup per key in the hot loop instead of
+        let mut key_to_group: Vec<Option<usize>> = vec![None; values.len()];
+        for value_idx in 0..values.len() {
+            if values.is_null(value_idx) {
+                // this will be handled in phase 2
+                continue;
+            }
+            let hash = value_hashes[value_idx];
+            if let Some(entries) = self.unique_dict_value_mapping.get(&hash) {
+                let raw = Self::get_raw_bytes(values, value_idx);
+                if let Some((group_id, _)) = entries
+                    .iter()
+                    .find(|(_, stored_bytes)| raw == stored_bytes.as_slice())
+                {
+                    key_to_group[value_idx] = Some(*group_id);
+                    continue;
+                }
+            }
         }
-
-        // Pass 2: iterate keys array (n iterations) - cheap array indexing only
-        // no hashing, no byte comparison, no hashmap lookup
+        // Pass 2: iterate keys array (n iterations) -
+        // only d insertions at most, repeated work is cached
         for key_opt in &keys_as_usize {
             let group_id = match key_opt {
                 None => self.get_null_group_id(),
-                Some(key) => key_to_group[*key],
+                Some(key) => {
+                    if let Some(group_id) = key_to_group[*key] {
+                        group_id
+                    } else if values.is_null(*key) {
+                        let gid = self.get_null_group_id();
+                        key_to_group[*key] = Some(gid); // cache it for future keys that point to null values
+                        gid
+                    } else {
+                        // new unique value we havent seen before, assign a new group id and store it in the map
+                        let new_group_id = self.seen_elements.len();
+                        let raw_bytes = Self::get_raw_bytes(values, *key).to_vec();
+                        self.seen_elements.push(raw_bytes.clone());
+                        if let Some(entries) =
+                            self.unique_dict_value_mapping.get_mut(&value_hashes[*key])
+                        {
+                            entries.push((new_group_id, raw_bytes));
+                        } else {
+                            self.unique_dict_value_mapping.insert(
+                                value_hashes[*key],
+                                vec![(new_group_id, raw_bytes)],
+                            );
+                        }
+                        key_to_group[*key] = Some(new_group_id);
+                        new_group_id
+                    }
+                }
             };
             groups.push(group_id);
         }
@@ -558,7 +616,11 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
         // reconstruct dictionary keys 0..n
         let mut keys_builder = PrimitiveBuilder::<K>::with_capacity(n);
         for i in 0..n {
-            keys_builder.append_value(K::Native::usize_as(i));
+            if Some(i) == self.null_group_id {
+                keys_builder.append_null();
+            } else {
+                keys_builder.append_value(K::Native::usize_as(i));
+            }
         }
         let dict_array =
             DictionaryArray::<K>::try_new(keys_builder.finish(), values_array)?;
@@ -623,9 +685,10 @@ mod group_values_trait_test {
     mod basic_functionality {
         use super::*;
 
-        pub fn test_single_group_all_same_values(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
+        #[test]
+        fn test_single_group_all_same_values() {
+            let mut group_values_trait_obj =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             let dict_array = create_dict_array(vec![0, 0, 0], vec!["red"]);
 
             let mut groups_vector = Vec::new();
@@ -637,14 +700,11 @@ mod group_values_trait_test {
             assert_eq!(group_values_trait_obj.len(), 1);
             assert!(!group_values_trait_obj.is_empty());
         }
-        #[test]
-        fn run_test_single_group_all_same_values() {
-            let mut group_values =
-                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_single_group_all_same_values(&mut group_values);
-        }
 
-        pub fn test_multiple_groups(group_values_trait_obj: &mut dyn GroupValues) {
+        #[test]
+        fn test_multiple_groups() {
+            let mut group_values_trait_obj =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             let dict_array =
                 create_dict_array(vec![0, 1, 0, 2, 1], vec!["red", "blue", "green"]);
 
@@ -657,15 +717,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_multiple_groups() {
-            let mut group_values =
+        fn test_multiple_groups_with_nulls() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_multiple_groups(&mut group_values);
-        }
-
-        pub fn test_multiple_groups_with_nulls(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let keys = UInt8Array::from(vec![Some(0), None, Some(1), None, Some(0)]);
             let values = StringArray::from(vec!["red", "blue"]);
             let dict_array = Arc::new(
@@ -686,13 +740,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_multiple_groups_with_nulls() {
-            let mut group_values =
+        fn test_all_different_values() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_multiple_groups_with_nulls(&mut group_values);
-        }
-
-        pub fn test_all_different_values(group_values_trait_obj: &mut dyn GroupValues) {
             let dict_array = create_dict_array(
                 vec![0, 1, 2, 3, 4],
                 vec!["apple", "banana", "cherry", "date", "elderberry"],
@@ -706,19 +756,15 @@ mod group_values_trait_test {
             assert_eq!(group_values_trait_obj.len(), 5);
             assert_eq!(groups_vector.len(), 5);
         }
-
-        #[test]
-        fn run_test_all_different_values() {
-            let mut group_values =
-                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_all_different_values(&mut group_values);
-        }
     }
 
     mod edge_cases {
         use super::*;
 
-        pub fn test_empty_batch(group_values_trait_obj: &mut dyn GroupValues) {
+        #[test]
+        fn test_empty_batch() {
+            let mut group_values_trait_obj =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             let dict_array = create_dict_array(vec![], vec!["red"]);
 
             let mut groups_vector = Vec::new();
@@ -732,13 +778,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_empty_batch() {
-            let mut group_values =
+        fn test_single_row() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_empty_batch(&mut group_values);
-        }
-
-        pub fn test_single_row(group_values_trait_obj: &mut dyn GroupValues) {
             let dict_array = create_dict_array(vec![0], vec!["apple"]);
 
             let mut groups_vector = Vec::new();
@@ -751,13 +793,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_single_row() {
-            let mut group_values =
+        fn test_repeated_pattern() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_single_row(&mut group_values);
-        }
-
-        pub fn test_repeated_pattern(group_values_trait_obj: &mut dyn GroupValues) {
             let dict_array =
                 create_dict_array(vec![0, 1, 2, 0, 1, 2, 0, 1, 2], vec!["a", "b", "c"]);
 
@@ -771,15 +809,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_repeated_pattern() {
-            let mut group_values =
+        fn test_null_heavy_mixed_values() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_repeated_pattern(&mut group_values);
-        }
-
-        pub fn test_null_heavy_mixed_values(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let keys = UInt8Array::from(vec![
                 None,
                 None,
@@ -826,15 +858,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_null_heavy_mixed_values() {
-            let mut group_values =
+        fn test_null_group_stable_across_batches_with_reordered_dict() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_null_heavy_mixed_values(&mut group_values);
-        }
-
-        pub fn test_null_group_stable_across_batches_with_reordered_dict(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let batch1_keys = UInt8Array::from(vec![None, Some(0u8), None, Some(1u8)]);
             let batch1_values = StringArray::from(vec!["a", "b"]);
             let batch1 = Arc::new(
@@ -884,19 +910,66 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_null_group_stable_across_batches_with_reordered_dict() {
-            let mut group_values =
+        fn test_null_values_in_values_array() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_null_group_stable_across_batches_with_reordered_dict(&mut group_values);
+            // Reproduce  Sql::aggregates::basic::count_distinct_dictionary_mixed_values
+            let keys = UInt8Array::from(vec![0, 1, 2, 0, 1, 3]);
+            let values = StringArray::from(vec![None, Some("abc"), Some("def"), None]);
+            let dict = Arc::new(
+                DictionaryArray::<UInt8Type>::try_new(keys, Arc::new(values)).unwrap(),
+            ) as ArrayRef;
+
+            let mut groups_vector = Vec::new();
+            group_values_trait_obj
+                .intern(&[dict], &mut groups_vector)
+                .unwrap();
+
+            assert_eq!(group_values_trait_obj.len(), 3);
+            assert_eq!(groups_vector.len(), 6);
+            assert_eq!(groups_vector[0], groups_vector[3]); // both null
+            assert_eq!(groups_vector[0], groups_vector[5]); // both null
+            assert_eq!(groups_vector[1], groups_vector[4]); // both "abc"
+            assert_ne!(groups_vector[1], groups_vector[2]); // "abc" != "def"
+            assert_ne!(groups_vector[0], groups_vector[1]); // null != "abc"
+
+            // emit and verify output
+            let result = group_values_trait_obj.emit(EmitTo::All).unwrap();
+            assert_eq!(result.len(), 1); // single column
+
+            let emitted = result[0]
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt8Type>>()
+                .expect("Expected DictionaryArray");
+            // should have 3 entries - null, "abc", "def"
+            assert_eq!(emitted.values().len(), 3);
+
+            // verify the values array has correct nulls
+            assert!(emitted.values().is_null(groups_vector[0])); // null group should be null
+            assert!(!emitted.values().is_null(groups_vector[1])); // "abc" should not be null
+            assert!(!emitted.values().is_null(groups_vector[2])); // "def" should not be null
+
+            // verify string values
+            let string_values = emitted
+                .values()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            assert_eq!(string_values.value(groups_vector[1]), "abc");
+            assert_eq!(string_values.value(groups_vector[2]), "def");
+
+            // group_values should be empty after EmitTo::All
+            assert!(group_values_trait_obj.is_empty());
         }
     }
 
     mod multi_column {
         use super::*;
 
-        pub fn test_multiple_columns_passed(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
+        #[test]
+        fn test_multiple_columns_passed() {
+            let mut group_values_trait_obj =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             let dict_array1 = create_dict_array(vec![0, 1, 0], vec!["red", "blue"]);
 
             let dict_array2 = create_dict_array(vec![0, 0, 1], vec!["x", "y"]);
@@ -909,21 +982,15 @@ mod group_values_trait_test {
                 "Should error when multiple columns are passed (only single column supported)"
             );
         }
-
-        #[test]
-        fn run_test_multiple_columns_passed() {
-            let mut group_values =
-                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_multiple_columns_passed(&mut group_values);
-        }
     }
 
     mod consecutive_batches {
         use super::*;
 
-        pub fn test_consecutive_batches_then_emit(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
+        #[test]
+        fn test_consecutive_batches_then_emit() {
+            let mut group_values_trait_obj =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             let batch1 = create_dict_array(vec![0, 1, 0], vec!["red", "blue"]);
 
             let mut groups_vector1 = Vec::new();
@@ -948,15 +1015,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_consecutive_batches_then_emit() {
-            let mut group_values =
+        fn test_three_consecutive_batches_with_partial_emit() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_consecutive_batches_then_emit(&mut group_values);
-        }
-
-        pub fn test_three_consecutive_batches_with_partial_emit(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let batch1 = create_dict_array(vec![0, 1], vec!["a", "b"]);
             let mut groups_vector1 = Vec::new();
             group_values_trait_obj
@@ -1006,32 +1067,23 @@ mod group_values_trait_test {
                 );
             });
         }
-
-        #[test]
-        fn run_test_three_consecutive_batches_with_partial_emit() {
-            let mut group_values =
-                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_three_consecutive_batches_with_partial_emit(&mut group_values);
-        }
     }
 
     mod state_management {
         use super::*;
 
-        fn test_initial_state_is_empty(group_values_trait_obj: &dyn GroupValues) {
+        #[test]
+        fn test_initial_state_is_empty() {
+            let group_values_trait_obj =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             assert!(group_values_trait_obj.is_empty());
             assert_eq!(group_values_trait_obj.len(), 0);
         }
 
         #[test]
-        fn run_test_initial_state_is_empty() {
-            let group_values = GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_initial_state_is_empty(&group_values);
-        }
-
-        pub fn test_size_grows_after_intern(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
+        fn test_size_grows_after_intern() {
+            let mut group_values_trait_obj =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             let initial_size = group_values_trait_obj.size();
 
             let dict_array1 =
@@ -1087,15 +1139,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_size_grows_after_intern() {
-            let mut group_values =
+        fn test_clear_shrink_resets_state() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_size_grows_after_intern(&mut group_values);
-        }
-
-        pub fn test_clear_shrink_resets_state(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let dict_array = create_dict_array(vec![0, 1, 0], vec!["red", "blue"]);
 
             let mut groups_vector = Vec::new();
@@ -1110,13 +1156,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_clear_shrink_resets_state() {
-            let mut group_values =
+        fn test_clear_shrink_with_zero() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_clear_shrink_resets_state(&mut group_values);
-        }
-
-        pub fn test_clear_shrink_with_zero(group_values_trait_obj: &mut dyn GroupValues) {
             let dict_array =
                 create_dict_array(vec![0, 1, 2, 1, 0], vec!["red", "blue", "green"]);
 
@@ -1131,13 +1173,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_clear_shrink_with_zero() {
-            let mut group_values =
+        fn test_emit_all_clears_state() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_clear_shrink_with_zero(&mut group_values);
-        }
-
-        pub fn test_emit_all_clears_state(group_values_trait_obj: &mut dyn GroupValues) {
             let dict_array = create_dict_array(vec![0, 1, 0], vec!["red", "blue"]);
 
             let mut groups_vector = Vec::new();
@@ -1154,13 +1192,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_emit_all_clears_state() {
-            let mut group_values =
+        fn test_emit_first_n() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_emit_all_clears_state(&mut group_values);
-        }
-
-        pub fn test_emit_first_n(group_values_trait_obj: &mut dyn GroupValues) {
             let dict_array =
                 create_dict_array(vec![0, 1, 2], vec!["apple", "banana", "cherry"]);
 
@@ -1180,15 +1214,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_emit_first_n() {
-            let mut group_values =
+        fn test_complex_emit_flow_with_multiple_intern() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_emit_first_n(&mut group_values);
-        }
-
-        pub fn test_complex_emit_flow_with_multiple_intern(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let batch1 = create_dict_array(vec![0, 1, 2, 3], vec!["a", "b", "c", "d"]);
             let mut groups_vector1 = Vec::new();
             group_values_trait_obj
@@ -1242,19 +1270,16 @@ mod group_values_trait_test {
             );
             assert_eq!(group_values_trait_obj.len(), 0);
         }
-        #[test]
-        fn run_test_complex_emit_flow_with_multiple_intern() {
-            let mut group_values =
-                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_complex_emit_flow_with_multiple_intern(&mut group_values);
-        }
     }
 
     mod data_correctness {
         use super::*;
         use arrow::array::Int32Array;
 
-        pub fn test_group_assignment_order(group_values_trait_obj: &mut dyn GroupValues) {
+        #[test]
+        fn test_group_assignment_order() {
+            let mut group_values_trait_obj =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             let dict_array =
                 create_dict_array(vec![0, 1, 0, 2, 1], vec!["red", "blue", "green"]);
 
@@ -1269,15 +1294,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_group_assignment_order() {
-            let mut group_values =
+        fn test_groups_vector_correctness_first_appearance() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_group_assignment_order(&mut group_values);
-        }
-
-        pub fn test_groups_vector_correctness_first_appearance(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let dict_array =
                 create_dict_array(vec![0, 1, 2, 0, 1, 2], vec!["x", "y", "z"]);
 
@@ -1306,15 +1325,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_groups_vector_correctness_first_appearance() {
-            let mut group_values =
+        fn test_groups_vector_sequential_assignment() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_groups_vector_correctness_first_appearance(&mut group_values);
-        }
-
-        pub fn test_groups_vector_sequential_assignment(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let dict_array =
                 create_dict_array(vec![2, 0, 1], vec!["first", "second", "third"]);
 
@@ -1339,15 +1352,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_groups_vector_sequential_assignment() {
-            let mut group_values =
+        fn test_emit_partial_preserves_state() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_groups_vector_sequential_assignment(&mut group_values);
-        }
-
-        pub fn test_emit_partial_preserves_state(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let dict_array =
                 create_dict_array(vec![0, 1, 2, 3], vec!["a", "b", "c", "d"]);
 
@@ -1374,15 +1381,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_emit_partial_preserves_state() {
-            let mut group_values =
+        fn test_emit_restores_intern_ability() {
+            let mut group_values_trait_obj =
                 GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_emit_partial_preserves_state(&mut group_values);
-        }
-
-        pub fn test_emit_restores_intern_ability(
-            group_values_trait_obj: &mut dyn GroupValues,
-        ) {
             let batch1 = create_dict_array(vec![0, 1], vec!["alpha", "beta"]);
 
             let mut groups_vector1 = Vec::new();
@@ -1417,14 +1418,9 @@ mod group_values_trait_test {
         }
 
         #[test]
-        fn run_test_emit_restores_intern_ability() {
+        fn test_null_keys_form_single_group() {
             let mut group_values =
-                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
-            test_emit_restores_intern_ability(&mut group_values);
-        }
-        fn test_null_keys_form_single_group(
-            group_values: &mut dyn GroupValues,
-        ) -> Result<()> {
+                GroupValuesDictionary::<Int32Type>::new(&DataType::Utf8);
             // keys: [0, null, 1, null, 0]
             // values: ["a", "b"]
             // null keys should all map to the same group
@@ -1433,7 +1429,7 @@ mod group_values_trait_test {
             let dict = Arc::new(DictionaryArray::new(keys, Arc::new(values))) as ArrayRef;
 
             let mut groups = Vec::new();
-            group_values.intern(&[dict], &mut groups)?;
+            group_values.intern(&[dict], &mut groups).unwrap();
 
             // should have 3 groups: "a", "b", null
             assert_eq!(group_values.len(), 3);
@@ -1442,18 +1438,12 @@ mod group_values_trait_test {
             // non null rows should map to correct groups
             assert_eq!(groups[0], groups[4]); // both "a"
             assert_ne!(groups[0], groups[2]); // "a" != "b"
-            Ok(())
-        }
-        #[test]
-        fn run_test_null_keys_form_single_group() {
-            let mut group_values =
-                GroupValuesDictionary::<Int32Type>::new(&DataType::Utf8);
-            test_null_keys_form_single_group(&mut group_values).unwrap();
         }
 
-        fn test_null_values_in_dictionary_form_single_group(
-            group_values: &mut dyn GroupValues,
-        ) -> Result<()> {
+        #[test]
+        fn test_null_values_in_dictionary_form_single_group() {
+            let mut group_values =
+                GroupValuesDictionary::<Int32Type>::new(&DataType::Utf8);
             // keys: [0, 1, 2, 1, 0]
             // values: ["a", null, "b"]
             // keys pointing to null value should all map to same group
@@ -1462,9 +1452,8 @@ mod group_values_trait_test {
             let dict = Arc::new(DictionaryArray::new(keys, Arc::new(values))) as ArrayRef;
 
             let mut groups = Vec::new();
-            group_values.intern(&[dict], &mut groups)?;
+            group_values.intern(&[dict], &mut groups).unwrap();
 
-            println!("Groups vector: {groups:#?}");
             // should have 3 groups: "a", null, "b"
             assert_eq!(group_values.len(), 3);
             // rows pointing to null value (index 1 and 3) should map to same group
@@ -1472,13 +1461,184 @@ mod group_values_trait_test {
             // non null rows should map correctly
             assert_eq!(groups[0], groups[4]); // both "a"
             assert_ne!(groups[0], groups[2]); // "a" != "b"
-            Ok(())
         }
+    }
+    #[cfg(test)]
+    mod null_value_edge_cases {
+        use super::*;
+
+        /// Regression test for COUNT DISTINCT with mixed null and non-null dictionary values
+        /// Expected: only non-null values "abc" and "def" are counted = 2
         #[test]
-        fn run_test_null_values_in_dictionary_form_single_group() {
+        fn test_count_distinct_mixed_nulls() {
             let mut group_values =
-                GroupValuesDictionary::<Int32Type>::new(&DataType::Utf8);
-            test_null_values_in_dictionary_form_single_group(&mut group_values).unwrap();
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
+            // keys: [0, 1, 2, 0, 1, 3]
+            // values: [None, "abc", "def", None]
+            // rows 0, 3, 5 point to null values → should all map to null group
+            // rows 1, 4 point to "abc" → same group
+            // row 2 points to "def" → own group
+            let keys = UInt8Array::from(vec![0, 1, 2, 0, 1, 3]);
+            let values = StringArray::from(vec![None, Some("abc"), Some("def"), None]);
+            let dict = Arc::new(
+                DictionaryArray::<UInt8Type>::try_new(keys, Arc::new(values)).unwrap(),
+            ) as ArrayRef;
+
+            let mut groups = Vec::new();
+            group_values.intern(&[dict], &mut groups).unwrap();
+            // 3 groups: null, "abc", "def"
+            assert_eq!(group_values.len(), 3);
+            assert_eq!(groups.len(), 6);
+
+            // null group - rows 0, 3, 5 all map to same group
+            assert_eq!(groups[0], groups[3]);
+            assert_eq!(groups[0], groups[5]);
+            // "abc" group - rows 1 and 4
+            assert_eq!(groups[1], groups[4]);
+            // all three groups are distinct
+            assert_ne!(groups[0], groups[1]);
+            assert_ne!(groups[1], groups[2]);
+            assert_ne!(groups[0], groups[2]);
+
+            // emit and verify null is correctly represented
+            let result = group_values.emit(EmitTo::All).unwrap();
+            assert_eq!(result.len(), 1);
+
+            let emitted = result[0]
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt8Type>>()
+                .expect("Expected DictionaryArray");
+
+            // null key should be null in the emitted array
+            let null_key = emitted.keys().value(groups[0]);
+            assert!(emitted.values().is_null(null_key as usize));
+
+            // check that non-null groups point to non-null values
+            let abc_key = emitted.keys().value(groups[1]);
+            assert!(!emitted.values().is_null(abc_key as usize));
+
+            let def_key = emitted.keys().value(groups[2]);
+            assert!(!emitted.values().is_null(def_key as usize));
+
+            assert!(group_values.is_empty());
+        }
+
+        /// Regression test for GROUP BY with null keys in dictionary
+        /// Expected: null keys form a single group, non-null keys form their own groups  
+        #[test]
+        fn test_group_by_null_keys() {
+            let mut group_values =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
+            // keys: [Some(0), None, Some(1), None, Some(0)]
+            // values: ["group_a", "group_b"]
+            // null key rows 1 and 3 should map to same null group
+            let keys = UInt8Array::from(vec![Some(0), None, Some(1), None, Some(0)]);
+            let values = StringArray::from(vec![Some("group_a"), Some("group_b")]);
+            let dict = Arc::new(
+                DictionaryArray::<UInt8Type>::try_new(keys, Arc::new(values)).unwrap(),
+            ) as ArrayRef;
+
+            let mut groups = Vec::new();
+            group_values.intern(&[dict], &mut groups).unwrap();
+
+            // 3 groups: "group_a", "group_b", null
+            assert_eq!(group_values.len(), 3);
+            assert_eq!(groups.len(), 5);
+
+            // null keys map to same group
+            assert_eq!(groups[1], groups[3]);
+            // "group_a" rows map to same group
+            assert_eq!(groups[0], groups[4]);
+            // all three groups are distinct
+            assert_ne!(groups[0], groups[1]);
+            assert_ne!(groups[0], groups[2]);
+            assert_ne!(groups[1], groups[2]);
+
+            // emit and verify
+            let result = group_values.emit(EmitTo::All).unwrap();
+            assert_eq!(result.len(), 1);
+
+            let emitted = result[0]
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt8Type>>()
+                .expect("Expected DictionaryArray");
+            let string_values = emitted
+                .values()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+
+            // null group key should be null in emitted array
+            let null_key = emitted.keys().value(groups[1]);
+            assert!(string_values.is_null(null_key as usize));
+
+            // non-null groups point to non-null values
+            let group_a_key = emitted.keys().value(groups[0]);
+            assert!(!string_values.is_null(group_a_key as usize));
+            assert_eq!(string_values.value(group_a_key as usize), "group_a");
+
+            let group_b_key = emitted.keys().value(groups[2]);
+            assert!(!string_values.is_null(group_b_key as usize));
+            assert_eq!(string_values.value(group_b_key as usize), "group_b");
+
+            assert!(group_values.is_empty());
+        }
+
+        /// Regression test for GROUP BY with null values in dictionary values array
+        /// Expected: keys pointing to null values form a single null group
+        #[test]
+        fn test_group_by_null_values_in_dict() {
+            let mut group_values =
+                GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
+            // keys: [0, 1, 2, 1, 0]
+            // values: ["val_x", None, "val_y"]
+            // key 1 points to null value - rows 1 and 3 should map to null group
+            let keys = UInt8Array::from(vec![0u8, 1, 2, 1, 0]);
+            let values = StringArray::from(vec![Some("val_x"), None, Some("val_y")]);
+            let dict = Arc::new(
+                DictionaryArray::<UInt8Type>::try_new(keys, Arc::new(values)).unwrap(),
+            ) as ArrayRef;
+
+            let mut groups = Vec::new();
+            group_values.intern(&[dict], &mut groups).unwrap();
+
+            // 3 groups: "val_x", null, "val_y"
+            assert_eq!(group_values.len(), 3);
+            assert_eq!(groups.len(), 5);
+
+            // rows pointing to null value map to same group
+            assert_eq!(groups[1], groups[3]);
+            // "val_x" rows map to same group
+            assert_eq!(groups[0], groups[4]);
+            // all three groups are distinct
+            assert_ne!(groups[0], groups[1]);
+            assert_ne!(groups[1], groups[2]);
+            assert_ne!(groups[0], groups[2]);
+
+            // emit and verify
+            let result = group_values.emit(EmitTo::All).unwrap();
+            assert_eq!(result.len(), 1);
+
+            let emitted = result[0]
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt8Type>>()
+                .expect("Expected DictionaryArray");
+
+            // null group should be null in emitted array
+            let null_key = emitted.keys().value(groups[1]);
+            let string_values = emitted
+                .values()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            assert!(string_values.is_null(null_key as usize));
+
+            let val_x_key = emitted.keys().value(groups[0]);
+            assert_eq!(string_values.value(val_x_key as usize), "val_x");
+
+            let val_y_key = emitted.keys().value(groups[2]);
+            assert_eq!(string_values.value(val_y_key as usize), "val_y");
+            assert!(group_values.is_empty());
         }
     }
 }

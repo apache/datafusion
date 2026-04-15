@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use arrow::array::{ArrayRef, StringDictionaryBuilder};
 use arrow::datatypes::{DataType, Field, Schema, UInt8Type};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -39,7 +56,7 @@ fn create_string_values(cardinality: &Cardinality) -> Vec<String> {
         Cardinality::Large => 200,
     };
     (0..num_values)
-        .map(|i| format!("group_value_{:06}", i))
+        .map(|i| format!("group_value_{i:06}"))
         .collect()
 }
 fn create_batch(batch_size: &BatchSize, cardinality: &Cardinality) -> Vec<String> {
@@ -84,7 +101,7 @@ fn introduce_nulls(values: Vec<String>, null_rate: &NullRate) -> Vec<Option<Stri
         .collect()
 }
 
-fn generate_group_values(kind: GroupType) -> Box<dyn GroupValues> {
+fn generate_group_values(kind: &GroupType) -> Box<dyn GroupValues> {
     match kind {
         GroupType::GroupValueRows => {
             // we know this is going to hit the fallback path I.E GroupValueRows, but for the sake of avoiding making private items public call the public api
@@ -123,8 +140,7 @@ fn bench_single_column_group_values(c: &mut Criterion) {
             for null_rate in &null_rates {
                 for group_type in &group_types {
                     let group_name = format!(
-                        "t1_{:?}_cardinality_{:?}_batch_{:?}_null_rate_{:?}",
-                        group_type, cardinality, batch_size, null_rate
+                        "t1_{group_type:?}_cardinality_{cardinality:?}_batch_{batch_size:?}_null_rate_{null_rate:?}"
                     );
 
                     let string_vec = create_batch(batch_size, cardinality);
@@ -138,7 +154,7 @@ fn bench_single_column_group_values(c: &mut Criterion) {
                         b.iter_batched(
                             || {
                                 //create fresh group values for each iteration
-                                let gv = generate_group_values(group_type.clone());
+                                let gv = generate_group_values(group_type);
                                 let col = col_ref.clone();
                                 (gv, col)
                             },
@@ -153,14 +169,13 @@ fn bench_single_column_group_values(c: &mut Criterion) {
 
                     //  Second benchmark that alternates between intern and emit to simulate more realistic usage patterns where the same group values is used across multiple batches of the same grouping column
                     let multi_batch_name = format!(
-                        "multi_batch/{:?}_cardinality_{:?}_batch_{:?}_null_rate_{:?}",
-                        group_type, cardinality, batch_size, null_rate
+                        "multi_batch/{group_type:?}_cardinality_{cardinality:?}_batch_{batch_size:?}_null_rate_{null_rate:?}"
                     );
                     c.bench_function(&multi_batch_name, |b| {
                         b.iter_batched(
                             || {
                                 // setup - create 3 batches to simulate multiple record batches
-                                let gv = generate_group_values(group_type.clone());
+                                let gv = generate_group_values(group_type);
                                 let batch1 = col_ref.clone();
                                 let batch2 = col_ref.clone();
                                 let batch3 = col_ref.clone();
@@ -213,12 +228,11 @@ fn bench_repeated_intern_prefab_cols(c: &mut Criterion) {
         let arr4 = col_ref.clone();
 
         let group_name = format!(
-            "repeated_intern/{:?}_cardinality_{:?}_batch_{:?}_null_rate_{:?}",
-            group_type, cardinality, batch_size, null_rate
+            "repeated_intern/{group_type:?}_cardinality_{cardinality:?}_batch_{batch_size:?}_null_rate_{null_rate:?}"
         );
         c.bench_function(&group_name, |b| {
             b.iter_batched(
-                || generate_group_values(group_type.clone()),
+                || generate_group_values(&group_type),
                 |mut group_values| {
                     let mut groups = Vec::new();
 
