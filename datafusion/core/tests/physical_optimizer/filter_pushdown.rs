@@ -5499,9 +5499,8 @@ async fn test_filter_pushdown_through_sort_with_projection() {
 }
 
 /// Test that in the Post phase (dynamic-filter pushdown), when the probe-side
-/// DataSourceExec does NOT support filter pushdown, SortExec does NOT intercept
-/// the dynamic filter — Post-phase interception is intentionally not supported.
-/// The plan is left unchanged and the dynamic filter is not applied.
+/// DataSourceExec does NOT support filter pushdown, SortExec intercepts the
+/// unsupported dynamic filter by inserting a FilterExec below itself.
 ///
 /// Plan:
 ///   HashJoinExec
@@ -5509,13 +5508,14 @@ async fn test_filter_pushdown_through_sort_with_projection() {
 ///     right: SortExec (no fetch)
 ///              DataSourceExec (probe side, pushdown_supported=false)
 ///
-/// Expected after optimization (unchanged — no FilterExec inserted):
+/// Expected after optimization:
 ///   HashJoinExec
 ///     left:  DataSourceExec (build side)
 ///     right: SortExec
-///              DataSourceExec (probe side, unchanged)
+///              FilterExec (dynamic filter intercepted)
+///                DataSourceExec (probe side)
 #[tokio::test]
-async fn test_hashjoin_dynamic_filter_not_pushed_through_sort_when_scan_unsupported() {
+async fn test_hashjoin_dynamic_filter_pushed_through_sort_when_scan_unsupported() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     let build_schema = Arc::new(Schema::new(vec![
@@ -5568,8 +5568,8 @@ async fn test_hashjoin_dynamic_filter_not_pushed_through_sort_when_scan_unsuppor
     ) as Arc<dyn ExecutionPlan>;
 
     // The probe-side DataSourceExec does not accept the dynamic filter.
-    // SortExec only intercepts unsupported filters in the Pre phase, not
-    // in the Post phase, so the plan is left unchanged.
+    // SortExec intercepts the unsupported filter and inserts a FilterExec
+    // below itself.
     insta::assert_snapshot!(
         OptimizationTest::new(
             Arc::clone(&plan),
@@ -5588,7 +5588,8 @@ async fn test_hashjoin_dynamic_filter_not_pushed_through_sort_when_scan_unsuppor
           - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
           -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=false
+          -     FilterExec: DynamicFilter [ empty ]
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=false
     "
     );
 }
