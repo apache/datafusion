@@ -3188,7 +3188,8 @@ mod tests {
     /// - Without ExpressionAnalyzer: default 20% selectivity -> 200 rows
     /// - With ExpressionAnalyzer: P(a=42) + P(b=5) - P(a=42)*P(b=5) = 0.1 + 0.2 - 0.02 = 0.28 -> 280 rows
     #[tokio::test]
-    async fn test_filter_statistics_expression_analyzer_selectivity_or_predicate() -> Result<()> {
+    async fn test_filter_statistics_expression_analyzer_selectivity_or_predicate()
+    -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),

@@ -188,7 +188,6 @@ impl ExpressionAnalyzerRegistry {
         }
     }
 
-    /// Create a registry with only the given analyzers (no builtins).
     /// Create a registry with only the given analyzers and no built-in fallback.
     ///
     /// If none of the provided analyzers can handle a request, the registry

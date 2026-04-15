@@ -56,7 +56,7 @@ impl DefaultExpressionAnalyzer {
     ///
     /// Using max is symmetric (order-independent) and handles column-vs-column,
     /// column-vs-expression, and expression-vs-expression uniformly through the
-    /// registry chain
+    /// registry chain. Returns `None` when either side has unknown NDV.
     fn resolve_ndv(
         left: &Arc<dyn PhysicalExpr>,
         right: &Arc<dyn PhysicalExpr>,
@@ -65,18 +65,12 @@ impl DefaultExpressionAnalyzer {
     ) -> Option<usize> {
         let l = registry.get_distinct_count(left, input_stats);
         let r = registry.get_distinct_count(right, input_stats);
-        l.max(r).filter(|&n| n > 0)
+        match (l, r) {
+            (Some(a), Some(b)) => Some(a.max(b)).filter(|&n| n > 0),
+            _ => None,
+        }
     }
 
-    /// Recursive selectivity estimation through the registry chain
-    fn estimate_selectivity_recursive(
-        &self,
-        expr: &Arc<dyn PhysicalExpr>,
-        input_stats: &Statistics,
-        registry: &ExpressionAnalyzerRegistry,
-    ) -> f64 {
-        registry.get_selectivity(expr, input_stats).unwrap_or(0.5)
-    }
 }
 
 impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
@@ -88,36 +82,25 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
     ) -> AnalysisResult<f64> {
         // Binary expressions: AND, OR, comparisons
         if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            let sel = match binary.op() {
-                // Logical operators: need child selectivities
-                Operator::And => {
-                    let left_sel = self.estimate_selectivity_recursive(
-                        binary.left(),
-                        input_stats,
-                        registry,
-                    );
-                    let right_sel = self.estimate_selectivity_recursive(
-                        binary.right(),
-                        input_stats,
-                        registry,
-                    );
-                    left_sel * right_sel
-                }
-                Operator::Or => {
-                    let left_sel = self.estimate_selectivity_recursive(
-                        binary.left(),
-                        input_stats,
-                        registry,
-                    );
-                    let right_sel = self.estimate_selectivity_recursive(
-                        binary.right(),
-                        input_stats,
-                        registry,
-                    );
-                    left_sel + right_sel - (left_sel * right_sel)
+            match binary.op() {
+                // AND/OR: only provide a value when both children have estimates.
+                // Delegating when either child has no information prevents arbitrary
+                // constants from contaminating the product/inclusion-exclusion formula.
+                Operator::And | Operator::Or => {
+                    if let (Some(left), Some(right)) = (
+                        registry.get_selectivity(binary.left(), input_stats),
+                        registry.get_selectivity(binary.right(), input_stats),
+                    ) {
+                        let sel = match binary.op() {
+                            Operator::And => left * right,
+                            Operator::Or => left + right - left * right,
+                            _ => unreachable!(),
+                        };
+                        return AnalysisResult::Computed(sel);
+                    }
                 }
 
-                // Equality: selectivity = 1/NDV
+                // Equality: 1/NDV. Delegate when NDV is unknown so default_selectivity applies.
                 Operator::Eq => {
                     if let Some(ndv) = Self::resolve_ndv(
                         binary.left(),
@@ -127,10 +110,9 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
                     ) {
                         return AnalysisResult::Computed(1.0 / (ndv as f64));
                     }
-                    0.1 // Default equality selectivity
                 }
 
-                // Inequality: selectivity = 1 - 1/NDV
+                // Inequality: 1 - 1/NDV. Delegate when NDV is unknown.
                 Operator::NotEq => {
                     if let Some(ndv) = Self::resolve_ndv(
                         binary.left(),
@@ -140,34 +122,25 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
                     ) {
                         return AnalysisResult::Computed(1.0 - (1.0 / (ndv as f64)));
                     }
-                    0.9
                 }
 
-                // Range predicates: classic 1/3 estimate
-                Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => 0.33,
+                // All other operators: no statistics available, let caller decide.
+                _ => {}
+            }
 
-                // LIKE: depends on pattern, use conservative estimate
-                Operator::LikeMatch | Operator::ILikeMatch => 0.25,
-                Operator::NotLikeMatch | Operator::NotILikeMatch => 0.75,
-
-                // Other operators: default
-                _ => 0.5,
-            };
-
-            return AnalysisResult::Computed(sel);
+            return AnalysisResult::Delegate;
         }
 
-        // NOT expression: 1 - child selectivity
+        // NOT expression: 1 - child selectivity. Delegate if child has no estimate.
         if let Some(not_expr) = expr.as_any().downcast_ref::<NotExpr>() {
-            let child_sel = self.estimate_selectivity_recursive(
-                not_expr.arg(),
-                input_stats,
-                registry,
-            );
-            return AnalysisResult::Computed(1.0 - child_sel);
+            if let Some(child_sel) = registry.get_selectivity(not_expr.arg(), input_stats)
+            {
+                return AnalysisResult::Computed(1.0 - child_sel);
+            }
+            return AnalysisResult::Delegate;
         }
 
-        // Literal boolean: 0.0 or 1.0
+        // Literal boolean: exact selectivity, no statistics needed.
         if let Some(b) = expr
             .as_any()
             .downcast_ref::<Literal>()
@@ -177,11 +150,6 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
             })
         {
             return AnalysisResult::Computed(if b { 1.0 } else { 0.0 });
-        }
-
-        // Column reference as predicate (boolean column)
-        if expr.as_any().downcast_ref::<Column>().is_some() {
-            return AnalysisResult::Computed(0.5);
         }
 
         AnalysisResult::Delegate
