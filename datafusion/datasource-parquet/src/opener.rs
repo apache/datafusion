@@ -1916,8 +1916,8 @@ mod test {
             .try_map_exprs(|expr| replace_columns_with_literals(expr, &constants))
             .unwrap();
         let exprs = rewritten.as_ref();
-        assert!(exprs[0].expr.as_any().downcast_ref::<Literal>().is_some());
-        assert!(exprs[1].expr.as_any().downcast_ref::<Column>().is_some());
+        assert!(exprs[0].expr.downcast_ref::<Literal>().is_some());
+        assert!(exprs[1].expr.downcast_ref::<Column>().is_some());
 
         // Only column `b` should remain in the projection mask
         assert_eq!(rewritten.column_indices(), vec![1]);
@@ -1930,7 +1930,7 @@ mod test {
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
 
         let rewritten = replace_columns_with_literals(expr, &constants).unwrap();
-        assert!(rewritten.as_any().downcast_ref::<Literal>().is_some());
+        assert!(rewritten.downcast_ref::<Literal>().is_some());
     }
 
     async fn count_batches_and_rows(

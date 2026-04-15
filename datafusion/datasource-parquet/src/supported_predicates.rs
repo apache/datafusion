@@ -70,8 +70,8 @@ impl SupportsListPushdown for dyn PhysicalExpr {
 ///
 /// These checks are universally supported for all column types.
 fn is_null_check(expr: &dyn PhysicalExpr) -> bool {
-    expr.as_any().downcast_ref::<IsNullExpr>().is_some()
-        || expr.as_any().downcast_ref::<IsNotNullExpr>().is_some()
+    expr.downcast_ref::<IsNullExpr>().is_some()
+        || expr.downcast_ref::<IsNotNullExpr>().is_some()
 }
 
 /// Checks if an expression is a scalar function registered for list pushdown.
@@ -86,8 +86,7 @@ fn is_supported_scalar_function(expr: &dyn PhysicalExpr) -> bool {
 }
 
 fn scalar_function_name(expr: &dyn PhysicalExpr) -> Option<&str> {
-    expr.as_any()
-        .downcast_ref::<ScalarFunctionExpr>()
+    expr.downcast_ref::<ScalarFunctionExpr>()
         .map(ScalarFunctionExpr::name)
 }
 

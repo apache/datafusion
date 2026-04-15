@@ -434,7 +434,6 @@ impl ProjectionExprs {
             .iter()
             .map(|e| {
                 e.expr
-                    .as_any()
                     .downcast_ref::<Column>()
                     .expect("Expected column reference in projection")
                     .index()
@@ -661,9 +660,9 @@ impl ProjectionExprs {
 
         for proj_expr in self.exprs.iter() {
             let expr = &proj_expr.expr;
-            let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            let col_stats = if let Some(col) = expr.downcast_ref::<Column>() {
                 std::mem::take(&mut stats.column_statistics[col.index()])
-            } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+            } else if let Some(literal) = expr.downcast_ref::<Literal>() {
                 // Handle literal expressions (constants) by calculating proper statistics
                 let data_type = expr.data_type(output_schema)?;
 
@@ -926,7 +925,7 @@ pub fn update_expr(
                 return Ok(Transformed::no(expr));
             }
 
-            let Some(column) = expr.as_any().downcast_ref::<Column>() else {
+            let Some(column) = expr.downcast_ref::<Column>() else {
                 return Ok(Transformed::no(expr));
             };
             if unproject {
@@ -948,7 +947,7 @@ pub fn update_expr(
                     .iter()
                     .enumerate()
                     .find_map(|(index, proj_expr)| {
-                        proj_expr.expr.as_any().downcast_ref::<Column>().and_then(
+                        proj_expr.expr.downcast_ref::<Column>().and_then(
                             |projected_column| {
                                 (column.name().eq(projected_column.name())
                                     && column.index() == projected_column.index())
@@ -1044,7 +1043,7 @@ impl ProjectionMapping {
         let mut map = IndexMap::<_, ProjectionTargets>::new();
         for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
             let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
-            let source_expr = expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+            let source_expr = expr.transform_down(|e| match e.downcast_ref::<Column>() {
                 Some(col) => {
                     // Sometimes, an expression and its name in the input_schema
                     // doesn't match. This can cause problems, so we make sure
@@ -1075,17 +1074,11 @@ impl ProjectionMapping {
             //   p.ticker → get_field(col("details"), "ticker")
             // enabling the optimizer to know that sorting by
             // `details.ticker` is equivalent to sorting by `p.ticker`.
-            if let Some(func_expr) =
-                source_expr.as_any().downcast_ref::<ScalarFunctionExpr>()
-            {
+            if let Some(func_expr) = source_expr.downcast_ref::<ScalarFunctionExpr>() {
                 let literal_args: Vec<Option<ScalarValue>> = func_expr
                     .args()
                     .iter()
-                    .map(|arg| {
-                        arg.as_any()
-                            .downcast_ref::<Literal>()
-                            .map(|l| l.value().clone())
-                    })
+                    .map(|arg| arg.downcast_ref::<Literal>().map(|l| l.value().clone()))
                     .collect();
 
                 if let Some(field_mapping) =
@@ -1227,7 +1220,7 @@ pub fn project_ordering(
     let mut projected_exprs = vec![];
     for PhysicalSortExpr { expr, options } in ordering.iter() {
         let transformed = Arc::clone(expr).transform_up(|expr| {
-            let Some(col) = expr.as_any().downcast_ref::<Column>() else {
+            let Some(col) = expr.downcast_ref::<Column>() else {
                 return Ok(Transformed::no(expr));
             };
 
@@ -1285,7 +1278,7 @@ pub(crate) mod tests {
             for (target, _) in targets.iter() {
                 // Skip non-Column targets (e.g. struct field decomposition
                 // entries which are ScalarFunctionExpr targets).
-                let Some(column) = target.as_any().downcast_ref::<Column>() else {
+                let Some(column) = target.downcast_ref::<Column>() else {
                     continue;
                 };
                 fields.push(Field::new(column.name(), data_type.clone(), nullable));
@@ -2549,11 +2542,7 @@ pub(crate) mod tests {
 
         let result_expr = result.unwrap();
         assert_eq!(
-            result_expr
-                .as_any()
-                .downcast_ref::<Literal>()
-                .unwrap()
-                .value(),
+            result_expr.downcast_ref::<Literal>().unwrap().value(),
             &ScalarValue::Int64(Some(42))
         );
 
@@ -2582,17 +2571,15 @@ pub(crate) mod tests {
 
         let result_expr = result.unwrap();
         let binary = result_expr
-            .as_any()
             .downcast_ref::<BinaryExpr>()
             .expect("Should be a BinaryExpr");
 
         // Left side should still be the literal
-        assert!(binary.left().as_any().downcast_ref::<Literal>().is_some());
+        assert!(binary.left().downcast_ref::<Literal>().is_some());
 
         // Right side should be updated to reference column at index 5
         let right_col = binary
             .right()
-            .as_any()
             .downcast_ref::<Column>()
             .expect("Right should be a Column");
         assert_eq!(right_col.index(), 5);
