@@ -814,9 +814,16 @@ impl OptimizerRule for PushDownFilter {
 
                 // remove duplicated filters
                 let child_predicates = split_conjunction_owned(child_filter.predicate);
-                let new_predicates = parents_predicates
+                // The unoptimized plan evaluates the child filter first
+                // (inner nodes feed outer nodes), so when we collapse a
+                // parent filter into its child filter we must preserve that
+                // execution order — child predicates first, then the
+                // parent's predicates. Putting the parent's predicates
+                // first reverses the user-authored order and changes the
+                // observed evaluation order of selective predicates.
+                let new_predicates = child_predicates
                     .into_iter()
-                    .chain(child_predicates)
+                    .chain(parents_predicates)
                     // use IndexSet to remove dupes while preserving predicate order
                     .collect::<IndexSet<_>>()
                     .into_iter()
@@ -2472,9 +2479,14 @@ mod tests {
         );
         assert_optimized_plan_equal!(
             plan,
+            // The unoptimized plan applies `a <= 1` first (it is the inner
+            // filter, fed into the outer `a >= 1` filter). PushDownFilter
+            // collapses the two filters into a single conjunction and must
+            // preserve that execution order: child predicate first, then the
+            // parent's predicate.
             @r"
         Projection: test.a
-          Filter: test.a >= Int64(1) AND test.a <= Int64(1)
+          Filter: test.a <= Int64(1) AND test.a >= Int64(1)
             Limit: skip=0, fetch=1
               TableScan: test
         "
