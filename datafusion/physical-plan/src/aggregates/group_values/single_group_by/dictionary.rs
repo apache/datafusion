@@ -18,15 +18,12 @@
 use crate::aggregates::group_values::GroupValues;
 use crate::hash_utils::RandomState;
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, BinaryViewArray,
-    BinaryViewBuilder, DictionaryArray, LargeBinaryArray, LargeBinaryBuilder,
-    LargeStringArray, LargeStringBuilder, PrimitiveArray, PrimitiveBuilder, StringArray,
-    StringBuilder, StringViewArray, StringViewBuilder, UInt64Array,
+    Array, ArrayRef, BinaryArray, BinaryBuilder, BinaryViewArray, BinaryViewBuilder,
+    DictionaryArray, LargeBinaryArray, LargeBinaryBuilder, LargeStringArray,
+    LargeStringBuilder, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
+    StringViewArray, StringViewBuilder, UInt64Array,
 };
-use arrow::datatypes::{
-    ArrowDictionaryKeyType, ArrowNativeType, DataType, Int8Type, Int16Type, Int32Type,
-    Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-};
+use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_expr::EmitTo;
@@ -132,46 +129,6 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
                 .downcast_ref::<BinaryViewArray>()
                 .expect("Expected BinaryViewArray")
                 .value(index),
-            DataType::Int8 => {
-                let arr = values.as_primitive::<Int8Type>();
-                let val = arr.value(index);
-                unsafe { std::slice::from_raw_parts(&val as *const i8 as *const u8, 1) }
-            }
-            DataType::Int16 => {
-                let arr = values.as_primitive::<Int16Type>();
-                let val = arr.value(index);
-                unsafe { std::slice::from_raw_parts(&val as *const i16 as *const u8, 2) }
-            }
-            DataType::Int32 => {
-                let arr = values.as_primitive::<Int32Type>();
-                let val = arr.value(index);
-                unsafe { std::slice::from_raw_parts(&val as *const i32 as *const u8, 4) }
-            }
-            DataType::Int64 => {
-                let arr = values.as_primitive::<Int64Type>();
-                let val = arr.value(index);
-                unsafe { std::slice::from_raw_parts(&val as *const i64 as *const u8, 8) }
-            }
-            DataType::UInt8 => {
-                let arr = values.as_primitive::<UInt8Type>();
-                let val = arr.value(index);
-                unsafe { std::slice::from_raw_parts(&val as *const u8, 1) }
-            }
-            DataType::UInt16 => {
-                let arr = values.as_primitive::<UInt16Type>();
-                let val = arr.value(index);
-                unsafe { std::slice::from_raw_parts(&val as *const u16 as *const u8, 2) }
-            }
-            DataType::UInt32 => {
-                let arr = values.as_primitive::<UInt32Type>();
-                let val = arr.value(index);
-                unsafe { std::slice::from_raw_parts(&val as *const u32 as *const u8, 4) }
-            }
-            DataType::UInt64 => {
-                let arr = values.as_primitive::<UInt64Type>();
-                let val = arr.value(index);
-                unsafe { std::slice::from_raw_parts(&val as *const u64 as *const u8, 8) }
-            }
             other => unimplemented!("get_raw_bytes not implemented for {other:?}"),
         }
     }
@@ -188,15 +145,6 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
             }
             // for primitives use a byte sequence that is a different length than the native type
             // a real i8 is always exactly 1 byte so 2 bytes can never match a real value
-            DataType::Int8 | DataType::UInt8 => vec![0xFF, 0xFF],
-            // a real i16/u16 is always exactly 2 bytes so 3 bytes can never match
-            DataType::Int16 | DataType::UInt16 => vec![0xFF, 0xFF, 0xFF],
-            // a real i32/u32/f32 is always exactly 4 bytes so 5 bytes can never match
-            DataType::Int32 | DataType::UInt32 => vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
-            // a real i64/u64/f64 is always exactly 8 bytes so 9 bytes can never match
-            DataType::Int64 | DataType::UInt64 => {
-                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
-            }
             other => unimplemented!("sentinel_repr not implemented for {other:?}"),
         }
     }
@@ -303,110 +251,6 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
                         builder.append_null();
                     } else {
                         builder.append_value(raw_bytes);
-                    }
-                }
-                Ok(Arc::new(builder.finish()) as ArrayRef)
-            }
-            DataType::Int8 => {
-                let mut builder = PrimitiveBuilder::<Int8Type>::new();
-                for raw_bytes in raw {
-                    if raw_bytes == &sentinel {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(i8::from_ne_bytes(
-                            raw_bytes.as_slice().try_into().unwrap(),
-                        ));
-                    }
-                }
-                Ok(Arc::new(builder.finish()) as ArrayRef)
-            }
-            DataType::Int16 => {
-                let mut builder = PrimitiveBuilder::<Int16Type>::new();
-                for raw_bytes in raw {
-                    if raw_bytes == &sentinel {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(i16::from_ne_bytes(
-                            raw_bytes.as_slice().try_into().unwrap(),
-                        ));
-                    }
-                }
-                Ok(Arc::new(builder.finish()) as ArrayRef)
-            }
-            DataType::Int32 => {
-                let mut builder = PrimitiveBuilder::<Int32Type>::new();
-                for raw_bytes in raw {
-                    if raw_bytes == &sentinel {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(i32::from_ne_bytes(
-                            raw_bytes.as_slice().try_into().unwrap(),
-                        ));
-                    }
-                }
-                Ok(Arc::new(builder.finish()) as ArrayRef)
-            }
-            DataType::Int64 => {
-                let mut builder = PrimitiveBuilder::<Int64Type>::new();
-                for raw_bytes in raw {
-                    if raw_bytes == &sentinel {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(i64::from_ne_bytes(
-                            raw_bytes.as_slice().try_into().unwrap(),
-                        ));
-                    }
-                }
-                Ok(Arc::new(builder.finish()) as ArrayRef)
-            }
-            DataType::UInt8 => {
-                let mut builder = PrimitiveBuilder::<UInt8Type>::new();
-                for raw_bytes in raw {
-                    if raw_bytes == &sentinel {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(u8::from_ne_bytes(
-                            raw_bytes.as_slice().try_into().unwrap(),
-                        ));
-                    }
-                }
-                Ok(Arc::new(builder.finish()) as ArrayRef)
-            }
-            DataType::UInt16 => {
-                let mut builder = PrimitiveBuilder::<UInt16Type>::new();
-                for raw_bytes in raw {
-                    if raw_bytes == &sentinel {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(u16::from_ne_bytes(
-                            raw_bytes.as_slice().try_into().unwrap(),
-                        ));
-                    }
-                }
-                Ok(Arc::new(builder.finish()) as ArrayRef)
-            }
-            DataType::UInt32 => {
-                let mut builder = PrimitiveBuilder::<UInt32Type>::new();
-                for raw_bytes in raw {
-                    if raw_bytes == &sentinel {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(u32::from_ne_bytes(
-                            raw_bytes.as_slice().try_into().unwrap(),
-                        ));
-                    }
-                }
-                Ok(Arc::new(builder.finish()) as ArrayRef)
-            }
-            DataType::UInt64 => {
-                let mut builder = PrimitiveBuilder::<UInt64Type>::new();
-                for raw_bytes in raw {
-                    if raw_bytes == &sentinel {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(u64::from_ne_bytes(
-                            raw_bytes.as_slice().try_into().unwrap(),
-                        ));
                     }
                 }
                 Ok(Arc::new(builder.finish()) as ArrayRef)
@@ -638,7 +482,8 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
 #[cfg(test)]
 mod group_values_trait_test {
     use super::*;
-    use arrow::array::{DictionaryArray, StringArray, UInt8Array};
+    use arrow::array::{DictionaryArray, Int32Array, StringArray, UInt8Array};
+    use arrow::datatypes::{Int32Type, UInt8Type};
     use std::sync::Arc;
 
     fn create_dict_array(keys: Vec<u8>, values: Vec<&str>) -> ArrayRef {
@@ -1274,7 +1119,6 @@ mod group_values_trait_test {
 
     mod data_correctness {
         use super::*;
-        use arrow::array::Int32Array;
 
         #[test]
         fn test_group_assignment_order() {
