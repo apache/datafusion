@@ -4497,7 +4497,9 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        let task_ctx = new_spill_ctx(1, 600);
+        // Blocked groups pre-allocates more memory per block, so give enough
+        // room for accumulation to proceed while still triggering spill.
+        let task_ctx = new_spill_ctx(1, 2000);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
         assert_spill_count_metric(true, aggr);
 
@@ -4628,7 +4630,8 @@ mod tests {
         )?);
 
         // Pool must be large enough for accumulation to start but too small for
-        // sort_memory after clearing.
+        // sort_memory after clearing. Blocked groups approach pre-allocates more
+        // memory upfront, so give a bit more room for accumulation to proceed.
         let task_ctx = new_spill_ctx(1, 500);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await;
 
