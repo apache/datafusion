@@ -56,6 +56,7 @@ parquet = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+bytes = { workspace = true }
 chrono = { workspace = true }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
@@ -85,4 +86,8 @@ harness = false
 
 [[bench]]
 name = "parquet_struct_filter_pushdown"
+harness = false
+
+[[bench]]
+name = "parquet_fully_matched_filter"
 harness = false

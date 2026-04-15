@@ -160,6 +160,7 @@ impl PagePruningAccessPlanFilter {
         parquet_schema: &SchemaDescriptor,
         parquet_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
+        fully_matched_row_groups: &[usize],
     ) -> ParquetAccessPlan {
         // scoped timer updates on drop
         let _timer_guard = file_metrics.page_index_eval_time.timer();
@@ -197,6 +198,11 @@ impl PagePruningAccessPlanFilter {
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
         for row_group_index in row_group_indexes {
+            // Skip page pruning for fully matched row groups: all rows are
+            // known to satisfy the predicate, so page-level pruning is wasted work.
+            if fully_matched_row_groups.contains(&row_group_index) {
+                continue;
+            }
             // The selection for this particular row group
             let mut overall_selection = None;
 

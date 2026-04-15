@@ -76,9 +76,18 @@ impl RowGroupAccessPlanFilter {
         self.access_plan.row_group_index_iter()
     }
 
-    /// Returns the inner access plan
-    pub fn build(self) -> ParquetAccessPlan {
-        self.access_plan
+    /// Returns the inner access plan and the indices of fully matched row groups.
+    ///
+    /// Fully matched row groups are those where ALL rows are known to satisfy
+    /// the predicate based on row group statistics. The returned indices are
+    /// a subset of the row groups that will be scanned.
+    pub fn build(self) -> (ParquetAccessPlan, Vec<usize>) {
+        let fully_matched: Vec<usize> = self
+            .access_plan
+            .row_group_index_iter()
+            .filter(|&idx| self.is_fully_matched[idx])
+            .collect();
+        (self.access_plan, fully_matched)
     }
 
     /// Returns the is_fully_matched vector

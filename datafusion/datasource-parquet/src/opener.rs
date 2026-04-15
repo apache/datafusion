@@ -1106,10 +1106,14 @@ impl RowGroupsPrunedParquetOpen {
             row_groups.prune_by_limit(limit, rg_metadata, &prepared.file_metrics);
         }
 
+        // Build the access plan and extract fully matched row group indices.
+        // Fully matched row groups have ALL rows satisfying the predicate,
+        // so we can skip both page pruning and row filter evaluation for them.
+        let (mut access_plan, fully_matched_row_groups) = row_groups.build();
+
         // Page index pruning: if all data on individual pages can
         // be ruled using page metadata, rows from other columns
         // with that range can be skipped as well.
-        let mut access_plan = row_groups.build();
         if prepared.enable_page_index
             && !access_plan.is_empty()
             && let Some(page_pruning_predicate) = page_pruning_predicate
@@ -1120,6 +1124,7 @@ impl RowGroupsPrunedParquetOpen {
                 reader_metadata.parquet_schema(),
                 file_metadata.as_ref(),
                 &prepared.file_metrics,
+                &fully_matched_row_groups,
             );
         }
 
@@ -1147,6 +1152,10 @@ impl RowGroupsPrunedParquetOpen {
 
         if let Some(row_filter) = row_filter {
             decoder_builder = decoder_builder.with_row_filter(row_filter);
+        }
+        if !fully_matched_row_groups.is_empty() {
+            decoder_builder =
+                decoder_builder.with_fully_matched_row_groups(fully_matched_row_groups);
         }
         if prepared.force_filter_selections {
             decoder_builder =
