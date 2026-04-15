@@ -401,13 +401,38 @@ impl RowGroupAccessPlanFilter {
             return;
         };
 
+        // Collect unique column names referenced by the predicate so we can
+        // check for NULLs. Rows with NULL predicate columns evaluate to NULL
+        // (not true), so a row group with NULLs cannot be "fully matched."
+        let predicate_columns =
+            datafusion_physical_expr::utils::collect_columns(predicate.orig_expr());
+
+        let null_count_converters: Vec<StatisticsConverter> = predicate_columns
+            .iter()
+            .filter_map(|col| {
+                StatisticsConverter::try_new(col.name(), arrow_schema, parquet_schema)
+                    .ok()
+            })
+            .collect();
+
         for (i, &original_row_group_idx) in candidate_row_group_indices.iter().enumerate()
         {
             // If the inverted predicate *also* prunes this row group (meaning inverted_values[i] is false),
-            // it implies that *all* rows in this group satisfy the original predicate.
+            // it implies that *all* non-null rows in this group satisfy the original predicate.
             if !inverted_values[i] {
-                self.is_fully_matched[original_row_group_idx] = true;
-                metrics.row_groups_pruned_statistics.add_fully_matched(1);
+                // Additionally verify that predicate columns have no NULLs.
+                // NULLs evaluate to NULL (not true) in the predicate, so rows
+                // with NULLs would be incorrectly included if the filter is skipped.
+                let has_nulls = null_count_converters.iter().any(|conv| {
+                    let rg = std::iter::once(&groups[original_row_group_idx]);
+                    conv.row_group_null_counts(rg).ok().is_none_or(|counts| {
+                        counts.iter().any(|c: Option<u64>| c.is_none_or(|n| n > 0))
+                    })
+                });
+                if !has_nulls {
+                    self.is_fully_matched[original_row_group_idx] = true;
+                    metrics.row_groups_pruned_statistics.add_fully_matched(1);
+                }
             }
         }
     }
