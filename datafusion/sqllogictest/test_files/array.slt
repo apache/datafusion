@@ -7685,6 +7685,99 @@ from array_distinct_table_2D_fixed;
 [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
 [[5, 6], NULL]
 
+## array_compact (aliases: `list_compact`)
+
+# basic: remove nulls from integer array
+query ?
+select array_compact([1, NULL, 2, NULL, 3]);
+----
+[1, 2, 3]
+
+# no nulls present
+query ?
+select array_compact([1, 2, 3]);
+----
+[1, 2, 3]
+
+# all nulls
+query ?
+select array_compact(arrow_cast([NULL, NULL, NULL], 'List(Int64)'));
+----
+[]
+
+# empty array
+query ?
+select array_compact([]);
+----
+[]
+
+# NULL input returns NULL
+query ?
+select array_compact(NULL::INT[]);
+----
+NULL
+
+# string array
+query ?
+select array_compact(['a', NULL, 'b', NULL, 'c']);
+----
+[a, b, c]
+
+# float array
+query ?
+select array_compact([1.0, NULL, 2.0, NULL]);
+----
+[1.0, 2.0]
+
+# nested array (2D)
+query ?
+select array_compact([make_array(1, 2), NULL, make_array(3, 4)]);
+----
+[[1, 2], [3, 4]]
+
+# LargeList
+query ?
+select array_compact(arrow_cast([1, NULL, 2, NULL, 3], 'LargeList(Int64)'));
+----
+[1, 2, 3]
+
+# alias list_compact
+query ?
+select list_compact([1, NULL, 2]);
+----
+[1, 2]
+
+# table-based test
+statement ok
+CREATE TABLE array_compact_table AS VALUES
+  (make_array(1, NULL, 2, NULL, 3)),
+  (make_array(NULL, NULL, NULL)),
+  (make_array(4, 5, 6)),
+  (NULL::INT[])
+;
+
+query ?
+select array_compact(column1) from array_compact_table;
+----
+[1, 2, 3]
+[]
+[4, 5, 6]
+NULL
+
+statement ok
+DROP TABLE array_compact_table;
+
+# FixedSizeList (coerced to List)
+query ?
+select array_compact(arrow_cast(make_array(1, NULL, 2, NULL, 3), 'FixedSizeList(5, Int64)'));
+----
+[1, 2, 3]
+
+query ?
+select array_compact(arrow_cast(make_array(NULL, NULL, NULL), 'FixedSizeList(3, Int64)'));
+----
+[]
+
 ## arrays_zip (aliases: `list_zip`)
 
 # Spark example: arrays_zip(array(1, 2, 3), array(2, 3, 4))
