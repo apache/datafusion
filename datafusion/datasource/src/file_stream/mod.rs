@@ -1059,7 +1059,7 @@ mod tests {
         let test = two_partition_morsel_test().with_file_stream_events(false);
 
         // Partition 0 starts with 3 files, but Partition 1 is polled first.
-        // Since Partition is polled first, it will run all the files even those
+        // Since Partition 1 is polled first, it will run all the files even those
         // that were assigned to Partition 0.
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
         ----- Partition 0 -----
