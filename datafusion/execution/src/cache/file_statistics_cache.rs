@@ -71,7 +71,7 @@ struct DefaultFileStatisticsCacheState {
     memory_used: usize,
 }
 
-pub const DEFAULT_FILE_STATISTICS_MEMORY_LIMIT: usize = 10 * 1024 * 1024; // 10MiB
+pub const DEFAULT_FILE_STATISTICS_MEMORY_LIMIT: usize = 20 * 1024 * 1024; // 10MiB
 
 impl Default for DefaultFileStatisticsCacheState {
     fn default() -> Self {
