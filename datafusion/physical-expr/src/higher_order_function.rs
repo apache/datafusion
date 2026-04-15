@@ -29,7 +29,6 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
-use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -112,7 +111,7 @@ impl HigherOrderFunctionExpr {
         let name = fun.name().to_string();
         let arg_fields = args
             .iter()
-            .map(|e| match e.as_any().downcast_ref::<LambdaExpr>() {
+            .map(|e| match e.downcast_ref::<LambdaExpr>() {
                 Some(lambda) => {
                     Ok(ValueOrLambda::Lambda(lambda.body().return_field(schema)?))
                 }
@@ -125,11 +124,7 @@ impl HigherOrderFunctionExpr {
 
         let arguments = args
             .iter()
-            .map(|e| {
-                e.as_any()
-                    .downcast_ref::<Literal>()
-                    .map(|literal| literal.value())
-            })
+            .map(|e| e.downcast_ref::<Literal>().map(|literal| literal.value()))
             .collect::<Vec<_>>();
 
         let ret_args = HigherOrderReturnFieldArgs {
@@ -142,7 +137,7 @@ impl HigherOrderFunctionExpr {
             .iter()
             .enumerate()
             .filter_map(|(i, arg)| {
-                if arg.as_any().is::<LambdaExpr>() {
+                if arg.is::<LambdaExpr>() {
                     Some(i)
                 } else {
                     None
@@ -256,10 +251,6 @@ fn sorted_config_entries(config_options: &ConfigOptions) -> Vec<ConfigEntry> {
 }
 
 impl PhysicalExpr for HigherOrderFunctionExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_field.data_type().clone())
     }
@@ -439,7 +430,7 @@ fn wrapped_lambda(expr: &Arc<dyn PhysicalExpr>) -> Result<&LambdaExpr> {
     let mut current = expr;
 
     loop {
-        if let Some(lambda) = current.as_any().downcast_ref::<LambdaExpr>() {
+        if let Some(lambda) = current.downcast_ref::<LambdaExpr>() {
             return Ok(lambda);
         }
 

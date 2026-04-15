@@ -134,10 +134,10 @@ impl CaseBody {
                 if let Some(column) = expr.downcast_ref::<Column>() {
                     used_column_indices.insert(column.index());
                 } else if let Some(lambda_variable) =
-                    expr.as_any().downcast_ref::<LambdaVariable>()
+                    expr.downcast_ref::<LambdaVariable>()
                 {
                     used_column_indices.insert(lambda_variable.index());
-                } else if expr.as_any().is::<LambdaExpr>() {
+                } else if expr.is::<LambdaExpr>() {
                     //todo: remove this branch when lambda supports column capture
                     return Ok(TreeNodeRecursion::Jump);
                 }
@@ -179,7 +179,7 @@ impl CaseBody {
                             ))));
                         }
                     } else if let Some(lambda_variable) =
-                        expr.as_any().downcast_ref::<LambdaVariable>()
+                        expr.downcast_ref::<LambdaVariable>()
                     {
                         let original = lambda_variable.index();
                         let projected = *column_index_map.get(&original).unwrap();
@@ -189,7 +189,7 @@ impl CaseBody {
                                 Arc::clone(lambda_variable.field()),
                             ))));
                         }
-                    } else if expr.as_any().is::<LambdaExpr>() {
+                    } else if expr.is::<LambdaExpr>() {
                         //todo: remove this branch when lambda supports column capture
                         return Ok(Transformed::new(e, false, TreeNodeRecursion::Jump));
                     }

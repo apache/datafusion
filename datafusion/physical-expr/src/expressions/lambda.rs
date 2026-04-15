@@ -17,7 +17,6 @@
 
 //! Physical lambda expression: [`LambdaExpr`]
 
-use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -83,10 +82,6 @@ impl std::fmt::Display for LambdaExpr {
 }
 
 impl PhysicalExpr for LambdaExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(DataType::Null)
     }
