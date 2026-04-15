@@ -3237,6 +3237,7 @@ _Alias of [current_date](#current_date)._
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
 - [array_cat](#array_cat)
+- [array_compact](#array_compact)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
@@ -3286,6 +3287,7 @@ _Alias of [current_date](#current_date)._
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
+- [list_compact](#list_compact)
 - [list_concat](#list_concat)
 - [list_contains](#list_contains)
 - [list_dims](#list_dims)
@@ -3392,6 +3394,33 @@ array_append(array, element)
 ### `array_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `array_compact`
+
+Removes null values from the array.
+
+```sql
+array_compact(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_compact([1, NULL, 2, NULL, 3]) arr;
++-----------+
+| arr       |
++-----------+
+| [1, 2, 3] |
++-----------+
+```
+
+#### Aliases
+
+- list_compact
 
 ### `array_concat`
 
@@ -4564,6 +4593,10 @@ _Alias of [array_append](#array_append)._
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `list_compact`
+
+_Alias of [array_compact](#array_compact)._
 
 ### `list_concat`
 

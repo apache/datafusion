@@ -677,7 +677,7 @@ run_tpch() {
     echo "Running tpch benchmark..."
 
     FORMAT=$2
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --scale-factor "${SCALE_FACTOR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the tpch in memory (needs tpch parquet data)
@@ -693,7 +693,7 @@ run_tpch_mem() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --scale-factor "${SCALE_FACTOR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the tpcds benchmark
@@ -900,7 +900,7 @@ data_imdb() {
                 if [ "${DOWNLOADED_SIZE}" != "${expected_size}" ]; then
                     echo "Error: Download size mismatch"
                     echo "Expected: ${expected_size}"
-                    echo "Got: ${DOWNLADED_SIZE}"
+                    echo "Got: ${DOWNLOADED_SIZE}"
                     echo "Please re-initiate the download"
                     return 1
                 fi

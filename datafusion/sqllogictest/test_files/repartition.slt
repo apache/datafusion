@@ -123,7 +123,7 @@ physical_plan
 03)----RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
 04)------StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
 
-# Start repratition on empty column test.
+# Start repartition on empty column test.
 # See https://github.com/apache/datafusion/issues/12057
 
 statement ok

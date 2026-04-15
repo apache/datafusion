@@ -166,6 +166,863 @@ drop table small_table;
 statement ok
 drop table large_table;
 
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_topk_dynamic_filter_pushdown_integration
+#
+# Integration test for dynamic filter pushdown with TopK:
+# a TopK over an ordered parquet file emits a dynamic filter that should
+# get pushed into the parquet scan and prune every row group except the
+# first (128 rows), visible via `pushdown_rows_matched` / `pushdown_rows_pruned`.
+#
+# `t * t` (rather than `t`) is used as the sort expression so the
+# order-pushdown optimizer does not rewrite the TopK away.
+########
+
+statement ok
+set datafusion.execution.parquet.max_row_group_size = 128;
+
+query I
+COPY (
+  SELECT 1372708800 + value AS t
+  FROM generate_series(0, 99999)
+  ORDER BY t
+) TO 'test_files/scratch/push_down_filter_parquet/topk_pushdown.parquet'
+STORED AS PARQUET;
+----
+100000
+
+statement ok
+CREATE EXTERNAL TABLE topk_pushdown
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/topk_pushdown.parquet';
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+query TT
+EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t * t LIMIT 10;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=10), expr=[t@0 * t@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[t@0 * t@0 < 1884329474306198481], metrics=[output_rows=10, output_batches=1, row_replacements=10]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_pushdown.parquet]]}, projection=[t], output_ordering=[t@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ t@0 * t@0 < 1884329474306198481 ], metrics=[output_rows=128, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=782 total → 782 matched, row_groups_pruned_bloom_filter=782 total → 782 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=128, pushdown_rows_pruned=99.87 K, predicate_cache_inner_records=128, predicate_cache_records=128, scan_efficiency_ratio=64.87% (258.7 K/398.8 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+reset datafusion.execution.parquet.max_row_group_size;
+
+statement ok
+drop table topk_pushdown;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_topk_dynamic_filter_pushdown
+#
+# A `ORDER BY b DESC LIMIT 1` over a parquet file should emit a dynamic
+# filter on the TopK that gets pushed into the scan's predicate, visible
+# in EXPLAIN ANALYZE as `DynamicFilter [ b > <max> ]` tightened to the
+# running max seen by the TopK during execution.
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'bd', 1.0),
+    ('ab', 'bc', 2.0),
+    ('ac', 'bb', 2.0),
+    ('ad', 'ba', 1.0)
+  ) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_parquet/topk_single_col.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE topk_single_col (a VARCHAR, b VARCHAR, c DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/topk_single_col.parquet';
+
+# Data-correctness check — top row by b desc is (aa, bd, 1).
+query TTR
+SELECT * FROM topk_single_col ORDER BY b DESC LIMIT 1;
+----
+aa bd 1
+
+# Before execution: a dynamic filter is emitted but still empty
+# (DynamicFilter [ empty ]) on the parquet scan.
+query TT
+EXPLAIN SELECT * FROM topk_single_col ORDER BY b DESC LIMIT 1;
+----
+physical_plan
+01)SortExec: TopK(fetch=1), expr=[b@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_single_col.parquet]]}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+# After execution: the dynamic filter is tightened to `b > <max_seen>`.
+query TT
+EXPLAIN ANALYZE SELECT * FROM topk_single_col ORDER BY b DESC LIMIT 1;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=1), expr=[b@1 DESC], preserve_partitioning=[false], filter=[b@1 IS NULL OR b@1 > bd], metrics=[output_rows=1, output_batches=1, row_replacements=1]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_single_col.parquet]]}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilter [ b@1 IS NULL OR b@1 > bd ], pruning_predicate=b_null_count@0 > 0 OR b_null_count@0 != row_count@2 AND b_max@1 > bd, required_guarantees=[], metrics=[output_rows=4, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=4, pushdown_rows_pruned=0, predicate_cache_inner_records=4, predicate_cache_records=4, scan_efficiency_ratio=22.37% (240/1.07 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table topk_single_col;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_topk_dynamic_filter_pushdown_multi_column_sort
+#
+# TopK with a compound sort key (b ASC NULLS LAST, a DESC). The dynamic
+# filter emitted to the scan should encode the tiebreaker as a compound
+# predicate of the form `b < <k1> OR (b = <k1> AND a > <k2>)`.
+# With fetch=2 the top-2 rows are (ad, ba) and (ac, bb), so the final
+# filter reads `b < bb OR (b = bb AND a > ac)`.
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('ac', 'bb', 2.0),
+    ('ad', 'ba', 1.0),
+    ('aa', 'bc', 1.0),
+    ('ab', 'bd', 2.0)
+  ) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_parquet/topk_multi_col.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE topk_multi_col (a VARCHAR, b VARCHAR, c DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/topk_multi_col.parquet';
+
+# Data-correctness: confirm the top-2 rows come out in the expected order.
+query TTR
+SELECT * FROM topk_multi_col ORDER BY b ASC NULLS LAST, a DESC LIMIT 2;
+----
+ad ba 1
+ac bb 2
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM topk_multi_col ORDER BY b ASC NULLS LAST, a DESC LIMIT 2;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=2), expr=[b@1 ASC NULLS LAST, a@0 DESC], preserve_partitioning=[false], filter=[b@1 < bb OR b@1 = bb AND (a@0 IS NULL OR a@0 > ac)], metrics=[output_rows=2, output_batches=1, row_replacements=2]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_multi_col.parquet]]}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilter [ b@1 < bb OR b@1 = bb AND (a@0 IS NULL OR a@0 > ac) ], pruning_predicate=b_null_count@1 != row_count@2 AND b_min@0 < bb OR b_null_count@1 != row_count@2 AND b_min@0 <= bb AND bb <= b_max@3 AND (a_null_count@4 > 0 OR a_null_count@4 != row_count@2 AND a_max@5 > ac), required_guarantees=[], metrics=[output_rows=4, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=4, pushdown_rows_pruned=0, predicate_cache_inner_records=8, predicate_cache_records=8, scan_efficiency_ratio=22.37% (240/1.07 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table topk_multi_col;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_hashjoin_dynamic_filter_pushdown
+#
+# CollectLeft hash join on two equi-join keys: the dynamic filter emitted
+# by the build side should cover both keys and include an `IN (SET)`
+# predicate over `struct(a, b)` for the rows it collected.
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0)
+  ) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_parquet/join_build.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0),
+    ('ac', 'bc', 3.0),
+    ('ad', 'bd', 4.0)
+  ) AS v(a, b, e)
+) TO 'test_files/scratch/push_down_filter_parquet/join_probe.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE join_build (a VARCHAR, b VARCHAR, c DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/join_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE join_probe (a VARCHAR, b VARCHAR, e DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/join_probe.parquet';
+
+# Data-correctness: only the 2 build rows should match.
+query TTRR
+SELECT p.a, p.b, build.c, p.e
+FROM join_probe p INNER JOIN join_build AS build
+  ON p.a = build.a AND p.b = build.b
+ORDER BY p.a;
+----
+aa ba 1 1
+ab bb 2 2
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+query TT
+EXPLAIN ANALYZE
+SELECT p.a, p.b, build.c, p.e
+FROM join_probe p INNER JOIN join_build AS build
+  ON p.a = build.a AND p.b = build.b;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], projection=[a@3, b@4, c@2, e@5], metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/join_build.parquet]]}, projection=[a, b, c], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=20.48% (214/1.04 K)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/join_probe.parquet]]}, projection=[a, b, e], file_type=parquet, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ], pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 >= aa AND a_null_count@1 != row_count@2 AND a_min@3 <= ab AND b_null_count@5 != row_count@2 AND b_max@4 >= ba AND b_null_count@5 != row_count@2 AND b_min@6 <= bb, required_guarantees=[], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=2, predicate_cache_inner_records=8, predicate_cache_records=4, scan_efficiency_ratio=22.78% (246/1.08 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table join_build;
+
+statement ok
+drop table join_probe;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_nested_hashjoin_dynamic_filter_pushdown
+#
+# Nested hash joins: `t1 JOIN (t2 JOIN t3 ON t2.c = t3.d) ON t1.a = t2.b`
+# should push dynamic filters down to BOTH the t2 and t3 scans
+# (t2 gets a filter on `b`, t3 gets a filter on `d`).
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 1.0),
+    ('ab', 2.0)
+  ) AS v(a, x)
+) TO 'test_files/scratch/push_down_filter_parquet/nested_t1.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ca', 1.0),
+    ('ab', 'cb', 2.0),
+    ('ac', 'cc', 3.0),
+    ('ad', 'cd', 4.0),
+    ('ae', 'ce', 5.0)
+  ) AS v(b, c, y)
+) TO 'test_files/scratch/push_down_filter_parquet/nested_t2.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('ca', 1.0),
+    ('cb', 2.0),
+    ('cc', 3.0),
+    ('cd', 4.0),
+    ('ce', 5.0),
+    ('cf', 6.0),
+    ('cg', 7.0),
+    ('ch', 8.0)
+  ) AS v(d, z)
+) TO 'test_files/scratch/push_down_filter_parquet/nested_t3.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE nested_t1 (a VARCHAR, x DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/nested_t1.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE nested_t2 (b VARCHAR, c VARCHAR, y DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/nested_t2.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE nested_t3 (d VARCHAR, z DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/nested_t3.parquet';
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+query TT
+EXPLAIN ANALYZE
+SELECT *
+FROM nested_t1
+INNER JOIN nested_t2 ON nested_t1.a = nested_t2.b
+INNER JOIN nested_t3 ON nested_t2.c = nested_t3.d;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@3, d@0)], metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, b@0)], metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nested_t1.parquet]]}, projection=[a, x], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=18.23% (144/790)]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nested_t2.parquet]]}, projection=[b, c, y], file_type=parquet, predicate=DynamicFilter [ b@0 >= aa AND b@0 <= ab AND b@0 IN (SET) ([aa, ab]) ], pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 >= aa AND b_null_count@1 != row_count@2 AND b_min@3 <= ab AND (b_null_count@1 != row_count@2 AND b_min@3 <= aa AND aa <= b_max@0 OR b_null_count@1 != row_count@2 AND b_min@3 <= ab AND ab <= b_max@0), required_guarantees=[b in (aa, ab)], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=1 total → 1 matched, page_index_rows_pruned=5 total → 5 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=3, predicate_cache_inner_records=5, predicate_cache_records=2, scan_efficiency_ratio=23.2% (252/1.09 K)]
+05)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nested_t3.parquet]]}, projection=[d, z], file_type=parquet, predicate=DynamicFilter [ d@0 >= ca AND d@0 <= cb AND hash_lookup ], pruning_predicate=d_null_count@1 != row_count@2 AND d_max@0 >= ca AND d_null_count@1 != row_count@2 AND d_min@3 <= cb, required_guarantees=[], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=1 total → 1 matched, page_index_rows_pruned=8 total → 8 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=6, predicate_cache_inner_records=8, predicate_cache_records=2, scan_efficiency_ratio=22.12% (184/832)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table nested_t1;
+
+statement ok
+drop table nested_t2;
+
+statement ok
+drop table nested_t3;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_hashjoin_parent_filter_pushdown
+#
+# A FilterExec above a HashJoin should split: the single-side predicates
+# should be pushed down to each scan, while any cross-side predicate
+# stays above the join.
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0)
+  ) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_parquet/parent_build.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0),
+    ('ac', 'bc', 3.0),
+    ('ad', 'bd', 4.0)
+  ) AS v(d, e, f)
+) TO 'test_files/scratch/push_down_filter_parquet/parent_probe.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE parent_build (a VARCHAR, b VARCHAR, c DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/parent_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE parent_probe (d VARCHAR, e VARCHAR, f DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/parent_probe.parquet';
+
+query TT
+EXPLAIN
+SELECT *
+FROM parent_build
+INNER JOIN parent_probe ON parent_build.a = parent_probe.d
+WHERE parent_build.a = 'aa' AND parent_probe.e = 'ba';
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, d@0)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/parent_build.parquet]]}, projection=[a, b, c], file_type=parquet, predicate=a@0 = aa, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= aa AND aa <= a_max@1, required_guarantees=[a in (aa)]
+03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/parent_probe.parquet]]}, projection=[d, e, f], file_type=parquet, predicate=e@1 = ba AND d@0 = aa AND DynamicFilter [ empty ], pruning_predicate=e_null_count@2 != row_count@3 AND e_min@0 <= ba AND ba <= e_max@1 AND d_null_count@6 != row_count@3 AND d_min@4 <= aa AND aa <= d_max@5, required_guarantees=[d in (aa), e in (ba)]
+
+statement ok
+drop table parent_build;
+
+statement ok
+drop table parent_probe;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_dynamic_filter_pushdown_through_hash_join_with_topk
+#
+# Composition: a TopK sitting above an InnerJoin should push its dynamic
+# filter THROUGH the hash join and into the probe-side scan, where it
+# gets combined (AND) with the hash join's own dynamic filter. The
+# probe-side predicate should contain BOTH a `DynamicFilter [ d IN (...) ]`
+# (from the join) and a `DynamicFilter [ e < <topk_bound> ]` (from the TopK).
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0)
+  ) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_parquet/topk_join_build.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0),
+    ('ac', 'bc', 3.0),
+    ('ad', 'bd', 4.0)
+  ) AS v(d, e, f)
+) TO 'test_files/scratch/push_down_filter_parquet/topk_join_probe.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE topk_join_build (a VARCHAR, b VARCHAR, c DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/topk_join_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE topk_join_probe (d VARCHAR, e VARCHAR, f DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/topk_join_probe.parquet';
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+query TT
+EXPLAIN ANALYZE
+SELECT topk_join_probe.e
+FROM topk_join_build
+INNER JOIN topk_join_probe ON topk_join_build.a = topk_join_probe.d
+ORDER BY topk_join_probe.e ASC
+LIMIT 2;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=2), expr=[e@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[e@0 < bb], metrics=[output_rows=2, output_batches=1, row_replacements=2]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, d@0)], projection=[e@2], metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_join_build.parquet]]}, projection=[a], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=6.7% (70/1.04 K)]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_join_probe.parquet]]}, projection=[d, e], file_type=parquet, predicate=DynamicFilter [ d@0 >= aa AND d@0 <= ab AND d@0 IN (SET) ([aa, ab]) ] AND DynamicFilter [ e@1 < bb ], pruning_predicate=d_null_count@1 != row_count@2 AND d_max@0 >= aa AND d_null_count@1 != row_count@2 AND d_min@3 <= ab AND (d_null_count@1 != row_count@2 AND d_min@3 <= aa AND aa <= d_max@0 OR d_null_count@1 != row_count@2 AND d_min@3 <= ab AND ab <= d_max@0) AND e_null_count@5 != row_count@2 AND e_min@4 < bb, required_guarantees=[d in (aa, ab)], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=1 total → 1 matched, page_index_rows_pruned=4 total → 4 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=2, predicate_cache_inner_records=8, predicate_cache_records=4, scan_efficiency_ratio=15.37% (166/1.08 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table topk_join_build;
+
+statement ok
+drop table topk_join_probe;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_topk_with_projection_transformation_on_dyn_filter
+#
+# When a ProjectionExec sits between a TopK and the parquet scan, the
+# dynamic filter emitted by the TopK (on the projected column) must be
+# rewritten back to the original scan-side column before it reaches the
+# scan. Covers: simple `SELECT a`, column reorder (`SELECT b, a`),
+# expression projection (`SELECT a+1 AS a_plus_1`), and column alias
+# shadowing (`SELECT a+1 AS a`).
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    (1, 'x', 1.0),
+    (2, 'y', 2.0),
+    (3, 'z', 3.0)
+  ) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_parquet/topk_proj.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE topk_proj (a INT, b VARCHAR, c DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/topk_proj.parquet';
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+# Case 1: reorder — `SELECT b, a` — filter on the TopK uses projected column
+# `a`, but the scan predicate must reference the original `a@0`.
+query TT
+EXPLAIN ANALYZE SELECT b, a FROM topk_proj ORDER BY a LIMIT 2;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=2), expr=[a@1 ASC NULLS LAST], preserve_partitioning=[false], filter=[a@1 < 2], metrics=[output_rows=2, output_batches=1, row_replacements=2]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_proj.parquet]]}, projection=[b, a], file_type=parquet, predicate=DynamicFilter [ a@0 < 2 ], pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 2, required_guarantees=[], metrics=[output_rows=3, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=3, pushdown_rows_pruned=0, predicate_cache_inner_records=3, predicate_cache_records=3, scan_efficiency_ratio=13.72% (153/1.11 K)]
+
+# Case 2: prune — `SELECT a` — filter stays as `a < 2` on the scan.
+query TT
+EXPLAIN ANALYZE SELECT a FROM topk_proj ORDER BY a LIMIT 2;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=2), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[a@0 < 2], metrics=[output_rows=2, output_batches=1, row_replacements=2]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_proj.parquet]]}, projection=[a], file_type=parquet, predicate=DynamicFilter [ a@0 < 2 ], pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 2, required_guarantees=[], metrics=[output_rows=3, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=3, pushdown_rows_pruned=0, predicate_cache_inner_records=3, predicate_cache_records=3, scan_efficiency_ratio=7.09% (79/1.11 K)]
+
+# Case 3: expression — `SELECT a+1 AS a_plus_1` — the TopK filter is on
+# `a_plus_1`, the scan predicate must read `a@0 + 1`.
+query TT
+EXPLAIN ANALYZE SELECT a + 1 AS a_plus_1, b FROM topk_proj ORDER BY a_plus_1 LIMIT 2;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=2), expr=[a_plus_1@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[a_plus_1@0 < 3], metrics=[output_rows=2, output_batches=1, row_replacements=2]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_proj.parquet]]}, projection=[CAST(a@0 AS Int64) + 1 as a_plus_1, b], file_type=parquet, predicate=DynamicFilter [ CAST(a@0 AS Int64) + 1 < 3 ], metrics=[output_rows=3, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=3, pushdown_rows_pruned=0, predicate_cache_inner_records=3, predicate_cache_records=3, scan_efficiency_ratio=13.72% (153/1.11 K)]
+
+# Case 4: alias shadowing — `SELECT a+1 AS a` — the projection renames
+# `a+1` to `a`, so the TopK's `a < 3` must still be rewritten to
+# `a@0 + 1 < 3` on the scan.
+query TT
+EXPLAIN ANALYZE SELECT a + 1 AS a, b FROM topk_proj ORDER BY a LIMIT 2;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=2), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[a@0 < 3], metrics=[output_rows=2, output_batches=1, row_replacements=2]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/topk_proj.parquet]]}, projection=[CAST(a@0 AS Int64) + 1 as a, b], file_type=parquet, predicate=DynamicFilter [ CAST(a@0 AS Int64) + 1 < 3 ], metrics=[output_rows=3, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=3, pushdown_rows_pruned=0, predicate_cache_inner_records=3, predicate_cache_records=3, scan_efficiency_ratio=13.72% (153/1.11 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table topk_proj;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_hashjoin_dynamic_filter_pushdown_through_aggregate_with_reordered_input
+#
+# The HashJoin's dynamic filter on the join key should propagate down
+# through a GROUP BY aggregate and land on the underlying parquet scan.
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES ('h1'), ('h2')) AS v(a)
+) TO 'test_files/scratch/push_down_filter_parquet/join_agg_build.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('h1', 1.0),
+    ('h2', 2.0),
+    ('h3', 3.0),
+    ('h4', 4.0)
+  ) AS v(a, value)
+) TO 'test_files/scratch/push_down_filter_parquet/join_agg_probe.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE join_agg_build (a VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/join_agg_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE join_agg_probe (a VARCHAR, value DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/join_agg_probe.parquet';
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+query TT
+EXPLAIN ANALYZE
+SELECT b.a, agg.min_value
+FROM join_agg_build b
+INNER JOIN (
+  SELECT a, MIN(value) AS min_value FROM join_agg_probe GROUP BY a
+) agg ON b.a = agg.a;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)], projection=[a@0, min_value@2], metrics=[output_rows=2, output_batches=2, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=2, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/join_agg_build.parquet]]}, projection=[a], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=15.32% (70/457)]
+03)--ProjectionExec: expr=[a@0 as a, min(join_agg_probe.value)@1 as min_value], metrics=[output_rows=2, output_batches=2]
+04)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[min(join_agg_probe.value)], metrics=[output_rows=2, output_batches=2, spill_count=0, spilled_rows=0]
+05)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1, metrics=[output_rows=2, output_batches=2, spill_count=0, spilled_rows=0]
+06)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[min(join_agg_probe.value)], metrics=[output_rows=2, output_batches=1, spill_count=0, spilled_rows=0, skipped_aggregation_rows=0, reduction_factor=100% (2/2)]
+07)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/join_agg_probe.parquet]]}, projection=[a, value], file_type=parquet, predicate=DynamicFilter [ a@0 >= h1 AND a@0 <= h2 AND a@0 IN (SET) ([h1, h2]) ], pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 >= h1 AND a_null_count@1 != row_count@2 AND a_min@3 <= h2 AND (a_null_count@1 != row_count@2 AND a_min@3 <= h1 AND h1 <= a_max@0 OR a_null_count@1 != row_count@2 AND a_min@3 <= h2 AND h2 <= a_max@0), required_guarantees=[a in (h1, h2)], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=1 total → 1 matched, page_index_rows_pruned=4 total → 4 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=2, predicate_cache_inner_records=4, predicate_cache_records=2, scan_efficiency_ratio=19.81% (163/823)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table join_agg_build;
+
+statement ok
+drop table join_agg_probe;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_hashjoin_dynamic_filter_with_nulls
+#
+# HashJoin build side contains NULL join-key values. The dynamic filter
+# emitted to the probe scan should still correctly handle NULLs.
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 1),
+    (CAST(NULL AS VARCHAR), 2),
+    ('ab', CAST(NULL AS INT))
+  ) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_parquet/nulls_build.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 1, 1.0),
+    ('ab', 3, 2.0),
+    ('ac', 4, 3.0),
+    (CAST(NULL AS VARCHAR), 5, 4.0)
+  ) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_parquet/nulls_probe.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE nulls_build (a VARCHAR, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/nulls_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE nulls_probe (a VARCHAR, b INT, c DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/nulls_probe.parquet';
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+query TT
+EXPLAIN ANALYZE
+SELECT nulls_build.a, nulls_build.b, nulls_probe.a, nulls_probe.b, nulls_probe.c
+FROM nulls_build INNER JOIN nulls_probe
+ON nulls_build.a = nulls_probe.a AND nulls_build.b = nulls_probe.b;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], metrics=[output_rows=1, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=3, input_batches=1, input_rows=1, avg_fanout=100% (1/1), probe_hit_rate=100% (1/1)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nulls_build.parquet]]}, projection=[a, b], file_type=parquet, metrics=[output_rows=3, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=18.6% (144/774)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nulls_probe.parquet]]}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= 1 AND b@1 <= 2 AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:1}, {c0:,c1:2}, {c0:ab,c1:}]) ], pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 >= aa AND a_null_count@1 != row_count@2 AND a_min@3 <= ab AND b_null_count@5 != row_count@2 AND b_max@4 >= 1 AND b_null_count@5 != row_count@2 AND b_min@6 <= 2, required_guarantees=[], metrics=[output_rows=1, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=1, pushdown_rows_pruned=3, predicate_cache_inner_records=8, predicate_cache_records=2, scan_efficiency_ratio=21.1% (237/1.12 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table nulls_build;
+
+statement ok
+drop table nulls_probe;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_hashjoin_dynamic_filter_pushdown_left_join
+#   test_hashjoin_dynamic_filter_pushdown_left_semi_join
+#
+# For LEFT and LEFT SEMI joins (without a WHERE that would convert them
+# to INNER), the HashJoin's dynamic filter should still push into the
+# probe scan on the join keys — unmatched probe rows that can never
+# contribute to any build match are safely pruned there.
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0)
+  ) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_parquet/lj_build.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0),
+    ('ac', 'bc', 3.0),
+    ('ad', 'bd', 4.0)
+  ) AS v(a, b, e)
+) TO 'test_files/scratch/push_down_filter_parquet/lj_probe.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE lj_build (a VARCHAR, b VARCHAR, c DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/lj_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE lj_probe (a VARCHAR, b VARCHAR, e DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/lj_probe.parquet';
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+# LEFT JOIN: build is preserved; probe rows get dynamic filter based on build keys.
+query TT
+EXPLAIN ANALYZE
+SELECT lj_build.a, lj_build.b, lj_build.c, lj_probe.a, lj_probe.b, lj_probe.e
+FROM lj_build LEFT JOIN lj_probe
+ON lj_build.a = lj_probe.a AND lj_build.b = lj_probe.b;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@0), (b@1, b@1)], metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=2, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/lj_build.parquet]]}, projection=[a, b, c], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=20.48% (214/1.04 K)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/lj_probe.parquet]]}, projection=[a, b, e], file_type=parquet, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ], pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 >= aa AND a_null_count@1 != row_count@2 AND a_min@3 <= ab AND b_null_count@5 != row_count@2 AND b_max@4 >= ba AND b_null_count@5 != row_count@2 AND b_min@6 <= bb, required_guarantees=[], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=2, predicate_cache_inner_records=8, predicate_cache_records=4, scan_efficiency_ratio=22.78% (246/1.08 K)]
+
+# LEFT SEMI JOIN: only matching build rows are returned; probe scan still
+# receives the dynamic filter.
+query TT
+EXPLAIN ANALYZE
+SELECT lj_build.*
+FROM lj_build
+WHERE EXISTS (
+  SELECT 1 FROM lj_probe
+  WHERE lj_probe.a = lj_build.a AND lj_probe.b = lj_build.b
+);
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(a@0, a@0), (b@1, b@1)], metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=2, input_rows=4, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/lj_build.parquet]]}, projection=[a, b, c], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=20.48% (214/1.04 K)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/lj_probe.parquet]]}, projection=[a, b], file_type=parquet, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ], pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 >= aa AND a_null_count@1 != row_count@2 AND a_min@3 <= ab AND b_null_count@5 != row_count@2 AND b_max@4 >= ba AND b_null_count@5 != row_count@2 AND b_min@6 <= bb, required_guarantees=[], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=2, predicate_cache_inner_records=8, predicate_cache_records=4, scan_efficiency_ratio=15.37% (166/1.08 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table lj_build;
+
+statement ok
+drop table lj_probe;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_hashjoin_hash_table_pushdown_collect_left
+#   test_hashjoin_hash_table_pushdown_integer_keys
+#
+# With `hash_join_inlist_pushdown_max_size = 1`, the HashJoin dynamic filter
+# should use the HashTable strategy (`hash_lookup`) instead of the InList
+# strategy (`IN (SET) ([...])`), even when the build side is tiny.
+########
+
+statement ok
+set datafusion.optimizer.hash_join_inlist_pushdown_max_size = 1;
+
+# --- multi-column string keys ---
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0)
+  ) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_parquet/hl_build.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('aa', 'ba', 1.0),
+    ('ab', 'bb', 2.0),
+    ('ac', 'bc', 3.0),
+    ('ad', 'bd', 4.0)
+  ) AS v(a, b, e)
+) TO 'test_files/scratch/push_down_filter_parquet/hl_probe.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE hl_build (a VARCHAR, b VARCHAR, c DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/hl_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE hl_probe (a VARCHAR, b VARCHAR, e DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/hl_probe.parquet';
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+# probe scan filter should contain `hash_lookup`, not `IN (SET)`.
+query TT
+EXPLAIN ANALYZE
+SELECT p.a, p.b, build.c, p.e
+FROM hl_probe p INNER JOIN hl_build AS build
+  ON p.a = build.a AND p.b = build.b;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], projection=[a@3, b@4, c@2, e@5], metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/hl_build.parquet]]}, projection=[a, b, c], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=20.48% (214/1.04 K)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/hl_probe.parquet]]}, projection=[a, b, e], file_type=parquet, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND hash_lookup ], pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 >= aa AND a_null_count@1 != row_count@2 AND a_min@3 <= ab AND b_null_count@5 != row_count@2 AND b_max@4 >= ba AND b_null_count@5 != row_count@2 AND b_min@6 <= bb, required_guarantees=[], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=2, predicate_cache_inner_records=8, predicate_cache_records=4, scan_efficiency_ratio=22.78% (246/1.08 K)]
+
+statement ok
+drop table hl_build;
+
+statement ok
+drop table hl_probe;
+
+# --- multi-column integer keys ---
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    (1, 10, 100.0),
+    (2, 20, 200.0)
+  ) AS v(id1, id2, value)
+) TO 'test_files/scratch/push_down_filter_parquet/int_build.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    (1, 10, 'a'),
+    (2, 20, 'b'),
+    (3, 30, 'c'),
+    (4, 40, 'd')
+  ) AS v(id1, id2, data)
+) TO 'test_files/scratch/push_down_filter_parquet/int_probe.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE int_build (id1 INT, id2 INT, value DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/int_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE int_probe (id1 INT, id2 INT, data VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/int_probe.parquet';
+
+query TT
+EXPLAIN ANALYZE
+SELECT b.id1, b.id2, b.value, p.data
+FROM int_build b INNER JOIN int_probe p
+  ON b.id1 = p.id1 AND b.id2 = p.id2;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id1@0, id1@0), (id2@1, id2@1)], projection=[id1@0, id2@1, value@2, data@5], metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/int_build.parquet]]}, projection=[id1, id2, value], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=19.02% (222/1.17 K)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/int_probe.parquet]]}, projection=[id1, id2, data], file_type=parquet, predicate=DynamicFilter [ id1@0 >= 1 AND id1@0 <= 2 AND id2@1 >= 10 AND id2@1 <= 20 AND hash_lookup ], pruning_predicate=id1_null_count@1 != row_count@2 AND id1_max@0 >= 1 AND id1_null_count@1 != row_count@2 AND id1_min@3 <= 2 AND id2_null_count@5 != row_count@2 AND id2_max@4 >= 10 AND id2_null_count@5 != row_count@2 AND id2_min@6 <= 20, required_guarantees=[], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=2, predicate_cache_inner_records=8, predicate_cache_records=4, scan_efficiency_ratio=21.43% (239/1.11 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+reset datafusion.optimizer.hash_join_inlist_pushdown_max_size;
+
+statement ok
+drop table int_build;
+
+statement ok
+drop table int_probe;
+
+
 # Config reset
 statement ok
 RESET datafusion.explain.physical_plan_only;

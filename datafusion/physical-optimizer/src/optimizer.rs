@@ -221,7 +221,7 @@ impl PhysicalOptimizer {
             Arc::new(PushdownSort::new()),
             Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
-            // Therefore it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
+            // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new_post_optimization()),
             // The SanityCheckPlan rule checks whether the order and
