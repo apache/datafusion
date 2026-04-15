@@ -106,8 +106,30 @@ fn encode_string(s: &str, charset: &str) -> Result<Vec<u8>> {
             }
             Ok(bytes)
         }
+        "UTF-32BE" | "UTF32BE" => {
+            let mut bytes = Vec::new();
+            for c in s.chars() {
+                bytes.extend_from_slice(&(c as u32).to_be_bytes());
+            }
+            Ok(bytes)
+        }
+        "UTF-32LE" | "UTF32LE" => {
+            let mut bytes = Vec::new();
+            for c in s.chars() {
+                bytes.extend_from_slice(&(c as u32).to_le_bytes());
+            }
+            Ok(bytes)
+        }
+        "UTF-32" | "UTF32" => {
+            // BOM (big-endian marker) followed by UTF-32BE encoded bytes
+            let mut bytes = vec![0x00, 0x00, 0xFE, 0xFF];
+            for c in s.chars() {
+                bytes.extend_from_slice(&(c as u32).to_be_bytes());
+            }
+            Ok(bytes)
+        }
         _ => exec_err!(
-            "Unsupported charset for encode: '{}'. Supported: US-ASCII, ISO-8859-1, UTF-8, UTF-16, UTF-16BE, UTF-16LE",
+            "Unsupported charset for encode: '{}'. Supported: US-ASCII, ISO-8859-1, UTF-8, UTF-16, UTF-16BE, UTF-16LE, UTF-32, UTF-32BE, UTF-32LE",
             charset
         ),
     }
@@ -544,6 +566,66 @@ mod tests {
         assert_eq!(
             expect_binary_scalar(result),
             vec![0xFE, 0xFF, 0xD8, 0x3D, 0xDE, 0x00]
+        );
+    }
+
+    #[test]
+    fn test_encode_utf32be() {
+        // 'A' = U+0041 → 00 00 00 41, 'B' = U+0042 → 00 00 00 42
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("AB".into())), "UTF-32BE").unwrap();
+        assert_eq!(
+            expect_binary_scalar(result),
+            vec![0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x42]
+        );
+    }
+
+    #[test]
+    fn test_encode_utf32le() {
+        // 'A' = U+0041 → 41 00 00 00, 'B' = U+0042 → 42 00 00 00
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("AB".into())), "UTF-32LE").unwrap();
+        assert_eq!(
+            expect_binary_scalar(result),
+            vec![0x41, 0x00, 0x00, 0x00, 0x42, 0x00, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn test_encode_utf32_with_bom() {
+        // UTF-32 = BOM (0000FEFF) + UTF-32BE
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("A".into())), "UTF-32").unwrap();
+        assert_eq!(
+            expect_binary_scalar(result),
+            vec![0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x41]
+        );
+    }
+
+    #[test]
+    fn test_encode_emoji_utf32be() {
+        // U+1F600 (😀) → 00 01 F6 00
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("😀".into())), "UTF-32BE").unwrap();
+        assert_eq!(expect_binary_scalar(result), vec![0x00, 0x01, 0xF6, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_emoji_utf32le() {
+        // U+1F600 (😀) → 00 F6 01 00 (little-endian)
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("😀".into())), "UTF-32LE").unwrap();
+        assert_eq!(expect_binary_scalar(result), vec![0x00, 0xF6, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_emoji_utf32_with_bom() {
+        // UTF-32 = BOM (0000FEFF) + UTF-32BE: 00 01 F6 00
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("😀".into())), "UTF-32").unwrap();
+        assert_eq!(
+            expect_binary_scalar(result),
+            vec![0x00, 0x00, 0xFE, 0xFF, 0x00, 0x01, 0xF6, 0x00]
         );
     }
 
