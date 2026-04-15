@@ -1,0 +1,273 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+## array_append (aliases: `list_append`, `array_push_back`, `list_push_back`)
+
+# array_append with NULLs
+
+query ?
+select array_append(null, 1);
+----
+[1]
+
+query ?
+select array_append(null, [2, 3]);
+----
+[[2, 3]]
+
+query ?
+select array_append(null, [[4]]);
+----
+[[[4]]]
+
+query ????
+select
+  array_append(make_array(), 4),
+  array_append(make_array(), null),
+  array_append(make_array(1, null, 3), 4),
+  array_append(make_array(null, null), 1)
+;
+----
+[4] [NULL] [1, NULL, 3, 4] [NULL, NULL, 1]
+
+query ????
+select
+  array_append(arrow_cast(make_array(), 'LargeList(Int64)'), 4),
+  array_append(arrow_cast(make_array(), 'LargeList(Int64)'), null),
+  array_append(arrow_cast(make_array(1, null, 3), 'LargeList(Int64)'), 4),
+  array_append(arrow_cast(make_array(null, null), 'LargeList(Int64)'), 1)
+;
+----
+[4] [NULL] [1, NULL, 3, 4] [NULL, NULL, 1]
+
+query ??
+select
+  array_append(arrow_cast(make_array(1, null, 3), 'FixedSizeList(3, Int64)'), 4),
+  array_append(arrow_cast(make_array(null, null), 'FixedSizeList(2, Int64)'), 1)
+;
+----
+[1, NULL, 3, 4] [NULL, NULL, 1]
+
+# test invalid (non-null)
+query error
+select array_append(1, 2);
+
+query error
+select array_append(1, [2]);
+
+query error
+select array_append([1], [2]);
+
+query ??
+select
+  array_append(make_array(make_array(1, null, 3)), make_array(null)),
+  array_append(make_array(make_array(1, null, 3)), null);
+----
+[[1, NULL, 3], [NULL]] [[1, NULL, 3], NULL]
+
+query ??
+select
+  array_append(arrow_cast(make_array(make_array(1, null, 3)), 'LargeList(LargeList(Int64))'), arrow_cast(make_array(null), 'LargeList(Int64)')),
+  array_append(arrow_cast(make_array(make_array(1, null, 3)), 'LargeList(LargeList(Int64))'), null);
+----
+[[1, NULL, 3], [NULL]] [[1, NULL, 3], NULL]
+
+query ??
+select
+  array_append(arrow_cast(make_array(make_array(1, null, 3)), 'FixedSizeList(1, List(Int64))'), [null]),
+  array_append(arrow_cast(make_array(make_array(1, null, 3)), 'FixedSizeList(1, List(Int64))'), null);
+----
+[[1, NULL, 3], [NULL]] [[1, NULL, 3], NULL]
+
+# array_append scalar function #3
+query ???
+select array_append(make_array(1, 2, 3), 4), array_append(make_array(1.0, 2.0, 3.0), 4.0), array_append(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+query ???
+select array_append(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4), array_append(arrow_cast(make_array(1.0, 2.0, 3.0), 'LargeList(Float64)'), 4.0), array_append(arrow_cast(make_array('h', 'e', 'l', 'l'), 'LargeList(Utf8)'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+query ???
+select array_append(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 4), array_append(arrow_cast(make_array(1.0, 2.0, 3.0), 'FixedSizeList(3, Float64)'), 4.0), array_append(arrow_cast(make_array('h', 'e', 'l', 'l'), 'FixedSizeList(4, Utf8)'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array_append scalar function #4 (element is list)
+query ???
+select array_append(make_array([1], [2], [3]), make_array(4)), array_append(make_array([1.0], [2.0], [3.0]), make_array(4.0)), array_append(make_array(['h'], ['e'], ['l'], ['l']), make_array('o'));
+----
+[[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+query ???
+select array_append(arrow_cast(make_array([1], [2], [3]), 'LargeList(LargeList(Int64))'), arrow_cast(make_array(4), 'LargeList(Int64)')), array_append(arrow_cast(make_array([1.0], [2.0], [3.0]), 'LargeList(LargeList(Float64))'), arrow_cast(make_array(4.0), 'LargeList(Float64)')), array_append(arrow_cast(make_array(['h'], ['e'], ['l'], ['l']), 'LargeList(LargeList(Utf8))'), arrow_cast(make_array('o'), 'LargeList(Utf8)'));
+----
+[[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+query ???
+select array_append(arrow_cast(make_array([1], [2], [3]), 'FixedSizeList(3, List(Int64))'), [4]), array_append(arrow_cast(make_array([1.0], [2.0], [3.0]), 'FixedSizeList(3, List(Float64))'), [4.0]), array_append(arrow_cast(make_array(['h'], ['e'], ['l'], ['l']), 'FixedSizeList(4, List(Utf8))'), ['o']);
+----
+[[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+# list_append scalar function #5 (function alias `array_append`)
+query ???
+select list_append(make_array(1, 2, 3), 4), list_append(make_array(1.0, 2.0, 3.0), 4.0), list_append(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+query ???
+select list_append(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4), list_append(arrow_cast(make_array(1.0, 2.0, 3.0), 'LargeList(Float64)'), 4.0), list_append(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array_push_back scalar function #6 (function alias `array_append`)
+query ???
+select array_push_back(make_array(1, 2, 3), 4), array_push_back(make_array(1.0, 2.0, 3.0), 4.0), array_push_back(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+query ???
+select array_push_back(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4), array_push_back(arrow_cast(make_array(1.0, 2.0, 3.0), 'LargeList(Float64)'), 4.0), array_push_back(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# list_push_back scalar function #7 (function alias `array_append`)
+query ???
+select list_push_back(make_array(1, 2, 3), 4), list_push_back(make_array(1.0, 2.0, 3.0), 4.0), list_push_back(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+query ???
+select list_push_back(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4), list_push_back(arrow_cast(make_array(1.0, 2.0, 3.0), 'LargeList(Float64)'), 4.0), list_push_back(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array_append with columns #1
+query ?
+select array_append(column1, column2) from arrays_values;
+----
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20, 12]
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 23]
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 34]
+[44]
+[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, NULL]
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, 55]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 66]
+
+query ?
+select array_append(column1, column2) from large_arrays_values;
+----
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20, 12]
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 23]
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 34]
+[44]
+[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, NULL]
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, 55]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 66]
+
+query ?
+select array_append(column1, column2) from fixed_arrays_values;
+----
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20, 12]
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 23]
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 34]
+[NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 44]
+[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, NULL]
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, 55]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 66]
+
+# array_append with columns #2 (element is list)
+query ?
+select array_append(column1, column2) from nested_arrays;
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [7, 8, 9]]
+[[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [10, 11, 12]]
+
+query ?
+select array_append(column1, column2) from large_nested_arrays;
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [7, 8, 9]]
+[[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [10, 11, 12]]
+
+query ?
+select array_append(column1, column2) from fixed_size_nested_arrays;
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [7, 8, 9]]
+[[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [10, 11, 12]]
+
+# array_append with columns and scalars #1
+query ??
+select array_append(column2, 100.1), array_append(column3, '.') from arrays;
+----
+[1.1, 2.2, 3.3, 100.1] [L, o, r, e, m, .]
+[NULL, 5.5, 6.6, 100.1] [i, p, NULL, u, m, .]
+[7.7, 8.8, 9.9, 100.1] [d, NULL, l, o, r, .]
+[10.1, NULL, 12.2, 100.1] [s, i, t, .]
+[13.3, 14.4, 15.5, 100.1] [a, m, e, t, .]
+[100.1] [,, .]
+[16.6, 17.7, 18.8, 100.1] [.]
+
+query ??
+select array_append(column2, 100.1), array_append(column3, '.') from large_arrays;
+----
+[1.1, 2.2, 3.3, 100.1] [L, o, r, e, m, .]
+[NULL, 5.5, 6.6, 100.1] [i, p, NULL, u, m, .]
+[7.7, 8.8, 9.9, 100.1] [d, NULL, l, o, r, .]
+[10.1, NULL, 12.2, 100.1] [s, i, t, .]
+[13.3, 14.4, 15.5, 100.1] [a, m, e, t, .]
+[100.1] [,, .]
+[16.6, 17.7, 18.8, 100.1] [.]
+
+query ??
+select array_append(column2, 100.1), array_append(column3, '.') from fixed_size_arrays;
+----
+[1.1, 2.2, 3.3, 100.1] [L, o, r, e, m, .]
+[NULL, 5.5, 6.6, 100.1] [i, p, NULL, u, m, .]
+[7.7, 8.8, 9.9, 100.1] [d, NULL, l, o, r, .]
+[10.1, NULL, 12.2, 100.1] [s, i, t, a, b, .]
+[13.3, 14.4, 15.5, 100.1] [a, m, e, t, x, .]
+[NULL, NULL, NULL, 100.1] [,, a, b, c, d, .]
+[16.6, 17.7, 18.8, 100.1] [NULL, NULL, NULL, NULL, NULL, .]
+
+# array_append with columns and scalars #2
+query ??
+select array_append(column1, make_array(1, 11, 111)), array_append(make_array(make_array(1, 2, 3), make_array(11, 12, 13)), column2) from nested_arrays;
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [7, 8, 9]]
+[[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [10, 11, 12]]
+
+query ??
+select array_append(column1, arrow_cast(make_array(1, 11, 111), 'LargeList(Int64)')), array_append(arrow_cast(make_array(make_array(1, 2, 3), make_array(11, 12, 13)), 'LargeList(LargeList(Int64))'), column2) from large_nested_arrays;
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [7, 8, 9]]
+[[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [10, 11, 12]]
+
+query ??
+select array_append(column1, arrow_cast(make_array(1, 11, 111), 'FixedSizeList(3, Int64)')), array_append(arrow_cast(make_array(make_array(1, 2, 3), make_array(11, 12, 13)), 'FixedSizeList(2, List(Int64))'), column2) from fixed_size_nested_arrays;
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [7, 8, 9]]
+[[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [10, 11, 12]]
+
+
+include ./cleanup.slt.part
