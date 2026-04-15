@@ -21,7 +21,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
-use crate::expressions::{CastExpr, Column, Literal};
+use crate::expressions::{Column, Literal};
 use crate::scalar_function::ScalarFunctionExpr;
 use crate::utils::collect_columns;
 
@@ -33,6 +33,7 @@ use datafusion_common::{
     Result, ScalarValue, Statistics, assert_or_internal_err, internal_datafusion_err,
     plan_err,
 };
+use datafusion_expr_common::interval_arithmetic::Interval;
 
 use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_expr_common::metrics::ExpressionEvaluatorMetrics;
@@ -715,10 +716,11 @@ impl ProjectionExprs {
                     }
                 }
             } else {
-                // Try to propagate statistics through expressions like CAST
+                // Propagate statistics through expressions (CAST, arithmetic, etc.)
+                // using the interval arithmetic system (evaluate_bounds).
                 project_column_statistics_through_expr(
                     expr.as_ref(),
-                    &mut stats.column_statistics,
+                    &stats.column_statistics,
                 )
             };
             column_statistics.push(col_stats);
@@ -729,41 +731,68 @@ impl ProjectionExprs {
     }
 }
 
-/// Propagate column statistics through expressions that preserve order.
-///
-/// Currently handles:
-/// - `Column` references (direct passthrough)
-/// - `CAST` expressions (casts min/max values to the target type)
-///
-/// For other expressions, returns unknown statistics.
+/// Propagate min/max statistics through an expression using
+/// [`PhysicalExpr::evaluate_bounds`]. Works for any expression that
+/// implements `evaluate_bounds` (CAST, negation, arithmetic with literals, etc.).
 fn project_column_statistics_through_expr(
     expr: &dyn PhysicalExpr,
-    column_stats: &mut [ColumnStatistics],
+    column_stats: &[ColumnStatistics],
 ) -> ColumnStatistics {
-    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-        std::mem::take(&mut column_stats[col.index()])
-    } else if let Some(cast_expr) = expr.as_any().downcast_ref::<CastExpr>() {
-        let inner_stats =
-            project_column_statistics_through_expr(cast_expr.expr.as_ref(), column_stats);
-        let target_type = cast_expr.cast_type();
-        ColumnStatistics {
-            min_value: inner_stats
-                .min_value
-                .cast_to(target_type)
-                .unwrap_or(Precision::Absent),
-            max_value: inner_stats
-                .max_value
-                .cast_to(target_type)
-                .unwrap_or(Precision::Absent),
-            null_count: inner_stats.null_count,
-            distinct_count: inner_stats.distinct_count,
-            // Sum and byte size change under CAST, don't propagate
+    match compute_bounds_and_exactness(expr, column_stats) {
+        Some((interval, all_exact)) => ColumnStatistics {
+            min_value: to_precision(interval.lower().clone(), all_exact),
+            max_value: to_precision(interval.upper().clone(), all_exact),
+            null_count: Precision::Absent,
+            distinct_count: Precision::Absent,
             sum_value: Precision::Absent,
             byte_size: Precision::Absent,
-        }
-    } else {
-        ColumnStatistics::new_unknown()
+        },
+        None => ColumnStatistics::new_unknown(),
     }
+}
+
+/// Convert a bound value to the appropriate [`Precision`] level.
+fn to_precision(value: ScalarValue, exact: bool) -> Precision<ScalarValue> {
+    if value.is_null() {
+        Precision::Absent
+    } else if exact {
+        Precision::Exact(value)
+    } else {
+        Precision::Inexact(value)
+    }
+}
+
+/// Recursively compute the output [`Interval`] and whether all leaf
+/// statistics are exact, in a single traversal of the expression tree.
+fn compute_bounds_and_exactness(
+    expr: &dyn PhysicalExpr,
+    column_stats: &[ColumnStatistics],
+) -> Option<(Interval, bool)> {
+    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+        let stats = &column_stats[col.index()];
+        let min = stats.min_value.get_value()?;
+        let max = stats.max_value.get_value()?;
+        let exact = stats.min_value.is_exact().unwrap_or(false)
+            && stats.max_value.is_exact().unwrap_or(false);
+        return Some((Interval::try_new(min.clone(), max.clone()).ok()?, exact));
+    }
+
+    if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+        let val = lit.value();
+        return Some((Interval::try_new(val.clone(), val.clone()).ok()?, true));
+    }
+
+    let children = expr.children();
+    let mut child_intervals = Vec::with_capacity(children.len());
+    let mut all_exact = true;
+    for child in &children {
+        let (interval, exact) =
+            compute_bounds_and_exactness(child.as_ref(), column_stats)?;
+        child_intervals.push(interval);
+        all_exact &= exact;
+    }
+    let child_refs: Vec<&Interval> = child_intervals.iter().collect();
+    Some((expr.evaluate_bounds(&child_refs).ok()?, all_exact))
 }
 
 impl<'a> IntoIterator for &'a ProjectionExprs {
@@ -2824,13 +2853,17 @@ pub(crate) mod tests {
         // Should have 2 column statistics
         assert_eq!(output_stats.column_statistics.len(), 2);
 
-        // First column (expression) should have unknown statistics
+        // First column (col0 + 1) should have propagated min/max via evaluate_bounds
         assert_eq!(
-            output_stats.column_statistics[0].distinct_count,
-            Precision::Absent
+            output_stats.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int64(Some(-3)))
         );
         assert_eq!(
             output_stats.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int64(Some(22)))
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].distinct_count,
             Precision::Absent
         );
 
