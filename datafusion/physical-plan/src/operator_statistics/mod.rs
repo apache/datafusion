@@ -697,7 +697,7 @@ impl StatisticsProvider for AggregateStatisticsProvider {
         // Compute NDV product of GROUP BY columns
         let mut ndv_product: Option<usize> = None;
         for (expr, _) in agg.group_expr().expr().iter() {
-            let Some(col) = expr.as_any().downcast_ref::<Column>() else {
+            let Some(col) = expr.downcast_ref::<Column>() else {
                 return Ok(StatisticsResult::Delegate);
             };
             let Some(&ndv) = input_stats
@@ -800,12 +800,10 @@ impl StatisticsProvider for JoinStatisticsProvider {
             let mut ndv_divisor: usize = 1;
             for (left_key, right_key) in on {
                 let left_ndv = left_key
-                    .as_any()
                     .downcast_ref::<Column>()
                     .and_then(|c| left.column_statistics.get(c.index()))
                     .and_then(|s| s.distinct_count.get_value().copied());
                 let right_ndv = right_key
-                    .as_any()
                     .downcast_ref::<Column>()
                     .and_then(|c| right.column_statistics.get(c.index()))
                     .and_then(|s| s.distinct_count.get_value().copied());

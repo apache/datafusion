@@ -1127,8 +1127,8 @@ fn hash_join_exec(
 ) -> Arc<dyn ExecutionPlan> {
     let left_on = col("c", &left.schema()).unwrap();
     let right_on = col("c", &right.schema()).unwrap();
-    let left_col = left_on.as_any().downcast_ref::<Column>().unwrap();
-    let right_col = right_on.as_any().downcast_ref::<Column>().unwrap();
+    let left_col = left_on.downcast_ref::<Column>().unwrap();
+    let right_col = right_on.downcast_ref::<Column>().unwrap();
     Arc::new(
         HashJoinExec::try_new(
             left,

@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use futures::stream::{BoxStream, Stream};
 use futures::{StreamExt, TryFutureExt};
-use object_store::{GetOptions, GetRange, ObjectStore};
+use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
 /// How far past `raw_end` the initial bounded fetch covers. If the terminating
 /// newline is not found within this window, `ScanningLastTerminator` issues
@@ -90,10 +90,52 @@ async fn get_stream(
     range: std::ops::Range<u64>,
 ) -> object_store::Result<BoxStream<'static, object_store::Result<Bytes>>> {
     let opts = GetOptions {
-        range: Some(GetRange::Bounded(range)),
+        range: Some(GetRange::Bounded(range.clone())),
         ..Default::default()
     };
     let result = store.get_opts(&location, opts).await?;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if let GetResultPayload::File(mut file, _path) = result.payload {
+        use std::io::{Read, Seek, SeekFrom};
+        const CHUNK_SIZE: u64 = 8 * 1024;
+
+        file.seek(SeekFrom::Start(range.start)).map_err(|e| {
+            object_store::Error::Generic {
+                store: "local",
+                source: Box::new(e),
+            }
+        })?;
+
+        return Ok(futures::stream::try_unfold(
+            (file, range.end - range.start),
+            move |(mut file, remaining)| async move {
+                if remaining == 0 {
+                    return Ok(None);
+                }
+                let to_read = remaining.min(CHUNK_SIZE);
+                let cap = usize::try_from(to_read).map_err(|e| {
+                    object_store::Error::Generic {
+                        store: "local",
+                        source: Box::new(e),
+                    }
+                })?;
+
+                let mut buf = Vec::with_capacity(cap);
+                let read =
+                    (&mut file)
+                        .take(to_read)
+                        .read_to_end(&mut buf)
+                        .map_err(|e| object_store::Error::Generic {
+                            store: "local",
+                            source: Box::new(e),
+                        })?;
+                Ok(Some((Bytes::from(buf), (file, remaining - read as u64))))
+            },
+        )
+        .boxed());
+    }
+
     Ok(result.into_stream())
 }
 

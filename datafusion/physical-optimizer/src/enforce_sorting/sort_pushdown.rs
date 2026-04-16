@@ -430,7 +430,7 @@ fn handle_aggregate_pushdown(
     for req in parent_requirement {
         // Sort above AggregateExec should reference its output columns. Map each
         // output group-by column to its original input expression.
-        let Some(column) = req.expr.as_any().downcast_ref::<Column>() else {
+        let Some(column) = req.expr.downcast_ref::<Column>() else {
             return Ok(None);
         };
         if column.index() >= group_input_exprs.len() {
@@ -604,14 +604,13 @@ fn expr_source_side(
             let mut right_ordering = ordering.clone();
             let (mut valid_left, mut valid_right) = (true, true);
             for (left, right) in ordering.iter_mut().zip(right_ordering.iter_mut()) {
-                let col = left.expr.as_any().downcast_ref::<Column>()?;
+                let col = left.expr.downcast_ref::<Column>()?;
                 let eq_class = eq_group.get_equivalence_class(&left.expr);
                 if col.index() < left_columns_len {
                     if valid_right {
                         valid_right = eq_class.is_some_and(|cls| {
                             for expr in cls.iter() {
                                 if expr
-                                    .as_any()
                                     .downcast_ref::<Column>()
                                     .is_some_and(|c| c.index() >= left_columns_len)
                                 {
@@ -626,7 +625,6 @@ fn expr_source_side(
                     valid_left = eq_class.is_some_and(|cls| {
                         for expr in cls.iter() {
                             if expr
-                                .as_any()
                                 .downcast_ref::<Column>()
                                 .is_some_and(|c| c.index() < left_columns_len)
                             {
@@ -652,11 +650,11 @@ fn expr_source_side(
         }
         JoinType::LeftSemi | JoinType::LeftAnti => ordering
             .iter()
-            .all(|e| e.expr.as_any().is::<Column>())
+            .all(|e| e.expr.is::<Column>())
             .then_some((JoinSide::Left, ordering)),
         JoinType::RightSemi | JoinType::RightAnti => ordering
             .iter()
-            .all(|e| e.expr.as_any().is::<Column>())
+            .all(|e| e.expr.is::<Column>())
             .then_some((JoinSide::Right, ordering)),
     }
 }
@@ -739,7 +737,7 @@ fn handle_custom_pushdown(
                 let updated_columns = req
                     .expr
                     .transform_up(|expr| {
-                        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                        if let Some(col) = expr.downcast_ref::<Column>() {
                             let new_index = col.index() - sub_offset;
                             Ok(Transformed::yes(Arc::new(Column::new(
                                 child_schema.field(new_index).name(),
@@ -822,7 +820,7 @@ fn handle_hash_join(
                 let updated_columns = req
                     .expr
                     .transform_up(|expr| {
-                        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                        if let Some(col) = expr.downcast_ref::<Column>() {
                             let index = projected_indices[col.index()].index;
                             Ok(Transformed::yes(Arc::new(Column::new(
                                 child_schema.field(index).name(),
