@@ -318,11 +318,13 @@ fn string_view_substr(
     }
 }
 
-fn values_fit_in_u32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -> bool {
+fn values_fit_in_i32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -> bool {
+    // The Arrow spec defines StringView offset fields as signed 32-bit
+    // integers, so the maximum representable offset is i32::MAX.
     string_array
         .offsets()
         .last()
-        .map(|offset| offset.as_usize() <= u32::MAX as usize)
+        .map(|offset| offset.as_usize() <= i32::MAX as usize)
         .unwrap_or(true)
 }
 
@@ -332,17 +334,11 @@ fn append_view_from_buffer(
     substr: &str,
     byte_offset: usize,
 ) -> bool {
-    let is_out_of_line = substr.len() > 12;
-    let view = if is_out_of_line {
-        let byte_offset = u32::try_from(byte_offset)
-            .expect("validated string buffer offset fits in u32");
-        make_view(substr.as_bytes(), 0, byte_offset)
-    } else {
-        make_view(substr.as_bytes(), 0, 0)
-    };
-
+    let byte_offset =
+        u32::try_from(byte_offset).expect("validated string buffer offset fits in i32");
+    let view = make_view(substr.as_bytes(), 0, byte_offset);
     views_buf.push(view);
-    is_out_of_line
+    substr.len() > 12
 }
 
 #[expect(clippy::needless_range_loop)]
@@ -351,9 +347,10 @@ fn generic_string_substr<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     // We'd like to return a StringViewArray that points into the input string
-    // array's values buffer. Since StringView offsets are u32, we can't use
-    // this approach when the values buffer is >4GB, so fallback to copying.
-    if !values_fit_in_u32(string_array) {
+    // array's values buffer. Since the Arrow spec defines StringView offsets
+    // as i32, we can't use this approach when the values buffer is >2GB, so
+    // fallback to copying.
+    if !values_fit_in_i32(string_array) {
         return generic_string_substr_copy(string_array, args);
     }
 
