@@ -28,11 +28,11 @@ use datafusion_physical_plan::ExecutionPlan;
 
 use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
+use datafusion_physical_plan::{ExecutionPlanProperties, get_plan_string};
 
 use crate::PhysicalOptimizerRule;
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
@@ -47,7 +47,7 @@ use itertools::izip;
 pub struct SanityCheckPlan {}
 
 impl SanityCheckPlan {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -59,8 +59,8 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_up(|p| check_plan_sanity(p, &config.optimizer))
-            .data()
+        check_plan_sanity_recursive(&plan, &config.optimizer)?;
+        Ok(plan)
     }
 
     fn name(&self) -> &str {
@@ -72,19 +72,31 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
     }
 }
 
+/// Bottom-up (post-order) read-only traversal that checks plan sanity.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+fn check_plan_sanity_recursive(
+    plan: &Arc<dyn ExecutionPlan>,
+    optimizer_options: &OptimizerOptions,
+) -> Result<TreeNodeRecursion> {
+    plan.apply_children(|child| check_plan_sanity_recursive(child, optimizer_options))?;
+    check_plan_sanity(plan, optimizer_options)?;
+    Ok(TreeNodeRecursion::Continue)
+}
+
 /// This function propagates finiteness information and rejects any plan with
 /// pipeline-breaking operators acting on infinite inputs.
 pub fn check_finiteness_requirements(
-    input: Arc<dyn ExecutionPlan>,
+    input: &dyn ExecutionPlan,
     optimizer_options: &OptimizerOptions,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    if let Some(exec) = input.as_any().downcast_ref::<SymmetricHashJoinExec>() {
-        if !(optimizer_options.allow_symmetric_joins_without_pruning
+) -> Result<()> {
+    if let Some(exec) = input.downcast_ref::<SymmetricHashJoinExec>()
+        && !(optimizer_options.allow_symmetric_joins_without_pruning
             || (exec.check_if_order_information_available()? && is_prunable(exec)))
-        {
-            return plan_err!("Join operation cannot operate on a non-prunable stream without enabling \
-                              the 'allow_symmetric_joins_without_pruning' configuration flag");
-        }
+    {
+        return plan_err!(
+            "Join operation cannot operate on a non-prunable stream without enabling \
+                              the 'allow_symmetric_joins_without_pruning' configuration flag"
+        );
     }
 
     if matches!(
@@ -100,7 +112,7 @@ pub fn check_finiteness_requirements(
             input
         )
     } else {
-        Ok(Transformed::no(input))
+        Ok(())
     }
 }
 
@@ -125,10 +137,10 @@ fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
 /// Ensures that the plan is pipeline friendly and the order and
 /// distribution requirements from its children are satisfied.
 pub fn check_plan_sanity(
-    plan: Arc<dyn ExecutionPlan>,
+    plan: &Arc<dyn ExecutionPlan>,
     optimizer_options: &OptimizerOptions,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    check_finiteness_requirements(Arc::clone(&plan), optimizer_options)?;
+) -> Result<()> {
+    check_finiteness_requirements(plan.as_ref(), optimizer_options)?;
 
     for ((idx, child), sort_req, dist_req) in izip!(
         plan.children().into_iter().enumerate(),
@@ -137,8 +149,9 @@ pub fn check_plan_sanity(
     ) {
         let child_eq_props = child.equivalence_properties();
         if let Some(sort_req) = sort_req {
-            if !child_eq_props.ordering_satisfy_requirement(&sort_req) {
-                let plan_str = get_plan_string(&plan);
+            let sort_req = sort_req.into_single();
+            if !child_eq_props.ordering_satisfy_requirement(sort_req.clone())? {
+                let plan_str = get_plan_string(plan);
                 return plan_err!(
                     "Plan: {:?} does not satisfy order requirements: {}. Child-{} order: {}",
                     plan_str,
@@ -151,9 +164,10 @@ pub fn check_plan_sanity(
 
         if !child
             .output_partitioning()
-            .satisfy(&dist_req, child_eq_props)
+            .satisfaction(&dist_req, child_eq_props, true)
+            .is_satisfied()
         {
-            let plan_str = get_plan_string(&plan);
+            let plan_str = get_plan_string(plan);
             return plan_err!(
                 "Plan: {:?} does not satisfy distribution requirements: {}. Child-{} output partitioning: {}",
                 plan_str,
@@ -164,7 +178,7 @@ pub fn check_plan_sanity(
         }
     }
 
-    Ok(Transformed::no(plan))
+    Ok(())
 }
 
 // See tests in datafusion/core/tests/physical_optimizer

@@ -16,17 +16,16 @@
 // under the License.
 
 use crate::core::greatest_least_utils::GreatestLeastOperator;
-use arrow::array::{make_comparator, Array, BooleanArray};
+use arrow::array::{Array, BooleanArray, make_comparator};
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::kernels::cmp;
 use arrow::compute::SortOptions;
+use arrow::compute::kernels::cmp;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 const SORT_OPTIONS: SortOptions = SortOptions {
     // We want greatest first
@@ -53,7 +52,7 @@ const SORT_OPTIONS: SortOptions = SortOptions {
         description = "Expressions to compare and return the greatest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct GreatestFunc {
     signature: Signature,
 }
@@ -90,11 +89,7 @@ impl GreatestLeastOperator for GreatestFunc {
             SORT_OPTIONS,
         )?;
 
-        if cmp(0, 0).is_ge() {
-            Ok(lhs)
-        } else {
-            Ok(rhs)
-        }
+        if cmp(0, 0).is_ge() { Ok(lhs) } else { Ok(rhs) }
     }
 
     /// Return boolean array where `arr[i] = lhs[i] >= rhs[i]` for all i, where `arr` is the result array
@@ -113,11 +108,11 @@ impl GreatestLeastOperator for GreatestFunc {
 
         let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
-        if lhs.len() != rhs.len() {
-            return internal_err!(
-                "All arrays should have the same length for greatest comparison"
-            );
-        }
+        assert_eq_or_internal_err!(
+            lhs.len(),
+            rhs.len(),
+            "All arrays should have the same length for greatest comparison"
+        );
 
         let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_ge());
 
@@ -127,10 +122,6 @@ impl GreatestLeastOperator for GreatestFunc {
 }
 
 impl ScalarUDFImpl for GreatestFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "greatest"
     }

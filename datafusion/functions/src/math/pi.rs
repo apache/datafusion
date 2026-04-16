@@ -15,11 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, assert_or_internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -32,7 +30,7 @@ use datafusion_macros::user_doc;
     description = "Returns an approximate value of π.",
     syntax_example = "pi()"
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PiFunc {
     signature: Signature,
 }
@@ -52,10 +50,6 @@ impl PiFunc {
 }
 
 impl ScalarUDFImpl for PiFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "pi"
     }
@@ -69,9 +63,11 @@ impl ScalarUDFImpl for PiFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if !args.args.is_empty() {
-            return internal_err!("{} function does not accept arguments", self.name());
-        }
+        assert_or_internal_err!(
+            args.args.is_empty(),
+            "{} function does not accept arguments",
+            self.name()
+        );
         Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
             std::f64::consts::PI,
         ))))

@@ -20,10 +20,9 @@ use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::{utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, utils::take_function_args};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Conditional Functions"),
@@ -53,7 +52,7 @@ This can be used to perform the inverse operation of [`coalesce`](#coalesce).",
         description = "Expression to compare to expression1. Can be a constant, column, or function, and any combination of operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NullIfFunc {
     signature: Signature,
 }
@@ -86,9 +85,6 @@ impl NullIfFunc {
 }
 
 impl ScalarUDFImpl for NullIfFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "nullif"
     }
@@ -113,7 +109,6 @@ impl ScalarUDFImpl for NullIfFunc {
 /// Implements NULLIF(expr1, expr2)
 /// Args: 0 - left expr is any array
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
-///
 fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let [lhs, rhs] = take_function_args("nullif", args)?;
 

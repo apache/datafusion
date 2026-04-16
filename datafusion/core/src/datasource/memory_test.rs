@@ -19,7 +19,7 @@
 mod tests {
 
     use crate::datasource::MemTable;
-    use crate::datasource::{provider_as_source, DefaultTableSource};
+    use crate::datasource::{DefaultTableSource, provider_as_source};
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
     use arrow::array::{AsArray, Int32Array};
@@ -29,8 +29,8 @@ mod tests {
     use arrow_schema::SchemaRef;
     use datafusion_catalog::TableProvider;
     use datafusion_common::{DataFusionError, Result};
-    use datafusion_expr::dml::InsertOp;
     use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_expr::dml::InsertOp;
     use futures::StreamExt;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -130,12 +130,15 @@ mod tests {
             .scan(&session_ctx.state(), Some(&projection), &[], None)
             .await
         {
-            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e), _)) => {
-                assert_eq!(
-                    "\"project index 4 out of bounds, max field 3\"",
-                    format!("{e:?}")
-                )
-            }
+            Err(DataFusionError::ArrowError(err, _)) => match err.as_ref() {
+                ArrowError::SchemaError(e) => {
+                    assert_eq!(
+                        "\"project index 4 out of bounds, max field 3\"",
+                        format!("{e:?}")
+                    )
+                }
+                _ => panic!("unexpected error"),
+            },
             res => panic!("Scan should failed on invalid projection, got {res:?}"),
         };
 
@@ -326,12 +329,11 @@ mod tests {
         );
         let col = batch.column(0).as_primitive::<UInt64Type>();
         assert_eq!(col.len(), 1, "expected 1 row, got {}", col.len());
-        let val = col
-            .iter()
+
+        col.iter()
             .next()
             .expect("had value")
-            .expect("expected non null");
-        val
+            .expect("expected non null")
     }
 
     // Test inserting a single batch of data into a single partition
@@ -443,7 +445,7 @@ mod tests {
             .unwrap_err();
         // Ensure that there is a descriptive error message
         assert_eq!(
-            "Error during planning: Cannot insert into MemTable with zero partitions",
+            "Error during planning: No partitions provided, expected at least one partition",
             experiment_result.strip_backtrace()
         );
         Ok(())

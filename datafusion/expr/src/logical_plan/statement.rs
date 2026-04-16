@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::FieldRef;
+use datafusion_common::metadata::format_type_and_metadata;
 use datafusion_common::{DFSchema, DFSchemaRef};
+use itertools::Itertools as _;
 use std::fmt::{self, Display};
 use std::sync::{Arc, LazyLock};
 
-use crate::{expr_vec_fmt, Expr, LogicalPlan};
+use crate::{Expr, LogicalPlan, expr_vec_fmt};
 
 /// Various types of Statements.
 ///
@@ -37,6 +39,8 @@ pub enum Statement {
     TransactionEnd(TransactionEnd),
     /// Set a Variable
     SetVariable(SetVariable),
+    /// Reset a Variable
+    ResetVariable(ResetVariable),
     /// Prepare a statement and find any bind parameters
     /// (e.g. `?`). This is used to implement SQL-prepared statements.
     Prepare(Prepare),
@@ -64,6 +68,7 @@ impl Statement {
             Statement::TransactionStart(_) => "TransactionStart",
             Statement::TransactionEnd(_) => "TransactionEnd",
             Statement::SetVariable(_) => "SetVariable",
+            Statement::ResetVariable(_) => "ResetVariable",
             Statement::Prepare(_) => "Prepare",
             Statement::Execute(_) => "Execute",
             Statement::Deallocate(_) => "Deallocate",
@@ -107,10 +112,21 @@ impl Statement {
                     }) => {
                         write!(f, "SetVariable: set {variable:?} to {value:?}")
                     }
-                    Statement::Prepare(Prepare {
-                        name, data_types, ..
-                    }) => {
-                        write!(f, "Prepare: {name:?} {data_types:?}")
+                    Statement::ResetVariable(ResetVariable { variable }) => {
+                        write!(f, "ResetVariable: reset {variable:?}")
+                    }
+                    Statement::Prepare(Prepare { name, fields, .. }) => {
+                        write!(
+                            f,
+                            "Prepare: {name:?} [{}]",
+                            fields
+                                .iter()
+                                .map(|f| format_type_and_metadata(
+                                    f.data_type(),
+                                    Some(f.metadata())
+                                ))
+                                .join(", ")
+                        )
                     }
                     Statement::Execute(Execute {
                         name, parameters, ..
@@ -184,6 +200,12 @@ pub struct SetVariable {
     pub value: String,
 }
 
+/// Reset a configuration variable to its default
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct ResetVariable {
+    /// The variable name
+    pub variable: String,
+}
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
 /// `Expr::Placeholder` expressions that are filled in during execution
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -191,7 +213,7 @@ pub struct Prepare {
     /// The name of the statement
     pub name: String,
     /// Data types of the parameters ([`Expr::Placeholder`])
-    pub data_types: Vec<DataType>,
+    pub fields: Vec<FieldRef>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
 }

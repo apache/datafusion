@@ -20,11 +20,11 @@ use std::{collections::HashMap, sync::Arc};
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result, TableReference};
-use datafusion_expr::planner::ExprPlanner;
+use datafusion_common::{Result, TableReference, plan_err};
 use datafusion_expr::WindowUDF;
+use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{
-    logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
+    AggregateUDF, ScalarUDF, TableSource, logical_plan::builder::LogicalTableSource,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::count::count_udaf;

@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
@@ -62,28 +63,33 @@
 //! # use datafusion_proto_common::protobuf_common;
 //! # use prost::Message;
 //! # fn main() -> Result<()>{
-//!     // Create a new ScalarValue
-//!     let val = ScalarValue::UInt64(Some(3));
-//!     let mut buffer = BytesMut::new();
-//!     let protobuf: protobuf_common::ScalarValue = match val {
-//!         ScalarValue::UInt64(Some(val)) => {
-//!             protobuf_common::ScalarValue{value: Some(protobuf_common::scalar_value::Value::Uint64Value(val))}
-//!         }
-//!         _ => unreachable!(),
-//!     };
+//! // Create a new ScalarValue
+//! let val = ScalarValue::UInt64(Some(3));
+//! let mut buffer = BytesMut::new();
+//! let protobuf: protobuf_common::ScalarValue = match val {
+//!     ScalarValue::UInt64(Some(val)) => protobuf_common::ScalarValue {
+//!         value: Some(protobuf_common::scalar_value::Value::Uint64Value(val)),
+//!     },
+//!     _ => unreachable!(),
+//! };
 //!
-//!     protobuf.encode(&mut buffer)
+//! protobuf
+//!     .encode(&mut buffer)
 //!     .map_err(|e| plan_datafusion_err!("Error encoding protobuf as bytes: {e}"))?;
-//!     // Convert it to bytes (for sending over the network, etc.)
-//!     let bytes: Bytes = buffer.into();
+//! // Convert it to bytes (for sending over the network, etc.)
+//! let bytes: Bytes = buffer.into();
 //!
-//!     let protobuf = protobuf_common::ScalarValue::decode(bytes).map_err(|e| plan_datafusion_err!("Error decoding ScalarValue as protobuf: {e}"))?;
-//!     // Decode bytes from somewhere (over network, etc.) back to ScalarValue
-//!     let decoded_val: ScalarValue = match protobuf.value {
-//!         Some(protobuf_common::scalar_value::Value::Uint64Value(val)) => ScalarValue::UInt64(Some(val)),
-//!         _ => unreachable!(),
-//!     };
-//!     assert_eq!(val, decoded_val);
+//! let protobuf = protobuf_common::ScalarValue::decode(bytes).map_err(|e| {
+//!     plan_datafusion_err!("Error decoding ScalarValue as protobuf: {e}")
+//! })?;
+//! // Decode bytes from somewhere (over network, etc.) back to ScalarValue
+//! let decoded_val: ScalarValue = match protobuf.value {
+//!     Some(protobuf_common::scalar_value::Value::Uint64Value(val)) => {
+//!         ScalarValue::UInt64(Some(val))
+//!     }
+//!     _ => unreachable!(),
+//! };
+//! assert_eq!(val, decoded_val);
 //! # Ok(())
 //! # }
 //! ```

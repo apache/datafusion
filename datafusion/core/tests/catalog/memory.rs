@@ -19,14 +19,13 @@ use arrow::datatypes::Schema;
 use datafusion::catalog::CatalogProvider;
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::listing::{
-    ListingTable, ListingTableConfig, ListingTableUrl,
+    ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::memory::*;
 use datafusion_catalog::{SchemaProvider, TableProvider};
 use datafusion_common::test_util::batches_to_string;
 use insta::assert_snapshot;
-use std::any::Any;
 use std::sync::Arc;
 
 #[test]
@@ -45,6 +44,20 @@ fn memory_catalog_dereg_nonempty_schema() {
         "dropping empty schema without cascade should error"
     );
     assert!(cat.deregister_schema("foo", true).unwrap().is_some());
+}
+
+#[test]
+fn memory_catalog_dereg_nonempty_schema_with_table_removal() {
+    let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
+
+    let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
+    let test_table =
+        Arc::new(EmptyTable::new(Arc::new(Schema::empty()))) as Arc<dyn TableProvider>;
+    schema.register_table("t".into(), test_table).unwrap();
+
+    cat.register_schema("foo", schema.clone()).unwrap();
+    schema.deregister_table("t").unwrap();
+    assert!(cat.deregister_schema("foo", false).unwrap().is_some());
 }
 
 #[test]
@@ -69,10 +82,6 @@ fn default_register_schema_not_supported() {
     #[derive(Debug)]
     struct TestProvider {}
     impl CatalogProvider for TestProvider {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn schema_names(&self) -> Vec<String> {
             unimplemented!()
         }
@@ -102,14 +111,16 @@ async fn test_mem_provider() {
     assert!(provider.deregister_table(table_name).unwrap().is_none());
     let test_table = EmptyTable::new(Arc::new(Schema::empty()));
     // register table successfully
-    assert!(provider
-        .register_table(table_name.to_string(), Arc::new(test_table))
-        .unwrap()
-        .is_none());
+    assert!(
+        provider
+            .register_table(table_name.to_string(), Arc::new(test_table))
+            .unwrap()
+            .is_none()
+    );
     assert!(provider.table_exist(table_name));
     let other_table = EmptyTable::new(Arc::new(Schema::empty()));
     let result = provider.register_table(table_name.to_string(), Arc::new(other_table));
-    assert!(result.is_err());
+    assert!(result.is_err(), "The table test_table_exist already exists");
 }
 
 #[tokio::test]

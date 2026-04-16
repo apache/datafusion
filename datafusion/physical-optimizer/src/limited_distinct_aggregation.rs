@@ -20,13 +20,13 @@
 
 use std::sync::Arc;
 
-use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
 
 use crate::PhysicalOptimizerRule;
 use itertools::Itertools;
@@ -54,16 +54,8 @@ impl LimitedDistinctAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::try_new(
-            *aggr.mode(),
-            aggr.group_expr().clone(),
-            aggr.aggr_expr().to_vec(),
-            aggr.filter_expr().to_vec(),
-            aggr.input().to_owned(),
-            aggr.input_schema(),
-        )
-        .expect("Unable to copy Aggregate!")
-        .with_limit(Some(limit));
+        let new_aggr = aggr.with_new_limit_options(Some(LimitOptions::new(limit)));
+
         Some(Arc::new(new_aggr))
     }
 
@@ -77,11 +69,10 @@ impl LimitedDistinctAggregation {
         let mut global_skip: usize = 0;
         let children: Vec<Arc<dyn ExecutionPlan>>;
         let mut is_global_limit = false;
-        if let Some(local_limit) = plan.as_any().downcast_ref::<LocalLimitExec>() {
+        if let Some(local_limit) = plan.downcast_ref::<LocalLimitExec>() {
             limit = local_limit.fetch();
             children = local_limit.children().into_iter().cloned().collect();
-        } else if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>()
-        {
+        } else if let Some(global_limit) = plan.downcast_ref::<GlobalLimitExec>() {
             global_fetch = global_limit.fetch();
             global_fetch?;
             global_skip = global_limit.skip();
@@ -112,18 +103,15 @@ impl LimitedDistinctAggregation {
             if !rewrite_applicable {
                 return Ok(Transformed::no(plan));
             }
-            if let Some(aggr) = plan.as_any().downcast_ref::<AggregateExec>() {
-                if found_match_aggr {
-                    if let Some(parent_aggr) =
-                        match_aggr.as_any().downcast_ref::<AggregateExec>()
-                    {
-                        if !parent_aggr.group_expr().eq(aggr.group_expr()) {
-                            // a partial and final aggregation with different groupings disqualifies
-                            // rewriting the child aggregation
-                            rewrite_applicable = false;
-                            return Ok(Transformed::no(plan));
-                        }
-                    }
+            if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
+                if found_match_aggr
+                    && let Some(parent_aggr) = match_aggr.downcast_ref::<AggregateExec>()
+                    && !parent_aggr.group_expr().eq(aggr.group_expr())
+                {
+                    // a partial and final aggregation with different groupings disqualifies
+                    // rewriting the child aggregation
+                    rewrite_applicable = false;
+                    return Ok(Transformed::no(plan));
                 }
                 // either we run into an Aggregate and transform it, or disable the rewrite
                 // for subsequent children

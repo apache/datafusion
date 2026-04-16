@@ -15,19 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
 use arrow::compute;
-use arrow::compute::{cast_with_options, CastOptions};
+use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
@@ -72,16 +71,11 @@ impl TryCastExpr {
 
 impl fmt::Display for TryCastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TRY_CAST({} AS {:?})", self.expr, self.cast_type)
+        write!(f, "TRY_CAST({} AS {})", self.expr, self.cast_type)
     }
 }
 
 impl PhysicalExpr for TryCastExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.cast_type.clone())
     }
@@ -96,18 +90,7 @@ impl PhysicalExpr for TryCastExpr {
             safe: true,
             format_options: DEFAULT_FORMAT_OPTIONS,
         };
-        match value {
-            ColumnarValue::Array(array) => {
-                let cast = cast_with_options(&array, &self.cast_type, &options)?;
-                Ok(ColumnarValue::Array(cast))
-            }
-            ColumnarValue::Scalar(scalar) => {
-                let array = scalar.to_array()?;
-                let cast_array = cast_with_options(&array, &self.cast_type, &options)?;
-                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
-            }
-        }
+        value.cast_to(&self.cast_type, Some(&options))
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
@@ -153,7 +136,7 @@ pub fn try_cast(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
-        not_impl_err!("Unsupported TRY_CAST from {expr_type:?} to {cast_type:?}")
+        not_impl_err!("Unsupported TRY_CAST from {expr_type} to {cast_type}")
     }
 }
 
@@ -166,8 +149,8 @@ mod tests {
     };
     use arrow::{
         array::{
-            Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-            Int8Array, TimestampNanosecondArray, UInt32Array,
+            Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+            Int64Array, TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
     };
@@ -191,7 +174,7 @@ mod tests {
 
             // verify that its display is correct
             assert_eq!(
-                format!("TRY_CAST(a@0 AS {:?})", $TYPE),
+                format!("TRY_CAST(a@0 AS {})", $TYPE),
                 format!("{}", expression)
             );
 
@@ -217,7 +200,7 @@ mod tests {
             for (i, x) in $VEC.iter().enumerate() {
                 match x {
                     Some(x) => assert_eq!(result.value(i), *x),
-                    None => assert!(!result.is_valid(i)),
+                    None => assert!(result.is_null(i)),
                 }
             }
         }};
@@ -242,7 +225,7 @@ mod tests {
 
             // verify that its display is correct
             assert_eq!(
-                format!("TRY_CAST(a@0 AS {:?})", $TYPE),
+                format!("TRY_CAST(a@0 AS {})", $TYPE),
                 format!("{}", expression)
             );
 
@@ -271,7 +254,7 @@ mod tests {
             for (i, x) in $VEC.iter().enumerate() {
                 match x {
                     Some(x) => assert_eq!(result.value(i), *x),
-                    None => assert!(!result.is_valid(i)),
+                    None => assert!(result.is_null(i)),
                 }
             }
         }};

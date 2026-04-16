@@ -28,9 +28,10 @@ use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
+use crate::metrics::{MetricCategory, MetricType};
 use crate::render_tree::RenderTree;
 
-use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
+use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -120,9 +121,20 @@ pub struct DisplayableExecutionPlan<'a> {
     show_statistics: bool,
     /// If schema should be displayed. See [`Self::set_show_schema`]
     show_schema: bool,
+    /// Which metric categories should be included when rendering
+    metric_types: Vec<MetricType>,
+    /// Optional filter by semantic category (rows / bytes / timing).
+    /// `None` means show all categories; `Some(vec![])` means plan-only.
+    metric_categories: Option<Vec<MetricCategory>>,
+    // (TreeRender) Maximum total width of the rendered tree
+    tree_maximum_render_width: usize,
 }
 
 impl<'a> DisplayableExecutionPlan<'a> {
+    fn default_metric_types() -> Vec<MetricType> {
+        vec![MetricType::Summary, MetricType::Dev]
+    }
+
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways
     pub fn new(inner: &'a dyn ExecutionPlan) -> Self {
@@ -131,6 +143,9 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics::None,
             show_statistics: false,
             show_schema: false,
+            metric_types: Self::default_metric_types(),
+            metric_categories: None,
+            tree_maximum_render_width: 240,
         }
     }
 
@@ -143,6 +158,9 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics::Aggregated,
             show_statistics: false,
             show_schema: false,
+            metric_types: Self::default_metric_types(),
+            metric_categories: None,
+            tree_maximum_render_width: 240,
         }
     }
 
@@ -155,6 +173,9 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics::Full,
             show_statistics: false,
             show_schema: false,
+            metric_types: Self::default_metric_types(),
+            metric_categories: None,
+            tree_maximum_render_width: 240,
         }
     }
 
@@ -170,6 +191,35 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Enable display of statistics
     pub fn set_show_statistics(mut self, show_statistics: bool) -> Self {
         self.show_statistics = show_statistics;
+        self
+    }
+
+    /// Specify which metric types should be rendered alongside the plan
+    pub fn set_metric_types(mut self, metric_types: Vec<MetricType>) -> Self {
+        self.metric_types = metric_types;
+        self
+    }
+
+    /// Specify which metric categories to include.
+    ///
+    /// - `None` means show all categories (default).
+    /// - `Some(vec![])` means plan-only — suppress all metrics.
+    /// - `Some(vec![Rows])` means show only row-count metrics (plus
+    ///   uncategorized metrics).
+    ///
+    /// See [`MetricCategory`] for the determinism properties of each
+    /// category.
+    pub fn set_metric_categories(
+        mut self,
+        metric_categories: Option<Vec<MetricCategory>>,
+    ) -> Self {
+        self.metric_categories = metric_categories;
+        self
+    }
+
+    /// Set the maximum render width for the tree format
+    pub fn set_tree_maximum_render_width(mut self, width: usize) -> Self {
+        self.tree_maximum_render_width = width;
         self
     }
 
@@ -195,6 +245,8 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics,
             show_statistics: bool,
             show_schema: bool,
+            metric_types: Vec<MetricType>,
+            metric_categories: Option<Vec<MetricCategory>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -205,6 +257,8 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
                     show_schema: self.show_schema,
+                    metric_types: &self.metric_types,
+                    metric_categories: self.metric_categories.as_deref(),
                 };
                 accept(self.plan, &mut visitor)
             }
@@ -215,6 +269,8 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
             show_schema: self.show_schema,
+            metric_types: self.metric_types.clone(),
+            metric_categories: self.metric_categories.clone(),
         }
     }
 
@@ -234,6 +290,8 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            metric_types: Vec<MetricType>,
+            metric_categories: Option<Vec<MetricCategory>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -244,6 +302,8 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     t,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    metric_types: &self.metric_types,
+                    metric_categories: self.metric_categories.as_deref(),
                     graphviz_builder: GraphvizBuilder::default(),
                     parents: Vec::new(),
                 };
@@ -261,6 +321,8 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            metric_types: self.metric_types.clone(),
+            metric_categories: self.metric_categories.clone(),
         }
     }
 
@@ -270,14 +332,21 @@ impl<'a> DisplayableExecutionPlan<'a> {
     pub fn tree_render(&self) -> impl fmt::Display + 'a {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
+            maximum_render_width: usize,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                let mut visitor = TreeRenderVisitor { f };
+                let mut visitor = TreeRenderVisitor {
+                    f,
+                    maximum_render_width: self.maximum_render_width,
+                };
                 visitor.visit(self.plan)
             }
         }
-        Wrapper { plan: self.inner }
+        Wrapper {
+            plan: self.inner,
+            maximum_render_width: self.tree_maximum_render_width,
+        }
     }
 
     /// Return a single-line summary of the root of the plan
@@ -288,6 +357,8 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics,
             show_statistics: bool,
             show_schema: bool,
+            metric_types: Vec<MetricType>,
+            metric_categories: Option<Vec<MetricCategory>>,
         }
 
         impl fmt::Display for Wrapper<'_> {
@@ -299,6 +370,8 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
                     show_schema: self.show_schema,
+                    metric_types: &self.metric_types,
+                    metric_categories: self.metric_categories.as_deref(),
                 };
                 visitor.pre_visit(self.plan)?;
                 Ok(())
@@ -310,6 +383,8 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
             show_schema: self.show_schema,
+            metric_types: self.metric_types.clone(),
+            metric_categories: self.metric_categories.clone(),
         }
     }
 
@@ -364,6 +439,10 @@ struct IndentVisitor<'a, 'b> {
     show_statistics: bool,
     /// If schema should be displayed
     show_schema: bool,
+    /// Which metric types should be rendered
+    metric_types: &'a [MetricType],
+    /// Optional filter by semantic category (rows / bytes / timing).
+    metric_categories: Option<&'a [MetricCategory]>,
 }
 
 impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
@@ -375,11 +454,14 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             ShowMetrics::None => {}
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics
+                    let mut metrics = metrics
+                        .filter_by_metric_types(self.metric_types)
                         .aggregate_by_name()
                         .sorted_for_display()
                         .timestamps_removed();
-
+                    if let Some(cats) = self.metric_categories {
+                        metrics = metrics.filter_by_categories(cats);
+                    }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
@@ -387,6 +469,10 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
             ShowMetrics::Full => {
                 if let Some(metrics) = plan.metrics() {
+                    let mut metrics = metrics.filter_by_metric_types(self.metric_types);
+                    if let Some(cats) = self.metric_categories {
+                        metrics = metrics.filter_by_categories(cats);
+                    }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
@@ -423,6 +509,10 @@ struct GraphvizVisitor<'a, 'b> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    /// Which metric types should be rendered
+    metric_types: &'a [MetricType],
+    /// Optional filter by semantic category
+    metric_categories: Option<&'a [MetricCategory]>,
 
     graphviz_builder: GraphvizBuilder,
     /// Used to record parent node ids when visiting a plan.
@@ -459,11 +549,14 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             ShowMetrics::None => "".to_string(),
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics
+                    let mut metrics = metrics
+                        .filter_by_metric_types(self.metric_types)
                         .aggregate_by_name()
                         .sorted_for_display()
                         .timestamps_removed();
-
+                    if let Some(cats) = self.metric_categories {
+                        metrics = metrics.filter_by_categories(cats);
+                    }
                     format!("metrics=[{metrics}]")
                 } else {
                     "metrics=[]".to_string()
@@ -471,6 +564,10 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             }
             ShowMetrics::Full => {
                 if let Some(metrics) = plan.metrics() {
+                    let mut metrics = metrics.filter_by_metric_types(self.metric_types);
+                    if let Some(cats) = self.metric_categories {
+                        metrics = metrics.filter_by_categories(cats);
+                    }
                     format!("metrics=[{metrics}]")
                 } else {
                     "metrics=[]".to_string()
@@ -540,6 +637,8 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
 struct TreeRenderVisitor<'a, 'b> {
     /// Write to this formatter
     f: &'a mut Formatter<'b>,
+    /// Maximum total width of the rendered tree
+    maximum_render_width: usize,
 }
 
 impl TreeRenderVisitor<'_, '_> {
@@ -557,7 +656,6 @@ impl TreeRenderVisitor<'_, '_> {
     const HORIZONTAL: &'static str = "─"; // Horizontal line
 
     // TODO: Make these variables configurable.
-    const MAXIMUM_RENDER_WIDTH: usize = 240; // Maximum total width of the rendered tree
     const NODE_RENDER_WIDTH: usize = 29; // Width of each node's box
     const MAX_EXTRA_LINES: usize = 30; // Maximum number of extra info lines per node
 
@@ -592,6 +690,12 @@ impl TreeRenderVisitor<'_, '_> {
         y: usize,
     ) -> Result<(), fmt::Error> {
         for x in 0..root.width {
+            if self.maximum_render_width > 0
+                && x * Self::NODE_RENDER_WIDTH >= self.maximum_render_width
+            {
+                break;
+            }
+
             if root.has_node(x, y) {
                 write!(self.f, "{}", Self::LTCORNER)?;
                 write!(
@@ -662,7 +766,9 @@ impl TreeRenderVisitor<'_, '_> {
         // Render the actual node.
         for render_y in 0..=extra_height {
             for (x, _) in root.nodes.iter().enumerate().take(root.width) {
-                if x * Self::NODE_RENDER_WIDTH >= Self::MAXIMUM_RENDER_WIDTH {
+                if self.maximum_render_width > 0
+                    && x * Self::NODE_RENDER_WIDTH >= self.maximum_render_width
+                {
                     break;
                 }
 
@@ -674,13 +780,14 @@ impl TreeRenderVisitor<'_, '_> {
                 if let Some(node) = root.get_node(x, y) {
                     write!(self.f, "{}", Self::VERTICAL)?;
 
-                    // Rigure out what to render.
-                    let mut render_text = String::new();
-                    if render_y == 0 {
-                        render_text = node.name.clone();
+                    // Figure out what to render.
+                    let mut render_text = if render_y == 0 {
+                        node.name.clone()
                     } else if render_y <= extra_info[x].len() {
-                        render_text = extra_info[x][render_y - 1].clone();
-                    }
+                        extra_info[x][render_y - 1].clone()
+                    } else {
+                        String::new()
+                    };
 
                     render_text = Self::adjust_text_for_rendering(
                         &render_text,
@@ -780,7 +887,9 @@ impl TreeRenderVisitor<'_, '_> {
         y: usize,
     ) -> Result<(), fmt::Error> {
         for x in 0..=root.width {
-            if x * Self::NODE_RENDER_WIDTH >= Self::MAXIMUM_RENDER_WIDTH {
+            if self.maximum_render_width > 0
+                && x * Self::NODE_RENDER_WIDTH >= self.maximum_render_width
+            {
                 break;
             }
             let mut has_adjacent_nodes = false;
@@ -906,7 +1015,7 @@ impl TreeRenderVisitor<'_, '_> {
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
-            let extra_left_space = if total_spaces % 2 == 0 { 0 } else { 1 };
+            let extra_left_space = if total_spaces.is_multiple_of(2) { 0 } else { 1 };
             format!(
                 "{}{}{}",
                 " ".repeat(half_spaces + extra_left_space),
@@ -1034,27 +1143,22 @@ impl fmt::Display for ProjectSchemaDisplay<'_> {
 }
 
 pub fn display_orderings(f: &mut Formatter, orderings: &[LexOrdering]) -> fmt::Result {
-    if let Some(ordering) = orderings.first() {
-        if !ordering.is_empty() {
-            let start = if orderings.len() == 1 {
-                ", output_ordering="
-            } else {
-                ", output_orderings=["
-            };
-            write!(f, "{start}")?;
-            for (idx, ordering) in
-                orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
-            {
-                match idx {
-                    0 => write!(f, "[{ordering}]")?,
-                    _ => write!(f, ", [{ordering}]")?,
-                }
+    if !orderings.is_empty() {
+        let start = if orderings.len() == 1 {
+            ", output_ordering="
+        } else {
+            ", output_orderings=["
+        };
+        write!(f, "{start}")?;
+        for (idx, ordering) in orderings.iter().enumerate() {
+            match idx {
+                0 => write!(f, "[{ordering}]")?,
+                _ => write!(f, ", [{ordering}]")?,
             }
-            let end = if orderings.len() == 1 { "" } else { "]" };
-            write!(f, "{end}")?;
         }
+        let end = if orderings.len() == 1 { "" } else { "]" };
+        write!(f, "{end}")?;
     }
-
     Ok(())
 }
 
@@ -1063,8 +1167,11 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::{DataFusionError, Result, Statistics};
+    use datafusion_common::{
+        Result, Statistics, internal_datafusion_err, tree_node::TreeNodeRecursion,
+    };
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion_physical_expr::PhysicalExpr;
 
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};
 
@@ -1092,11 +1199,7 @@ mod tests {
             "TestStatsExecPlan"
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
@@ -1111,6 +1214,13 @@ mod tests {
             unimplemented!()
         }
 
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
         fn execute(
             &self,
             _: usize,
@@ -1119,20 +1229,17 @@ mod tests {
             todo!()
         }
 
-        fn statistics(&self) -> Result<Statistics> {
-            self.partition_statistics(None)
-        }
-
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             if partition.is_some() {
-                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+                return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             match self {
                 Self::Panic => panic!("expected panic"),
-                Self::Error => {
-                    Err(DataFusionError::Internal("expected error".to_string()))
-                }
-                Self::Ok => Ok(Statistics::new_unknown(self.schema().as_ref())),
+                Self::Error => Err(internal_datafusion_err!("expected error")),
+                Self::Ok => Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref()))),
             }
         }
     }

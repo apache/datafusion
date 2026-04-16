@@ -5,7 +5,6 @@ info:
   args:
     - "--command"
     - EXPLAIN FORMAT indent SELECT 123
-snapshot_kind: text
 ---
 success: true
 exit_code: 0
@@ -15,7 +14,7 @@ exit_code: 0
 | plan_type     | plan                                     |
 +---------------+------------------------------------------+
 | logical_plan  | Projection: Int64(123)                   |
-|               |   EmptyRelation                          |
+|               |   EmptyRelation: rows=1                  |
 | physical_plan | ProjectionExec: expr=[123 as Int64(123)] |
 |               |   PlaceholderRowExec                     |
 |               |                                          |

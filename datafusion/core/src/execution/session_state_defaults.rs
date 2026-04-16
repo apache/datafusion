@@ -17,6 +17,7 @@
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::catalog::{CatalogProvider, TableProviderFactory};
+use crate::datasource::file_format::FileFormatFactory;
 use crate::datasource::file_format::arrow::ArrowFormatFactory;
 #[cfg(feature = "avro")]
 use crate::datasource::file_format::avro::AvroFormatFactory;
@@ -24,7 +25,6 @@ use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::json::JsonFormatFactory;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormatFactory;
-use crate::datasource::file_format::FileFormatFactory;
 use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
@@ -36,6 +36,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::registry::ExtensionTypeRegistrationRef;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -90,11 +91,10 @@ impl SessionStateDefaults {
             Arc::new(functions_nested::planner::NestedFunctionPlanner),
             #[cfg(feature = "nested_expressions")]
             Arc::new(functions_nested::planner::FieldAccessPlanner),
-            #[cfg(any(
-                feature = "datetime_expressions",
-                feature = "unicode_expressions"
-            ))]
-            Arc::new(functions::planner::UserDefinedFunctionPlanner),
+            #[cfg(feature = "datetime_expressions")]
+            Arc::new(functions::datetime::planner::DatetimeFunctionPlanner),
+            #[cfg(feature = "unicode_expressions")]
+            Arc::new(functions::unicode::planner::UnicodeFunctionPlanner),
             Arc::new(functions_aggregate::planner::AggregateFunctionPlanner),
             Arc::new(functions_window::planner::WindowFunctionPlanner),
         ];
@@ -102,9 +102,9 @@ impl SessionStateDefaults {
         expr_planners
     }
 
-    /// returns the list of default [`ScalarUDF']'s
+    /// returns the list of default [`ScalarUDF`]s
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
-        #[cfg_attr(not(feature = "nested_expressions"), allow(unused_mut))]
+        #[cfg_attr(not(feature = "nested_expressions"), expect(unused_mut))]
         let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
 
         #[cfg(feature = "nested_expressions")]
@@ -113,14 +113,21 @@ impl SessionStateDefaults {
         functions
     }
 
-    /// returns the list of default [`AggregateUDF']'s
+    /// returns the list of default [`AggregateUDF`]s
     pub fn default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         functions_aggregate::all_default_aggregate_functions()
     }
 
-    /// returns the list of default [`WindowUDF']'s
+    /// returns the list of default [`WindowUDF`]s
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
         functions_window::all_default_window_functions()
+    }
+
+    /// Returns the list of default extension types.
+    ///
+    /// For now, we do not register any extension types by default.
+    pub fn default_extension_types() -> Vec<ExtensionTypeRegistrationRef> {
+        vec![]
     }
 
     /// returns the list of default [`TableFunction`]s
@@ -128,7 +135,7 @@ impl SessionStateDefaults {
         functions_table::all_default_table_functions()
     }
 
-    /// returns the list of default [`FileFormatFactory']'s
+    /// returns the list of default [`FileFormatFactory`]s
     pub fn default_file_formats() -> Vec<Arc<dyn FileFormatFactory>> {
         let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![
             #[cfg(feature = "parquet")]
@@ -156,7 +163,7 @@ impl SessionStateDefaults {
     }
 
     /// registers all the builtin array functions
-    #[cfg_attr(not(feature = "nested_expressions"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "nested_expressions"), expect(unused_variables))]
     pub fn register_array_functions(state: &mut SessionState) {
         // register crate of array expressions (if enabled)
         #[cfg(feature = "nested_expressions")]

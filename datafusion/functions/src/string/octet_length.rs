@@ -17,7 +17,6 @@
 
 use arrow::compute::kernels::length::length;
 use arrow::datatypes::DataType;
-use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::types::logical_string;
@@ -45,7 +44,7 @@ use datafusion_macros::user_doc;
     related_udf(name = "bit_length"),
     related_udf(name = "length")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct OctetLengthFunc {
     signature: Signature,
 }
@@ -70,10 +69,6 @@ impl OctetLengthFunc {
 }
 
 impl ScalarUDFImpl for OctetLengthFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "octet_length"
     }
@@ -119,7 +114,7 @@ mod tests {
     use arrow::datatypes::DataType::Int32;
 
     use datafusion_common::ScalarValue;
-    use datafusion_common::{exec_err, Result};
+    use datafusion_common::{Result, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::string::octet_length::OctetLengthFunc;

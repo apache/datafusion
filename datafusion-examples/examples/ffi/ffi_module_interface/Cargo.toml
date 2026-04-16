@@ -18,8 +18,11 @@
 [package]
 name = "ffi_module_interface"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 abi_stable = "0.11.3"

@@ -22,6 +22,7 @@ members = [
     "datafusion/catalog",
     "datafusion/catalog-listing",
     "datafusion/datasource",
+    "datafusion/datasource-arrow",
     "datafusion/datasource-avro",
     "datafusion/datasource-csv",
     "datafusion/datasource-json",
@@ -40,8 +41,10 @@ members = [
     "datafusion/functions-window-common",
     "datafusion/optimizer",
     "datafusion/physical-expr",
+    "datafusion/physical-expr-adapter",
     "datafusion/physical-expr-common",
     "datafusion/physical-optimizer",
+    "datafusion/pruning",
     "datafusion/physical-plan",
     "datafusion/proto",
     "datafusion/proto/gen",
@@ -69,15 +72,15 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
-edition = "2021"
+edition = "2024"
 homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
-rust-version = "1.82.0"
+rust-version = "1.88.0"
 # Define DataFusion version
-version = "47.0.0"
+version = "53.0.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -85,129 +88,117 @@ version = "47.0.0"
 # for the inherited dependency but cannot do the reverse (override from true to false).
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
-apache-avro = { version = "0.17", default-features = false }
-arrow = { version = "55.1.0", features = [
+apache-avro = { version = "0.21", default-features = false }
+arrow = { version = "58.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "55.0.0", default-features = false }
-arrow-flight = { version = "55.1.0", features = [
+arrow-avro = { version = "58.1.0", default-features = false, features = [
+    "deflate",
+    "snappy",
+    "zstd",
+    "bzip2",
+    "xz",
+] }
+arrow-buffer = { version = "58.1.0", default-features = false }
+arrow-flight = { version = "58.1.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "55.0.0", default-features = false, features = [
+arrow-ipc = { version = "58.1.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "55.0.0", default-features = false }
-arrow-schema = { version = "55.0.0", default-features = false }
-async-trait = "0.1.88"
+arrow-ord = { version = "58.1.0", default-features = false }
+arrow-schema = { version = "58.1.0", default-features = false }
+async-trait = "0.1.89"
 bigdecimal = "0.4.8"
-bytes = "1.10"
-chrono = { version = "0.4.41", default-features = false }
-criterion = "0.5.1"
-ctor = "0.4.0"
+bytes = "1.11"
+bzip2 = "0.6.1"
+chrono = { version = "0.4.44", default-features = false }
+criterion = "0.8"
+ctor = "0.10.0"
 dashmap = "6.0.1"
-datafusion = { path = "datafusion/core", version = "47.0.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "47.0.0" }
-datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "47.0.0" }
-datafusion-common = { path = "datafusion/common", version = "47.0.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "47.0.0" }
-datafusion-datasource = { path = "datafusion/datasource", version = "47.0.0", default-features = false }
-datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "47.0.0", default-features = false }
-datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "47.0.0", default-features = false }
-datafusion-datasource-json = { path = "datafusion/datasource-json", version = "47.0.0", default-features = false }
-datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "47.0.0", default-features = false }
-datafusion-doc = { path = "datafusion/doc", version = "47.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "47.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "47.0.0" }
-datafusion-expr-common = { path = "datafusion/expr-common", version = "47.0.0" }
-datafusion-ffi = { path = "datafusion/ffi", version = "47.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "47.0.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "47.0.0" }
-datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "47.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "47.0.0" }
-datafusion-functions-table = { path = "datafusion/functions-table", version = "47.0.0" }
-datafusion-functions-window = { path = "datafusion/functions-window", version = "47.0.0" }
-datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "47.0.0" }
-datafusion-macros = { path = "datafusion/macros", version = "47.0.0" }
-datafusion-object-store-iouring = { path = "datafusion/object-store-iouring", version = "47.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "47.0.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "47.0.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "47.0.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "47.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "47.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "47.0.0" }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "47.0.0" }
-datafusion-session = { path = "datafusion/session", version = "47.0.0" }
-datafusion-spark = { path = "datafusion/spark", version = "47.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "47.0.0" }
+datafusion = { path = "datafusion/core", version = "53.0.0", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "53.0.0" }
+datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "53.0.0" }
+datafusion-common = { path = "datafusion/common", version = "53.0.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "53.0.0" }
+datafusion-datasource = { path = "datafusion/datasource", version = "53.0.0", default-features = false }
+datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "53.0.0", default-features = false }
+datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "53.0.0", default-features = false }
+datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "53.0.0", default-features = false }
+datafusion-datasource-json = { path = "datafusion/datasource-json", version = "53.0.0", default-features = false }
+datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "53.0.0", default-features = false }
+datafusion-doc = { path = "datafusion/doc", version = "53.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "53.0.0", default-features = false }
+datafusion-expr = { path = "datafusion/expr", version = "53.0.0", default-features = false }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "53.0.0" }
+datafusion-ffi = { path = "datafusion/ffi", version = "53.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "53.0.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "53.0.0" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "53.0.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "53.0.0", default-features = false }
+datafusion-functions-table = { path = "datafusion/functions-table", version = "53.0.0" }
+datafusion-functions-window = { path = "datafusion/functions-window", version = "53.0.0" }
+datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "53.0.0" }
+datafusion-macros = { path = "datafusion/macros", version = "53.0.0" }
+datafusion-object-store-iouring = { path = "datafusion/object-store-iouring", version = "53.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "53.0.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "53.0.0", default-features = false }
+datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "53.0.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "53.0.0", default-features = false }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "53.0.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "53.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "53.0.0" }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "53.0.0" }
+datafusion-pruning = { path = "datafusion/pruning", version = "53.0.0" }
+datafusion-session = { path = "datafusion/session", version = "53.0.0" }
+datafusion-spark = { path = "datafusion/spark", version = "53.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "53.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "53.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
+flate2 = "1.1.9"
 futures = "0.3"
-half = { version = "2.6.0", default-features = false }
-hashbrown = { version = "0.14.5", features = ["raw"] }
-indexmap = "2.9.0"
+glob = "0.3.0"
+half = { version = "2.7.0", default-features = false }
+hashbrown = { version = "0.17.0" }
+hex = { version = "0.4.3" }
+indexmap = "2.14.0"
+insta = { version = "1.47.2", features = ["glob", "filters"] }
 itertools = "0.14"
+itoa = "1.0"
+liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
-object_store = { version = "0.12.0", default-features = false }
+memchr = "2.8.0"
+num-traits = { version = "0.2" }
+object_store = { version = "0.13.2", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "55.1.0", default-features = false, features = [
+parquet = { version = "58.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
 ] }
-pbjson = { version = "0.7.0" }
-pbjson-types = "0.7"
+pbjson = { version = "0.9.0" }
+pbjson-types = "0.9"
 # Should match arrow-flight's version of prost.
-insta = { version = "1.43.1", features = ["glob", "filters"] }
-prost = "0.13.1"
+prost = "0.14.1"
 rand = "0.9"
 recursive = "0.1.1"
-regex = "1.8"
-rstest = "0.25.0"
+regex = "1.12"
+rstest = "0.26.1"
 serde_json = "1"
-sqlparser = { version = "0.55.0", features = ["visitor"] }
+sha2 = "^0.10.9"
+sqlparser = { version = "0.61.0", default-features = false, features = ["std", "visitor"] }
+strum = "0.28.0"
+strum_macros = "0.28.0"
 tempfile = "3"
-tokio = { version = "1.45", features = ["macros", "rt", "sync"] }
-url = "2.5.4"
-
-[profile.release]
-codegen-units = 1
-lto = true
-strip = true      # Eliminate debug information to minimize binary size
-
-# the release profile takes a long time to build so we can use this profile during development to save time
-# cargo build --profile release-nonlto
-[profile.release-nonlto]
-codegen-units = 16
-debug-assertions = false
-incremental = false
-inherits = "release"
-lto = false
-opt-level = 3
-overflow-checks = false
-rpath = false
-strip = false            # Retain debug info for flamegraphs
-
-[profile.ci]
-inherits = "dev"
-incremental = false
-
-# ci turns off debug info, etc. for dependencies to allow for smaller binaries making caching more effective
-[profile.ci.package."*"]
-debug = false
-debug-assertions = false
-strip = "debuginfo"
-incremental = false
-
-# release inherited profile keeping debug information and symbols
-# for mem/cpu profiling
-[profile.profiling]
-inherits = "release"
-debug = true
-strip = false
+testcontainers-modules = { version = "0.15" }
+tokio = { version = "1.52", features = ["macros", "rt", "sync"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+url = "2.5.7"
+uuid = "1.23"
+zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
@@ -216,7 +207,81 @@ used_underscore_binding = "warn"
 or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
 uninlined_format_args = "warn"
+inefficient_to_string = "warn"
+# https://github.com/apache/datafusion/issues/18503
+needless_pass_by_value = "warn"
+# https://github.com/apache/datafusion/issues/18881
+allow_attributes = "warn"
+assigning_clones = "warn"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
+    "cfg(tarpaulin)",
+    "cfg(tarpaulin_include)",
+] }
 unused_qualifications = "deny"
+
+# --------------------
+# Compilation Profiles
+# --------------------
+# A Cargo profile is a preset for the compiler/linker knobs that trades off:
+# - Build time: how quickly code compiles and links
+# - Runtime performance: how fast the resulting binaries execute
+# - Binary size: how large the executables end up
+# - Debuggability: how much debug information is preserved for debugging and profiling
+#
+# To use a profile: `cargo [ build | run | ... ] --profile <profile-name>`
+#
+# Profiles available:
+# - dev: default debug build; fastest to compile, slowest to run, full debug info.
+#     For everyday development; default for "cargo [ build | test | run ]".
+# - release: fully optimized build; slowest to compile, fastest to run, smallest
+#     binaries. For public releases; default for "cargo [ bench | install ]".
+# - release-nonlto: skips LTO, so it builds much faster while staying close to
+#     release performance. Useful when developing performance optimizations.
+# - profiling: inherits release optimizations but retains debug info to support
+#     profiling tools and flamegraphs.
+# - ci: derived from `dev` but disables debug info and incremental builds to keep
+#     CI artifacts small and reproducible.
+# - ci-optimized: derived from `release` but enables debug assertions and uses
+#     less aggressive optimizations for faster builds.  Used for long-running CI
+#     tasks.
+#
+# If you want to optimize compilation, the `compile_profile` benchmark can be useful.
+# See `benchmarks/README.md` for more details.
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true      # Eliminate debug info to minimize binary size
+
+[profile.release-nonlto]
+inherits = "release"
+codegen-units = 16
+lto = false
+strip = false        # Retain debug info for flamegraphs
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
+[profile.ci-optimized]
+inherits = "release"
+debug-assertions = true
+codegen-units = 16
+lto = "thin"
+
+[profile.ci]
+inherits = "dev"
+debug = false
+incremental = false
+
+# This rule applies to every package except workspace members (dependencies
+# such as `arrow` and `tokio`). It disables debug info and related features on
+# dependencies so their binaries stay smaller, improving cache reuse.
+[profile.ci.package."*"]
+debug = false
+debug-assertions = false
+strip = "debuginfo"
+incremental = false

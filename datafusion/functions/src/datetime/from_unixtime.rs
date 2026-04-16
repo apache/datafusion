@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType::{Int64, Timestamp, Utf8};
 use arrow::datatypes::TimeUnit::Second;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -46,7 +46,7 @@ use datafusion_macros::user_doc;
         description = "Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct FromUnixtimeFunc {
     signature: Signature,
 }
@@ -69,10 +69,6 @@ impl FromUnixtimeFunc {
 }
 
 impl ScalarUDFImpl for FromUnixtimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "from_unixtime"
     }
@@ -118,10 +114,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         internal_err!("call return_field_from_args instead")
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         let len = args.len();
         if len != 1 && len != 2 {
@@ -133,7 +126,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
 
         if args[0].data_type() != Int64 {
             return exec_err!(
-                "Unsupported data type {:?} for function from_unixtime",
+                "Unsupported data type {} for function from_unixtime",
                 args[0].data_type()
             );
         }
@@ -145,7 +138,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
                     .cast_to(&Timestamp(Second, Some(Arc::from(tz.to_string()))), None),
                 _ => {
                     exec_err!(
-                        "Unsupported data type {:?} for function from_unixtime",
+                        "Unsupported data type {} for function from_unixtime",
                         args[1].data_type()
                     )
                 }
@@ -166,17 +159,19 @@ mod test {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Int64;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
     fn test_without_timezone() {
         let arg_field = Arc::new(Field::new("a", DataType::Int64, true));
-        let args = datafusion_expr::ScalarFunctionArgs {
+        let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(Int64(Some(1729900800)))],
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Timestamp(Second, None), true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
@@ -194,7 +189,7 @@ mod test {
             Field::new("a", DataType::Int64, true).into(),
             Field::new("a", DataType::Utf8, true).into(),
         ];
-        let args = datafusion_expr::ScalarFunctionArgs {
+        let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(Int64(Some(1729900800))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(
@@ -209,6 +204,7 @@ mod test {
                 true,
             )
             .into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 

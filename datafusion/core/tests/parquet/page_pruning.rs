@@ -20,27 +20,35 @@ use std::sync::Arc;
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
 
-use datafusion::datasource::file_format::parquet::ParquetFormat;
+use arrow::array::{Int32Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
-use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
+use datafusion::physical_plan::metrics::MetricValue;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{col, lit, Expr};
+use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_expr::create_physical_expr;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use futures::StreamExt;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 
-async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec {
+async fn get_parquet_exec(
+    state: &SessionState,
+    filter: Expr,
+    pushdown_filters: bool,
+) -> DataSourceExec {
     let object_store_url = ObjectStoreUrl::local_filesystem();
     let store = state.runtime_env().object_store(&object_store_url).unwrap();
 
@@ -62,63 +70,63 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec 
         .await
         .unwrap();
 
-    let partitioned_file = PartitionedFile {
-        object_meta: meta,
-        partition_values: vec![],
-        range: None,
-        statistics: None,
-        extensions: None,
-        metadata_size_hint: None,
-    };
+    let partitioned_file = PartitionedFile::new_from_meta(meta);
 
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
     let source = Arc::new(
-        ParquetSource::default()
+        ParquetSource::new(schema.clone())
             .with_predicate(predicate)
-            .with_enable_page_index(true),
+            .with_enable_page_index(true)
+            .with_pushdown_filters(pushdown_filters),
     );
-    let base_config = FileScanConfigBuilder::new(object_store_url, schema, source)
+    let base_config = FileScanConfigBuilder::new(object_store_url, source)
         .with_file(partitioned_file)
         .build();
 
     DataSourceExec::new(Arc::new(base_config))
 }
 
+async fn get_filter_results(
+    state: &SessionState,
+    filter: Expr,
+    pushdown_filters: bool,
+) -> Vec<RecordBatch> {
+    let parquet_exec = get_parquet_exec(state, filter, pushdown_filters).await;
+    let task_ctx = state.task_ctx();
+    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
+    let mut batches = Vec::new();
+    while let Some(Ok(batch)) = results.next().await {
+        batches.push(batch);
+    }
+    batches
+}
+
 #[tokio::test]
 async fn page_index_filter_one_col() {
     let session_ctx = SessionContext::new();
     let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
 
     // 1.create filter month == 1;
     let filter = col("month").eq(lit(1_i32));
 
-    let parquet_exec = get_parquet_exec(&state, filter).await;
-
-    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
-
-    let batch = results.next().await.unwrap().unwrap();
-
+    let batches = get_filter_results(&state, filter.clone(), false).await;
     // `month = 1` from the page index should create below RowSelection
     //  vec.push(RowSelector::select(312));
     //  vec.push(RowSelector::skip(3330));
     //  vec.push(RowSelector::select(339));
     //  vec.push(RowSelector::skip(3319));
     // total 651 row
-    assert_eq!(batch.num_rows(), 651);
+    assert_eq!(batches[0].num_rows(), 651);
+
+    let batches = get_filter_results(&state, filter, true).await;
+    assert_eq!(batches[0].num_rows(), 620);
 
     // 2. create filter month == 1 or month == 2;
     let filter = col("month").eq(lit(1_i32)).or(col("month").eq(lit(2_i32)));
-
-    let parquet_exec = get_parquet_exec(&state, filter).await;
-
-    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
-
-    let batch = results.next().await.unwrap().unwrap();
-
+    let batches = get_filter_results(&state, filter.clone(), false).await;
     // `month = 1` or `month = 2` from the page index should create below RowSelection
     //  vec.push(RowSelector::select(312));
     //  vec.push(RowSelector::skip(900));
@@ -128,95 +136,78 @@ async fn page_index_filter_one_col() {
     //  vec.push(RowSelector::skip(873));
     //  vec.push(RowSelector::select(318));
     //  vec.push(RowSelector::skip(2128));
-    assert_eq!(batch.num_rows(), 1281);
+    assert_eq!(batches[0].num_rows(), 1281);
+
+    let batches = get_filter_results(&state, filter, true).await;
+    assert_eq!(batches[0].num_rows(), 1180);
 
     // 3. create filter month == 1 and month == 12;
     let filter = col("month")
         .eq(lit(1_i32))
         .and(col("month").eq(lit(12_i32)));
+    let batches = get_filter_results(&state, filter.clone(), false).await;
+    assert!(batches.is_empty());
 
-    let parquet_exec = get_parquet_exec(&state, filter).await;
-
-    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
-
-    let batch = results.next().await;
-
-    assert!(batch.is_none());
+    let batches = get_filter_results(&state, filter, true).await;
+    assert!(batches.is_empty());
 
     // 4.create filter 0 < month < 2 ;
     let filter = col("month").gt(lit(0_i32)).and(col("month").lt(lit(2_i32)));
-
-    let parquet_exec = get_parquet_exec(&state, filter).await;
-
-    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
-
-    let batch = results.next().await.unwrap().unwrap();
-
+    let batches = get_filter_results(&state, filter.clone(), false).await;
     // should same with `month = 1`
-    assert_eq!(batch.num_rows(), 651);
-
-    let session_ctx = SessionContext::new();
-    let task_ctx = session_ctx.task_ctx();
+    assert_eq!(batches[0].num_rows(), 651);
+    let batches = get_filter_results(&state, filter, true).await;
+    assert_eq!(batches[0].num_rows(), 620);
 
     // 5.create filter date_string_col == "01/01/09"`;
     // Note this test doesn't apply type coercion so the literal must match the actual view type
     let filter = col("date_string_col").eq(lit(ScalarValue::new_utf8view("01/01/09")));
-    let parquet_exec = get_parquet_exec(&state, filter).await;
-    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
-    let batch = results.next().await.unwrap().unwrap();
+    let batches = get_filter_results(&state, filter.clone(), false).await;
+    assert_eq!(batches[0].num_rows(), 14);
 
     // there should only two pages match the filter
     //                                  min                                        max
     // page-20                        0  01/01/09                                  01/02/09
     // page-21                        0  01/01/09                                  01/01/09
     // each 7 rows
-    assert_eq!(batch.num_rows(), 14);
+    assert_eq!(batches[0].num_rows(), 14);
+    let batches = get_filter_results(&state, filter, true).await;
+    assert_eq!(batches[0].num_rows(), 10);
 }
 
 #[tokio::test]
 async fn page_index_filter_multi_col() {
     let session_ctx = SessionContext::new();
     let state = session_ctx.state();
-    let task_ctx = session_ctx.task_ctx();
 
     // create filter month == 1 and year = 2009;
     let filter = col("month").eq(lit(1_i32)).and(col("year").eq(lit(2009)));
-
-    let parquet_exec = get_parquet_exec(&state, filter).await;
-
-    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
-
-    let batch = results.next().await.unwrap().unwrap();
-
+    let batches = get_filter_results(&state, filter.clone(), false).await;
     //  `year = 2009` from the page index should create below RowSelection
     //  vec.push(RowSelector::select(3663));
     //  vec.push(RowSelector::skip(3642));
     //  combine with `month = 1` total 333 row
-    assert_eq!(batch.num_rows(), 333);
+    assert_eq!(batches[0].num_rows(), 333);
+    let batches = get_filter_results(&state, filter, true).await;
+    assert_eq!(batches[0].num_rows(), 310);
 
     // create filter (year = 2009 or id = 1) and month = 1;
     // this should only use `month = 1` to evaluate the page index.
     let filter = col("month")
         .eq(lit(1_i32))
         .and(col("year").eq(lit(2009)).or(col("id").eq(lit(1))));
-
-    let parquet_exec = get_parquet_exec(&state, filter).await;
-
-    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
-
-    let batch = results.next().await.unwrap().unwrap();
-    assert_eq!(batch.num_rows(), 651);
+    let batches = get_filter_results(&state, filter.clone(), false).await;
+    assert_eq!(batches[0].num_rows(), 651);
+    let batches = get_filter_results(&state, filter, true).await;
+    assert_eq!(batches[0].num_rows(), 310);
 
     // create filter (year = 2009 or id = 1)
     // this filter use two columns will not push down
     let filter = col("year").eq(lit(2009)).or(col("id").eq(lit(1)));
-
-    let parquet_exec = get_parquet_exec(&state, filter).await;
-
-    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
-
-    let batch = results.next().await.unwrap().unwrap();
-    assert_eq!(batch.num_rows(), 7300);
+    let batches = get_filter_results(&state, filter.clone(), false).await;
+    assert_eq!(batches[0].num_rows(), 7300);
+    let batches = get_filter_results(&state, filter, true).await;
+    assert_eq!(batches[0].num_rows(), 3650);
 
     // create filter (year = 2009 and id = 1) or (year = 2010)
     // this filter use two columns will not push down
@@ -226,13 +217,10 @@ async fn page_index_filter_multi_col() {
         .eq(lit(2009))
         .and(col("id").eq(lit(1)))
         .or(col("year").eq(lit(2010)));
-
-    let parquet_exec = get_parquet_exec(&state, filter).await;
-
-    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
-
-    let batch = results.next().await.unwrap().unwrap();
-    assert_eq!(batch.num_rows(), 7300);
+    let batches = get_filter_results(&state, filter.clone(), false).await;
+    assert_eq!(batches[0].num_rows(), 7300);
+    let batches = get_filter_results(&state, filter, true).await;
+    assert_eq!(batches[0].num_rows(), 3651);
 }
 
 async fn test_prune(
@@ -378,281 +366,367 @@ async fn prune_date64() {
 }
 
 macro_rules! int_tests {
-    ($bits:expr) => {
-        paste::item! {
-            #[tokio::test]
-            //                      null count  min                                       max
-            // page-0                         0  -5                                        -1
-            // page-1                         0  -4                                        0
-            // page-2                         0  0                                         4
-            // page-3                         0  5                                         9
-            async fn [<prune_int $bits _lt>]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} < 1", $bits),
-                    Some(0),
-                    Some(5),
-                    11,
-                    5,
-                )
-                .await;
-                // result of sql "SELECT * FROM t where i < 1" is same as
-                // "SELECT * FROM t where -i > -1"
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where -i{} > -1", $bits),
-                    Some(0),
-                    Some(5),
-                    11,
-                    5,
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _gt >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} > 8", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5,
-                )
-                .await;
-
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where -i{} < -8", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5,
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _eq >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} = 1", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-            #[tokio::test]
-            async fn [<prune_int $bits _scalar_fun_and_eq >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where abs(i{}) = 1  and i{} = 1", $bits, $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _scalar_fun >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where abs(i{}) = 1", $bits),
-                    Some(0),
-                    Some(0),
-                    3,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _complex_expr>]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{}+1 = 1", $bits),
-                    Some(0),
-                    Some(0),
-                    2,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _complex_expr_subtract >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where 1-i{} > 1", $bits),
-                    Some(0),
-                    Some(0),
-                    9,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _eq_in_list >]() {
-                // result of sql "SELECT * FROM t where in (1)"
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} in (1)", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _eq_in_list_negated >]() {
-                // result of sql "SELECT * FROM t where not in (1)" prune nothing
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} not in (1)", $bits),
-                    Some(0),
-                    Some(0),
-                    19,
-                    5
-                )
-                .await;
-            }
+    ($bits:expr, $fn_lt:ident, $fn_gt:ident, $fn_eq:ident, $fn_scalar_fun_and_eq:ident, $fn_scalar_fun:ident, $fn_complex_expr:ident, $fn_complex_expr_subtract:ident, $fn_eq_in_list:ident, $fn_eq_in_list_negated:ident) => {
+        #[tokio::test]
+        //                      null count  min                                       max
+        // page-0                         0  -5                                        -1
+        // page-1                         0  -4                                        0
+        // page-2                         0  0                                         4
+        // page-3                         0  5                                         9
+        async fn $fn_lt() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} < 1", $bits),
+                Some(0),
+                Some(5),
+                11,
+                5,
+            )
+            .await;
+            // result of sql "SELECT * FROM t where i < 1" is same as
+            // "SELECT * FROM t where -i > -1"
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where -i{} > -1", $bits),
+                Some(0),
+                Some(5),
+                11,
+                5,
+            )
+            .await;
         }
-    }
+
+        #[tokio::test]
+        async fn $fn_gt() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} > 8", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where -i{} < -8", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} = 1", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+        #[tokio::test]
+        async fn $fn_scalar_fun_and_eq() {
+            test_prune(
+                Scenario::Int,
+                &format!(
+                    "SELECT * FROM t where abs(i{}) = 1  and i{} = 1",
+                    $bits, $bits
+                ),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_scalar_fun() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where abs(i{}) = 1", $bits),
+                Some(0),
+                Some(0),
+                3,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_complex_expr() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{}+1 = 1", $bits),
+                Some(0),
+                Some(0),
+                2,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_complex_expr_subtract() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where 1-i{} > 1", $bits),
+                Some(0),
+                Some(0),
+                9,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq_in_list() {
+            // result of sql "SELECT * FROM t where in (1)"
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} in (1)", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq_in_list_negated() {
+            // result of sql "SELECT * FROM t where not in (1)" prune nothing
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} not in (1)", $bits),
+                Some(0),
+                Some(0),
+                19,
+                5,
+            )
+            .await;
+        }
+    };
 }
 
-int_tests!(8);
-int_tests!(16);
-int_tests!(32);
-int_tests!(64);
+int_tests!(
+    8,
+    prune_int8_lt,
+    prune_int8_gt,
+    prune_int8_eq,
+    prune_int8_scalar_fun_and_eq,
+    prune_int8_scalar_fun,
+    prune_int8_complex_expr,
+    prune_int8_complex_expr_subtract,
+    prune_int8_eq_in_list,
+    prune_int8_eq_in_list_negated
+);
+int_tests!(
+    16,
+    prune_int16_lt,
+    prune_int16_gt,
+    prune_int16_eq,
+    prune_int16_scalar_fun_and_eq,
+    prune_int16_scalar_fun,
+    prune_int16_complex_expr,
+    prune_int16_complex_expr_subtract,
+    prune_int16_eq_in_list,
+    prune_int16_eq_in_list_negated
+);
+int_tests!(
+    32,
+    prune_int32_lt,
+    prune_int32_gt,
+    prune_int32_eq,
+    prune_int32_scalar_fun_and_eq,
+    prune_int32_scalar_fun,
+    prune_int32_complex_expr,
+    prune_int32_complex_expr_subtract,
+    prune_int32_eq_in_list,
+    prune_int32_eq_in_list_negated
+);
+int_tests!(
+    64,
+    prune_int64_lt,
+    prune_int64_gt,
+    prune_int64_eq,
+    prune_int64_scalar_fun_and_eq,
+    prune_int64_scalar_fun,
+    prune_int64_complex_expr,
+    prune_int64_complex_expr_subtract,
+    prune_int64_eq_in_list,
+    prune_int64_eq_in_list_negated
+);
 
 macro_rules! uint_tests {
-    ($bits:expr) => {
-        paste::item! {
-            #[tokio::test]
-            //                      null count  min                                       max
-            // page-0                         0  0                                         4
-            // page-1                         0  1                                         5
-            // page-2                         0  5                                         9
-            // page-3                         0  250                                       254
-            async fn [<prune_uint $bits _lt>]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} < 6", $bits),
-                    Some(0),
-                    Some(5),
-                    11,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _gt >]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} > 253", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq >]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} = 6", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _scalar_fun_and_eq >]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where power(u{}, 2) = 36 and u{} = 6", $bits, $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _scalar_fun >]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where power(u{}, 2) = 25", $bits),
-                    Some(0),
-                    Some(0),
-                    2,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _complex_expr>]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{}+1 = 6", $bits),
-                    Some(0),
-                    Some(0),
-                    2,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq_in_list >]() {
-                // result of sql "SELECT * FROM t where in (1)"
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} in (6)", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq_in_list_negated >]() {
-                // result of sql "SELECT * FROM t where not in (6)" prune nothing
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} not in (6)", $bits),
-                    Some(0),
-                    Some(0),
-                    19,
-                    5
-                )
-                .await;
-            }
+    ($bits:expr, $fn_lt:ident, $fn_gt:ident, $fn_eq:ident, $fn_scalar_fun_and_eq:ident, $fn_scalar_fun:ident, $fn_complex_expr:ident, $fn_eq_in_list:ident, $fn_eq_in_list_negated:ident) => {
+        #[tokio::test]
+        //                      null count  min                                       max
+        // page-0                         0  0                                         4
+        // page-1                         0  1                                         5
+        // page-2                         0  5                                         9
+        // page-3                         0  250                                       254
+        async fn $fn_lt() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} < 6", $bits),
+                Some(0),
+                Some(5),
+                11,
+                5,
+            )
+            .await;
         }
-    }
+
+        #[tokio::test]
+        async fn $fn_gt() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} > 253", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} = 6", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_scalar_fun_and_eq() {
+            test_prune(
+                Scenario::UInt,
+                &format!(
+                    "SELECT * FROM t where power(u{}, 2) = 36 and u{} = 6",
+                    $bits, $bits
+                ),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_scalar_fun() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where power(u{}, 2) = 25", $bits),
+                Some(0),
+                Some(0),
+                2,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_complex_expr() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{}+1 = 6", $bits),
+                Some(0),
+                Some(0),
+                2,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq_in_list() {
+            // result of sql "SELECT * FROM t where in (1)"
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} in (6)", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq_in_list_negated() {
+            // result of sql "SELECT * FROM t where not in (6)" prune nothing
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} not in (6)", $bits),
+                Some(0),
+                Some(0),
+                19,
+                5,
+            )
+            .await;
+        }
+    };
 }
 
-uint_tests!(8);
-uint_tests!(16);
-uint_tests!(32);
-uint_tests!(64);
+uint_tests!(
+    8,
+    prune_uint8_lt,
+    prune_uint8_gt,
+    prune_uint8_eq,
+    prune_uint8_scalar_fun_and_eq,
+    prune_uint8_scalar_fun,
+    prune_uint8_complex_expr,
+    prune_uint8_eq_in_list,
+    prune_uint8_eq_in_list_negated
+);
+uint_tests!(
+    16,
+    prune_uint16_lt,
+    prune_uint16_gt,
+    prune_uint16_eq,
+    prune_uint16_scalar_fun_and_eq,
+    prune_uint16_scalar_fun,
+    prune_uint16_complex_expr,
+    prune_uint16_eq_in_list,
+    prune_uint16_eq_in_list_negated
+);
+uint_tests!(
+    32,
+    prune_uint32_lt,
+    prune_uint32_gt,
+    prune_uint32_eq,
+    prune_uint32_scalar_fun_and_eq,
+    prune_uint32_scalar_fun,
+    prune_uint32_complex_expr,
+    prune_uint32_eq_in_list,
+    prune_uint32_eq_in_list_negated
+);
+uint_tests!(
+    64,
+    prune_uint64_lt,
+    prune_uint64_gt,
+    prune_uint64_eq,
+    prune_uint64_scalar_fun_and_eq,
+    prune_uint64_scalar_fun,
+    prune_uint64_complex_expr,
+    prune_uint64_eq_in_list,
+    prune_uint64_eq_in_list_negated
+);
 
 #[tokio::test]
 //                      null count  min                                       max
@@ -911,8 +985,8 @@ async fn without_pushdown_filter() {
     )
     .unwrap();
 
-    // Without filter will not read pageIndex.
-    assert!(bytes_scanned_with_filter > bytes_scanned_without_filter);
+    // Same amount of bytes are scanned when defaulting to cache parquet metadata
+    assert_eq!(bytes_scanned_with_filter, bytes_scanned_without_filter);
 }
 
 #[tokio::test]
@@ -975,4 +1049,57 @@ fn cast_count_metric(metric: MetricValue) -> Option<usize> {
         MetricValue::Count { count, .. } => Some(count.value()),
         _ => None,
     }
+}
+
+#[tokio::test]
+async fn test_parquet_opener_without_page_index() {
+    // Defines a simple schema and batch
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )
+    .unwrap();
+
+    // Create a temp file
+    let file = tempfile::Builder::new()
+        .suffix(".parquet")
+        .tempfile()
+        .unwrap();
+    let path = file.path().to_str().unwrap().to_string();
+
+    // Write parquet WITHOUT page index
+    // The default WriterProperties does not write page index, but we set it explicitly
+    // to be robust against future changes in defaults as requested by reviewers.
+    let props = WriterProperties::builder()
+        .set_statistics_enabled(parquet::file::properties::EnabledStatistics::None)
+        .build();
+
+    let file_fs = std::fs::File::create(&path).unwrap();
+    let mut writer = ArrowWriter::try_new(file_fs, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    // Setup SessionContext with PageIndex enabled
+    // This triggers the ParquetOpener to try and load page index if available
+    let config = SessionConfig::new().with_parquet_page_index_pruning(true);
+
+    let ctx = SessionContext::new_with_config(config);
+
+    // Register the table
+    ctx.register_parquet("t", &path, Default::default())
+        .await
+        .unwrap();
+
+    // Query the table
+    // If the bug exists, this might fail because Opener tries to load PageIndex forcefully
+    let df = ctx.sql("SELECT * FROM t").await.unwrap();
+    let batches = df
+        .collect()
+        .await
+        .expect("Failed to read parquet file without page index");
+
+    // We expect this to succeed, but currently it might fail
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 3);
 }

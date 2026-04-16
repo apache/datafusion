@@ -21,6 +21,16 @@
 
 This directory contains test files for the `spark` test suite.
 
+## RoadMap
+
+Implementing the `datafusion-spark` compatible functions project is still a work in progress.
+Many of the tests in this directory are commented out and are waiting for help with implementation.
+
+For more information please see:
+
+- [The `datafusion-spark` Epic](https://github.com/apache/datafusion/issues/15914)
+- [Spark Test Generation Script] (https://github.com/apache/datafusion/pull/16409#issuecomment-2972618052)
+
 ## Testing Guide
 
 When testing Spark functions:
@@ -29,6 +39,18 @@ When testing Spark functions:
 - Test cases should only contain `SELECT` statements with the function being tested
 - Add explicit casts to input values to ensure the correct data type is used (e.g., `0::INT`)
   - Explicit casting is necessary because DataFusion and Spark do not infer data types in the same way
+- If the Spark built-in function under test behaves differently in ANSI SQL mode, please wrap your test cases like this example:
+
+```sql
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+# Functions under test
+select abs((-128)::TINYINT)
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
+```
 
 ### Finding Test Cases
 

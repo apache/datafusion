@@ -15,32 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::{to_substrait_type, SubstraitProducer};
+use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type_from_field};
 use crate::variation_const::DEFAULT_TYPE_VARIATION_REF;
 use datafusion::common::{DFSchemaRef, ScalarValue};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
+use substrait::proto::Expression;
 use substrait::proto::expression::cast::FailureBehavior;
 use substrait::proto::expression::literal::LiteralType;
 use substrait::proto::expression::{Literal, RexType};
-use substrait::proto::Expression;
 
 pub fn from_cast(
     producer: &mut impl SubstraitProducer,
     cast: &Cast,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let Cast { expr, data_type } = cast;
+    let Cast { expr, field } = cast;
     // since substrait Null must be typed, so if we see a cast(null, dt), we make it a typed null
-    if let Expr::Literal(lit) = expr.as_ref() {
+    if let Expr::Literal(lit, _) = expr.as_ref() {
         // only the untyped(a null scalar value) null literal need this special handling
         // since all other kind of nulls are already typed and can be handled by substrait
         // e.g. null::<Int32Type> or null::<Utf8Type>
-        if matches!(lit, ScalarValue::Null) {
+        if *lit == ScalarValue::Null {
             let lit = Literal {
                 nullable: true,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                literal_type: Some(LiteralType::Null(to_substrait_type(
-                    data_type, true,
+                literal_type: Some(LiteralType::Null(to_substrait_type_from_field(
+                    producer, field,
                 )?)),
             };
             return Ok(Expression {
@@ -51,7 +51,7 @@ pub fn from_cast(
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type(data_type, true)?),
+                r#type: Some(to_substrait_type_from_field(producer, field)?),
                 input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ThrowException.into(),
             },
@@ -64,11 +64,11 @@ pub fn from_try_cast(
     cast: &TryCast,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let TryCast { expr, data_type } = cast;
+    let TryCast { expr, field } = cast;
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type(data_type, true)?),
+                r#type: Some(to_substrait_type_from_field(producer, field)?),
                 input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ReturnNull.into(),
             },
@@ -79,7 +79,9 @@ pub fn from_try_cast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::producer::to_substrait_extended_expr;
+    use crate::logical_plan::producer::{
+        DefaultSubstraitProducer, to_substrait_extended_expr, to_substrait_type,
+    };
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::DFSchema;
     use datafusion::execution::SessionStateBuilder;
@@ -92,7 +94,9 @@ mod tests {
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
         let field = Field::new("out", DataType::Int32, false);
 
-        let expr = Expr::Literal(ScalarValue::Null)
+        let mut producer = DefaultSubstraitProducer::new(&state);
+
+        let expr = Expr::Literal(ScalarValue::Null, None)
             .cast_to(&DataType::Int32, &empty_schema)
             .unwrap();
 
@@ -107,7 +111,7 @@ mod tests {
                 nullable: true,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 literal_type: Some(LiteralType::Null(
-                    to_substrait_type(&DataType::Int32, true).unwrap(),
+                    to_substrait_type(&mut producer, &DataType::Int32, true).unwrap(),
                 )),
             };
             let expected = Expression {
@@ -119,7 +123,7 @@ mod tests {
         }
 
         // a typed null should not be folded
-        let expr = Expr::Literal(ScalarValue::Int64(None))
+        let expr = Expr::Literal(ScalarValue::Int64(None), None)
             .cast_to(&DataType::Int32, &empty_schema)
             .unwrap();
 
@@ -131,13 +135,16 @@ mod tests {
             typed_null.referred_expr[0].expr_type.as_ref().unwrap()
         {
             let cast_expr = substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type(&DataType::Int32, true).unwrap()),
+                r#type: Some(
+                    to_substrait_type(&mut producer, &DataType::Int32, true).unwrap(),
+                ),
                 input: Some(Box::new(Expression {
                     rex_type: Some(RexType::Literal(Literal {
                         nullable: true,
                         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                         literal_type: Some(LiteralType::Null(
-                            to_substrait_type(&DataType::Int64, true).unwrap(),
+                            to_substrait_type(&mut producer, &DataType::Int64, true)
+                                .unwrap(),
                         )),
                     })),
                 })),

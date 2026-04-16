@@ -18,8 +18,8 @@
 //! [`EliminateLimit`] eliminates `LIMIT` when possible
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::logical_plan::{EmptyRelation, FetchType, LogicalPlan, SkipType};
 use std::sync::Arc;
 
@@ -34,7 +34,7 @@ use std::sync::Arc;
 pub struct EliminateLimit;
 
 impl EliminateLimit {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -77,7 +77,7 @@ impl OptimizerRule for EliminateLimit {
                 } else if matches!(limit.get_skip_type()?, SkipType::Literal(0)) {
                     // If fetch is `None` and skip is 0, then Limit takes no effect and
                     // we can remove it. Its input also can be Limit, so we should apply again.
-                    #[allow(clippy::used_underscore_binding)]
+                    #[expect(clippy::used_underscore_binding)]
                     return self.rewrite(Arc::unwrap_or_clone(limit.input), _config);
                 }
                 Ok(Transformed::no(LogicalPlan::Limit(limit)))
@@ -90,14 +90,13 @@ impl OptimizerRule for EliminateLimit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::*;
     use crate::OptimizerContext;
+    use crate::test::*;
     use datafusion_common::Column;
     use datafusion_expr::{
         col,
-        logical_plan::{builder::LogicalPlanBuilder, JoinType},
+        logical_plan::{JoinType, builder::LogicalPlanBuilder},
     };
-    use std::sync::Arc;
 
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::push_down_limit::PushDownLimit;
@@ -148,7 +147,7 @@ mod tests {
         // No aggregate / scan / limit
         assert_optimized_plan_equal!(
             plan,
-            @ r"EmptyRelation"
+            @ "EmptyRelation: rows=0"
         )
     }
 
@@ -169,7 +168,7 @@ mod tests {
             plan,
             @ r"
         Union
-          EmptyRelation
+          EmptyRelation: rows=0
           Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]
             TableScan: test
         "
@@ -188,7 +187,7 @@ mod tests {
         // No aggregate / scan / limit
         assert_optimized_plan_eq_with_pushdown!(
             plan,
-            @ "EmptyRelation"
+            @ "EmptyRelation: rows=0"
         )
     }
 

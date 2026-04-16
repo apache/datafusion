@@ -1,0 +1,89 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test parquet encryption and decryption in DataFusion SQL.
+# See datafusion/common/src/config.rs for equivalent rust code
+
+statement count 0
+CREATE EXTERNAL TABLE encrypted_parquet_table
+(
+double_field double,
+float_field float
+)
+STORED AS PARQUET LOCATION 'test_files/scratch/encrypted_parquet/' OPTIONS (
+    -- Configure encryption for reading and writing Parquet files
+    -- Encryption properties
+    'format.crypto.file_encryption.encrypt_footer' 'true',
+    'format.crypto.file_encryption.footer_key_as_hex' '30313233343536373839303132333435',  -- b"0123456789012345"
+    'format.crypto.file_encryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450" 
+    'format.crypto.file_encryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451" 
+    -- Decryption properties
+    'format.crypto.file_decryption.footer_key_as_hex' '30313233343536373839303132333435', -- b"0123456789012345" 
+    'format.crypto.file_decryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450" 
+    'format.crypto.file_decryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+)
+
+statement count 0
+CREATE TABLE temp_table (
+    double_field double,
+    float_field float
+)
+
+query I
+INSERT INTO temp_table VALUES(-1.0, -1.0)
+----
+1
+
+query I
+INSERT INTO temp_table VALUES(1.0, 2.0)
+----
+1
+
+query I
+INSERT INTO temp_table VALUES(3.0, 4.0)
+----
+1
+
+query I
+INSERT INTO temp_table VALUES(5.0, 6.0)
+----
+1
+
+query I
+INSERT INTO TABLE encrypted_parquet_table(double_field, float_field) SELECT * FROM temp_table
+----
+4
+
+query RR
+SELECT * FROM encrypted_parquet_table
+WHERE double_field > 0.0 AND float_field > 0.0
+ORDER BY double_field
+----
+1 2
+3 4
+5 6
+
+statement count 0
+CREATE EXTERNAL TABLE parquet_table
+(
+double_field double,
+float_field float
+)
+STORED AS PARQUET LOCATION 'test_files/scratch/encrypted_parquet/'
+
+query error DataFusion error: Parquet error: Parquet error: Parquet file has an encrypted footer but decryption properties were not provided
+SELECT * FROM parquet_table

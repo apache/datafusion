@@ -95,15 +95,17 @@ pub trait PruningStatistics {
     /// [`UInt64Array`]: arrow::array::UInt64Array
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 
-    /// Return the number of rows for the named column in each container
-    /// as an [`UInt64Array`].
+    /// Return the number of rows in each container as an [`UInt64Array`].
+    ///
+    /// Row counts are container-level (not column-specific) — the value
+    /// is the same regardless of which column is being considered.
     ///
     /// See [`Self::min_values`] for when to return `None` and null values.
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
     ///
     /// [`UInt64Array`]: arrow::array::UInt64Array
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef>;
+    fn row_counts(&self) -> Option<ArrayRef>;
 
     /// Returns [`BooleanArray`] where each row represents information known
     /// about specific literal `values` in a column.
@@ -121,6 +123,7 @@ pub trait PruningStatistics {
     /// container, return `None` (the default).
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn contained(
         &self,
         column: &Column,
@@ -135,6 +138,10 @@ pub trait PruningStatistics {
 /// This feeds into [`CompositePruningStatistics`] to allow pruning
 /// with filters that depend both on partition columns and data columns
 /// (e.g. `WHERE partition_col = data_col`).
+#[deprecated(
+    since = "52.0.0",
+    note = "This struct is no longer used internally. Use `replace_columns_with_literals` from `datafusion-physical-expr-adapter` to substitute partition column values before pruning. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
+)]
 #[derive(Clone)]
 pub struct PartitionPruningStatistics {
     /// Values for each column for each container.
@@ -156,6 +163,7 @@ pub struct PartitionPruningStatistics {
     partition_schema: SchemaRef,
 }
 
+#[expect(deprecated)]
 impl PartitionPruningStatistics {
     /// Create a new instance of [`PartitionPruningStatistics`].
     ///
@@ -169,6 +177,36 @@ impl PartitionPruningStatistics {
     ///   This must **not** be the schema of the entire file or table:
     ///   instead it must only be the schema of the partition columns,
     ///   in the same order as the values in `partition_values`.
+    ///
+    /// # Example
+    ///
+    /// To create [`PartitionPruningStatistics`] for two partition columns `a` and `b`,
+    /// for three containers like this:
+    ///
+    /// | a | b |
+    /// | - | - |
+    /// | 1 | 2 |
+    /// | 3 | 4 |
+    /// | 5 | 6 |
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion_common::ScalarValue;
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::pruning::PartitionPruningStatistics;
+    ///
+    /// let partition_values = vec![
+    ///     vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
+    ///     vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
+    ///     vec![ScalarValue::from(5i32), ScalarValue::from(6i32)],
+    /// ];
+    /// let partition_fields = vec![
+    ///     Arc::new(Field::new("a", DataType::Int32, false)),
+    ///     Arc::new(Field::new("b", DataType::Int32, false)),
+    /// ];
+    /// let partition_stats =
+    ///     PartitionPruningStatistics::try_new(partition_values, partition_fields).unwrap();
+    /// ```
     pub fn try_new(
         partition_values: Vec<Vec<ScalarValue>>,
         partition_fields: Vec<FieldRef>,
@@ -202,6 +240,7 @@ impl PartitionPruningStatistics {
     }
 }
 
+#[expect(deprecated)]
 impl PruningStatistics for PartitionPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
@@ -228,7 +267,7 @@ impl PruningStatistics for PartitionPruningStatistics {
         None
     }
 
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         None
     }
 
@@ -245,7 +284,7 @@ impl PruningStatistics for PartitionPruningStatistics {
             match acc {
                 None => Some(Some(eq_result)),
                 Some(acc_array) => {
-                    arrow::compute::kernels::boolean::and(&acc_array, &eq_result)
+                    arrow::compute::kernels::boolean::or_kleene(&acc_array, &eq_result)
                         .map(Some)
                         .ok()
                 }
@@ -361,11 +400,7 @@ impl PruningStatistics for PrunableStatistics {
         }
     }
 
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        // If the column does not exist in the schema, return None
-        if self.schema.index_of(column.name()).is_err() {
-            return None;
-        }
+    fn row_counts(&self) -> Option<ArrayRef> {
         if self
             .statistics
             .iter()
@@ -409,10 +444,15 @@ impl PruningStatistics for PrunableStatistics {
 /// the first one is returned without any regard for completeness or accuracy.
 /// That is: if the first statistics has information for a column, even if it is incomplete,
 /// that is returned even if a later statistics has more complete information.
+#[deprecated(
+    since = "52.0.0",
+    note = "This struct is no longer used internally. It may be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first. Please open an issue if you have a use case for it."
+)]
 pub struct CompositePruningStatistics {
     pub statistics: Vec<Box<dyn PruningStatistics>>,
 }
 
+#[expect(deprecated)]
 impl CompositePruningStatistics {
     /// Create a new instance of [`CompositePruningStatistics`] from
     /// a vector of [`PruningStatistics`].
@@ -427,6 +467,7 @@ impl CompositePruningStatistics {
     }
 }
 
+#[expect(deprecated)]
 impl PruningStatistics for CompositePruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         for stats in &self.statistics {
@@ -459,9 +500,9 @@ impl PruningStatistics for CompositePruningStatistics {
         None
     }
 
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         for stats in &self.statistics {
-            if let Some(array) = stats.row_counts(column) {
+            if let Some(array) = stats.row_counts() {
                 return Some(array);
             }
         }
@@ -483,18 +524,26 @@ impl PruningStatistics for CompositePruningStatistics {
 }
 
 #[cfg(test)]
+#[expect(deprecated)]
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
 mod tests {
     use crate::{
-        cast::{as_int32_array, as_uint64_array},
         ColumnStatistics,
+        cast::{as_int32_array, as_uint64_array},
     };
 
     use super::*;
     use arrow::datatypes::{DataType, Field};
     use std::sync::Arc;
 
-    #[test]
-    fn test_partition_pruning_statistics() {
+    /// return a PartitionPruningStatistics for two columns 'a' and 'b'
+    /// and the following stats
+    ///
+    /// | a | b |
+    /// | - | - |
+    /// | 1 | 2 |
+    /// | 3 | 4 |
+    fn partition_pruning_statistics_setup() -> PartitionPruningStatistics {
         let partition_values = vec![
             vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
             vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
@@ -503,18 +552,21 @@ mod tests {
             Arc::new(Field::new("a", DataType::Int32, false)),
             Arc::new(Field::new("b", DataType::Int32, false)),
         ];
-        let partition_stats =
-            PartitionPruningStatistics::try_new(partition_values, partition_fields)
-                .unwrap();
+        PartitionPruningStatistics::try_new(partition_values, partition_fields).unwrap()
+    }
+
+    #[test]
+    fn test_partition_pruning_statistics() {
+        let partition_stats = partition_pruning_statistics_setup();
 
         let column_a = Column::new_unqualified("a");
         let column_b = Column::new_unqualified("b");
 
         // Partition values don't know anything about nulls or row counts
         assert!(partition_stats.null_counts(&column_a).is_none());
-        assert!(partition_stats.row_counts(&column_a).is_none());
+        assert!(partition_stats.row_counts().is_none());
         assert!(partition_stats.null_counts(&column_b).is_none());
-        assert!(partition_stats.row_counts(&column_b).is_none());
+        assert!(partition_stats.row_counts().is_none());
 
         // Min/max values are the same as the partition values
         let min_values_a =
@@ -561,6 +613,85 @@ mod tests {
     }
 
     #[test]
+    fn test_partition_pruning_statistics_multiple_positive_values() {
+        let partition_stats = partition_pruning_statistics_setup();
+
+        let column_a = Column::new_unqualified("a");
+
+        // The two containers have `a` values 1 and 3, so they both only contain values from 1 and 3
+        let values = HashSet::from([ScalarValue::from(1i32), ScalarValue::from(3i32)]);
+        let contained_a = partition_stats.contained(&column_a, &values).unwrap();
+        let expected_contained_a = BooleanArray::from(vec![true, true]);
+        assert_eq!(contained_a, expected_contained_a);
+    }
+
+    #[test]
+    fn test_partition_pruning_statistics_multiple_negative_values() {
+        let partition_stats = partition_pruning_statistics_setup();
+
+        let column_a = Column::new_unqualified("a");
+
+        // The two containers have `a` values 1 and 3,
+        // so the first contains ONLY values from 1,2
+        // but the second does not
+        let values = HashSet::from([ScalarValue::from(1i32), ScalarValue::from(2i32)]);
+        let contained_a = partition_stats.contained(&column_a, &values).unwrap();
+        let expected_contained_a = BooleanArray::from(vec![true, false]);
+        assert_eq!(contained_a, expected_contained_a);
+    }
+
+    #[test]
+    fn test_partition_pruning_statistics_null_in_values() {
+        let partition_values = vec![
+            vec![
+                ScalarValue::from(1i32),
+                ScalarValue::from(2i32),
+                ScalarValue::from(3i32),
+            ],
+            vec![
+                ScalarValue::from(4i32),
+                ScalarValue::from(5i32),
+                ScalarValue::from(6i32),
+            ],
+        ];
+        let partition_fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+            Arc::new(Field::new("c", DataType::Int32, false)),
+        ];
+        let partition_stats =
+            PartitionPruningStatistics::try_new(partition_values, partition_fields)
+                .unwrap();
+
+        let column_a = Column::new_unqualified("a");
+        let column_b = Column::new_unqualified("b");
+        let column_c = Column::new_unqualified("c");
+
+        let values_a = HashSet::from([ScalarValue::from(1i32), ScalarValue::Int32(None)]);
+        let contained_a = partition_stats.contained(&column_a, &values_a).unwrap();
+        let mut builder = BooleanArray::builder(2);
+        builder.append_value(true);
+        builder.append_null();
+        let expected_contained_a = builder.finish();
+        assert_eq!(contained_a, expected_contained_a);
+
+        // First match creates a NULL boolean array
+        // The accumulator should update the value to true for the second value
+        let values_b = HashSet::from([ScalarValue::Int32(None), ScalarValue::from(5i32)]);
+        let contained_b = partition_stats.contained(&column_b, &values_b).unwrap();
+        let mut builder = BooleanArray::builder(2);
+        builder.append_null();
+        builder.append_value(true);
+        let expected_contained_b = builder.finish();
+        assert_eq!(contained_b, expected_contained_b);
+
+        // All matches are null, contained should return None
+        let values_c = HashSet::from([ScalarValue::Int32(None)]);
+        let contained_c = partition_stats.contained(&column_c, &values_c);
+        assert!(contained_c.is_none());
+    }
+
+    #[test]
     fn test_partition_pruning_statistics_empty() {
         let partition_values = vec![];
         let partition_fields = vec![
@@ -576,9 +707,9 @@ mod tests {
 
         // Partition values don't know anything about nulls or row counts
         assert!(partition_stats.null_counts(&column_a).is_none());
-        assert!(partition_stats.row_counts(&column_a).is_none());
+        assert!(partition_stats.row_counts().is_none());
         assert!(partition_stats.null_counts(&column_b).is_none());
-        assert!(partition_stats.row_counts(&column_b).is_none());
+        assert!(partition_stats.row_counts().is_none());
 
         // Min/max values are all missing
         assert!(partition_stats.min_values(&column_a).is_none());
@@ -681,13 +812,13 @@ mod tests {
         assert_eq!(null_counts_b, expected_null_counts_b);
 
         // Row counts are the same as the statistics
-        let row_counts_a = as_uint64_array(&pruning_stats.row_counts(&column_a).unwrap())
+        let row_counts_a = as_uint64_array(&pruning_stats.row_counts().unwrap())
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
         let expected_row_counts_a = vec![Some(100), Some(200)];
         assert_eq!(row_counts_a, expected_row_counts_a);
-        let row_counts_b = as_uint64_array(&pruning_stats.row_counts(&column_b).unwrap())
+        let row_counts_b = as_uint64_array(&pruning_stats.row_counts().unwrap())
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
@@ -712,7 +843,7 @@ mod tests {
         // This is debatable, personally I think `row_count` should not take a `Column` as an argument
         // at all since all columns should have the same number of rows.
         // But for now we just document the current behavior in this test.
-        let row_counts_c = as_uint64_array(&pruning_stats.row_counts(&column_c).unwrap())
+        let row_counts_c = as_uint64_array(&pruning_stats.row_counts().unwrap())
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
@@ -720,12 +851,13 @@ mod tests {
         assert_eq!(row_counts_c, expected_row_counts_c);
         assert!(pruning_stats.contained(&column_c, &values).is_none());
 
-        // Test with a column that doesn't exist
+        // Test with a column that doesn't exist — column-specific stats
+        // return None, but row_counts is container-level and still available
         let column_d = Column::new_unqualified("d");
         assert!(pruning_stats.min_values(&column_d).is_none());
         assert!(pruning_stats.max_values(&column_d).is_none());
         assert!(pruning_stats.null_counts(&column_d).is_none());
-        assert!(pruning_stats.row_counts(&column_d).is_none());
+        assert!(pruning_stats.row_counts().is_some());
         assert!(pruning_stats.contained(&column_d, &values).is_none());
     }
 
@@ -753,8 +885,8 @@ mod tests {
         assert!(pruning_stats.null_counts(&column_b).is_none());
 
         // Row counts are all missing
-        assert!(pruning_stats.row_counts(&column_a).is_none());
-        assert!(pruning_stats.row_counts(&column_b).is_none());
+        assert!(pruning_stats.row_counts().is_none());
+        assert!(pruning_stats.row_counts().is_none());
 
         // Contained values are all empty
         let values = HashSet::from([ScalarValue::from(1i32)]);
@@ -894,13 +1026,11 @@ mod tests {
         let expected_null_counts_col_x = vec![Some(0), Some(10)];
         assert_eq!(null_counts_col_x, expected_null_counts_col_x);
 
-        // Test row counts - only available from file statistics
-        assert!(composite_stats.row_counts(&part_a).is_none());
-        let row_counts_col_x =
-            as_uint64_array(&composite_stats.row_counts(&col_x).unwrap())
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>();
+        // Test row counts — container-level, available from file statistics
+        let row_counts_col_x = as_uint64_array(&composite_stats.row_counts().unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_row_counts = vec![Some(100), Some(200)];
         assert_eq!(row_counts_col_x, expected_row_counts);
 
@@ -913,12 +1043,13 @@ mod tests {
         // File statistics don't implement contained
         assert!(composite_stats.contained(&col_x, &values).is_none());
 
-        // Non-existent column should return None for everything
+        // Non-existent column should return None for column-specific stats,
+        // but row_counts is container-level and still available
         let non_existent = Column::new_unqualified("non_existent");
         assert!(composite_stats.min_values(&non_existent).is_none());
         assert!(composite_stats.max_values(&non_existent).is_none());
         assert!(composite_stats.null_counts(&non_existent).is_none());
-        assert!(composite_stats.row_counts(&non_existent).is_none());
+        assert!(composite_stats.row_counts().is_some());
         assert!(composite_stats.contained(&non_existent, &values).is_none());
 
         // Verify num_containers matches
@@ -1022,7 +1153,7 @@ mod tests {
         let expected_null_counts = vec![Some(0), Some(5)];
         assert_eq!(null_counts, expected_null_counts);
 
-        let row_counts = as_uint64_array(&composite_stats.row_counts(&col_a).unwrap())
+        let row_counts = as_uint64_array(&composite_stats.row_counts().unwrap())
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
@@ -1062,11 +1193,10 @@ mod tests {
         let expected_null_counts = vec![Some(10), Some(20)];
         assert_eq!(null_counts, expected_null_counts);
 
-        let row_counts =
-            as_uint64_array(&composite_stats_reversed.row_counts(&col_a).unwrap())
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>();
+        let row_counts = as_uint64_array(&composite_stats_reversed.row_counts().unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_row_counts = vec![Some(1000), Some(2000)];
         assert_eq!(row_counts, expected_row_counts);
     }

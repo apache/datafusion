@@ -23,17 +23,17 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Null, UInt64},
     UInt64Type,
 };
-use std::any::Any;
 
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
 use datafusion_common::utils::list_ndims;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -64,7 +64,7 @@ make_udf_expr_and_func!(
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayDims {
     signature: Signature,
     aliases: Vec<String>,
@@ -86,9 +86,6 @@ impl ArrayDims {
 }
 
 impl ScalarUDFImpl for ArrayDims {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_dims"
     }
@@ -101,10 +98,7 @@ impl ScalarUDFImpl for ArrayDims {
         Ok(DataType::new_list(UInt64, true))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_dims_inner)(&args.args)
     }
 
@@ -143,7 +137,7 @@ make_udf_expr_and_func!(
     ),
     argument(name = "element", description = "Array element.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayNdims {
     signature: Signature,
     aliases: Vec<String>,
@@ -158,9 +152,6 @@ impl ArrayNdims {
 }
 
 impl ScalarUDFImpl for ArrayNdims {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_ndims"
     }
@@ -173,10 +164,7 @@ impl ScalarUDFImpl for ArrayNdims {
         Ok(UInt64)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_ndims_inner)(&args.args)
     }
 
@@ -189,8 +177,7 @@ impl ScalarUDFImpl for ArrayNdims {
     }
 }
 
-/// Array_dims SQL function
-pub fn array_dims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_dims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_dims", args)?;
     let data: Vec<_> = match array.data_type() {
         List(_) => as_list_array(&array)?
@@ -214,8 +201,7 @@ pub fn array_dims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
-/// Array_ndims SQL function
-pub fn array_ndims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_ndims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_ndims", args)?;
 
     fn general_list_ndims(array: &ArrayRef) -> Result<ArrayRef> {

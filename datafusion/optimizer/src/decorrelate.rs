@@ -26,17 +26,18 @@ use crate::simplify_expressions::ExprSimplifier;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{plan_err, Column, DFSchemaRef, HashMap, Result, ScalarValue};
+use datafusion_common::{
+    Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
+};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    expr, lit, BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator,
+    BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan, LogicalPlanBuilder,
+    Operator, expr, lit,
 };
-use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// This struct rewrite the sub query plan by pull up the correlated
 /// expressions(contains outer reference columns) from the inner subquery's
@@ -136,6 +137,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(_) => Ok(Transformed::no(plan)),
+            // Subquery nodes are scope boundaries for correlation. A nested
+            // Subquery's outer references belong to a different decorrelation
+            // level and must not be pulled up into the current scope.
+            LogicalPlan::Subquery(_) => {
+                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            }
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 if plan_hold_outer {
@@ -180,7 +187,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     find_join_exprs(subquery_filter_exprs)?;
                 if let Some(in_predicate) = &self.in_predicate_opt {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
-                    join_filters = remove_duplicated_filter(join_filters, in_predicate);
+                    join_filters = remove_duplicated_filter(join_filters, in_predicate)?;
                 }
                 let correlated_subquery_cols =
                     collect_subquery_cols(&join_filters, subquery_schema)?;
@@ -461,25 +468,39 @@ fn collect_local_correlated_cols(
     }
 }
 
-fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: &Expr) -> Vec<Expr> {
-    filters
+fn remove_duplicated_filter(
+    filters: Vec<Expr>,
+    in_predicate: &Expr,
+) -> Result<Vec<Expr>> {
+    // We assume below that swapping the order of operands to an operator does
+    // not change behavior, which is only true if the operator is commutative.
+    assert_or_internal_err!(
+        match in_predicate {
+            Expr::BinaryExpr(b) => b.op.swap() == Some(b.op),
+            _ => true,
+        },
+        "remove_duplicated_filter: in_predicate must use a commutative operator"
+    );
+
+    Ok(filters
         .into_iter()
         .filter(|filter| {
             if filter == in_predicate {
                 return false;
             }
 
-            // ignore the binary order
+            // Treat swapped operand order to a binary operator as equivalent
             !match (filter, in_predicate) {
                 (Expr::BinaryExpr(a_expr), Expr::BinaryExpr(b_expr)) => {
-                    (a_expr.op == b_expr.op)
-                        && (a_expr.left == b_expr.left && a_expr.right == b_expr.right)
-                        || (a_expr.left == b_expr.right && a_expr.right == b_expr.left)
+                    a_expr.op == b_expr.op
+                        && ((a_expr.left == b_expr.left && a_expr.right == b_expr.right)
+                            || (a_expr.left == b_expr.right
+                                && a_expr.right == b_expr.left))
                 }
                 _ => false,
             }
         })
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>())
 }
 
 fn agg_exprs_evaluation_result_on_empty_batch(
@@ -494,9 +515,12 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
                         if func.name() == "count" {
-                            Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                            Transformed::yes(Expr::Literal(
+                                ScalarValue::Int64(Some(0)),
+                                None,
+                            ))
                         } else {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
+                            Transformed::yes(Expr::Literal(ScalarValue::Null, None))
                         }
                     }
                     _ => Transformed::no(expr),
@@ -506,8 +530,9 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         let result_expr = result_expr.unalias();
-        let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+        let info = SimplifyContext::builder()
+            .with_schema(Arc::clone(schema))
+            .build();
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
@@ -540,8 +565,9 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         if result_expr.ne(expr) {
-            let props = ExecutionProps::new();
-            let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+            let info = SimplifyContext::builder()
+                .with_schema(Arc::clone(schema))
+                .build();
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
@@ -581,16 +607,15 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         .data()?;
 
     let pull_up_expr = if result_expr.ne(filter_expr) {
-        let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(schema);
+        let info = SimplifyContext::builder().with_schema(schema).build();
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
             // evaluate to false or null on empty batch, no need to pull up
-            Expr::Literal(ScalarValue::Null)
-            | Expr::Literal(ScalarValue::Boolean(Some(false))) => None,
+            Expr::Literal(ScalarValue::Null, _)
+            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => None,
             // evaluate to true on empty batch, need to pull up the expr
-            Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+            Expr::Literal(ScalarValue::Boolean(Some(true)), _) => {
                 for (name, exprs) in input_expr_result_map_for_count_bug {
                     expr_result_map_for_count_bug.insert(name.clone(), exprs.clone());
                 }
@@ -605,7 +630,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
                             Box::new(result_expr.clone()),
                             Box::new(input_expr.clone()),
                         )],
-                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null, None))),
                     });
                     let expr_key = new_expr.schema_name().to_string();
                     expr_result_map_for_count_bug.insert(expr_key, new_expr);

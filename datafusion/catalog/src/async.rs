@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::{error::Result, not_impl_err, HashMap, TableReference};
+use datafusion_common::{HashMap, TableReference, error::Result, not_impl_err};
 use datafusion_execution::config::SessionConfig;
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
@@ -35,10 +35,6 @@ struct ResolvedSchemaProvider {
 impl SchemaProvider for ResolvedSchemaProvider {
     fn owner_name(&self) -> Option<&str> {
         self.owner_name.as_deref()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 
     fn table_names(&self) -> Vec<String> {
@@ -60,7 +56,9 @@ impl SchemaProvider for ResolvedSchemaProvider {
     }
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        not_impl_err!("Attempt to deregister table '{name}' with ResolvedSchemaProvider which is not supported")
+        not_impl_err!(
+            "Attempt to deregister table '{name}' with ResolvedSchemaProvider which is not supported"
+        )
     }
 
     fn table_exist(&self, name: &str) -> bool {
@@ -113,10 +111,6 @@ struct ResolvedCatalogProvider {
     cached_schemas: HashMap<String, Arc<dyn SchemaProvider>>,
 }
 impl CatalogProvider for ResolvedCatalogProvider {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.cached_schemas.keys().cloned().collect()
     }
@@ -158,10 +152,6 @@ struct ResolvedCatalogProviderList {
     cached_catalogs: HashMap<String, Arc<dyn CatalogProvider>>,
 }
 impl CatalogProviderList for ResolvedCatalogProviderList {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         _name: String,
@@ -193,7 +183,7 @@ impl CatalogProviderList for ResolvedCatalogProviderList {
 ///
 /// See the [remote_catalog.rs] for an end to end example
 ///
-/// [remote_catalog.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/remote_catalog.rs
+/// [remote_catalog.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/data_io/remote_catalog.rs
 #[async_trait]
 pub trait AsyncSchemaProvider: Send + Sync {
     /// Lookup a table in the schema provider
@@ -422,17 +412,14 @@ pub trait AsyncCatalogProviderList: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        any::Any,
-        sync::{
-            atomic::{AtomicU32, Ordering},
-            Arc,
-        },
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
     };
 
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
-    use datafusion_common::{error::Result, Statistics, TableReference};
+    use datafusion_common::{Statistics, TableReference, error::Result};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{Expr, TableType};
     use datafusion_physical_plan::ExecutionPlan;
@@ -445,10 +432,6 @@ mod tests {
     struct MockTableProvider {}
     #[async_trait]
     impl TableProvider for MockTableProvider {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         /// Get a reference to the schema for this table
         fn schema(&self) -> SchemaRef {
             unimplemented!()
@@ -737,7 +720,7 @@ mod tests {
         ] {
             let async_provider = MockAsyncCatalogProviderList::default();
             let cached_provider = async_provider
-                .resolve(&[table_ref.clone()], &test_config())
+                .resolve(std::slice::from_ref(table_ref), &test_config())
                 .await
                 .unwrap();
 

@@ -42,13 +42,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
+#[cfg(target_os = "linux")]
+use object_store::ObjectStoreExt;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 #[cfg(target_os = "linux")]
 use object_store::{Attributes, GetResultPayload};
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
 
 /// ObjectStore implementation that uses io_uring for local file reads on Linux.
@@ -80,7 +82,7 @@ impl IoUringObjectStore {
 
     /// Create a new `IoUringObjectStore` with the given root directory.
     pub fn new_with_root(root: PathBuf) -> Self {
-        let inner = if root == PathBuf::from("/") {
+        let inner = if root == std::path::Path::new("/") {
             Arc::new(LocalFileSystem::new())
         } else {
             Arc::new(LocalFileSystem::new_with_prefix(&root).expect("valid root path"))
@@ -250,7 +252,7 @@ impl ObjectStore for IoUringObjectStore {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, opts).await
     }
@@ -288,8 +290,11 @@ impl ObjectStore for IoUringObjectStore {
         }
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.inner.delete(location).await
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        self.inner.delete_stream(locations)
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -300,19 +305,20 @@ impl ObjectStore for IoUringObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.inner.copy(from, to).await
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.inner.copy_if_not_exists(from, to).await
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> Result<()> {
+        self.inner.copy_opts(from, to, options).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use object_store::ObjectStore;
+    use object_store::ObjectStoreExt;
 
     #[tokio::test]
     async fn test_put_and_get() {

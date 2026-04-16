@@ -21,20 +21,20 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{FieldRef, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_expr::PartitionEvaluator;
+use datafusion_expr::{LimitEffect, PartitionEvaluator};
 
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use std::any::Any;
 use std::sync::Arc;
 
 /// Evaluates a window function by instantiating a
-/// `[PartitionEvaluator]` for calculating the function's output in
+/// [`PartitionEvaluator`] for calculating the function's output in
 /// that partition.
 ///
 /// Note that unlike aggregation based window functions, some window
 /// functions such as `rank` ignore the values in the window frame,
 /// but others such as `first_value`, `last_value`, and
 /// `nth_value` need the value.
-#[allow(rustdoc::private_intra_doc_links)]
 pub trait StandardWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Returns the aggregate expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
@@ -57,13 +57,7 @@ pub trait StandardWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     ///
     /// Typically, the resulting vector is a single element vector.
     fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
-        self.expressions()
-            .iter()
-            .map(|e| {
-                e.evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
-            })
-            .collect()
+        evaluate_expressions_to_arrays(&self.expressions(), batch)
     }
 
     /// Create a [`PartitionEvaluator`] for evaluating the function on
@@ -90,4 +84,6 @@ pub trait StandardWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn get_result_ordering(&self, _schema: &SchemaRef) -> Option<PhysicalSortExpr> {
         None
     }
+
+    fn limit_effect(&self) -> LimitEffect;
 }

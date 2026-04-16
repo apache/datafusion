@@ -1,0 +1,34 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args: []
+  env:
+    AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
+    AWS_ALLOW_HTTP: "true"
+    AWS_ENDPOINT: "http://localhost:32771"
+    AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
+  stdin: "CREATE EXTERNAL TABLE partitioned_data\nSTORED AS CSV\nLOCATION 's3://data/partitioned_csv'\nOPTIONS (\n    'format.has_header' 'false'\n);\n\nSELECT * FROM partitioned_data ORDER BY column_1, column_2 LIMIT 5;\n"
+---
+success: true
+exit_code: 0
+----- stdout -----
+[CLI_VERSION]
+0 row(s) fetched. 
+[ELAPSED]
+
++----------+----------+----------+
+| column_1 | column_2 | column_3 |
++----------+----------+----------+
+| 0        | 0        | true     |
+| 0        | 1        | false    |
+| 0        | 2        | true     |
+| 0        | 3        | false    |
+| 0        | 4        | true     |
++----------+----------+----------+
+5 row(s) fetched. 
+[ELAPSED]
+
+\q
+
+----- stderr -----

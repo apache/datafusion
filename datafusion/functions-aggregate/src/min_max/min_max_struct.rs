@@ -24,9 +24,8 @@ use arrow::{
     datatypes::DataType,
 };
 use datafusion_common::{
-    internal_err,
+    Result, internal_err,
     scalar::{copy_array_data, partial_cmp_struct},
-    Result,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;

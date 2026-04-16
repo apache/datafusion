@@ -32,7 +32,7 @@ use arrow::{
     compute::take_arrays,
     datatypes::UInt32Type,
 };
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
@@ -80,15 +80,13 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 ///  Logical group         Current Min/Max value for that group stored
 ///     number             as a ScalarValue which points to an
 ///                        individually allocated String
-///
-///```
+/// ```
 ///
 /// # Optimizations
 ///
 /// The adapter minimizes the number of calls to [`Accumulator::update_batch`]
 /// by first collecting the input rows for each group into a contiguous array
 /// using [`compute::take`]
-///
 pub struct GroupsAccumulatorAdapter {
     factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
 
@@ -184,7 +182,6 @@ impl GroupsAccumulatorAdapter {
     /// └─────────┘   └─────────┘   └ ─ ─ ─ ─ ┘                       └─────────┘   └ ─ ─ ─ ─ ┘
     ///
     /// logical group   values      opt_filter           logical group  values       opt_filter
-    ///
     /// ```
     fn invoke_per_accumulator<F>(
         &mut self,

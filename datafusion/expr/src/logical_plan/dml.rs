@@ -40,6 +40,8 @@ pub struct CopyTo {
     pub file_type: Arc<dyn FileType>,
     /// SQL Options that can affect the formats
     pub options: HashMap<String, String>,
+    /// The schema of the output (a single column "count")
+    pub output_schema: DFSchemaRef,
 }
 
 impl Debug for CopyTo {
@@ -50,6 +52,7 @@ impl Debug for CopyTo {
             .field("partition_by", &self.partition_by)
             .field("file_type", &"...")
             .field("options", &self.options)
+            .field("output_schema", &self.output_schema)
             .finish_non_exhaustive()
     }
 }
@@ -78,6 +81,8 @@ impl PartialOrd for CopyTo {
             },
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -89,6 +94,26 @@ impl Hash for CopyTo {
     }
 }
 
+impl CopyTo {
+    pub fn new(
+        input: Arc<LogicalPlan>,
+        output_url: String,
+        partition_by: Vec<String>,
+        file_type: Arc<dyn FileType>,
+        options: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            input,
+            output_url,
+            partition_by,
+            file_type,
+            options,
+            // The output schema is always a single column "count" with the number of rows copied
+            output_schema: make_count_schema(),
+        }
+    }
+}
+
 /// Modifies the content of a database
 ///
 /// This operator is used to perform DML operations such as INSERT, DELETE,
@@ -97,11 +122,9 @@ impl Hash for CopyTo {
 /// * `INSERT` - Appends new rows to the existing table. Calls
 ///   [`TableProvider::insert_into`]
 ///
-/// * `DELETE` - Removes rows from the table. Currently NOT supported by the
-///   [`TableProvider`] trait or builtin sources.
+/// * `DELETE` - Removes rows from the table. Calls [`TableProvider::delete_from`]
 ///
-/// * `UPDATE` - Modifies existing rows in the table. Currently NOT supported by
-///   the [`TableProvider`] trait or builtin sources.
+/// * `UPDATE` - Modifies existing rows in the table. Calls [`TableProvider::update`]
 ///
 /// * `CREATE TABLE AS SELECT` - Creates a new table and populates it with data
 ///   from a query. This is similar to the `INSERT` operation, but it creates a new
@@ -111,6 +134,8 @@ impl Hash for CopyTo {
 ///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 /// [`TableProvider::insert_into`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.insert_into
+/// [`TableProvider::delete_from`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.delete_from
+/// [`TableProvider::update`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.update
 #[derive(Clone)]
 pub struct DmlStatement {
     /// The table name
@@ -194,6 +219,8 @@ impl PartialOrd for DmlStatement {
             },
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -210,6 +237,8 @@ pub enum WriteOp {
     Update,
     /// `CREATE TABLE AS SELECT` operation
     Ctas,
+    /// `TRUNCATE` operation
+    Truncate,
 }
 
 impl WriteOp {
@@ -220,6 +249,7 @@ impl WriteOp {
             WriteOp::Delete => "Delete",
             WriteOp::Update => "Update",
             WriteOp::Ctas => "Ctas",
+            WriteOp::Truncate => "Truncate",
         }
     }
 }

@@ -27,7 +27,9 @@ use crate::file_compression_type::FileCompressionType;
 use datafusion_common::error::Result;
 
 use arrow::array::RecordBatch;
-use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
+use datafusion_common::{
+    DataFusionError, exec_datafusion_err, internal_datafusion_err, internal_err,
+};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
 
@@ -117,10 +119,8 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                     Err(e) => {
                         return SerializedRecordBatchResult::failure(
                             None,
-                            DataFusionError::Execution(format!(
-                                "Error writing to object store: {e}"
-                            )),
-                        )
+                            exec_datafusion_err!("Error writing to object store: {e}"),
+                        );
                     }
                 };
                 row_count += cnt;
@@ -133,9 +133,9 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                 // Handle task panic or cancellation
                 return SerializedRecordBatchResult::failure(
                     Some(writer),
-                    DataFusionError::Execution(format!(
+                    exec_datafusion_err!(
                         "Serialization task panicked or was cancelled: {e}"
-                    )),
+                    ),
                 );
             }
         }
@@ -148,7 +148,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
             return SerializedRecordBatchResult::failure(
                 Some(writer),
                 internal_datafusion_err!("Unknown error writing to object store"),
-            )
+            );
         }
     }
     SerializedRecordBatchResult::success(writer, row_count)
@@ -216,12 +216,20 @@ pub(crate) async fn stateless_serialize_and_write_files(
     }
 
     if any_errors {
-        match any_abort_errors{
-            true => return internal_err!("Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."),
+        match any_abort_errors {
+            true => {
+                return internal_err!(
+                    "Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."
+                );
+            }
             false => match triggering_error {
                 Some(e) => return Err(e),
-                None => return internal_err!("Unknown Error encountered during writing to ObjectStore. All writers successfully aborted.")
-            }
+                None => {
+                    return internal_err!(
+                        "Unknown Error encountered during writing to ObjectStore. All writers successfully aborted."
+                    );
+                }
+            },
         }
     }
 
@@ -240,6 +248,7 @@ pub async fn spawn_writer_tasks_and_join(
     context: &Arc<TaskContext>,
     serializer: Arc<dyn BatchSerializer>,
     compression: FileCompressionType,
+    compression_level: Option<u32>,
     object_store: Arc<dyn ObjectStore>,
     demux_task: SpawnedTask<Result<()>>,
     mut file_stream_rx: DemuxedStreamReceiver,
@@ -265,6 +274,7 @@ pub async fn spawn_writer_tasks_and_join(
                         .execution
                         .objectstore_writer_buffer_size,
                 ))
+                .with_compression_level(compression_level)
                 .build()?;
 
         if tx_file_bundle
@@ -285,8 +295,8 @@ pub async fn spawn_writer_tasks_and_join(
         write_coordinator_task.join_unwind(),
         demux_task.join_unwind()
     );
-    r1.map_err(DataFusionError::ExecutionJoin)??;
-    r2.map_err(DataFusionError::ExecutionJoin)??;
+    r1.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+    r2.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
     // Return total row count:
     rx_row_cnt.await.map_err(|_| {

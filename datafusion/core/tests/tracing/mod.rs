@@ -76,7 +76,13 @@ async fn run_query() {
     let ctx = SessionContext::new();
 
     // Get the test data directory
-    let test_data = parquet_test_data();
+    let test_data = if cfg!(target_os = "windows") {
+        // Prefix Windows paths with "/", since they start with <Drive>:/ but the URI should be
+        // test:///C:/... (https://datatracker.ietf.org/doc/html/rfc8089#appendix-E.2)
+        format!("/{}", parquet_test_data())
+    } else {
+        parquet_test_data()
+    };
 
     // Define a Parquet file format with pruning enabled
     let file_format = ParquetFormat::default().with_enable_pruning(true);

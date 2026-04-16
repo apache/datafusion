@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -22,30 +23,31 @@ use arrow::array::{
     PrimitiveArray,
 };
 use arrow::datatypes::{Field, Int64Type};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
 use arrow::buffer::OffsetBuffer;
-use rand::distr::{Distribution, StandardUniform};
-use rand::prelude::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::distr::{Distribution, StandardUniform};
+use rand::prelude::StdRng;
 
 /// Returns fixed seedable RNG
 pub fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
     c.bench_function(name, |b| {
         b.iter(|| {
-            #[allow(clippy::unit_arg)]
+            #[expect(clippy::unit_arg)]
             black_box(
                 ArrayAggAccumulator::try_new(&list_item_data_type, false)
                     .unwrap()
-                    .merge_batch(&[values.clone()])
+                    .merge_batch(std::slice::from_ref(&values))
                     .unwrap(),
             )
         })

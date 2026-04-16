@@ -26,7 +26,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use io_uring::{opcode, types, IoUring};
+use io_uring::{IoUring, opcode, types};
 use object_store::Result;
 use tokio::sync::{mpsc, oneshot};
 

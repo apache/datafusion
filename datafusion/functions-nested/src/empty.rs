@@ -25,12 +25,12 @@ use arrow::datatypes::{
     DataType::{Boolean, FixedSizeList, LargeList, List},
 };
 use datafusion_common::cast::as_generic_list_array;
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -58,7 +58,7 @@ make_udf_expr_and_func!(
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayEmpty {
     signature: Signature,
     aliases: Vec<String>,
@@ -79,9 +79,6 @@ impl ArrayEmpty {
 }
 
 impl ScalarUDFImpl for ArrayEmpty {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "empty"
     }
@@ -94,10 +91,7 @@ impl ScalarUDFImpl for ArrayEmpty {
         Ok(Boolean)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_empty_inner)(&args.args)
     }
 
@@ -110,8 +104,7 @@ impl ScalarUDFImpl for ArrayEmpty {
     }
 }
 
-/// Array_empty SQL function
-pub fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_empty", args)?;
     match array.data_type() {
         List(_) => general_array_empty::<i32>(array),

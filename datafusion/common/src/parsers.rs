@@ -20,7 +20,7 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-use sqlparser::parser::ParserError;
+use crate::DataFusionError;
 
 /// Readable file compression type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,9 +38,9 @@ pub enum CompressionTypeVariant {
 }
 
 impl FromStr for CompressionTypeVariant {
-    type Err = ParserError;
+    type Err = DataFusionError;
 
-    fn from_str(s: &str) -> Result<Self, ParserError> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.to_uppercase();
         match s.as_str() {
             "GZIP" | "GZ" => Ok(Self::GZIP),
@@ -48,7 +48,7 @@ impl FromStr for CompressionTypeVariant {
             "XZ" => Ok(Self::XZ),
             "ZST" | "ZSTD" => Ok(Self::ZSTD),
             "" | "UNCOMPRESSED" => Ok(Self::UNCOMPRESSED),
-            _ => Err(ParserError::ParserError(format!(
+            _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported file compression type {s}"
             ))),
         }

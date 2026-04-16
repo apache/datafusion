@@ -24,9 +24,9 @@ use arrow::error::ArrowError;
 use bytes::Buf;
 use bytes::Bytes;
 use datafusion_common::Result;
-use futures::stream::BoxStream;
 use futures::StreamExt as _;
-use futures::{ready, Stream};
+use futures::stream::BoxStream;
+use futures::{Stream, ready};
 use std::collections::VecDeque;
 use std::fmt;
 use std::task::Poll;
@@ -175,17 +175,19 @@ pub fn deserialize_stream<'a>(
     mut input: impl Stream<Item = Result<Bytes>> + Unpin + Send + 'a,
     mut deserializer: impl BatchDeserializer<Bytes> + 'a,
 ) -> BoxStream<'a, Result<RecordBatch, ArrowError>> {
-    futures::stream::poll_fn(move |cx| loop {
-        match ready!(input.poll_next_unpin(cx)).transpose()? {
-            Some(b) => _ = deserializer.digest(b),
-            None => deserializer.finish(),
-        };
+    futures::stream::poll_fn(move |cx| {
+        loop {
+            match ready!(input.poll_next_unpin(cx)).transpose()? {
+                Some(b) => _ = deserializer.digest(b),
+                None => deserializer.finish(),
+            };
 
-        return match deserializer.next()? {
-            DeserializerOutput::RecordBatch(rb) => Poll::Ready(Some(Ok(rb))),
-            DeserializerOutput::InputExhausted => Poll::Ready(None),
-            DeserializerOutput::RequiresMoreData => continue,
-        };
+            return match deserializer.next()? {
+                DeserializerOutput::RecordBatch(rb) => Poll::Ready(Some(Ok(rb))),
+                DeserializerOutput::InputExhausted => Poll::Ready(None),
+                DeserializerOutput::RequiresMoreData => continue,
+            };
+        }
     })
     .boxed()
 }

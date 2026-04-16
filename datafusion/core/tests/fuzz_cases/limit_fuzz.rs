@@ -24,7 +24,7 @@ use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::assert_contains;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::sync::Arc;
 use test_utils::stagger_batch;
 

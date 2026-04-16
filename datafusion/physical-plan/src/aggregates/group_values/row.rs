@@ -16,13 +16,16 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
+use arrow::array::{
+    Array, ArrayRef, ListArray, PrimitiveArray, RunArray, StructArray,
+    downcast_run_end_index,
+};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::Result;
+use datafusion_common::hash_utils::RandomState;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use hashbrown::hash_table::HashTable;
@@ -236,30 +239,28 @@ impl GroupValues for GroupValuesRows {
         // https://github.com/apache/datafusion/issues/7647
         for (field, array) in self.schema.fields.iter().zip(&mut output) {
             let expected = field.data_type();
-            *array =
-                dictionary_encode_if_necessary(Arc::<dyn Array>::clone(array), expected)?;
+            *array = dictionary_encode_if_necessary(array, expected)?;
         }
 
         self.group_values = Some(group_values);
         Ok(output)
     }
 
-    fn clear_shrink(&mut self, batch: &RecordBatch) {
-        let count = batch.num_rows();
+    fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values = self.group_values.take().map(|mut rows| {
             rows.clear();
             rows
         });
         self.map.clear();
-        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
-        self.hashes_buffer.shrink_to(count);
+        self.hashes_buffer.shrink_to(num_rows);
     }
 }
 
 fn dictionary_encode_if_necessary(
-    array: ArrayRef,
+    array: &ArrayRef,
     expected: &DataType,
 ) -> Result<ArrayRef> {
     match (expected, array.data_type()) {
@@ -269,10 +270,7 @@ fn dictionary_encode_if_necessary(
                 .iter()
                 .zip(struct_array.columns())
                 .map(|(expected_field, column)| {
-                    dictionary_encode_if_necessary(
-                        Arc::<dyn Array>::clone(column),
-                        expected_field.data_type(),
-                    )
+                    dictionary_encode_if_necessary(column, expected_field.data_type())
                 })
                 .collect::<Result<Vec<_>>>()?;
 
@@ -289,13 +287,40 @@ fn dictionary_encode_if_necessary(
                 Arc::<arrow::datatypes::Field>::clone(expected_field),
                 list.offsets().clone(),
                 dictionary_encode_if_necessary(
-                    Arc::<dyn Array>::clone(list.values()),
+                    list.values(),
                     expected_field.data_type(),
                 )?,
                 list.nulls().cloned(),
             )?))
         }
         (DataType::Dictionary(_, _), _) => Ok(cast(array.as_ref(), expected)?),
-        (_, _) => Ok(Arc::<dyn Array>::clone(&array)),
+        (
+            DataType::RunEndEncoded(run_ends_field, expected_values_field),
+            &DataType::RunEndEncoded(_, _),
+        ) => {
+            macro_rules! reencode_ree {
+                ($run_end_type:ty) => {{
+                    let run_array = array
+                        .as_any()
+                        .downcast_ref::<RunArray<$run_end_type>>()
+                        .unwrap();
+                    let values = dictionary_encode_if_necessary(
+                        &(Arc::clone(run_array.values()) as ArrayRef),
+                        expected_values_field.data_type(),
+                    )?;
+                    let run_ends = PrimitiveArray::<$run_end_type>::new(
+                        run_array.run_ends().inner().clone(),
+                        None,
+                    );
+                    Ok(Arc::new(RunArray::try_new(&run_ends, &values)?))
+                }};
+            }
+            downcast_run_end_index! {
+                run_ends_field.data_type() => (reencode_ree),
+                _ => unreachable!("unsupported run end type: {}", run_ends_field.data_type()),
+            }
+        }
+        (DataType::RunEndEncoded(_, _), _) => Ok(cast(array.as_ref(), expected)?),
+        (_, _) => Ok(Arc::<dyn Array>::clone(array)),
     }
 }

@@ -15,19 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
 use arrow::datatypes::Field;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
-use rand::rngs::ThreadRng;
-use rand::Rng;
-
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_trunc;
+use rand::Rng;
+use rand::rngs::ThreadRng;
 
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
     let mut seconds = vec![];
@@ -56,10 +55,15 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
             .collect::<Vec<_>>();
 
-        let return_type = udf
-            .return_type(&args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>())
+        let scalar_arguments = vec![None; arg_fields.len()];
+        let return_field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &scalar_arguments,
+            })
             .unwrap();
-        let return_field = Arc::new(Field::new("f", return_type, true));
+        let config_options = Arc::new(ConfigOptions::default());
+
         b.iter(|| {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
@@ -67,6 +71,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: batch_len,
                     return_field: Arc::clone(&return_field),
+                    config_options: Arc::clone(&config_options),
                 })
                 .expect("date_trunc should work on valid values"),
             )

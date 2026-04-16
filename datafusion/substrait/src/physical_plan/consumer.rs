@@ -37,11 +37,11 @@ use async_recursion::async_recursion;
 use chrono::DateTime;
 use datafusion::datasource::memory::DataSourceExec;
 use object_store::ObjectMeta;
-use substrait::proto::r#type::{Kind, Nullability};
-use substrait::proto::read_rel::local_files::file_or_files::PathType;
 use substrait::proto::Type;
+use substrait::proto::read_rel::local_files::file_or_files::PathType;
+use substrait::proto::r#type::{Kind, Nullability};
 use substrait::proto::{
-    expression::MaskExpression, read_rel::ReadType, rel::RelType, Rel,
+    Rel, expression::MaskExpression, read_rel::ReadType, rel::RelType,
 };
 
 /// Convert Substrait Rel to DataFusion ExecutionPlan
@@ -53,7 +53,6 @@ pub async fn from_substrait_rel(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut base_config_builder;
 
-    let source = Arc::new(ParquetSource::default());
     match &rel.rel_type {
         Some(RelType::Read(read)) => {
             if read.filter.is_some() || read.best_effort_filter.is_some() {
@@ -80,9 +79,10 @@ pub async fn from_substrait_rel(
                 .collect::<Result<Vec<Field>>>()
             {
                 Ok(fields) => {
+                    let schema = Arc::new(Schema::new(fields));
+                    let source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
                     base_config_builder = FileScanConfigBuilder::new(
                         ObjectStoreUrl::local_filesystem(),
-                        Arc::new(Schema::new(fields)),
                         source,
                     );
                 }
@@ -119,20 +119,14 @@ pub async fn from_substrait_rel(
                         .unwrap();
                         let size = 0;
 
-                        let partitioned_file = PartitionedFile {
-                            object_meta: ObjectMeta {
+                        let partitioned_file =
+                            PartitionedFile::new_from_meta(ObjectMeta {
                                 last_modified: last_modified.into(),
                                 location: path.into(),
                                 size,
                                 e_tag: None,
                                 version: None,
-                            },
-                            partition_values: vec![],
-                            range: None,
-                            statistics: None,
-                            extensions: None,
-                            metadata_size_hint: None,
-                        };
+                            });
 
                         let part_index = file.partition_index as usize;
                         while part_index >= file_groups.len() {
@@ -144,16 +138,16 @@ pub async fn from_substrait_rel(
                     base_config_builder =
                         base_config_builder.with_file_groups(file_groups);
 
-                    if let Some(MaskExpression { select, .. }) = &read.projection {
-                        if let Some(projection) = &select.as_ref() {
-                            let column_indices: Vec<usize> = projection
-                                .struct_items
-                                .iter()
-                                .map(|item| item.field as usize)
-                                .collect();
-                            base_config_builder =
-                                base_config_builder.with_projection(Some(column_indices));
-                        }
+                    if let Some(MaskExpression { select, .. }) = &read.projection
+                        && let Some(projection) = &select.as_ref()
+                    {
+                        let column_indices: Vec<usize> = projection
+                            .struct_items
+                            .iter()
+                            .map(|item| item.field as usize)
+                            .collect();
+                        base_config_builder = base_config_builder
+                            .with_projection_indices(Some(column_indices))?;
                     }
 
                     Ok(
@@ -166,7 +160,7 @@ pub async fn from_substrait_rel(
                 ),
             }
         }
-        _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
+        _ => not_impl_err!("Unsupported Reltype: {:?}", rel.rel_type),
     }
 }
 

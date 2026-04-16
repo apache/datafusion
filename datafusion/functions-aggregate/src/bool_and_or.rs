@@ -17,7 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
 use std::mem::size_of_val;
 
 use arrow::array::ArrayRef;
@@ -28,10 +27,10 @@ use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef};
 
 use datafusion_common::internal_err;
-use datafusion_common::{downcast_value, not_impl_err};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{downcast_value, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
     Signature, Volatility,
@@ -106,7 +105,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression", prefix = "The")
 )]
 /// BOOL_AND aggregate expression
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BoolAnd {
     signature: Signature,
 }
@@ -114,11 +113,7 @@ pub struct BoolAnd {
 impl BoolAnd {
     fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Boolean],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![DataType::Boolean], Volatility::Immutable),
         }
     }
 }
@@ -130,10 +125,6 @@ impl Default for BoolAnd {
 }
 
 impl AggregateUDFImpl for BoolAnd {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bool_and"
     }
@@ -151,12 +142,14 @@ impl AggregateUDFImpl for BoolAnd {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, self.name()),
-            DataType::Boolean,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, self.name()),
+                DataType::Boolean,
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -177,10 +170,6 @@ impl AggregateUDFImpl for BoolAnd {
                 args.return_field.data_type()
             ),
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
@@ -245,7 +234,7 @@ impl Accumulator for BoolAndAccumulator {
     standard_argument(name = "expression", prefix = "The")
 )]
 /// BOOL_OR aggregate expression
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BoolOr {
     signature: Signature,
 }
@@ -253,11 +242,7 @@ pub struct BoolOr {
 impl BoolOr {
     fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Boolean],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![DataType::Boolean], Volatility::Immutable),
         }
     }
 }
@@ -269,10 +254,6 @@ impl Default for BoolOr {
 }
 
 impl AggregateUDFImpl for BoolOr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bool_or"
     }
@@ -290,12 +271,14 @@ impl AggregateUDFImpl for BoolOr {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, self.name()),
-            DataType::Boolean,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, self.name()),
+                DataType::Boolean,
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -317,10 +300,6 @@ impl AggregateUDFImpl for BoolOr {
                 args.return_field.data_type()
             ),
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {

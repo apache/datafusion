@@ -21,13 +21,12 @@ use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow::array::{Array, ArrayRef, ListArray};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{cast::as_map_array, exec_err, Result};
+use datafusion_common::{Result, cast::as_map_array, exec_err};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -56,7 +55,7 @@ SELECT map_keys(map([100, 5], [42, 43]));
         description = "Map expression. Can be a constant, column, or function, and any combination of map operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MapKeysFunc {
     signature: Signature,
 }
@@ -79,10 +78,6 @@ impl MapKeysFunc {
 }
 
 impl ScalarUDFImpl for MapKeysFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_keys"
     }
@@ -94,16 +89,14 @@ impl ScalarUDFImpl for MapKeysFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let [map_type] = take_function_args(self.name(), arg_types)?;
         let map_fields = get_map_entry_field(map_type)?;
+        // internal array nullability is true to be in sync with DuckDB
         Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.first().unwrap().data_type().clone(),
-            false,
+            true,
         ))))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(map_keys_inner)(&args.args)
     }
 
@@ -121,7 +114,8 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new_list_field(map_array.key_type().clone(), false)),
+        // internal array nullability is true to be in sync with DuckDB
+        Arc::new(Field::new_list_field(map_array.key_type().clone(), true)),
         map_array.offsets().clone(),
         Arc::clone(map_array.keys()),
         map_array.nulls().cloned(),

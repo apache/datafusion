@@ -30,3 +30,8 @@ SELECT expm1(a) FROM (VALUES (0::INT), (1::INT)) AS t(a);
 ----
 0
 1.718281828459045
+
+query R
+SELECT expm1(0.0::double);
+----
+0

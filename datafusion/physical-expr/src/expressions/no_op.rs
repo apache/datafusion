@@ -17,7 +17,6 @@
 
 //! NoOp placeholder for physical operations
 
-use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -26,7 +25,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::ColumnarValue;
 
 /// A place holder expression, can not be evaluated.
@@ -49,11 +48,6 @@ impl std::fmt::Display for NoOp {
 }
 
 impl PhysicalExpr for NoOp {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(DataType::Null)
     }

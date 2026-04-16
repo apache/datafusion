@@ -19,20 +19,22 @@ use std::sync::Arc;
 
 use crate::ScalarFunctionExpr;
 use crate::{
-    expressions::{self, binary, like, similar_to, Column, Literal},
     PhysicalExpr,
+    expressions::{self, Column, Literal, binary, like, similar_to},
 };
 
 use arrow::datatypes::Schema;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
+    DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err, plan_err,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
-use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
+use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
-    binary_expr, lit, Between, BinaryExpr, Expr, Like, Operator, TryCast,
+    Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, TryCast, binary_expr, lit,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -103,22 +105,37 @@ use datafusion_expr::{
 /// * `e` - The logical expression
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
 ///   to qualified or unqualified fields by name.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let input_schema: &Schema = &input_dfschema.into();
+    let input_schema = input_dfschema.as_arrow();
 
     match e {
-        Expr::Alias(Alias { expr, .. }) => {
-            Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+        Expr::Alias(Alias { expr, metadata, .. }) => {
+            if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
+                let new_metadata = FieldMetadata::merge_options(
+                    prior_metadata.as_ref(),
+                    metadata.as_ref(),
+                );
+                Ok(Arc::new(Literal::new_with_metadata(
+                    v.clone(),
+                    new_metadata,
+                )))
+            } else {
+                Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+            }
         }
         Expr::Column(c) => {
             let idx = input_dfschema.index_of_column(c)?;
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
+        Expr::Literal(value, metadata) => Ok(Arc::new(Literal::new_with_metadata(
+            value.clone(),
+            metadata.clone(),
+        ))),
         Expr::ScalarVariable(_, variable_names) => {
             if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {
@@ -168,7 +185,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(ScalarValue::Boolean(None), None),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
@@ -176,7 +193,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(ScalarValue::Boolean(None), None),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
@@ -271,16 +288,31 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast(Cast { expr, data_type }) => expressions::cast(
+        Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
-            data_type.clone(),
+            Arc::clone(field),
+            None,
         ),
-        Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
-            create_physical_expr(expr, input_dfschema, execution_props)?,
-            input_schema,
-            data_type.clone(),
-        ),
+        Expr::TryCast(TryCast { expr, field }) => {
+            if !field.metadata().is_empty() {
+                let (_, src_field) = expr.to_field(input_dfschema)?;
+                return plan_err!(
+                    "TryCast from {} to {} is not supported",
+                    format_type_and_metadata(
+                        src_field.data_type(),
+                        Some(src_field.metadata()),
+                    ),
+                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
+                );
+            }
+
+            expressions::try_cast(
+                create_physical_expr(expr, input_dfschema, execution_props)?,
+                input_schema,
+                field.data_type().clone(),
+            )
+        }
         Expr::Not(expr) => {
             expressions::not(create_physical_expr(expr, input_dfschema, execution_props)?)
         }
@@ -301,11 +333,16 @@ pub fn create_physical_expr(
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
+            let config_options = match execution_props.config_options.as_ref() {
+                Some(config_options) => Arc::clone(config_options),
+                None => Arc::new(ConfigOptions::default()),
+            };
 
             Ok(Arc::new(ScalarFunctionExpr::try_new(
                 Arc::clone(func),
                 physical_args,
                 input_schema,
+                config_options,
             )?))
         }
         Expr::Between(Between {
@@ -347,7 +384,7 @@ pub fn create_physical_expr(
             list,
             negated,
         }) => match expr.as_ref() {
-            Expr::Literal(ScalarValue::Utf8(None)) => {
+            Expr::Literal(ScalarValue::Utf8(None), _) => {
                 Ok(expressions::lit(ScalarValue::Boolean(None)))
             }
             _ => {
@@ -380,11 +417,12 @@ where
     exprs
         .into_iter()
         .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 /// Convert a logical expression to a physical expression (without any simplification, etc)
 pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
+    // TODO this makes a deep copy of the Schema. Should take SchemaRef instead and avoid deep copy
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     create_physical_expr(expr, &df_schema, &execution_props).unwrap()
@@ -394,10 +432,24 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
-
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::col;
 
     use super::*;
+
+    fn test_cast_schema() -> Schema {
+        Schema::new(vec![Field::new("a", DataType::Int32, false)])
+    }
+
+    fn lower_cast_expr(expr: &Expr, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        create_physical_expr(expr, &df_schema, &ExecutionProps::new())
+    }
+
+    fn as_planner_cast(physical: &Arc<dyn PhysicalExpr>) -> &expressions::CastExpr {
+        physical
+            .downcast_ref::<expressions::CastExpr>()
+            .expect("planner should lower logical CAST to CastExpr")
+    }
 
     #[test]
     fn test_create_physical_expr_scalar_input_output() -> Result<()> {
@@ -420,6 +472,98 @@ mod tests {
             &result,
             &(Arc::new(BooleanArray::from(vec![true, false, false, false,])) as ArrayRef)
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_lowering_preserves_target_field_metadata() -> Result<()> {
+        let schema = test_cast_schema();
+        let target_field = Arc::new(
+            Field::new("cast_target", DataType::Int64, true)
+                .with_metadata([("target_meta".to_string(), "1".to_string())].into()),
+        );
+        let cast_expr = Expr::Cast(Cast::new_from_field(
+            Box::new(col("a")),
+            Arc::clone(&target_field),
+        ));
+
+        let physical = lower_cast_expr(&cast_expr, &schema)?;
+        let cast = as_planner_cast(&physical);
+
+        assert_eq!(cast.target_field(), &target_field);
+        assert_eq!(physical.return_field(&schema)?, target_field);
+        assert!(physical.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_lowering_preserves_standard_cast_semantics() -> Result<()> {
+        let schema = test_cast_schema();
+        let cast_expr = Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int64));
+
+        let physical = lower_cast_expr(&cast_expr, &schema)?;
+        let cast = as_planner_cast(&physical);
+        let returned_field = physical.return_field(&schema)?;
+
+        assert_eq!(cast.cast_type(), &DataType::Int64);
+        assert_eq!(returned_field.name(), "a");
+        assert_eq!(returned_field.data_type(), &DataType::Int64);
+        assert!(!physical.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_lowering_preserves_same_type_field_semantics() -> Result<()> {
+        let schema = test_cast_schema();
+        let target_field = Arc::new(
+            Field::new("same_type_cast", DataType::Int32, true).with_metadata(
+                [("target_meta".to_string(), "same-type".to_string())].into(),
+            ),
+        );
+        let cast_expr = Expr::Cast(Cast::new_from_field(
+            Box::new(col("a")),
+            Arc::clone(&target_field),
+        ));
+
+        let physical = lower_cast_expr(&cast_expr, &schema)?;
+        let cast = as_planner_cast(&physical);
+
+        assert_eq!(cast.target_field(), &target_field);
+        assert_eq!(physical.return_field(&schema)?, target_field);
+        assert!(physical.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    /// Test that deeply nested expressions do not cause a stack overflow.
+    ///
+    /// This test only runs when the `recursive_protection` feature is enabled,
+    /// as it would overflow the stack otherwise.
+    #[test]
+    #[cfg_attr(not(feature = "recursive_protection"), ignore)]
+    fn test_deeply_nested_binary_expr() -> Result<()> {
+        // Create a deeply nested binary expression tree: ((((a + a) + a) + a) + ... )
+        // With 1000 levels of nesting, this would overflow the stack without recursion protection.
+        let depth = 1000;
+
+        let mut expr = col("a");
+        for _ in 0..depth {
+            expr = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(expr),
+                op: Operator::Plus,
+                right: Box::new(col("a")),
+            });
+        }
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let df_schema = DFSchema::try_from(schema)?;
+
+        // This should not stack overflow
+        let _physical_expr =
+            create_physical_expr(&expr, &df_schema, &ExecutionProps::new())?;
 
         Ok(())
     }

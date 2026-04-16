@@ -24,7 +24,7 @@ use arrow::array::RecordBatch;
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 
-use super::{spill_manager::SpillManager, IPCStreamWriter};
+use super::{IPCStreamWriter, spill_manager::SpillManager};
 
 /// Represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 /// Caller is able to use this struct to incrementally append in-memory batches to
@@ -62,30 +62,60 @@ impl InProgressSpillFile {
             ));
         }
         if self.writer.is_none() {
-            let schema = batch.schema();
-            if let Some(ref in_progress_file) = self.in_progress_file {
+            // Use the SpillManager's declared schema rather than the batch's schema.
+            // Individual batches may have different schemas (e.g., different nullability)
+            // when they come from different branches of a UnionExec. The SpillManager's
+            // schema represents the canonical schema that all batches should conform to.
+            let schema = self.spill_writer.schema();
+            if let Some(in_progress_file) = &mut self.in_progress_file {
                 self.writer = Some(IPCStreamWriter::new(
                     in_progress_file.path(),
                     schema.as_ref(),
+                    self.spill_writer.compression,
                 )?);
 
                 // Update metrics
                 self.spill_writer.metrics.spill_file_count.add(1);
+
+                // Update initial size (schema/header)
+                in_progress_file.update_disk_usage()?;
+                let initial_size = in_progress_file.current_disk_usage();
+                self.spill_writer
+                    .metrics
+                    .spilled_bytes
+                    .add(initial_size as usize);
             }
         }
         if let Some(writer) = &mut self.writer {
-            let (spilled_rows, spilled_bytes) = writer.write(batch)?;
+            let (spilled_rows, _) = writer.write(batch)?;
             if let Some(in_progress_file) = &mut self.in_progress_file {
+                let pre_size = in_progress_file.current_disk_usage();
                 in_progress_file.update_disk_usage()?;
+                let post_size = in_progress_file.current_disk_usage();
+
+                self.spill_writer.metrics.spilled_rows.add(spilled_rows);
+                self.spill_writer
+                    .metrics
+                    .spilled_bytes
+                    .add((post_size - pre_size) as usize);
             } else {
                 unreachable!() // Already checked inside current function
             }
-
-            // Update metrics
-            self.spill_writer.metrics.spilled_bytes.add(spilled_bytes);
-            self.spill_writer.metrics.spilled_rows.add(spilled_rows);
         }
         Ok(())
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        if let Some(writer) = &mut self.writer {
+            writer.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Returns a reference to the in-progress file, if it exists.
+    /// This can be used to get the file path for creating readers before the file is finished.
+    pub fn file(&self) -> Option<&RefCountedTempFile> {
+        self.in_progress_file.as_ref()
     }
 
     /// Finalizes the file, returning the completed file reference.
@@ -97,6 +127,92 @@ impl InProgressSpillFile {
             return Ok(None);
         }
 
+        // Since spill files are append-only, add the file size to spilled_bytes
+        if let Some(in_progress_file) = &mut self.in_progress_file {
+            // Since writer.finish() writes continuation marker and message length at the end
+            let pre_size = in_progress_file.current_disk_usage();
+            in_progress_file.update_disk_usage()?;
+            let post_size = in_progress_file.current_disk_usage();
+            self.spill_writer
+                .metrics
+                .spilled_bytes
+                .add((post_size - pre_size) as usize);
+        }
+
         Ok(self.in_progress_file.take())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_physical_expr_common::metrics::{
+        ExecutionPlanMetricsSet, SpillMetrics,
+    };
+    use futures::TryStreamExt;
+
+    #[tokio::test]
+    async fn test_spill_file_uses_spill_manager_schema() -> Result<()> {
+        let nullable_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("val", DataType::Int64, true),
+        ]));
+        let non_nullable_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("val", DataType::Int64, false),
+        ]));
+
+        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let spill_metrics = SpillMetrics::new(&metrics_set, 0);
+        let spill_manager = Arc::new(SpillManager::new(
+            runtime,
+            spill_metrics,
+            Arc::clone(&nullable_schema),
+        ));
+
+        let mut in_progress = spill_manager.create_in_progress_file("test")?;
+
+        // First batch: non-nullable val (simulates literal-0 UNION branch)
+        let non_nullable_batch = RecordBatch::try_new(
+            Arc::clone(&non_nullable_schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(Int64Array::from(vec![0, 0, 0])),
+            ],
+        )?;
+        in_progress.append_batch(&non_nullable_batch)?;
+
+        // Second batch: nullable val with NULLs (simulates table UNION branch)
+        let nullable_batch = RecordBatch::try_new(
+            Arc::clone(&nullable_schema),
+            vec![
+                Arc::new(Int64Array::from(vec![4, 5, 6])),
+                Arc::new(Int64Array::from(vec![Some(10), None, Some(30)])),
+            ],
+        )?;
+        in_progress.append_batch(&nullable_batch)?;
+
+        let spill_file = in_progress.finish()?.unwrap();
+
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
+
+        // Stream schema should be nullable
+        assert_eq!(stream.schema(), nullable_schema);
+
+        let batches = stream.try_collect::<Vec<_>>().await?;
+        assert_eq!(batches.len(), 2);
+
+        // Both batches must have the SpillManager's nullable schema
+        assert_eq!(
+            batches[0],
+            non_nullable_batch.with_schema(Arc::clone(&nullable_schema))?
+        );
+        assert_eq!(batches[1], nullable_batch);
+
+        Ok(())
     }
 }

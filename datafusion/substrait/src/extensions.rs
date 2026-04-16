@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::{plan_err, DataFusionError, HashMap};
+use datafusion::common::{DataFusionError, HashMap, plan_err};
+use substrait::proto::extensions::SimpleExtensionDeclaration;
 use substrait::proto::extensions::simple_extension_declaration::{
     ExtensionFunction, ExtensionType, ExtensionTypeVariation, MappingType,
 };
-use substrait::proto::extensions::SimpleExtensionDeclaration;
 
 /// Substrait uses [SimpleExtensions](https://substrait.io/extensions/#simple-extensions) to define
 /// behavior of plans in addition to what's supported directly by the protobuf definitions.
@@ -38,13 +38,15 @@ impl Extensions {
     /// Registers a function and returns the anchor (reference) to it. If the function has already
     /// been registered, it returns the existing anchor.
     /// Function names are case-insensitive (converted to lowercase).
-    pub fn register_function(&mut self, function_name: String) -> u32 {
+    pub fn register_function(&mut self, function_name: &str) -> u32 {
         let function_name = function_name.to_lowercase();
 
         // Some functions are named differently in Substrait default extensions than in DF
         // Rename those to match the Substrait extensions for interoperability
         let function_name = match function_name.as_str() {
             "substr" => "substring".to_string(),
+            "log" => "logb".to_string(),
+            "isnan" => "is_nan".to_string(),
             _ => function_name,
         };
 
@@ -62,7 +64,7 @@ impl Extensions {
 
     /// Registers a type and returns the anchor (reference) to it. If the type has already
     /// been registered, it returns the existing anchor.
-    pub fn register_type(&mut self, type_name: String) -> u32 {
+    pub fn register_type(&mut self, type_name: &str) -> u32 {
         let type_name = type_name.to_lowercase();
         match self.types.iter().find(|(_, t)| *t == &type_name) {
             Some((type_anchor, _)) => *type_anchor, // Type has been registered
@@ -115,7 +117,7 @@ impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
         let mut extensions = vec![];
         for (f_anchor, f_name) in val.functions {
             let function_extension = ExtensionFunction {
-                extension_uri_reference: u32::MAX,
+                extension_urn_reference: u32::MAX,
                 function_anchor: f_anchor,
                 name: f_name,
             };
@@ -127,7 +129,7 @@ impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
 
         for (t_anchor, t_name) in val.types {
             let type_extension = ExtensionType {
-                extension_uri_reference: u32::MAX, // https://github.com/apache/datafusion/issues/11545
+                extension_urn_reference: u32::MAX, // https://github.com/apache/datafusion/issues/11545
                 type_anchor: t_anchor,
                 name: t_name,
             };
@@ -139,7 +141,7 @@ impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
 
         for (tv_anchor, tv_name) in val.type_variations {
             let type_variation_extension = ExtensionTypeVariation {
-                extension_uri_reference: u32::MAX, // We don't register proper extension URIs yet
+                extension_urn_reference: u32::MAX, // We don't register proper extension URNs yet
                 type_variation_anchor: tv_anchor,
                 name: tv_name,
             };

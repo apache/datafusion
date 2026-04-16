@@ -20,14 +20,15 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use arrow::array::{new_null_array, Array, RecordBatch};
+use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::TableReference;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::{logical_plan::LogicalPlan, ColumnarValue, Expr};
+use datafusion_expr::{ColumnarValue, Expr, logical_plan::LogicalPlan};
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
 use std::sync::Arc;
@@ -37,12 +38,17 @@ use std::sync::Arc;
 pub use datafusion_expr::expr_rewriter::NamePreserver;
 
 /// Returns true if `expr` contains all columns in `schema_cols`
-pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
+pub(crate) fn has_all_column_refs(
+    expr: &Expr,
+    schema_cols: &HashSet<ColumnReference>,
+) -> bool {
     let column_refs = expr.column_refs();
     // note can't use HashSet::intersect because of different types (owned vs References)
-    schema_cols
+    column_refs
         .iter()
-        .filter(|c| column_refs.contains(c))
+        .filter(|c| {
+            schema_cols.contains(&ColumnReference::new(c.relation.as_ref(), c.name()))
+        })
         .count()
         == column_refs.len()
 }
@@ -60,6 +66,40 @@ pub(crate) fn replace_qualified_name(
         cols.iter().zip(alias_cols.iter()).collect();
 
     replace_col(expr, &replace_map)
+}
+
+/// Column reference to avoid copying string around
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub(crate) struct ColumnReference<'a> {
+    pub relation: Option<&'a TableReference>,
+    pub name: &'a str,
+}
+
+impl<'a> ColumnReference<'a> {
+    pub fn new(relation: Option<&'a TableReference>, name: &'a str) -> Self {
+        Self { relation, name }
+    }
+
+    pub fn new_unqualified(name: &'a str) -> Self {
+        Self {
+            relation: None,
+            name,
+        }
+    }
+}
+
+/// Returns references to all columns in the schema
+pub(crate) fn schema_columns<'a>(schema: &'a DFSchema) -> HashSet<ColumnReference<'a>> {
+    schema
+        .iter()
+        .flat_map(|(qualifier, field)| {
+            [
+                ColumnReference::new(qualifier, field.name()),
+                // we need to push down filter using unqualified column as well
+                ColumnReference::new_unqualified(field.name()),
+            ]
+        })
+        .collect::<HashSet<_>>()
 }
 
 /// Log the plan in debug/tracing mode after some part of the optimizer runs
@@ -124,10 +164,14 @@ fn evaluate_expr_with_null_column<'a>(
     null_columns: impl IntoIterator<Item = &'a Column>,
 ) -> Result<ColumnarValue> {
     static DUMMY_COL_NAME: &str = "?";
-    let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
-    let input_schema = DFSchema::try_from(schema.clone())?;
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        DUMMY_COL_NAME,
+        DataType::Null,
+        true,
+    )]));
+    let input_schema = DFSchema::try_from(Arc::clone(&schema))?;
     let column = new_null_array(&DataType::Null, 1);
-    let input_batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![column])?;
+    let input_batch = RecordBatch::try_new(schema, vec![column])?;
     let execution_props = ExecutionProps::default();
     let null_column = Column::from_name(DUMMY_COL_NAME);
 
@@ -150,7 +194,7 @@ fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::{binary_expr, case, col, in_list, is_null, lit, Operator};
+    use datafusion_expr::{Operator, binary_expr, case, col, in_list, is_null, lit};
 
     #[test]
     fn expr_is_restrict_null_predicate() -> Result<()> {
@@ -163,7 +207,11 @@ mod tests {
             (Expr::IsNotNull(Box::new(col("a"))), true),
             // a = NULL
             (
-                binary_expr(col("a"), Operator::Eq, Expr::Literal(ScalarValue::Null)),
+                binary_expr(
+                    col("a"),
+                    Operator::Eq,
+                    Expr::Literal(ScalarValue::Null, None),
+                ),
                 true,
             ),
             // a > 8
@@ -226,12 +274,16 @@ mod tests {
             ),
             // a IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], false),
+                in_list(
+                    col("a"),
+                    vec![Expr::Literal(ScalarValue::Null, None)],
+                    false,
+                ),
                 true,
             ),
             // a NOT IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], true),
+                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null, None)], true),
                 true,
             ),
         ];

@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{builder::Int32Builder, RecordBatch};
+use arrow::array::{RecordBatch, builder::Int32Builder};
 use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_physical_expr::expressions::{Column, IsNotNullExpr, IsNullExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {

@@ -25,27 +25,27 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::fmt::Debug;
+use std::sync::Arc;
 
-use crate::table_provider::FFI_TableProvider;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{Session, TableProvider},
-    error::{DataFusionError, Result},
-    execution::RecordBatchStream,
-    physical_expr::EquivalenceProperties,
-    physical_plan::{ExecutionPlan, Partitioning},
-    prelude::Expr,
-};
+use datafusion_catalog::TableProvider;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{Result, exec_err};
+use datafusion_execution::RecordBatchStream;
+use datafusion_expr::Expr;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_session::Session;
 use futures::Stream;
-use tokio::{
-    runtime::Handle,
-    sync::{broadcast, mpsc},
-};
+use tokio::runtime::Handle;
+use tokio::sync::{broadcast, mpsc};
 
 use super::create_record_batch;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::table_provider::FFI_TableProvider;
 
 #[derive(Debug)]
 pub struct AsyncTableProvider {
@@ -59,7 +59,7 @@ fn async_table_provider_thread(
     mut shutdown: mpsc::Receiver<bool>,
     mut batch_request: mpsc::Receiver<bool>,
     batch_sender: broadcast::Sender<Option<RecordBatch>>,
-    tokio_rt: mpsc::Sender<Handle>,
+    tokio_rt: &mpsc::Sender<Handle>,
 ) {
     let runtime = Arc::new(
         tokio::runtime::Builder::new_current_thread()
@@ -106,7 +106,7 @@ pub fn start_async_provider() -> (AsyncTableProvider, Handle) {
             shutdown_rx,
             batch_request_rx,
             record_batch_tx,
-            tokio_rt_tx,
+            &tokio_rt_tx,
         )
     }));
 
@@ -126,16 +126,12 @@ pub fn start_async_provider() -> (AsyncTableProvider, Handle) {
 
 #[async_trait]
 impl TableProvider for AsyncTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> Arc<Schema> {
         super::create_test_schema()
     }
 
-    fn table_type(&self) -> datafusion::logical_expr::TableType {
-        datafusion::logical_expr::TableType::Base
+    fn table_type(&self) -> datafusion_expr::TableType {
+        datafusion_expr::TableType::Base
     }
 
     async fn scan(
@@ -162,7 +158,7 @@ impl Drop for AsyncTableProvider {
 
 #[derive(Debug)]
 struct AsyncTestExecutionPlan {
-    properties: datafusion::physical_plan::PlanProperties,
+    properties: Arc<datafusion_physical_plan::PlanProperties>,
     batch_request: mpsc::Sender<bool>,
     batch_receiver: broadcast::Receiver<Option<RecordBatch>>,
 }
@@ -173,12 +169,12 @@ impl AsyncTestExecutionPlan {
         batch_receiver: broadcast::Receiver<Option<RecordBatch>>,
     ) -> Self {
         Self {
-            properties: datafusion::physical_plan::PlanProperties::new(
+            properties: Arc::new(datafusion_physical_plan::PlanProperties::new(
                 EquivalenceProperties::new(super::create_test_schema()),
                 Partitioning::UnknownPartitioning(3),
-                datafusion::physical_plan::execution_plan::EmissionType::Incremental,
-                datafusion::physical_plan::execution_plan::Boundedness::Bounded,
-            ),
+                datafusion_physical_plan::execution_plan::EmissionType::Incremental,
+                datafusion_physical_plan::execution_plan::Boundedness::Bounded,
+            )),
             batch_request,
             batch_receiver,
         }
@@ -190,11 +186,7 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         "async test execution plan"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+    fn properties(&self) -> &Arc<datafusion_physical_plan::PlanProperties> {
         &self.properties
     }
 
@@ -212,19 +204,35 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<datafusion::execution::TaskContext>,
-    ) -> Result<datafusion::execution::SendableRecordBatchStream> {
+        _context: Arc<datafusion_execution::TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         Ok(Box::pin(AsyncTestRecordBatchStream {
             batch_request: self.batch_request.clone(),
             batch_receiver: self.batch_receiver.resubscribe(),
         }))
     }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.properties.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
+    }
 }
 
-impl datafusion::physical_plan::DisplayAs for AsyncTestExecutionPlan {
+impl datafusion_physical_plan::DisplayAs for AsyncTestExecutionPlan {
     fn fmt_as(
         &self,
-        _t: datafusion::physical_plan::DisplayFormatType,
+        _t: datafusion_physical_plan::DisplayFormatType,
         _f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         // Do nothing, just a test
@@ -252,16 +260,16 @@ impl Stream for AsyncTestRecordBatchStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
 
-        #[allow(clippy::disallowed_methods)]
+        #[expect(clippy::disallowed_methods)]
         tokio::spawn(async move {
             // Nothing to do. We just need to simulate an async
             // task running
         });
 
         if let Err(e) = this.batch_request.try_send(true) {
-            return std::task::Poll::Ready(Some(Err(DataFusionError::Execution(
-                format!("Unable to send batch request, {e}"),
-            ))));
+            return std::task::Poll::Ready(Some(exec_err!(
+                "Failed to send batch request: {e}"
+            )));
         }
 
         match this.batch_receiver.blocking_recv() {
@@ -269,14 +277,21 @@ impl Stream for AsyncTestRecordBatchStream {
                 Some(batch) => std::task::Poll::Ready(Some(Ok(batch))),
                 None => std::task::Poll::Ready(None),
             },
-            Err(e) => std::task::Poll::Ready(Some(Err(DataFusionError::Execution(
-                format!("Unable to receive record batch: {e}"),
-            )))),
+            Err(e) => std::task::Poll::Ready(Some(exec_err!(
+                "Failed to receive record batch: {e}"
+            ))),
         }
     }
 }
 
-pub(crate) fn create_async_table_provider() -> FFI_TableProvider {
+pub(crate) fn create_async_table_provider(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_TableProvider {
     let (table_provider, tokio_rt) = start_async_provider();
-    FFI_TableProvider::new(Arc::new(table_provider), true, Some(tokio_rt))
+    FFI_TableProvider::new_with_ffi_codec(
+        Arc::new(table_provider),
+        true,
+        Some(tokio_rt),
+        codec,
+    )
 }

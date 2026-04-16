@@ -102,7 +102,7 @@ Here is my vote:
 
 [1]: https://github.com/apache/datafusion/tree/${release_hash}
 [2]: ${url}
-[3]: https://github.com/apache/datafusion/blob/${release_hash}/CHANGELOG.md
+[3]: https://github.com/apache/datafusion/blob/${release_hash}/dev/changelog/${version}.md
 MAIL
 echo "---------------------------------------------------------"
 

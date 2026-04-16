@@ -15,19 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::{StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use rand::distr::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -165,6 +165,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: Arc::clone(&return_field),
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });
@@ -182,6 +183,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: Arc::clone(&return_field),
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });
@@ -203,6 +205,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: Arc::clone(&return_field),
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });
@@ -213,6 +216,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
         let return_field = Arc::new(Field::new("f", DataType::Int32, true));
+        let config_options = Arc::new(ConfigOptions::default());
+
         group.bench_function(format!("string_view_len_{str_len}"), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
@@ -220,6 +225,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: Arc::clone(&return_field),
+                    config_options: Arc::clone(&config_options),
                 }))
             })
         });

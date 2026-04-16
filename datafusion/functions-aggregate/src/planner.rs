@@ -19,11 +19,11 @@
 
 use datafusion_common::Result;
 use datafusion_expr::{
+    Expr,
     expr::{AggregateFunction, AggregateFunctionParams},
     expr_rewriter::NamePreserver,
     planner::{ExprPlanner, PlannerResult, RawAggregateExpr},
     utils::COUNT_STAR_EXPANSION,
-    Expr,
 };
 
 #[derive(Debug)]
@@ -100,7 +100,7 @@ impl ExprPlanner for AggregateFunctionPlanner {
 
             let new_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
                 func,
-                vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
                 distinct,
                 filter,
                 order_by,

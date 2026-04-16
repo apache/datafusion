@@ -17,9 +17,12 @@
   under the License.
 -->
 
-# Extending DataFusion's operators: custom LogicalPlan and Execution Plans
+# Extending Operators
 
-DataFusion supports extension of operators by transforming logical plan and execution plan through customized [optimizer rules](https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html). This section will use the µWheel project to illustrate such capabilities.
+DataFusion supports extending operators by transforming [`LogicalPlan`] and [`ExecutionPlan`] through customized [optimizer rules](https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html). This section will use the µWheel project to illustrate such capabilities.
+
+[`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
+[`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 
 ## About DataFusion µWheel
 
@@ -35,7 +38,7 @@ fn rewrite(
   plan: LogicalPlan,
   _config: &dyn OptimizerConfig,
 ) -> Result<Transformed<LogicalPlan>> {
-    // Attemps to rewrite a logical plan to a uwheel-based plan that either provides
+    // Attempts to rewrite a logical plan to a uwheel-based plan that either provides
     // plan-time aggregates or skips execution based on min/max pruning.
     if let Some(rewritten) = self.try_rewrite(&plan) {
         Ok(Transformed::yes(rewritten))

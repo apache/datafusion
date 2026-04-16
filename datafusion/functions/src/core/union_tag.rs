@@ -18,7 +18,7 @@
 use arrow::array::{Array, AsArray, DictionaryArray, Int8Array, StringArray};
 use arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -43,7 +43,7 @@ use std::sync::Arc;
 ```"#,
     standard_argument(name = "union", prefix = "Union")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UnionTagFunc {
     signature: Signature,
 }
@@ -63,10 +63,6 @@ impl UnionTagFunc {
 }
 
 impl ScalarUDFImpl for UnionTagFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "union_tag"
     }
@@ -136,14 +132,14 @@ impl ScalarUDFImpl for UnionTagFunc {
                     })
                     .ok_or_else(|| {
                         exec_datafusion_err!(
-                            "union_tag: union scalar with unknow type_id {value_type_id}"
+                            "union_tag: union scalar with unknown type_id {value_type_id}"
                         )
                     }),
                 None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
                     args.return_field.data_type(),
                 )?)),
             },
-            v => exec_err!("union_tag only support unions, got {:?}", v.data_type()),
+            v => exec_err!("union_tag only support unions, got {}", v.data_type()),
         }
     }
 
@@ -157,6 +153,7 @@ mod tests {
     use super::UnionTagFunc;
     use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
@@ -182,6 +179,7 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
 
@@ -204,6 +202,7 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
 

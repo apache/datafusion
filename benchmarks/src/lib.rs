@@ -19,9 +19,12 @@
 pub mod cancellation;
 pub mod clickbench;
 pub mod h2o;
+pub mod hj;
 pub mod imdb;
-pub mod parquet_filter;
-pub mod sort;
+pub mod nlj;
+pub mod smj;
+pub mod sort_pushdown;
 pub mod sort_tpch;
+pub mod tpcds;
 pub mod tpch;
 pub mod util;

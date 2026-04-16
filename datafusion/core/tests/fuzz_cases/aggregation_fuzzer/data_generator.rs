@@ -18,7 +18,7 @@
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::sorts::sort::sort_batch;
 use test_utils::stagger_batch;
@@ -39,7 +39,6 @@ use crate::fuzz_cases::record_batch_generator::{ColumnDescr, RecordBatchGenerato
 ///     will generate one `base dataset` firstly. Then the `base dataset` will be sorted
 ///     based on each `sort_key` respectively. And finally `len(sort_keys) + 1` datasets
 ///     will be returned
-///
 #[derive(Debug, Clone)]
 pub struct DatasetGeneratorConfig {
     /// Descriptions of columns in datasets, it's `required`
@@ -115,7 +114,6 @@ impl DatasetGeneratorConfig {
 ///   
 ///   - Split each batch to multiple batches which each sub-batch in has the randomly `rows num`,
 ///     and this multiple batches will be used to create the `Dataset`.
-///
 pub struct DatasetGenerator {
     batch_generator: RecordBatchGenerator,
     sort_keys_set: Vec<Vec<String>>,
@@ -149,14 +147,14 @@ impl DatasetGenerator {
         for sort_keys in self.sort_keys_set.clone() {
             let sort_exprs = sort_keys
                 .iter()
-                .map(|key| {
-                    let col_expr = col(key, schema)?;
-                    Ok(PhysicalSortExpr::new_default(col_expr))
-                })
-                .collect::<Result<LexOrdering>>()?;
-            let sorted_batch = sort_batch(&base_batch, sort_exprs.as_ref(), None)?;
-
-            let batches = stagger_batch(sorted_batch);
+                .map(|key| col(key, schema).map(PhysicalSortExpr::new_default))
+                .collect::<Result<Vec<_>>>()?;
+            let batch = if let Some(ordering) = LexOrdering::new(sort_exprs) {
+                sort_batch(&base_batch, &ordering, None)?
+            } else {
+                base_batch.clone()
+            };
+            let batches = stagger_batch(batch);
             let dataset = Dataset::new(batches, sort_keys);
             datasets.push(dataset);
         }
@@ -211,8 +209,8 @@ mod test {
             sort_keys_set: vec![vec!["b".to_string()]],
         };
 
-        let mut gen = DatasetGenerator::new(config);
-        let datasets = gen.generate().unwrap();
+        let mut data_gen = DatasetGenerator::new(config);
+        let datasets = data_gen.generate().unwrap();
 
         // Should Generate 2 datasets
         assert_eq!(datasets.len(), 2);

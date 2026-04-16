@@ -18,7 +18,6 @@
 //! IS NULL expression
 
 use crate::PhysicalExpr;
-use arrow::datatypes::FieldRef;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -27,7 +26,7 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 use std::hash::Hash;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 /// IS NULL expression
 #[derive(Debug, Eq)]
@@ -68,11 +67,6 @@ impl std::fmt::Display for IsNullExpr {
 }
 
 impl PhysicalExpr for IsNullExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(DataType::Boolean)
     }
@@ -91,10 +85,6 @@ impl PhysicalExpr for IsNullExpr {
                 ScalarValue::Boolean(Some(scalar.is_null())),
             )),
         }
-    }
-
-    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        self.arg.return_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

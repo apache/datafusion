@@ -20,17 +20,15 @@
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
+    Result, ScalarValue, arrow_datafusion_err, datatype::DataTypeExt,
+    exec_datafusion_err, exec_err, internal_err, types::logical_string,
+    utils::take_function_args,
 };
-use datafusion_common::{
-    exec_datafusion_err, utils::take_function_args, DataFusionError,
-};
-use std::any::Any;
 
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -60,16 +58,26 @@ use datafusion_macros::user_doc;
     description = "Casts a value to a specific Arrow data type.",
     syntax_example = "arrow_cast(expression, datatype)",
     sql_example = r#"```sql
-> select arrow_cast(-5, 'Int8') as a,
+> select
+  arrow_cast(-5,    'Int8') as a,
   arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
-  arrow_cast('bar', 'LargeUtf8') as c,
-  arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
-  ;
-+----+-----+-----+---------------------------+
-| a  | b   | c   | d                         |
-+----+-----+-----+---------------------------+
-| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
-+----+-----+-----+---------------------------+
+  arrow_cast('bar', 'LargeUtf8') as c;
+
++----+-----+-----+
+| a  | b   | c   |
++----+-----+-----+
+| -5 | foo | bar |
++----+-----+-----+
+
+> select
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(µs, "+08:00")') as d,
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(µs)') as e;
+
++---------------------------+---------------------+
+| d                         | e                   |
++---------------------------+---------------------+
+| 2023-01-02T12:53:02+08:00 | 2023-01-02T12:53:02 |
++---------------------------+---------------------+
 ```"#,
     argument(
         name = "expression",
@@ -80,7 +88,7 @@ use datafusion_macros::user_doc;
         description = "[Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]"
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrowCastFunc {
     signature: Signature,
 }
@@ -94,16 +102,18 @@ impl Default for ArrowCastFunc {
 impl ArrowCastFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Any),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
 
 impl ScalarUDFImpl for ArrowCastFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "arrow_cast"
     }
@@ -144,24 +154,21 @@ impl ScalarUDFImpl for ArrowCastFunc {
 
     fn simplify(
         &self,
-        mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        args: Vec<Expr>,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // convert this into a real cast
-        let target_type = data_type_from_args(&args)?;
-        // remove second (type) argument
-        args.pop().unwrap();
-        let arg = args.pop().unwrap();
-
-        let source_type = info.get_data_type(&arg)?;
+        let [source_arg, type_arg] = take_function_args(self.name(), args)?;
+        let target_type = data_type_from_type_arg(self.name(), &type_arg)?;
+        let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
             // the argument's data type is already the correct type
-            arg
+            source_arg
         } else {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
-                data_type: target_type,
+                expr: Box::new(source_arg),
+                field: target_type.into_nullable_field_ref(),
             })
         };
         // return the newly written argument to DataFusion
@@ -173,13 +180,11 @@ impl ScalarUDFImpl for ArrowCastFunc {
     }
 }
 
-/// Returns the requested type from the arguments
-fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
-    let [_, type_arg] = take_function_args("arrow_cast", args)?;
-
-    let Expr::Literal(ScalarValue::Utf8(Some(val))) = type_arg else {
+/// Returns the requested type from the type argument
+pub(crate) fn data_type_from_type_arg(name: &str, type_arg: &Expr) -> Result<DataType> {
+    let Expr::Literal(ScalarValue::Utf8(Some(val)), _) = type_arg else {
         return exec_err!(
-            "arrow_cast requires its second argument to be a constant string, got {:?}",
+            "{name} requires its second argument to be a constant string, got {:?}",
             type_arg
         );
     };

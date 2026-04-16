@@ -17,16 +17,16 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::mem::align_of_val;
 use std::sync::Arc;
 
 use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
-use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_common::{plan_err, ScalarValue};
+use datafusion_common::ScalarValue;
+use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -61,18 +61,10 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Stddev {
     signature: Signature,
     alias: Vec<String>,
-}
-
-impl Debug for Stddev {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Stddev")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for Stddev {
@@ -85,18 +77,13 @@ impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
             alias: vec!["stddev_samp".to_string()],
         }
     }
 }
 
 impl AggregateUDFImpl for Stddev {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "stddev"
     }
@@ -178,17 +165,9 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV_POP population aggregate expression
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct StddevPop {
     signature: Signature,
-}
-
-impl Debug for StddevPop {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StddevPop")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for StddevPop {
@@ -201,17 +180,12 @@ impl StddevPop {
     /// Create a new STDDEV_POP aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
         }
     }
 }
 
 impl AggregateUDFImpl for StddevPop {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "stddev_pop"
     }
@@ -246,11 +220,7 @@ impl AggregateUDFImpl for StddevPop {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("StddevPop requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
@@ -315,13 +285,8 @@ impl Accumulator for StddevAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let variance = self.variance.evaluate()?;
         match variance {
-            ScalarValue::Float64(e) => {
-                if e.is_none() {
-                    Ok(ScalarValue::Float64(None))
-                } else {
-                    Ok(ScalarValue::Float64(e.map(|f| f.sqrt())))
-                }
-            }
+            ScalarValue::Float64(None) => Ok(ScalarValue::Float64(None)),
+            ScalarValue::Float64(Some(f)) => Ok(ScalarValue::Float64(Some(f.sqrt()))),
             _ => internal_err!("Variance should be f64"),
         }
     }
@@ -393,8 +358,6 @@ mod tests {
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
-    use std::sync::Arc;
 
     #[test]
     fn stddev_f64_merge_1() -> Result<()> {
@@ -441,37 +404,46 @@ mod tests {
         agg2: Arc<AggregateUDF>,
         schema: &Schema,
     ) -> Result<ScalarValue> {
+        let expr = col("a", schema)?;
+        let expr_field = expr.return_field(schema)?;
+
         let args1 = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
+            expr_fields: &[Arc::clone(&expr_field)],
             ignore_nulls: false,
-            ordering_req: &LexOrdering::default(),
+            order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            exprs: &[col("a", schema)?],
+            exprs: &[Arc::clone(&expr)],
         };
 
         let args2 = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
+            expr_fields: &[expr_field],
             ignore_nulls: false,
-            ordering_req: &LexOrdering::default(),
+            order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            exprs: &[col("a", schema)?],
+            exprs: &[expr],
         };
 
         let mut accum1 = agg1.accumulator(args1)?;
         let mut accum2 = agg2.accumulator(args2)?;
 
-        let value1 = vec![col("a", schema)?
-            .evaluate(batch1)
-            .and_then(|v| v.into_array(batch1.num_rows()))?];
-        let value2 = vec![col("a", schema)?
-            .evaluate(batch2)
-            .and_then(|v| v.into_array(batch2.num_rows()))?];
+        let value1 = vec![
+            col("a", schema)?
+                .evaluate(batch1)
+                .and_then(|v| v.into_array(batch1.num_rows()))?,
+        ];
+        let value2 = vec![
+            col("a", schema)?
+                .evaluate(batch2)
+                .and_then(|v| v.into_array(batch2.num_rows()))?,
+        ];
 
         accum1.update_batch(&value1)?;
         accum2.update_batch(&value2)?;

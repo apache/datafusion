@@ -18,19 +18,23 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
-use std::task::{ready, Poll};
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
+use std::task::{Poll, ready};
 
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::metrics::{
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    MetricsSet, RecordOutput,
+};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, check_if_same_properties,
 };
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, FixedSizeListArray, Int64Array,
-    LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray,
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray, Int64Array,
+    LargeListArray, LargeListViewArray, ListArray, ListViewArray, PrimitiveArray, Scalar,
+    StructArray, new_null_array,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -38,19 +42,22 @@ use arrow::compute::{cast, is_not_null, kernels, sum};
 use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
+use async_trait::async_trait;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, HashMap, HashSet, Result, UnnestOptions,
+    Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
+    internal_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
-
-use async_trait::async_trait;
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::expressions::Column;
 use futures::{Stream, StreamExt};
 use log::trace;
 
 /// Unnest the given columns (either with type struct or list)
-/// For list unnesting, each rows is vertically transformed into multiple rows
-/// For struct unnesting, each columns is horizontally transformed into multiple columns,
+/// For list unnesting, each row is vertically transformed into multiple rows
+/// For struct unnesting, each column is horizontally transformed into multiple columns,
 /// Thus the original RecordBatch with dimension (n x m) may have new dimension (n' x m')
 ///
 /// See [`UnnestOptions`] for more details and an example.
@@ -69,7 +76,7 @@ pub struct UnnestExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl UnnestExec {
@@ -80,31 +87,94 @@ impl UnnestExec {
         struct_column_indices: Vec<usize>,
         schema: SchemaRef,
         options: UnnestOptions,
-    ) -> Self {
-        let cache = Self::compute_properties(&input, Arc::clone(&schema));
+    ) -> Result<Self> {
+        let cache = Self::compute_properties(
+            &input,
+            &list_column_indices,
+            &struct_column_indices,
+            &schema,
+        )?;
 
-        UnnestExec {
+        Ok(UnnestExec {
             input,
             schema,
             list_column_indices,
             struct_column_indices,
             options,
             metrics: Default::default(),
-            cache,
-        }
+            cache: Arc::new(cache),
+        })
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
-        schema: SchemaRef,
-    ) -> PlanProperties {
-        PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            input.output_partitioning().to_owned(),
+        list_column_indices: &[ListUnnest],
+        struct_column_indices: &[usize],
+        schema: &SchemaRef,
+    ) -> Result<PlanProperties> {
+        // Find out which indices are not unnested, such that they can be copied over from the input plan
+        let input_schema = input.schema();
+        let mut unnested_indices = BooleanBufferBuilder::new(input_schema.fields().len());
+        unnested_indices.append_n(input_schema.fields().len(), false);
+        for list_unnest in list_column_indices {
+            unnested_indices.set_bit(list_unnest.index_in_input_schema, true);
+        }
+        for struct_unnest in struct_column_indices {
+            unnested_indices.set_bit(*struct_unnest, true)
+        }
+        let unnested_indices = unnested_indices.finish();
+        let non_unnested_indices: Vec<usize> = (0..input_schema.fields().len())
+            .filter(|idx| !unnested_indices.value(*idx))
+            .collect();
+
+        // Manually build projection mapping from non-unnested input columns to their positions in the output
+        let input_schema = input.schema();
+        let projection_mapping: ProjectionMapping = non_unnested_indices
+            .iter()
+            .map(|&input_idx| {
+                // Find what index the input column has in the output schema
+                let input_field = input_schema.field(input_idx);
+                let output_idx = schema
+                    .fields()
+                    .iter()
+                    .position(|output_field| output_field.name() == input_field.name())
+                    .ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "Non-unnested column '{}' must exist in output schema",
+                            input_field.name()
+                        )
+                    })?;
+
+                let input_col = Arc::new(Column::new(input_field.name(), input_idx))
+                    as Arc<dyn PhysicalExpr>;
+                let target_col = Arc::new(Column::new(input_field.name(), output_idx))
+                    as Arc<dyn PhysicalExpr>;
+                // Use From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets
+                let targets = vec![(target_col, output_idx)].into();
+                Ok((input_col, targets))
+            })
+            .collect::<Result<ProjectionMapping>>()?;
+
+        // Create the unnest's equivalence properties by copying the input plan's equivalence properties
+        // for the unaffected columns. Except for the constraints, which are removed entirely because
+        // the unnest operation invalidates any global uniqueness or primary-key constraints.
+        let input_eq_properties = input.equivalence_properties();
+        let eq_properties = input_eq_properties
+            .project(&projection_mapping, Arc::clone(schema))
+            .with_constraints(Constraints::default());
+
+        // Output partitioning must use the projection mapping
+        let output_partitioning = input
+            .output_partitioning()
+            .project(&projection_mapping, &eq_properties);
+
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
             input.pipeline_behavior(),
             input.boundedness(),
-        )
+        ))
     }
 
     /// Input execution plan
@@ -124,6 +194,17 @@ impl UnnestExec {
 
     pub fn options(&self) -> &UnnestOptions {
         &self.options
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -149,11 +230,7 @@ impl ExecutionPlan for UnnestExec {
         "UnnestExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -161,17 +238,25 @@ impl ExecutionPlan for UnnestExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(UnnestExec::new(
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
             self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
             Arc::clone(&self.schema),
             self.options.clone(),
-        )))
+        )?))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -203,38 +288,28 @@ impl ExecutionPlan for UnnestExec {
 
 #[derive(Clone, Debug)]
 struct UnnestMetrics {
-    /// Total time for column unnesting
-    elapsed_compute: metrics::Time,
+    /// Execution metrics
+    baseline_metrics: BaselineMetrics,
     /// Number of batches consumed
     input_batches: metrics::Count,
     /// Number of rows consumed
     input_rows: metrics::Count,
-    /// Number of batches produced
-    output_batches: metrics::Count,
-    /// Number of rows produced by this operator
-    output_rows: metrics::Count,
 }
 
 impl UnnestMetrics {
     fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let elapsed_compute = MetricBuilder::new(metrics).elapsed_compute(partition);
+        let input_batches = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_batches", partition);
 
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
-
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
-
-        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
+        let input_rows = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_rows", partition);
 
         Self {
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
             input_batches,
             input_rows,
-            output_batches,
-            output_rows,
-            elapsed_compute,
         }
     }
 }
@@ -284,7 +359,9 @@ impl UnnestStream {
         loop {
             return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    let timer = self.metrics.elapsed_compute.timer();
+                    let elapsed_compute =
+                        self.metrics.baseline_metrics.elapsed_compute().clone();
+                    let timer = elapsed_compute.timer();
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
                     let result = build_batch(
@@ -298,8 +375,7 @@ impl UnnestStream {
                     let Some(result_batch) = result else {
                         continue;
                     };
-                    self.metrics.output_batches.add(1);
-                    self.metrics.output_rows.add(result_batch.num_rows());
+                    (&result_batch).record_output(&self.metrics.baseline_metrics);
 
                     // Empty record batches should not be emitted.
                     // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
@@ -312,9 +388,9 @@ impl UnnestStream {
                         produced {} output batches containing {} rows in {}",
                         self.metrics.input_batches,
                         self.metrics.input_rows,
-                        self.metrics.output_batches,
-                        self.metrics.output_rows,
-                        self.metrics.elapsed_compute,
+                        self.metrics.baseline_metrics.output_batches(),
+                        self.metrics.baseline_metrics.output_rows(),
+                        self.metrics.baseline_metrics.elapsed_compute(),
                     );
                     other
                 }
@@ -350,9 +426,7 @@ fn flatten_struct_cols(
                     Ok(struct_arr.columns().to_vec())
                 }
                 data_type => internal_err!(
-                    "expecting column {} from input plan to be a struct, got {:?}",
-                    idx,
-                    data_type
+                    "expecting column {idx} from input plan to be a struct, got {data_type}"
                 ),
             },
             None => Ok(vec![Arc::clone(column_data)]),
@@ -697,7 +771,6 @@ fn build_batch(
 /// ```ignore
 /// longest_length: [3, 1, 1, 2]
 /// ```
-///
 fn find_longest_length(
     list_arrays: &[ArrayRef],
     options: &UnnestOptions,
@@ -772,6 +845,30 @@ impl ListArrayType for FixedSizeListArray {
     }
 }
 
+impl ListArrayType for ListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row] as i64;
+        let size = self.value_sizes()[row] as i64;
+        (offset, offset + size)
+    }
+}
+
+impl ListArrayType for LargeListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row];
+        let size = self.value_sizes()[row];
+        (offset, offset + size)
+    }
+}
+
 /// Unnest multiple list arrays according to the length array.
 fn unnest_list_arrays(
     list_arrays: &[ArrayRef],
@@ -787,6 +884,12 @@ fn unnest_list_arrays(
             }
             DataType::FixedSizeList(_, _) => {
                 Ok(list_array.as_fixed_size_list() as &dyn ListArrayType)
+            }
+            DataType::ListView(_) => {
+                Ok(list_array.as_list_view::<i32>() as &dyn ListArrayType)
+            }
+            DataType::LargeListView(_) => {
+                Ok(list_array.as_list_view::<i64>() as &dyn ListArrayType)
             }
             other => exec_err!("Invalid unnest datatype {other }"),
         })
@@ -818,7 +921,6 @@ fn unnest_list_arrays(
 /// ```ignore
 /// [1, null, 2, 3, 4, null, null, 5, null, null]
 /// ```
-///
 fn unnest_list_array(
     list_array: &dyn ListArrayType,
     length_array: &PrimitiveArray<Int64Type>,
@@ -866,7 +968,6 @@ fn unnest_list_array(
 /// ```ignore
 /// [0, 0, 1, 1, 1, 2]
 /// ```
-///
 fn create_take_indices(
     length_array: &PrimitiveArray<Int64Type>,
     capacity: usize,
@@ -931,7 +1032,6 @@ fn create_take_indices(
 /// ```ignore
 /// c1: 1, null, 2, 3, 4, null, 5, 6  // Repeated using `indices`
 /// c2: null, null, null, null, null, null, null, null  // Replaced with nulls
-///
 fn repeat_arrs_from_indices(
     batch: &[ArrayRef],
     indices: &PrimitiveArray<Int64Type>,
@@ -1147,32 +1247,32 @@ mod tests {
         .unwrap();
 
         assert_snapshot!(batches_to_string(&[ret]),
-        @r###"
-+---------------------------------+---------------------------------+---------------------------------+
-| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
-+---------------------------------+---------------------------------+---------------------------------+
-| [1, 2, 3]                       | 1                               | a                               |
-|                                 | 2                               | b                               |
-| [4, 5]                          | 3                               |                                 |
-| [1, 2, 3]                       |                                 | a                               |
-|                                 |                                 | b                               |
-| [4, 5]                          |                                 |                                 |
-| [1, 2, 3]                       | 4                               | a                               |
-|                                 | 5                               | b                               |
-| [4, 5]                          |                                 |                                 |
-| [7, 8, 9, 10]                   | 7                               | c                               |
-|                                 | 8                               | d                               |
-| [11, 12, 13]                    | 9                               |                                 |
-|                                 | 10                              |                                 |
-| [7, 8, 9, 10]                   |                                 | c                               |
-|                                 |                                 | d                               |
-| [11, 12, 13]                    |                                 |                                 |
-| [7, 8, 9, 10]                   | 11                              | c                               |
-|                                 | 12                              | d                               |
-| [11, 12, 13]                    | 13                              |                                 |
-|                                 |                                 | e                               |
-+---------------------------------+---------------------------------+---------------------------------+
-        "###);
+        @r"
+        +---------------------------------+---------------------------------+---------------------------------+
+        | col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
+        +---------------------------------+---------------------------------+---------------------------------+
+        | [1, 2, 3]                       | 1                               | a                               |
+        |                                 | 2                               | b                               |
+        | [4, 5]                          | 3                               |                                 |
+        | [1, 2, 3]                       |                                 | a                               |
+        |                                 |                                 | b                               |
+        | [4, 5]                          |                                 |                                 |
+        | [1, 2, 3]                       | 4                               | a                               |
+        |                                 | 5                               | b                               |
+        | [4, 5]                          |                                 |                                 |
+        | [7, 8, 9, 10]                   | 7                               | c                               |
+        |                                 | 8                               | d                               |
+        | [11, 12, 13]                    | 9                               |                                 |
+        |                                 | 10                              |                                 |
+        | [7, 8, 9, 10]                   |                                 | c                               |
+        |                                 |                                 | d                               |
+        | [11, 12, 13]                    |                                 |                                 |
+        | [7, 8, 9, 10]                   | 11                              | c                               |
+        |                                 | 12                              | d                               |
+        | [11, 12, 13]                    | 13                              |                                 |
+        |                                 |                                 | e                               |
+        +---------------------------------+---------------------------------+---------------------------------+
+        ");
         Ok(())
     }
 

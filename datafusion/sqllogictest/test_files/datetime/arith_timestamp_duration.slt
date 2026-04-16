@@ -1,0 +1,147 @@
+# timestamp + duration → timestamp
+# Add an duration to a timestamp
+# timestamp '2001-09-28 01:00' + arrow_cast(12345000000000, 'Duration(Nanosecond)') → 2001-09-29 00:00:00
+
+query P
+SELECT '2001-09-28T01:00:00'::timestamp + arrow_cast(12345, 'Duration(Second)');
+----
+2001-09-28T04:25:45
+
+query P
+SELECT '2001-09-28T01:00:00'::timestamp - arrow_cast(12345, 'Duration(Second)');
+----
+2001-09-27T21:34:15
+
+query P
+SELECT arrow_cast(12345, 'Duration(Second)') + '2001-09-28T01:00:00'::timestamp;
+----
+2001-09-28T04:25:45
+
+query T
+SELECT arrow_typeof('2001-09-28T01:00:00'::timestamp + arrow_cast(12345, 'Duration(Second)'))
+----
+Timestamp(ns)
+
+query P
+SELECT '2001-09-28T01:00:00'::timestamp + arrow_cast(12345000, 'Duration(Millisecond)');
+----
+2001-09-28T04:25:45
+
+query P
+SELECT '2001-09-28T01:00:00'::timestamp - arrow_cast(12345000, 'Duration(Millisecond)');
+----
+2001-09-27T21:34:15
+
+query T
+SELECT arrow_typeof('2001-09-28T01:00:00'::timestamp + arrow_cast(12345000, 'Duration(Millisecond)'))
+----
+Timestamp(ns)
+
+query P
+SELECT '2001-09-28T01:00:00'::timestamp + arrow_cast(12345000000, 'Duration(Microsecond)');
+----
+2001-09-28T04:25:45
+
+query P
+SELECT '2001-09-28T01:00:00'::timestamp - arrow_cast(12345000000, 'Duration(Microsecond)');
+----
+2001-09-27T21:34:15
+
+query T
+SELECT arrow_typeof('2001-09-28T01:00:00'::timestamp + arrow_cast(12345000000, 'Duration(Microsecond)'))
+----
+Timestamp(ns)
+
+query P
+SELECT '2001-09-28T01:00:00'::timestamp + arrow_cast(12345000000999, 'Duration(Nanosecond)');
+----
+2001-09-28T04:25:45.000000999
+
+query P
+SELECT '2001-09-28T01:00:00'::timestamp - arrow_cast(12345000000999, 'Duration(Nanosecond)');
+----
+2001-09-27T21:34:14.999999001
+
+query T
+SELECT arrow_typeof('2001-09-28T01:00:00'::timestamp + arrow_cast(12345000000999, 'Duration(Nanosecond)'))
+----
+Timestamp(ns)
+
+# test with other timestamp timeunits beyond the default ns
+
+# second +/- millisecond
+query P
+SELECT arrow_cast('2001-09-28T01:00:00', 'Timestamp(Second)') + arrow_cast(12345000, 'Duration(Millisecond)');
+----
+2001-09-28T04:25:45
+
+query P
+SELECT arrow_cast('2001-09-28T01:00:00', 'Timestamp(Second)') - arrow_cast(12345000, 'Duration(Millisecond)');
+----
+2001-09-27T21:34:15
+
+query T
+SELECT arrow_typeof(arrow_cast('2001-09-28T01:00:00', 'Timestamp(Second)') + arrow_cast(12345000, 'Duration(Millisecond)'))
+----
+Timestamp(s)
+
+# second +/- microsecond
+query P
+SELECT arrow_cast('2001-09-28T01:00:00', 'Timestamp(Second)') + arrow_cast(12345000000, 'Duration(Microsecond)');
+----
+2001-09-28T04:25:45
+
+query P
+SELECT arrow_cast('2001-09-28T01:00:00', 'Timestamp(Second)') - arrow_cast(12345000000, 'Duration(Microsecond)');
+----
+2001-09-27T21:34:15
+
+query T
+SELECT arrow_typeof(arrow_cast('2001-09-28T01:00:00', 'Timestamp(Second)') + arrow_cast(12345000000, 'Duration(Microsecond)'))
+----
+Timestamp(s)
+
+# millisecond +/- nanosecond
+query P
+SELECT arrow_cast('2001-09-28T01:00:00', 'Timestamp(Millisecond)') + arrow_cast(12345000000999, 'Duration(Nanosecond)');
+----
+2001-09-28T04:25:45
+
+query P
+SELECT arrow_cast('2001-09-28T01:00:00', 'Timestamp(Millisecond)') - arrow_cast(12345000000999, 'Duration(Nanosecond)');
+----
+2001-09-27T21:34:15
+
+query T
+SELECT arrow_typeof(arrow_cast('2001-09-28T01:00:00', 'Timestamp(Millisecond)') + arrow_cast(12345000000999, 'Duration(Nanosecond)'))
+----
+Timestamp(ms)
+
+# millisecond +/- microsecond
+query P
+SELECT arrow_cast('2001-09-28T01:00:00', 'Timestamp(Millisecond)') + arrow_cast(12345000000, 'Duration(Microsecond)');
+----
+2001-09-28T04:25:45
+
+query P
+SELECT arrow_cast('2001-09-28T01:00:00', 'Timestamp(Millisecond)') - arrow_cast(12345000000, 'Duration(Microsecond)');
+----
+2001-09-27T21:34:15
+
+query T
+SELECT arrow_typeof(arrow_cast('2001-09-28T01:00:00', 'Timestamp(Millisecond)') + arrow_cast(12345000000, 'Duration(Microsecond)'))
+----
+Timestamp(ms)
+
+# while timestamp + duration makes sense, duration - timestamp does not
+query error Invalid arithmetic operation: Duration\(ns\) - Timestamp\(ns\)
+SELECT arrow_cast(12345, 'Duration(Second)') - '2001-09-28T01:00:00'::timestamp;
+
+query error Invalid timestamp arithmetic operation
+SELECT '2001-09-28T01:00:00'::timestamp * arrow_cast(12345, 'Duration(Second)');
+
+query error Invalid timestamp arithmetic operation
+SELECT '2001-09-28T01:00:00'::timestamp % arrow_cast(12345, 'Duration(Second)');
+
+query error Invalid timestamp arithmetic operation
+SELECT '2001-09-28T01:00:00'::timestamp / arrow_cast(12345, 'Duration(Second)');

@@ -21,20 +21,19 @@ pub use guarantee::{Guarantee, LiteralGuarantee};
 use std::borrow::Borrow;
 use std::sync::Arc;
 
-use crate::expressions::{BinaryExpr, Column};
+use crate::expressions::{BinaryExpr, Column, Literal};
 use crate::tree_node::ExprContext;
-use crate::PhysicalExpr;
-use crate::PhysicalSortExpr;
+use crate::{
+    AcrossPartitions, ConstExpr, EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+};
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::Schema;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{HashMap, HashSet, Result};
 use datafusion_expr::Operator;
 
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 
@@ -45,6 +44,65 @@ pub fn split_conjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
     split_impl(Operator::And, predicate, vec![])
+}
+
+impl ConstExpr {
+    /// Collects predicate-derived constants from equality conjunctions.
+    ///
+    /// For each equality predicate of the form `lhs = rhs`, if either side is
+    /// already known constant according to `input_eqs`, or is a literal, then
+    /// the other side is also constant and will be returned as a [`ConstExpr`].
+    ///
+    /// Literals are treated as uniform constants across partitions, so
+    /// `col = literal` produces a constant for `col` with the literal value.
+    ///
+    /// For example, given predicate `a = 5 AND b = c` where `c` is already
+    /// known constant, this returns constants for both `a` (Uniform with value
+    /// 5) and `b` (propagating `c`'s across-partitions value).
+    pub fn collect_predicate_constants(
+        input_eqs: &EquivalenceProperties,
+        predicate: &Arc<dyn PhysicalExpr>,
+    ) -> Vec<ConstExpr> {
+        /// Returns the `AcrossPartitions` value for `expr` if it is constant:
+        /// either already known constant in `input_eqs`, or a `Literal`
+        /// (which is inherently constant across all partitions).
+        fn expr_constant_or_literal(
+            expr: &Arc<dyn PhysicalExpr>,
+            input_eqs: &EquivalenceProperties,
+        ) -> Option<AcrossPartitions> {
+            input_eqs.is_expr_constant(expr).or_else(|| {
+                expr.downcast_ref::<Literal>()
+                    .map(|l| AcrossPartitions::Uniform(Some(l.value().clone())))
+            })
+        }
+
+        let mut constants = Vec::new();
+        for conjunction in split_conjunction(predicate) {
+            if let Some(binary) = conjunction.downcast_ref::<BinaryExpr>()
+                && binary.op() == &Operator::Eq
+            {
+                // Check if either side is constant — either already known
+                // constant from the input equivalence properties, or a literal
+                // value (which is inherently constant across all partitions).
+                let left_const = expr_constant_or_literal(binary.left(), input_eqs);
+                let right_const = expr_constant_or_literal(binary.right(), input_eqs);
+
+                if let Some(left_across) = left_const {
+                    // LEFT is constant, so RIGHT must also be constant.
+                    // Use RIGHT's known across value if available, otherwise
+                    // propagate LEFT's (e.g. Uniform from a literal).
+                    let across = right_const.unwrap_or(left_across);
+                    constants.push(ConstExpr::new(Arc::clone(binary.right()), across));
+                } else if let Some(right_across) = right_const {
+                    // RIGHT is constant, so LEFT must also be constant.
+                    constants
+                        .push(ConstExpr::new(Arc::clone(binary.left()), right_across));
+                }
+            }
+        }
+
+        constants
+    }
 }
 
 /// Create a conjunction of the given predicates.
@@ -86,7 +144,7 @@ fn split_impl<'a>(
     predicate: &'a Arc<dyn PhysicalExpr>,
     mut exprs: Vec<&'a Arc<dyn PhysicalExpr>>,
 ) -> Vec<&'a Arc<dyn PhysicalExpr>> {
-    match predicate.as_any().downcast_ref::<BinaryExpr>() {
+    match predicate.downcast_ref::<BinaryExpr>() {
         Some(binary) if binary.op() == &operator => {
             let exprs = split_impl(operator, binary.left(), exprs);
             split_impl(operator, binary.right(), exprs)
@@ -117,16 +175,14 @@ pub fn map_columns_before_projection(
     let column_mapping = proj_exprs
         .iter()
         .filter_map(|(expr, name)| {
-            expr.as_any()
-                .downcast_ref::<Column>()
+            expr.downcast_ref::<Column>()
                 .map(|column| (name.clone(), column.clone()))
         })
         .collect::<HashMap<_, _>>();
     parent_required
         .iter()
         .filter_map(|r| {
-            r.as_any()
-                .downcast_ref::<Column>()
+            r.downcast_ref::<Column>()
                 .and_then(|c| column_mapping.get(c.name()))
         })
         .map(|e| Arc::new(e.clone()) as _)
@@ -230,8 +286,8 @@ where
 pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
     expr.apply(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            columns.get_or_insert_owned(column);
+        if let Some(column) = expr.downcast_ref::<Column>() {
+            columns.get_or_insert_with(column, |c| c.clone());
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -240,22 +296,23 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     columns
 }
 
-/// Re-assign column indices referenced in predicate according to given schema.
-/// This may be helpful when dealing with projections.
-pub fn reassign_predicate_columns(
-    pred: Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
-    ignore_not_found: bool,
+/// Re-assign indices of [`Column`]s within the given [`PhysicalExpr`] according to
+/// the provided [`Schema`].
+///
+/// This can be useful when attempting to map an expression onto a different schema.
+///
+/// # Errors
+///
+/// This function will return an error if any column in the expression cannot be found
+/// in the provided schema.
+pub fn reassign_expr_columns(
+    expr: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform_down(|expr| {
-        let expr_any = expr.as_any();
+    expr.transform_down(|expr| {
+        if let Some(column) = expr.downcast_ref::<Column>() {
+            let index = schema.index_of(column.name())?;
 
-        if let Some(column) = expr_any.downcast_ref::<Column>() {
-            let index = match schema.index_of(column.name()) {
-                Ok(idx) => idx,
-                Err(_) if ignore_not_found => usize::MAX,
-                Err(e) => return Err(e.into()),
-            };
             return Ok(Transformed::yes(Arc::new(Column::new(
                 column.name(),
                 index,
@@ -266,26 +323,17 @@ pub fn reassign_predicate_columns(
     .data()
 }
 
-/// Merge left and right sort expressions, checking for duplicates.
-pub fn merge_vectors(left: &LexOrdering, right: &LexOrdering) -> LexOrdering {
-    left.iter()
-        .cloned()
-        .chain(right.iter().cloned())
-        .unique()
-        .collect()
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::any::Any;
+
     use std::fmt::{Display, Formatter};
 
     use super::*;
-    use crate::expressions::{binary, cast, col, in_list, lit, Literal};
+    use crate::expressions::{Literal, binary, cast, col, in_list, lit};
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{exec_err, DataFusionError, ScalarValue};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{ScalarValue, exec_err, internal_datafusion_err};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -293,7 +341,7 @@ pub(crate) mod tests {
 
     use petgraph::visit::Bfs;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub struct TestScalarUDF {
         pub(crate) signature: Signature,
     }
@@ -312,9 +360,6 @@ pub(crate) mod tests {
     }
 
     impl ScalarUDFImpl for TestScalarUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "test-scalar-udf"
         }
@@ -345,11 +390,11 @@ pub(crate) mod tests {
                         .as_any()
                         .downcast_ref::<Float64Array>()
                         .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
+                            internal_datafusion_err!(
                                 "could not cast {} to {}",
                                 self.name(),
                                 std::any::type_name::<Float64Array>()
-                            ))
+                            )
                         })?;
 
                     arg.iter()
@@ -361,11 +406,11 @@ pub(crate) mod tests {
                         .as_any()
                         .downcast_ref::<Float32Array>()
                         .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
+                            internal_datafusion_err!(
                                 "could not cast {} to {}",
                                 self.name(),
                                 std::any::type_name::<Float32Array>()
-                            ))
+                            )
                         })?;
 
                     arg.iter()
@@ -404,11 +449,11 @@ pub(crate) mod tests {
 
     fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> Result<PhysicalExprDummyNode> {
         let expr = Arc::clone(&node.expr);
-        let dummy_property = if expr.as_any().is::<BinaryExpr>() {
+        let dummy_property = if expr.is::<BinaryExpr>() {
             "Binary"
-        } else if expr.as_any().is::<Column>() {
+        } else if expr.is::<Column>() {
             "Column"
-        } else if expr.as_any().is::<Literal>() {
+        } else if expr.is::<Literal>() {
             "Literal"
         } else {
             "Other"
@@ -517,7 +562,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_reassign_predicate_columns_in_list() {
+    fn test_reassign_expr_columns_in_list() {
         let int_field = Field::new("should_not_matter", DataType::Int64, true);
         let dict_field = Field::new(
             "id",
@@ -537,7 +582,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let actual = reassign_predicate_columns(pred, &schema_small, false).unwrap();
+        let actual = reassign_expr_columns(pred, &schema_small).unwrap();
 
         let expected = in_list(
             Arc::new(Column::new_with_schema("id", &schema_small).unwrap()),
@@ -570,6 +615,33 @@ pub(crate) mod tests {
         expected.insert(Column::new("col1", 2));
         expected.insert(Column::new("col2", 5));
         assert_eq!(collect_columns(&expr3), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_predicate_constants_propagates_uniform_literal_value() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ticker",
+            DataType::Utf8,
+            false,
+        )]));
+        let predicate = binary(
+            col("ticker", schema.as_ref())?,
+            Operator::Eq,
+            lit(ScalarValue::Utf8(Some("NGJ26".to_string()))),
+            schema.as_ref(),
+        )?;
+        let eq_properties = EquivalenceProperties::new(schema);
+
+        let constants =
+            ConstExpr::collect_predicate_constants(&eq_properties, &predicate);
+
+        assert_eq!(constants.len(), 1);
+        assert_eq!(
+            constants[0].across_partitions,
+            AcrossPartitions::Uniform(Some(ScalarValue::Utf8(Some("NGJ26".to_string()))))
+        );
+
         Ok(())
     }
 }

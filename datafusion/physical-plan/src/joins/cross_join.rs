@@ -18,36 +18,40 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
-use std::{any::Any, sync::Arc, task::Poll};
+use std::{sync::Arc, task::Poll};
 
 use super::utils::{
-    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
-    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
-    StatefulStreamResult,
+    BatchSplitter, BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer,
+    OnceAsync, OnceFut, StatefulStreamResult, adjust_right_output_partitioning,
+    reorder_output_after_swap,
 };
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, ProjectionExec,
+    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs,
 };
 use crate::{
-    handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics, check_if_same_properties, handle_state,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, JoinType, Result, ScalarValue};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{
+    JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
+};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, ready};
 
 /// Data of the left side that is buffered into memory
 #[derive(Debug)]
@@ -59,7 +63,7 @@ struct JoinLeftData {
     _reservation: MemoryReservation,
 }
 
-#[allow(rustdoc::private_intra_doc_links)]
+#[expect(rustdoc::private_intra_doc_links)]
 /// Cross Join Execution Plan
 ///
 /// This operator is used when there are no predicates between two tables and
@@ -92,7 +96,7 @@ pub struct CrossJoinExec {
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
     /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CrossJoinExec {
@@ -115,7 +119,7 @@ impl CrossJoinExec {
         };
 
         let schema = Arc::new(Schema::new(all_columns).with_metadata(metadata));
-        let cache = Self::compute_properties(&left, &right, Arc::clone(&schema));
+        let cache = Self::compute_properties(&left, &right, Arc::clone(&schema)).unwrap();
 
         CrossJoinExec {
             left,
@@ -123,7 +127,7 @@ impl CrossJoinExec {
             schema,
             left_fut: Default::default(),
             metrics: ExecutionPlanMetricsSet::default(),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -142,7 +146,7 @@ impl CrossJoinExec {
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties
         // TODO: Check equivalence properties of cross join, it may preserve
         //       ordering in some cases.
@@ -154,7 +158,7 @@ impl CrossJoinExec {
             &[false, false],
             None,
             &[],
-        );
+        )?;
 
         // Get output partitioning:
         // TODO: Optimize the cross join implementation to generate M * N
@@ -162,19 +166,25 @@ impl CrossJoinExec {
         let output_partitioning = adjust_right_output_partitioning(
             right.output_partitioning(),
             left.schema().fields.len(),
-        );
+        )?;
 
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             EmissionType::Final,
             boundedness_from_children([left, right]),
-        )
+        ))
     }
 
     /// Returns a new `ExecutionPlan` that computes the same join as this one,
     /// with the left and right inputs swapped using the  specified
     /// `partition_mode`.
+    ///
+    /// # Notes:
+    ///
+    /// This function should be called BEFORE inserting any repartitioning
+    /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
+    /// for more details.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let new_join =
             CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
@@ -183,6 +193,23 @@ impl CrossJoinExec {
             &self.left.schema(),
             &self.right.schema(),
         )
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            left_fut: Default::default(),
+            cache: Arc::clone(&self.cache),
+            schema: Arc::clone(&self.schema),
+        }
     }
 }
 
@@ -198,7 +225,7 @@ async fn load_left_input(
     let (batches, _metrics, reservation) = stream
         .try_fold(
             (Vec::new(), metrics, reservation),
-            |(mut batches, metrics, mut reservation), batch| async {
+            |(mut batches, metrics, reservation), batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
                 reservation.try_grow(batch_size)?;
@@ -244,11 +271,7 @@ impl ExecutionPlan for CrossJoinExec {
         "CrossJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -260,14 +283,35 @@ impl ExecutionPlan for CrossJoinExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // CrossJoin has no join conditions or expressions
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(CrossJoinExec::new(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
         )))
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let new_exec = CrossJoinExec {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            schema: Arc::clone(&self.schema),
+            left_fut: Default::default(), // reset the build side!
+            metrics: ExecutionPlanMetricsSet::default(),
+            cache: Arc::clone(&self.cache),
+        };
+        Ok(Arc::new(new_exec))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -282,12 +326,12 @@ impl ExecutionPlan for CrossJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if self.left.output_partitioning().partition_count() != 1 {
-            return internal_err!(
-                "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
+        assert_eq_or_internal_err!(
+            self.left.output_partitioning().partition_count(),
+            1,
+            "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
                  consider using CoalescePartitionsExec or the EnforceDistribution rule"
-            );
-        }
+        );
 
         let stream = self.right.execute(partition, Arc::clone(&context))?;
 
@@ -336,16 +380,13 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // Get the all partitions statistics of the left
-        let left_stats = self.left.partition_statistics(None)?;
-        let right_stats = self.right.partition_statistics(partition)?;
+        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
+        let right_stats =
+            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
 
-        Ok(stats_cartesian_product(left_stats, right_stats))
+        Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
@@ -413,31 +454,34 @@ fn stats_cartesian_product(
     // Min, max and distinct_count on the other hand are invariants.
     let cross_join_stats = left_col_stats
         .into_iter()
-        .map(|s| ColumnStatistics {
-            null_count: s.null_count.multiply(&right_row_count),
-            distinct_count: s.distinct_count,
-            min_value: s.min_value,
-            max_value: s.max_value,
-            sum_value: s
-                .sum_value
-                .get_value()
-                // Cast the row count into the same type as any existing sum value
-                .and_then(|v| {
-                    Precision::<ScalarValue>::from(right_row_count)
-                        .cast_to(&v.data_type())
-                        .ok()
-                })
-                .map(|row_count| s.sum_value.multiply(&row_count))
-                .unwrap_or(Precision::Absent),
+        .map(|s| {
+            let widened_sum = s.sum_value.cast_to_sum_type();
+            ColumnStatistics {
+                null_count: s.null_count.multiply(&right_row_count),
+                distinct_count: s.distinct_count,
+                min_value: s.min_value,
+                max_value: s.max_value,
+                sum_value: widened_sum
+                    .get_value()
+                    // Cast the row count into the same type as any existing sum value
+                    .and_then(|v| {
+                        Precision::<ScalarValue>::from(right_row_count)
+                            .cast_to(&v.data_type())
+                            .ok()
+                    })
+                    .map(|row_count| widened_sum.multiply(&row_count))
+                    .unwrap_or(Precision::Absent),
+                byte_size: Precision::Absent,
+            }
         })
         .chain(right_col_stats.into_iter().map(|s| {
+            let widened_sum = s.sum_value.cast_to_sum_type();
             ColumnStatistics {
                 null_count: s.null_count.multiply(&left_row_count),
                 distinct_count: s.distinct_count,
                 min_value: s.min_value,
                 max_value: s.max_value,
-                sum_value: s
-                    .sum_value
+                sum_value: widened_sum
                     .get_value()
                     // Cast the row count into the same type as any existing sum value
                     .and_then(|v| {
@@ -445,8 +489,9 @@ fn stats_cartesian_product(
                             .cast_to(&v.data_type())
                             .ok()
                     })
-                    .map(|row_count| s.sum_value.multiply(&row_count))
+                    .map(|row_count| widened_sum.multiply(&row_count))
                     .unwrap_or(Precision::Absent),
+                byte_size: Precision::Absent,
             }
         }))
         .collect();
@@ -559,7 +604,8 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 CrossJoinStreamState::BuildBatches(_) => {
-                    handle_state!(self.build_batches())
+                    let poll = handle_state!(self.build_batches());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
             };
         }
@@ -608,7 +654,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    /// Joins the the indexed row of left data with the current probe batch.
+    /// Joins the indexed row of left data with the current probe batch.
     /// If all the results are produced, the state is set to fetch new probe batch.
     fn build_batches(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let right_batch = self.state.try_as_record_batch()?;
@@ -631,8 +677,6 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                         self.left_index += 1;
                     }
 
-                    self.join_metrics.output_batches.add(1);
-                    self.join_metrics.output_rows.add(batch.num_rows());
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
                 }
             }
@@ -647,7 +691,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::build_table_scan_i32;
+    use crate::test::{assert_join_metrics, build_table_scan_i32};
 
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -657,14 +701,15 @@ mod tests {
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let join = CrossJoinExec::new(left, right);
         let columns_header = columns(&join.schema());
 
         let stream = join.execute(0, context)?;
         let batches = common::collect(stream).await?;
+        let metrics = join.metrics().unwrap();
 
-        Ok((columns_header, batches))
+        Ok((columns_header, batches, metrics))
     }
 
     #[tokio::test]
@@ -684,6 +729,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -691,6 +737,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -704,6 +751,7 @@ mod tests {
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
+                byte_size: Precision::Absent,
             }],
         };
 
@@ -721,6 +769,7 @@ mod tests {
                         42 * right_row_count as i64,
                     ))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -728,6 +777,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3 * right_row_count),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
@@ -737,6 +787,7 @@ mod tests {
                         20 * left_row_count as i64,
                     ))),
                     null_count: Precision::Exact(2 * left_row_count),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -758,6 +809,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -765,6 +817,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -778,6 +831,7 @@ mod tests {
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
+                byte_size: Precision::Absent,
             }],
         };
 
@@ -793,6 +847,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Absent, // we don't know the row count on the right
                     null_count: Precision::Absent, // we don't know the row count on the right
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -800,6 +855,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent, // we don't know the row count on the right
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
@@ -809,11 +865,55 @@ mod tests {
                         20 * left_row_count as i64,
                     ))),
                     null_count: Precision::Exact(2 * left_row_count),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
 
         assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_stats_cartesian_product_unsigned_sum_widens_to_u64() {
+        let left_row_count = 2;
+        let right_row_count = 3;
+
+        let left = Statistics {
+            num_rows: Precision::Exact(left_row_count),
+            total_byte_size: Precision::Exact(10),
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Exact(2),
+                max_value: Precision::Exact(ScalarValue::UInt32(Some(10))),
+                min_value: Precision::Exact(ScalarValue::UInt32(Some(1))),
+                sum_value: Precision::Exact(ScalarValue::UInt32(Some(7))),
+                null_count: Precision::Exact(0),
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        let right = Statistics {
+            num_rows: Precision::Exact(right_row_count),
+            total_byte_size: Precision::Exact(10),
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Exact(3),
+                max_value: Precision::Exact(ScalarValue::UInt32(Some(12))),
+                min_value: Precision::Exact(ScalarValue::UInt32(Some(0))),
+                sum_value: Precision::Exact(ScalarValue::UInt32(Some(11))),
+                null_count: Precision::Exact(0),
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        let result = stats_cartesian_product(left, right);
+
+        assert_eq!(
+            result.column_statistics[0].sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(21)))
+        );
+        assert_eq!(
+            result.column_statistics[1].sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(22)))
+        );
     }
 
     #[tokio::test]
@@ -831,22 +931,24 @@ mod tests {
             ("c2", &vec![14, 15]),
         );
 
-        let (columns, batches) = join_collect(left, right, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(left, right, task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+----+----+----+----+
-            | a1 | b1 | c1 | a2 | b2 | c2 |
-            +----+----+----+----+----+----+
-            | 1  | 4  | 7  | 10 | 12 | 14 |
-            | 1  | 4  | 7  | 11 | 13 | 15 |
-            | 2  | 5  | 8  | 10 | 12 | 14 |
-            | 2  | 5  | 8  | 11 | 13 | 15 |
-            | 3  | 6  | 9  | 10 | 12 | 14 |
-            | 3  | 6  | 9  | 11 | 13 | 15 |
-            +----+----+----+----+----+----+
-            "#);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b2 | c2 |
+        +----+----+----+----+----+----+
+        | 1  | 4  | 7  | 10 | 12 | 14 |
+        | 1  | 4  | 7  | 11 | 13 | 15 |
+        | 2  | 5  | 8  | 10 | 12 | 14 |
+        | 2  | 5  | 8  | 11 | 13 | 15 |
+        | 3  | 6  | 9  | 10 | 12 | 14 |
+        | 3  | 6  | 9  | 11 | 13 | 15 |
+        +----+----+----+----+----+----+
+        ");
+
+        assert_join_metrics!(metrics, 6);
 
         Ok(())
     }
@@ -874,7 +976,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec"
+            "Resources exhausted: Additional allocation failed for CrossJoinExec with top memory consumers (across reservations) as:\n  CrossJoinExec"
         );
 
         Ok(())

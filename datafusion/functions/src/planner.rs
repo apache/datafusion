@@ -19,14 +19,19 @@
 
 use datafusion_common::Result;
 use datafusion_expr::{
+    Expr,
     expr::ScalarFunction,
     planner::{ExprPlanner, PlannerResult},
-    Expr,
 };
 
+#[deprecated(
+    since = "50.0.0",
+    note = "Use UnicodeFunctionPlanner and DateTimeFunctionPlanner instead"
+)]
 #[derive(Default, Debug)]
 pub struct UserDefinedFunctionPlanner;
 
+#[expect(deprecated)]
 impl ExprPlanner for UserDefinedFunctionPlanner {
     #[cfg(feature = "datetime_expressions")]
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
