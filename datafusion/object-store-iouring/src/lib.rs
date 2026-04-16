@@ -41,6 +41,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+#[cfg(target_os = "linux")]
+use futures::StreamExt;
 use futures::stream::BoxStream;
 #[cfg(target_os = "linux")]
 use object_store::ObjectStoreExt;
@@ -169,7 +171,7 @@ impl IoUringObjectStore {
             return Ok(GetResult {
                 payload: GetResultPayload::Stream(stream),
                 meta,
-                range: range.start as usize..range.end as usize,
+                range: range.clone(),
                 attributes: Attributes::new(),
             });
         }
@@ -199,7 +201,7 @@ impl IoUringObjectStore {
         Ok(GetResult {
             payload: GetResultPayload::Stream(stream),
             meta,
-            range: range.start as usize..range.end as usize,
+            range: range.clone(),
             attributes: Attributes::new(),
         })
     }
