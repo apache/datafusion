@@ -447,10 +447,19 @@ impl BitwiseSortMergeJoinStream {
 
     /// Spill the in-memory inner key buffer to disk and clear it.
     fn spill_inner_key_buffer(&mut self) -> Result<()> {
+        // The inner_key_buffer contains sliced batches that may share
+        // StringView/BinaryView data buffers with the original unsliced
+        // batches. GC each batch so the IPC writer only writes the
+        // buffers actually referenced by each batch's live views.
+        let gc_batches: Vec<_> = self
+            .inner_key_buffer
+            .iter()
+            .map(|b| crate::spill::gc_view_arrays(b))
+            .collect::<Result<_>>()?;
         let spill_file = self
             .spill_manager
             .spill_record_batch_and_finish(
-                &self.inner_key_buffer,
+                &gc_batches,
                 "semi_anti_smj_inner_key_spill",
             )?
             .expect("inner_key_buffer is non-empty when spilling");

@@ -1163,11 +1163,20 @@ impl GroupedHashAggregateStream {
             self.spill_state.spill_expr.clone(),
             self.batch_size,
         );
+        // After `take_record_batch` inside IncrementalSortIterator, each output
+        // batch shares the same StringView/BinaryView data buffers as the
+        // original emitted batch. Without gc(), the IPC writer duplicates all
+        // referenced buffers for every chunk — potentially causing N× write
+        // amplification where N is the number of chunks.
+        let gc_iter =
+            sorted_iter.map(|r| r.map(|batch| crate::spill::gc_view_arrays(&batch)));
+        // gc_view_arrays returns Result, so flatten the nested Result
+        let gc_iter = gc_iter.map(|r| r.and_then(|inner| inner));
         let spillfile = self
             .spill_state
             .spill_manager
             .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
+                gc_iter,
                 "HashAggSpill",
             )?;
 

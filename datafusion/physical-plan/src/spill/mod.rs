@@ -34,7 +34,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{BufferSpec, layout};
+use arrow::array::{Array, BinaryViewArray, BufferSpec, StringViewArray, layout};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{
     MetadataVersion,
@@ -50,6 +50,42 @@ use datafusion_execution::RecordBatchStream;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use futures::{FutureExt as _, Stream};
 use log::debug;
+
+/// Compact view-type arrays (`StringViewArray` and `BinaryViewArray`) in a
+/// [`RecordBatch`] so that each batch owns only the data buffers it actually
+/// references.
+///
+/// After operations like `take` or `interleave`, view-type arrays may retain
+/// shared references to large original data buffers.  When such batches are
+/// written to spill files individually, the IPC writer must include **all**
+/// referenced buffers for every batch, causing massive write amplification.
+/// Calling `gc()` on each view array rebuilds its buffer list to contain only
+/// the bytes that are live in the current array, eliminating the duplication.
+///
+/// Returns the batch unchanged (no allocation) when it contains no view-type
+/// columns.
+pub fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+    let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
+    let mut mutated = false;
+
+    for array in batch.columns() {
+        if let Some(sv) = array.as_any().downcast_ref::<StringViewArray>() {
+            new_columns.push(Arc::new(sv.gc()));
+            mutated = true;
+        } else if let Some(bv) = array.as_any().downcast_ref::<BinaryViewArray>() {
+            new_columns.push(Arc::new(bv.gc()));
+            mutated = true;
+        } else {
+            new_columns.push(Arc::clone(array));
+        }
+    }
+
+    if mutated {
+        Ok(RecordBatch::try_new(batch.schema(), new_columns)?)
+    } else {
+        Ok(batch.clone())
+    }
+}
 
 /// Stream that reads spill files from disk where each batch is read in a spawned blocking task
 /// It will read one batch at a time and will not do any buffering, to buffer data use [`crate::common::spawn_buffered`]
@@ -784,6 +820,149 @@ mod tests {
 
                 Ok(())
             })
+    }
+
+    #[test]
+    fn test_gc_view_arrays_reduces_spill_size() -> Result<()> {
+        use arrow::array::{StringViewArray, BinaryViewArray};
+
+        // Create a large StringViewArray with non-inline strings (>12 bytes)
+        let long_strings: Vec<String> = (0..1000)
+            .map(|i| format!("this_is_a_long_string_value_{:06}", i))
+            .collect();
+        let sv_array = StringViewArray::from(
+            long_strings.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        );
+
+        // Create a large BinaryViewArray with non-inline values
+        let long_binaries: Vec<Vec<u8>> = (0..1000)
+            .map(|i| format!("binary_payload_data_value_{:06}", i).into_bytes())
+            .collect();
+        let bv_array = BinaryViewArray::from(
+            long_binaries
+                .iter()
+                .map(|b| b.as_slice())
+                .collect::<Vec<_>>(),
+        );
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sv", DataType::Utf8View, false),
+            Field::new("bv", DataType::BinaryView, false),
+        ]));
+
+        let full_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(sv_array) as ArrayRef,
+                Arc::new(bv_array) as ArrayRef,
+            ],
+        )?;
+
+        // Simulate what take_record_batch does: take a subset of rows.
+        // The resulting batch retains all original data buffers.
+        let indices = arrow::array::UInt32Array::from(vec![0, 1, 2, 3, 4]);
+        let taken_batch =
+            arrow::compute::take_record_batch(&full_batch, &indices)?;
+
+        // The taken batch (5 rows) should reference the full 1000-row buffers
+        let taken_size = get_record_batch_memory_size(&taken_batch);
+
+        // After gc, it should only contain the 5 rows' worth of data
+        let gc_batch = gc_view_arrays(&taken_batch)?;
+        let gc_size = get_record_batch_memory_size(&gc_batch);
+
+        // The gc'd batch should be significantly smaller
+        // (5/1000 = 0.5% of original data, but with overhead maybe ~5%)
+        assert!(
+            gc_size < taken_size / 2,
+            "gc_view_arrays should reduce memory: gc_size={gc_size}, taken_size={taken_size}"
+        );
+
+        // Verify data integrity
+        assert_eq!(gc_batch.num_rows(), 5);
+        assert_eq!(gc_batch.num_columns(), 2);
+
+        Ok(())
+    }
+
+    /// Demonstrates the write amplification that gc_view_arrays prevents.
+    /// When IncrementalSortIterator produces chunks via take(), each chunk
+    /// retains all original StringView data buffers. Without gc(), spilling
+    /// N chunks writes N copies of the shared buffers.
+    #[test]
+    fn test_gc_view_arrays_write_amplification() -> Result<()> {
+        use arrow::array::StringViewArray;
+
+        // 10,000 rows of long strings (~50 bytes each = ~500 KB of string data)
+        let strings: Vec<String> = (0..10_000)
+            .map(|i| format!("long_string_for_gc_amplification_test_{:08}", i))
+            .collect();
+        let sv = StringViewArray::from(
+            strings.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sv", DataType::Utf8View, false),
+        ]));
+        let full_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(sv) as ArrayRef],
+        )?;
+
+        // Simulate IncrementalSortIterator: split into 10 chunks of 1000 rows
+        let chunk_size = 1000u32;
+        let n_chunks = 10;
+        let mut total_without_gc = 0usize;
+        let mut total_with_gc = 0usize;
+
+        for i in 0..n_chunks {
+            let start = i * chunk_size;
+            let indices = arrow::array::UInt32Array::from(
+                (start..start + chunk_size).collect::<Vec<_>>(),
+            );
+            let chunk = arrow::compute::take_record_batch(&full_batch, &indices)?;
+            total_without_gc += get_record_batch_memory_size(&chunk);
+
+            let gc_chunk = gc_view_arrays(&chunk)?;
+            total_with_gc += get_record_batch_memory_size(&gc_chunk);
+        }
+
+        // Without gc: each chunk carries all 10,000 rows' buffers → ~10x amplification
+        // With gc: each chunk carries only its 1,000 rows' buffers → ~1x
+        let amplification = total_without_gc as f64 / total_with_gc as f64;
+        eprintln!(
+            "Write amplification: {amplification:.1}x \
+             (without_gc={total_without_gc} bytes, with_gc={total_with_gc} bytes)"
+        );
+
+        // The amplification should be close to n_chunks (10x)
+        assert!(
+            amplification > 3.0,
+            "Expected significant write amplification, got {amplification:.1}x"
+        );
+        // With gc, total should be close to the full batch size (not N× it)
+        let full_size = get_record_batch_memory_size(&full_batch);
+        assert!(
+            total_with_gc < full_size * 2,
+            "With gc, total ({total_with_gc}) should be close to full batch ({full_size})"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_view_arrays_noop_for_non_view_types() -> Result<()> {
+        let batch = build_table_i32(
+            ("a", &vec![1, 2, 3]),
+            ("b", &vec![4, 5, 6]),
+            ("c", &vec![7, 8, 9]),
+        );
+        let gc_batch = gc_view_arrays(&batch)?;
+        assert_eq!(gc_batch.num_rows(), batch.num_rows());
+        assert_eq!(
+            get_record_batch_memory_size(&gc_batch),
+            get_record_batch_memory_size(&batch)
+        );
+        Ok(())
     }
 
     #[test]
