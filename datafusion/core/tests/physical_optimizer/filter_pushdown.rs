@@ -2959,7 +2959,7 @@ async fn test_discover_dynamic_filters_via_expressions_api() {
 
         // Check expressions from this node using apply_expressions
         let _ = plan.apply_expressions(&mut |expr| {
-            if let Some(_df) = expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
+            if let Some(_df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
                 count += 1;
             }
             Ok(TreeNodeRecursion::Continue)

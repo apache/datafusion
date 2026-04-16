@@ -38,7 +38,7 @@ pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: isize,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+    expr.transform_down(|e| match e.downcast_ref::<Column>() {
         Some(col) => {
             let Some(idx) = col.index().checked_add_signed(offset) else {
                 return plan_err!("Column index overflow");
@@ -244,7 +244,6 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::ColumnarValue;
     use datafusion_expr::Operator;
-    use std::any::Any;
     use std::fmt;
 
     #[test]
@@ -394,10 +393,6 @@ mod tests {
     }
 
     impl PhysicalExpr for MockVolatileExpr {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
             Ok(DataType::Boolean)
         }

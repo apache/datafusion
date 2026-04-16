@@ -620,7 +620,7 @@ impl DataSource for FileScanConfig {
                             .iter()
                             .map(|proj_expr| {
                                 if let Some(column) =
-                                    proj_expr.expr.as_any().downcast_ref::<Column>()
+                                    proj_expr.expr.downcast_ref::<Column>()
                                 {
                                     if column.name() == proj_expr.alias {
                                         column.name().to_string()
@@ -1075,7 +1075,7 @@ impl FileScanConfig {
             // (e.g. due to unnecessary projections being removed)
             reassign_expr_columns(Arc::clone(expr), schema)
                 .ok()
-                .and_then(|expr| match expr.as_any().downcast_ref::<BinaryExpr>() {
+                .and_then(|expr| match expr.downcast_ref::<BinaryExpr>() {
                     Some(expr) if expr.op() == &Operator::Eq => {
                         Some((Arc::clone(expr.left()), Arc::clone(expr.right())))
                     }
@@ -1918,7 +1918,7 @@ mod tests {
 
         for class in eq_group.iter() {
             for expr in class.iter() {
-                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(col) = expr.downcast_ref::<Column>() {
                     assert_ne!(
                         col.name(),
                         "c2",
@@ -2350,10 +2350,7 @@ mod tests {
             Partitioning::Hash(exprs, num_partitions) => {
                 assert_eq!(num_partitions, 3);
                 assert_eq!(exprs.len(), 1);
-                assert_eq!(
-                    exprs[0].as_any().downcast_ref::<Column>().unwrap().name(),
-                    "date"
-                );
+                assert_eq!(exprs[0].downcast_ref::<Column>().unwrap().name(), "date");
             }
             _ => panic!("Expected Hash partitioning"),
         }
@@ -2383,7 +2380,7 @@ mod tests {
                 assert_eq!(exprs.len(), 2);
                 let col_names: Vec<_> = exprs
                     .iter()
-                    .map(|e| e.as_any().downcast_ref::<Column>().unwrap().name())
+                    .map(|e| e.downcast_ref::<Column>().unwrap().name())
                     .collect();
                 assert_eq!(col_names, vec!["year", "month"]);
             }

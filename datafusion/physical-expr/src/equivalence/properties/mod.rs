@@ -209,7 +209,7 @@ impl EquivalenceProperties {
         sort_expr: &PhysicalSortExpr,
         expr_type: &DataType,
     ) -> Option<PhysicalSortExpr> {
-        let cast_expr = r_expr.as_any().downcast_ref::<CastExpr>()?;
+        let cast_expr = r_expr.downcast_ref::<CastExpr>()?;
 
         (cast_expr.expr().eq(&sort_expr.expr)
             && CastExpr::check_bigger_cast(cast_expr.cast_type(), expr_type))
@@ -738,8 +738,7 @@ impl EquivalenceProperties {
                         // Build a map of column positions in the ordering:
                         let mut col_positions = HashMap::with_capacity(length);
                         for (pos, req) in ordering.iter().enumerate() {
-                            if let Some(col) = req.expr.as_any().downcast_ref::<Column>()
-                            {
+                            if let Some(col) = req.expr.downcast_ref::<Column>() {
                                 let nullable = col.nullable(&self.schema).unwrap_or(true);
                                 col_positions.insert(col.index(), (pos, nullable));
                             }
@@ -783,8 +782,7 @@ impl EquivalenceProperties {
                         // Build a map of column positions in the ordering:
                         let mut col_positions = HashMap::with_capacity(length);
                         for (pos, req) in ordering.iter().enumerate() {
-                            if let Some(col) = req.expr.as_any().downcast_ref::<Column>()
-                            {
+                            if let Some(col) = req.expr.downcast_ref::<Column>() {
                                 let nullable = col.nullable(&self.schema).unwrap_or(true);
                                 col_positions.insert(col.index(), (pos, nullable));
                             }
@@ -1134,7 +1132,7 @@ impl EquivalenceProperties {
             .iter()
             .flat_map(|(_, targets)| {
                 targets.iter().flat_map(|(target, _)| {
-                    target.as_any().downcast_ref::<Column>().map(|c| c.index())
+                    target.downcast_ref::<Column>().map(|c| c.index())
                 })
             })
             .collect::<Vec<_>>();
@@ -1392,10 +1390,10 @@ fn update_properties(
         // We have an intermediate (non-leaf) node, account for its children:
         let children_props = node.children.iter().map(|c| c.data.clone()).collect_vec();
         node.data = node.expr.get_properties(&children_props)?;
-    } else if node.expr.as_any().is::<Literal>() {
+    } else if node.expr.is::<Literal>() {
         // We have a Literal, which is one of the two possible leaf node types:
         node.data = node.expr.get_properties(&[])?;
-    } else if node.expr.as_any().is::<Column>() {
+    } else if node.expr.is::<Column>() {
         // We have a Column, which is the other possible leaf node type:
         node.data.range =
             Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?
@@ -1466,13 +1464,13 @@ fn get_expr_properties(
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
         })
-    } else if expr.as_any().downcast_ref::<Column>().is_some() {
+    } else if expr.downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
         })
-    } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+    } else if let Some(literal) = expr.downcast_ref::<Literal>() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
             range: literal.value().into(),
