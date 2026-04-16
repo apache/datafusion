@@ -146,15 +146,26 @@ impl ScalarUDFImpl for SparkSequence {
 
         match args[0].data_type() {
             DataType::Int64 => {
-                validate_int64_sequence_step(args)?;
-                let optional_new_args = add_step_argument_if_not_exists(args)?;
-                let new_args = match optional_new_args {
-                    Some(new_args) => &new_args.to_owned(),
-                    None => args,
-                };
-                make_scalar_function(|args| {
-                    Range::generate_series().gen_range_inner(args)
-                })(new_args)
+                let result = validate_int64_sequence_step(args)?;
+                match result {
+                    Some(_r) => Ok(ColumnarValue::Scalar(ScalarValue::List(
+                        ScalarValue::new_list(
+                            &[ScalarValue::Int64(result)],
+                            &DataType::Int64,
+                            true,
+                        ),
+                    ))),
+                    None => {
+                        let optional_new_args = add_step_argument_if_not_exists(args)?;
+                        let new_args = match optional_new_args {
+                            Some(new_args) => &new_args.to_owned(),
+                            None => args,
+                        };
+                        make_scalar_function(|args| {
+                            Range::generate_series().gen_range_inner(args)
+                        })(new_args)
+                    }
+                }
             }
             DataType::Date32 | DataType::Date64 => {
                 let optional_new_args = add_interval_argument_if_not_exists(args);
@@ -187,9 +198,9 @@ impl ScalarUDFImpl for SparkSequence {
 }
 
 /// Validates explicit `step` for 3-argument integer `sequence` (Spark semantics).
-fn validate_int64_sequence_step(args: &[ColumnarValue]) -> Result<()> {
+fn validate_int64_sequence_step(args: &[ColumnarValue]) -> Result<Option<i64>> {
     if args.len() != 3 {
-        return Ok(());
+        return Ok(None);
     }
     let arrays = ColumnarValue::values_to_arrays(args)?;
     let start = as_int64_array(&arrays[0])?;
@@ -202,8 +213,13 @@ fn validate_int64_sequence_step(args: &[ColumnarValue]) -> Result<()> {
         let s = start.value(i);
         let e = stop.value(i);
         let st = step.value(i);
-        if st == 0 {
-            return exec_err!("Step cannot be 0 for sequence");
+        if st == 0 && s == e {
+            return Ok(Some(s));
+        }
+        if st == 0 && s != e {
+            return exec_err!(
+                "Step cannot be 0 for sequence when start and stop are different"
+            );
         }
         if s < e && st <= 0 {
             return exec_err!("When start < stop, step must be positive");
@@ -212,7 +228,7 @@ fn validate_int64_sequence_step(args: &[ColumnarValue]) -> Result<()> {
             return exec_err!("When start > stop, step must be negative");
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// When only start and stop are given, Spark picks step `1` if start ≤ stop and `-1` if start > stop.

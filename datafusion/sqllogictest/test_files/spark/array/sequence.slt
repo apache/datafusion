@@ -80,6 +80,16 @@ SELECT sequence(-2, -2);
 [-2]
 
 query ?
+SELECT sequence(5, 5, 0);
+----
+[5]
+
+query ?
+SELECT sequence(-5, -5, 0);
+----
+[-5]
+
+query ?
 SELECT sequence(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00', INTERVAL '-1' DAY)
 ----
 [2023-01-03T00:00:00, 2023-01-02T00:00:00, 2023-01-01T00:00:00]
@@ -216,8 +226,8 @@ SELECT sequence(5, 0, 1);
 query error DataFusion error: Execution error: When start < stop, step must be positive
 SELECT sequence(0, 5, -1);
 
-query error DataFusion error: Execution error: Step cannot be 0 for sequence
+query error DataFusion error: Execution error: Step cannot be 0 for sequence when start and stop are different
 SELECT sequence(1, 5, 0);
 
-query error DataFusion error: Execution error: Step cannot be 0 for sequence
+query error DataFusion error: Execution error: Step cannot be 0 for sequence when start and stop are different
 SELECT sequence(5, 1, 0);
