@@ -100,7 +100,7 @@ impl TopKAggregation {
         let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
         let order_desc = order.options.descending;
-        let order = order.expr.as_any().downcast_ref::<Column>()?;
+        let order = order.expr.downcast_ref::<Column>()?;
         let mut cur_col_name = order.name().to_string();
         let limit = sort.fetch()?;
 
@@ -118,8 +118,7 @@ impl TopKAggregation {
             } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
                 // track renames due to successive projections
                 for proj_expr in proj.expr() {
-                    let Some(src_col) = proj_expr.expr.as_any().downcast_ref::<Column>()
-                    else {
+                    let Some(src_col) = proj_expr.expr.downcast_ref::<Column>() else {
                         continue;
                     };
                     if proj_expr.alias == cur_col_name {
