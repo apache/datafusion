@@ -1,0 +1,67 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for NestedLoopJoinExec memory-limited execution (spill to disk).
+# When the left (build) side exceeds the memory budget, the operator falls
+# back to a multi-pass strategy that spills the right side to disk.
+
+# Use a single target partition to avoid repartitioning.
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+# Set a memory limit small enough to force OOM on the left-side buffering
+# (100K rows × 8 bytes ≈ 800KB > 150KB limit), triggering spill fallback.
+statement ok
+SET datafusion.runtime.memory_limit = '150K'
+
+# --- INNER JOIN with non-equijoin predicate (forces NestedLoopJoinExec) ---
+# Verify query succeeds and produces correct results under tight memory.
+query III nosort
+SELECT count(*) as cnt, min(v1) as mn, max(v1) as mx
+FROM generate_series(1, 100000) AS t1(v1)
+INNER JOIN generate_series(1, 1) AS t2(v2)
+  ON (t1.v1 + t2.v2) > 0
+----
+100000 1 100000
+
+# --- Verify spill metrics via EXPLAIN ANALYZE ---
+# The NestedLoopJoinExec line should show spill_count=1, confirming
+# the memory-limited fallback path was taken and right side was spilled.
+query TT
+EXPLAIN ANALYZE SELECT count(*)
+FROM generate_series(1, 100000) AS t1(v1)
+INNER JOIN generate_series(1, 1) AS t2(v2)
+  ON (t1.v1 + t2.v2) > 0
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----NestedLoopJoinExec: join_type=Inner, filter=v1@0 + v2@1 > 0, projection=[], metrics=[output_rows=100.0 K, <slt:ignore> spill_count=1, <slt:ignore>]
+04)------ProjectionExec: expr=[value@0 as v1], metrics=[<slt:ignore>]
+05)--------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192], metrics=[<slt:ignore>]
+06)------ProjectionExec: expr=[value@0 as v2], metrics=[<slt:ignore>]
+07)--------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=1, batch_size=8192], metrics=[<slt:ignore>]
+
+# Restore settings to slt runner defaults
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema

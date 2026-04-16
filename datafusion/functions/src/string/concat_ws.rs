@@ -314,7 +314,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 let mut builder = StringViewArrayBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     if !sep.is_valid(i) {
-                        builder.append_offset();
+                        builder.append_offset()?;
                         continue;
                     }
                     let mut first = true;
@@ -327,15 +327,15 @@ impl ScalarUDFImpl for ConcatWsFunc {
                             first = false;
                         }
                     }
-                    builder.append_offset();
+                    builder.append_offset()?;
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
             }
             DataType::LargeUtf8 => {
                 let mut builder = LargeStringArrayBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     if !sep.is_valid(i) {
-                        builder.append_offset();
+                        builder.append_offset()?;
                         continue;
                     }
                     let mut first = true;
@@ -348,15 +348,15 @@ impl ScalarUDFImpl for ConcatWsFunc {
                             first = false;
                         }
                     }
-                    builder.append_offset();
+                    builder.append_offset()?;
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
             }
             _ => {
                 let mut builder = StringArrayBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     if !sep.is_valid(i) {
-                        builder.append_offset();
+                        builder.append_offset()?;
                         continue;
                     }
                     let mut first = true;
@@ -369,9 +369,9 @@ impl ScalarUDFImpl for ConcatWsFunc {
                             first = false;
                         }
                     }
-                    builder.append_offset();
+                    builder.append_offset()?;
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
             }
         }
     }

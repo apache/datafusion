@@ -1370,7 +1370,11 @@ impl FileSink for ParquetSink {
 
         while let Some((path, mut rx)) = file_stream_rx.recv().await {
             let parquet_props = self.create_writer_props(&runtime, &path).await?;
-            if !parquet_opts.global.allow_single_file_parallelism {
+            // CDC requires the sequential writer: the chunker state lives in ArrowWriter
+            // and persists across row groups. The parallel path bypasses ArrowWriter entirely.
+            if !parquet_opts.global.allow_single_file_parallelism
+                || parquet_opts.global.use_content_defined_chunking.is_some()
+            {
                 let mut writer = self
                     .create_async_arrow_writer(
                         &path,

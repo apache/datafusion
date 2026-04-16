@@ -27,10 +27,13 @@
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::prelude::{CsvReadOptions, ParquetReadOptions, SessionContext};
+use datafusion::prelude::{
+    CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext,
+};
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_csv::CsvFormat;
+use datafusion_datasource_json::JsonFormat;
 use futures::stream::BoxStream;
 use insta::assert_snapshot;
 use object_store::memory::InMemory;
@@ -228,6 +231,63 @@ async fn query_multi_csv_file() {
     );
 }
 
+/// Test that a CSV file split into byte ranges via repartitioning exercises
+/// range-based object store access.
+///
+/// With a single file and `target_partitions=3`, the repartitioner produces
+/// exactly 3 ranges.  For each range, `calculate_range` calls
+/// `find_first_newline` via a GET for every non-file boundary it touches
+/// (the start boundary if `start > 0`, the end boundary if `end < file_size`),
+/// plus one GET for the actual data — so 2 GETs for the first range (end scan
+/// + data), 3 for the middle range (start scan + end scan + data), and 2 for
+/// the last range (start scan + data) = 7 data GETs total.  Additionally,
+/// adjacent ranges share a boundary position, so each shared boundary is scanned
+/// twice — once as the left range's end and again as the right range's start —
+/// producing the duplicate GETs visible in the snapshot.  Add the 1 HEAD for
+/// file-size metadata = **8 total**.
+///
+/// This differs from the JSON reader which uses [`AlignedBoundaryStream`] and
+/// needs only 1 GET per range.
+///
+/// This test documents the current request pattern to catch regressions.
+#[tokio::test]
+async fn query_csv_file_with_byte_range_partitions() {
+    let test = Test::new().with_single_file_csv_for_range_test().await;
+    // Lower the repartition_file_min_size threshold so the small test file gets
+    // split, and set target_partitions=3 to produce exactly 3 ranges.
+    test.query("SET datafusion.optimizer.repartition_file_min_size = 0")
+        .await;
+    test.query("SET datafusion.execution.target_partitions = 3")
+        .await;
+    assert_snapshot!(
+        test.query("select * from csv_range_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.00001 | 1e-12 | false |
+    | 0.00002 | 2e-12 | false |
+    | 0.00003 | 3e-12 | false |
+    | 0.00004 | 4e-12 | false |
+    | 0.00005 | 5e-12 | false |
+    | 0.00006 | 6e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 8
+    - GET  (opts) path=csv_range_table.csv head=true
+    - GET  (opts) path=csv_range_table.csv range=42-129
+    - GET  (opts) path=csv_range_table.csv range=0-49
+    - GET  (opts) path=csv_range_table.csv range=42-129
+    - GET  (opts) path=csv_range_table.csv range=85-129
+    - GET  (opts) path=csv_range_table.csv range=49-89
+    - GET  (opts) path=csv_range_table.csv range=85-129
+    - GET  (opts) path=csv_range_table.csv range=89-129
+    "
+    );
+}
+
 #[tokio::test]
 async fn query_partitioned_csv_file() {
     let test = Test::new().with_partitioned_csv().await;
@@ -340,6 +400,348 @@ async fn query_partitioned_csv_file() {
     );
 }
 
+// =====================================================================
+// JSON (NDJSON) tests — mirrors the CSV tests above
+// =====================================================================
+
+#[tokio::test]
+async fn create_single_json_file() {
+    let test = Test::new().with_single_file_json().await;
+    assert_snapshot!(
+        test.requests(),
+        @r"
+    RequestCountingObjectStore()
+    Total Requests: 2
+    - GET  (opts) path=json_table.json head=true
+    - GET  (opts) path=json_table.json
+    "
+    );
+}
+
+#[tokio::test]
+async fn query_single_json_file() {
+    let test = Test::new().with_single_file_json().await;
+    assert_snapshot!(
+        test.query("select * from json_table").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.00001 | 5e-12 | true  |
+    | 0.00002 | 4e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 2
+    - GET  (opts) path=json_table.json head=true
+    - GET  (opts) path=json_table.json
+    "
+    );
+}
+
+#[tokio::test]
+async fn create_multi_file_json() {
+    let test = Test::new().with_multi_file_json().await;
+    assert_snapshot!(
+        test.requests(),
+        @r"
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - LIST prefix=data
+    - GET  (opts) path=data/file_0.json
+    - GET  (opts) path=data/file_1.json
+    - GET  (opts) path=data/file_2.json
+    "
+    );
+}
+
+#[tokio::test]
+async fn multi_query_multi_file_json() {
+    let test = Test::new().with_multi_file_json().await;
+    assert_snapshot!(
+        test.query("select * from json_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.0     | 0.0   | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00001 | 1e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00002 | 2e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
+    - GET  (opts) path=data/file_0.json
+    - GET  (opts) path=data/file_1.json
+    - GET  (opts) path=data/file_2.json
+    "
+    );
+
+    // Force a cache eviction by removing the data limit for the cache
+    assert_snapshot!(
+        test.query("set datafusion.runtime.list_files_cache_limit=\"0K\"").await,
+        @r"
+    ------- Query Output (0 rows) -------
+    ++
+    ++
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 0
+    "
+    );
+
+    // Then re-enable the cache
+    assert_snapshot!(
+        test.query("set datafusion.runtime.list_files_cache_limit=\"1M\"").await,
+        @r"
+    ------- Query Output (0 rows) -------
+    ++
+    ++
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 0
+    "
+    );
+
+    // this query should list the table since the cache entries were evicted
+    assert_snapshot!(
+        test.query("select * from json_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.0     | 0.0   | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00001 | 1e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00002 | 2e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - LIST prefix=data
+    - GET  (opts) path=data/file_0.json
+    - GET  (opts) path=data/file_1.json
+    - GET  (opts) path=data/file_2.json
+    "
+    );
+
+    // this query should not list the table since the entries were added in the previous query
+    assert_snapshot!(
+        test.query("select * from json_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.0     | 0.0   | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00001 | 1e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00002 | 2e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
+    - GET  (opts) path=data/file_0.json
+    - GET  (opts) path=data/file_1.json
+    - GET  (opts) path=data/file_2.json
+    "
+    );
+}
+
+#[tokio::test]
+async fn query_multi_json_file() {
+    let test = Test::new().with_multi_file_json().await;
+    assert_snapshot!(
+        test.query("select * from json_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.0     | 0.0   | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00001 | 1e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00002 | 2e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
+    - GET  (opts) path=data/file_0.json
+    - GET  (opts) path=data/file_1.json
+    - GET  (opts) path=data/file_2.json
+    "
+    );
+}
+
+#[tokio::test]
+async fn query_partitioned_json_file() {
+    let test = Test::new().with_partitioned_json().await;
+    assert_snapshot!(
+        test.query("select * from json_table_partitioned").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00001 | 1e-12 | true  | 1 | 10 | 100 |
+    | 0.00003 | 5e-12 | false | 1 | 10 | 100 |
+    | 0.00002 | 2e-12 | true  | 2 | 20 | 200 |
+    | 0.00003 | 5e-12 | false | 2 | 20 | 200 |
+    | 0.00003 | 3e-12 | true  | 3 | 30 | 300 |
+    | 0.00003 | 5e-12 | false | 3 | 30 | 300 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
+    - GET  (opts) path=data/a=1/b=10/c=100/file_1.json
+    - GET  (opts) path=data/a=2/b=20/c=200/file_2.json
+    - GET  (opts) path=data/a=3/b=30/c=300/file_3.json
+    "
+    );
+
+    assert_snapshot!(
+        test.query("select * from json_table_partitioned WHERE a=2").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00002 | 2e-12 | true  | 2 | 20 | 200 |
+    | 0.00003 | 5e-12 | false | 2 | 20 | 200 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 1
+    - GET  (opts) path=data/a=2/b=20/c=200/file_2.json
+    "
+    );
+
+    assert_snapshot!(
+        test.query("select * from json_table_partitioned WHERE b=20").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00002 | 2e-12 | true  | 2 | 20 | 200 |
+    | 0.00003 | 5e-12 | false | 2 | 20 | 200 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 1
+    - GET  (opts) path=data/a=2/b=20/c=200/file_2.json
+    "
+    );
+
+    assert_snapshot!(
+        test.query("select * from json_table_partitioned WHERE c=200").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00002 | 2e-12 | true  | 2 | 20 | 200 |
+    | 0.00003 | 5e-12 | false | 2 | 20 | 200 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 1
+    - GET  (opts) path=data/a=2/b=20/c=200/file_2.json
+    "
+    );
+
+    assert_snapshot!(
+        test.query("select * from json_table_partitioned WHERE a=2 AND b=20").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00002 | 2e-12 | true  | 2 | 20 | 200 |
+    | 0.00003 | 5e-12 | false | 2 | 20 | 200 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 1
+    - GET  (opts) path=data/a=2/b=20/c=200/file_2.json
+    "
+    );
+
+    assert_snapshot!(
+        test.query("select * from json_table_partitioned WHERE a<2 AND b=10 AND c=100").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00001 | 1e-12 | true  | 1 | 10 | 100 |
+    | 0.00003 | 5e-12 | false | 1 | 10 | 100 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 1
+    - GET  (opts) path=data/a=1/b=10/c=100/file_1.json
+    "
+    );
+}
+
+/// Test that a JSON file split into byte ranges via repartitioning produces
+/// exactly one GET request per byte range — no extra requests for boundary seeking.
+///
+/// With a single file and `target_partitions=3`, the repartitioner produces
+/// exactly 3 ranges.  Each range is served by a single [`AlignedBoundaryStream`]
+/// which issues exactly one bounded `get_opts` call, so there are 3 data GETs
+/// plus 1 HEAD (to determine file size) = **4 total**.
+///
+/// This differs from the CSV reader, which needs multiple GETs per range.
+///
+/// This test documents the current request pattern to catch regressions.
+#[tokio::test]
+async fn query_json_file_with_byte_range_partitions() {
+    let test = Test::new().with_single_file_json_for_range_test().await;
+    // Lower the repartition_file_min_size threshold so the small test file gets
+    // split, and set target_partitions=3 to produce exactly 3 ranges.
+    test.query("SET datafusion.optimizer.repartition_file_min_size = 0")
+        .await;
+    test.query("SET datafusion.execution.target_partitions = 3")
+        .await;
+    assert_snapshot!(
+        test.query("select * from json_range_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+------+
+    | c1      | c2    | c3   |
+    +---------+-------+------+
+    | 0.00001 | 1e-12 | true |
+    | 0.00002 | 2e-12 | true |
+    | 0.00003 | 3e-12 | true |
+    | 0.00004 | 4e-12 | true |
+    | 0.00005 | 5e-12 | true |
+    | 0.00006 | 6e-12 | true |
+    +---------+-------+------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - GET  (opts) path=json_range_table.json head=true
+    - GET  (opts) path=json_range_table.json range=0-216
+    - GET  (opts) path=json_range_table.json range=71-216
+    - GET  (opts) path=json_range_table.json range=143-216
+    "
+    );
+}
+
 #[tokio::test]
 async fn create_single_parquet_file_default() {
     // The default metadata size hint is 512KB
@@ -353,7 +755,7 @@ async fn create_single_parquet_file_default() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (opts) path=parquet_table.parquet range=0-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=0-2994
     "
     );
 }
@@ -372,7 +774,7 @@ async fn create_single_parquet_file_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (opts) path=parquet_table.parquet range=1994-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=1994-2994
     "
     );
 }
@@ -401,9 +803,9 @@ async fn create_single_parquet_file_too_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 4
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (opts) path=parquet_table.parquet range=2494-2994
-    - GET  (opts) path=parquet_table.parquet range=2264-2986
-    - GET  (opts) path=parquet_table.parquet range=2124-2264
+    - GET  (ranges) path=parquet_table.parquet ranges=2494-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=2264-2986
+    - GET  (ranges) path=parquet_table.parquet ranges=2124-2264
     "
     );
 }
@@ -433,8 +835,8 @@ async fn create_single_parquet_file_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 3
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (opts) path=parquet_table.parquet range=2254-2994
-    - GET  (opts) path=parquet_table.parquet range=2124-2264
+    - GET  (ranges) path=parquet_table.parquet ranges=2254-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=2124-2264
     "
     );
 }
@@ -457,7 +859,7 @@ async fn create_single_parquet_file_no_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (opts) path=parquet_table.parquet range=0-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=0-2994
     "
     );
 }
@@ -684,6 +1086,116 @@ impl Test {
         }
         // register table
         self.register_partitioned_csv("csv_table_partitioned", "/data/")
+            .await
+    }
+
+    /// Register a single CSV file with six equal-length rows for byte-range
+    /// repartitioning tests. With a single file and `target_partitions=3`, the
+    /// repartitioner creates exactly 3 ranges.
+    async fn with_single_file_csv_for_range_test(self) -> Test {
+        let csv_data = "c1,c2,c3\n\
+                        0.00001,1e-12,false\n\
+                        0.00002,2e-12,false\n\
+                        0.00003,3e-12,false\n\
+                        0.00004,4e-12,false\n\
+                        0.00005,5e-12,false\n\
+                        0.00006,6e-12,false\n";
+        self.with_bytes("/csv_range_table.csv", csv_data)
+            .await
+            .register_csv("csv_range_table", "/csv_range_table.csv")
+            .await
+    }
+
+    /// Register a JSON (NDJSON) file at the given path
+    async fn register_json(self, table_name: &str, path: &str) -> Self {
+        let url = format!("mem://{path}");
+        self.session_context
+            .register_json(table_name, url, JsonReadOptions::default())
+            .await
+            .unwrap();
+        self
+    }
+
+    /// Register a partitioned JSON table at the given path
+    async fn register_partitioned_json(self, table_name: &str, path: &str) -> Self {
+        let file_format = Arc::new(JsonFormat::default());
+        let options = ListingOptions::new(file_format);
+
+        let url = format!("mem://{path}").parse().unwrap();
+        let table_url = ListingTableUrl::try_new(url, None).unwrap();
+
+        let session_state = self.session_context.state();
+        let mut config = ListingTableConfig::new(table_url).with_listing_options(options);
+        config = config
+            .infer_partitions_from_path(&session_state)
+            .await
+            .unwrap();
+        config = config.infer_schema(&session_state).await.unwrap();
+
+        let table = Arc::new(ListingTable::try_new(config).unwrap());
+        self.session_context
+            .register_table(table_name, table)
+            .unwrap();
+        self
+    }
+
+    /// Register a single NDJSON file with three columns and two rows named `json_table`
+    async fn with_single_file_json(self) -> Test {
+        let json_data = "{\"c1\":0.00001,\"c2\":5e-12,\"c3\":true}\n\
+                         {\"c1\":0.00002,\"c2\":4e-12,\"c3\":false}\n";
+        self.with_bytes("/json_table.json", json_data)
+            .await
+            .register_json("json_table", "/json_table.json")
+            .await
+    }
+
+    /// Register a single NDJSON file with six equal-length rows for byte-range
+    /// repartitioning tests. With a single file and `target_partitions=3`, the
+    /// repartitioner creates exactly 3 ranges.
+    async fn with_single_file_json_for_range_test(self) -> Test {
+        let json_data = r#"{"c1":0.00001,"c2":1e-12,"c3":true}
+{"c1":0.00002,"c2":2e-12,"c3":true}
+{"c1":0.00003,"c2":3e-12,"c3":true}
+{"c1":0.00004,"c2":4e-12,"c3":true}
+{"c1":0.00005,"c2":5e-12,"c3":true}
+{"c1":0.00006,"c2":6e-12,"c3":true}
+"#;
+        self.with_bytes("/json_range_table.json", json_data)
+            .await
+            .register_json("json_range_table", "/json_range_table.json")
+            .await
+    }
+
+    /// Register three NDJSON files in a directory, called `json_table`
+    async fn with_multi_file_json(mut self) -> Test {
+        for i in 0..3 {
+            let json_data = format!(
+                "{{\"c1\":0.0000{i},\"c2\":{i}e-12,\"c3\":true}}\n\
+                 {{\"c1\":0.00003,\"c2\":5e-12,\"c3\":false}}\n"
+            );
+            self = self
+                .with_bytes(&format!("/data/file_{i}.json"), json_data)
+                .await;
+        }
+        self.register_json("json_table", "/data/").await
+    }
+
+    /// Register three NDJSON files in a partitioned directory structure, called
+    /// `json_table_partitioned`
+    async fn with_partitioned_json(mut self) -> Test {
+        for i in 1..4 {
+            let json_data = format!(
+                "{{\"d1\":0.0000{i},\"d2\":{i}e-12,\"d3\":true}}\n\
+                 {{\"d1\":0.00003,\"d2\":5e-12,\"d3\":false}}\n"
+            );
+            self = self
+                .with_bytes(
+                    &format!("/data/a={i}/b={}/c={}/file_{i}.json", i * 10, i * 100),
+                    json_data,
+                )
+                .await;
+        }
+        self.register_partitioned_json("json_table_partitioned", "/data/")
             .await
     }
 

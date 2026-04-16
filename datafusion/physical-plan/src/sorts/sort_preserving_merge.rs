@@ -17,7 +17,6 @@
 
 //! [`SortPreservingMergeExec`] merges multiple sorted streams into one sorted stream.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
@@ -235,10 +234,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -255,7 +250,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             metrics: self.metrics.clone(),
             fetch: limit,
             cache: Arc::clone(&self.cache),
-            enable_round_robin_repartition: true,
+            enable_round_robin_repartition: self.enable_round_robin_repartition,
         }))
     }
 
@@ -1417,9 +1412,6 @@ mod tests {
     impl ExecutionPlan for CongestedExec {
         fn name(&self) -> &'static str {
             Self::static_name()
-        }
-        fn as_any(&self) -> &dyn Any {
-            self
         }
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache

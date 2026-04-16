@@ -1114,7 +1114,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => {
                 let provider = source_as_provider(source)?;
                 let schema = provider.schema();
-                let source = provider.as_any();
 
                 let projection = match projection {
                     None => None,
@@ -1132,7 +1131,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let filters: Vec<protobuf::LogicalExprNode> =
                     serialize_exprs(filters, extension_codec)?;
 
-                if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
+                if let Some(listing_table) = provider.downcast_ref::<ListingTable>() {
                     let any = listing_table.options().format.as_any();
                     let file_format_type = {
                         let mut maybe_some_type = None;
@@ -1246,7 +1245,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         )),
                     })
-                } else if let Some(view_table) = source.downcast_ref::<ViewTable>() {
+                } else if let Some(view_table) = provider.downcast_ref::<ViewTable>() {
                     let schema: protobuf::Schema = schema.as_ref().try_into()?;
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
@@ -1267,7 +1266,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         ))),
                     })
-                } else if let Some(cte_work_table) = source.downcast_ref::<CteWorkTable>()
+                } else if let Some(cte_work_table) =
+                    provider.downcast_ref::<CteWorkTable>()
                 {
                     let name = cte_work_table.name().to_string();
                     let schema = cte_work_table.schema();

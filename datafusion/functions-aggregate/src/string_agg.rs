@@ -120,7 +120,7 @@ impl StringAgg {
 
     /// Extract the delimiter string from the second argument expression.
     fn extract_delimiter(args: &AccumulatorArgs) -> Result<String> {
-        let Some(lit) = args.exprs[1].as_any().downcast_ref::<Literal>() else {
+        let Some(lit) = args.exprs[1].downcast_ref::<Literal>() else {
             return not_impl_err!("string_agg delimiter must be a string literal");
         };
 

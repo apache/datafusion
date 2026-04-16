@@ -440,6 +440,7 @@ where
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
     }
 
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
         for i in 0..values[0].len() {

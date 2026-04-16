@@ -137,6 +137,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(_) => Ok(Transformed::no(plan)),
+            // Subquery nodes are scope boundaries for correlation. A nested
+            // Subquery's outer references belong to a different decorrelation
+            // level and must not be pulled up into the current scope.
+            LogicalPlan::Subquery(_) => {
+                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            }
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 if plan_hold_outer {

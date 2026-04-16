@@ -547,7 +547,7 @@ async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
         type Node = Arc<dyn ExecutionPlan>;
 
         fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-            if let Some(exec) = node.as_any().downcast_ref::<AggregateExec>() {
+            if let Some(exec) = node.downcast_ref::<AggregateExec>() {
                 if self.expected_sort {
                     assert!(matches!(
                         exec.input_order_mode(),

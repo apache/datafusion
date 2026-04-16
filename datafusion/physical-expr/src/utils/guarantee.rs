@@ -93,6 +93,7 @@ impl LiteralGuarantee {
     /// Create a new instance of the guarantee if the provided operator is
     /// supported. Returns None otherwise. See [`LiteralGuarantee::analyze`] to
     /// create these structures from an predicate (boolean expression).
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn new<'a>(
         column_name: impl Into<String>,
         guarantee: Guarantee,
@@ -125,9 +126,8 @@ impl LiteralGuarantee {
             .fold(GuaranteeBuilder::new(), |builder, expr| {
                 if let Some(cel) = ColOpLit::try_new(expr) {
                     builder.aggregate_conjunct(&cel)
-                } else if let Some(inlist) = expr
-                    .as_any()
-                    .downcast_ref::<crate::expressions::InListExpr>()
+                } else if let Some(inlist) =
+                    expr.downcast_ref::<crate::expressions::InListExpr>()
                 {
                     if let Some(inlist) = ColInList::try_new(inlist) {
                         builder.aggregate_multi_conjunct(
@@ -309,6 +309,7 @@ impl<'a> GuaranteeBuilder<'a> {
     /// * `AND (a IN (1,2,3))`: a is in (1, 2, or 3)
     /// * `AND (a != 1 OR a != 2 OR a != 3)`: a is not in (1, 2, or 3)
     /// * `AND (a NOT IN (1,2,3))`: a is not in (1, 2, or 3)
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn aggregate_multi_conjunct(
         mut self,
         col: &'a crate::expressions::Column,
@@ -391,15 +392,10 @@ impl<'a> ColOpLit<'a> {
     ///
     /// Returns None otherwise
     fn try_new(expr: &'a Arc<dyn PhysicalExpr>) -> Option<Self> {
-        let binary_expr = expr
-            .as_any()
-            .downcast_ref::<crate::expressions::BinaryExpr>()?;
+        let binary_expr = expr.downcast_ref::<crate::expressions::BinaryExpr>()?;
 
-        let (left, op, right) = (
-            binary_expr.left().as_any(),
-            binary_expr.op(),
-            binary_expr.right().as_any(),
-        );
+        let (left, op, right) =
+            (binary_expr.left(), binary_expr.op(), binary_expr.right());
         let guarantee = match op {
             Operator::Eq => Guarantee::In,
             Operator::NotEq => Guarantee::NotIn,
@@ -447,15 +443,12 @@ impl<'a> ColInList<'a> {
     /// Returns None otherwise
     fn try_new(inlist: &'a crate::expressions::InListExpr) -> Option<Self> {
         // Only support single-column inlist currently, multi-column inlist is not supported
-        let col = inlist
-            .expr()
-            .as_any()
-            .downcast_ref::<crate::expressions::Column>()?;
+        let col = inlist.expr().downcast_ref::<crate::expressions::Column>()?;
 
         let literals = inlist
             .list()
             .iter()
-            .map(|e| e.as_any().downcast_ref::<crate::expressions::Literal>())
+            .map(|e| e.downcast_ref::<crate::expressions::Literal>())
             .collect::<Option<Vec<_>>>()?;
 
         let guarantee = if inlist.negated() {
@@ -480,10 +473,7 @@ enum ColOpLitOrInList<'a> {
 
 impl<'a> ColOpLitOrInList<'a> {
     fn try_new(expr: &'a Arc<dyn PhysicalExpr>) -> Option<Self> {
-        match expr
-            .as_any()
-            .downcast_ref::<crate::expressions::InListExpr>()
-        {
+        match expr.downcast_ref::<crate::expressions::InListExpr>() {
             Some(inlist) => Some(Self::ColInList(ColInList::try_new(inlist)?)),
             None => ColOpLit::try_new(expr).map(Self::ColOpLit),
         }

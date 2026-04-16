@@ -229,10 +229,6 @@ struct ParquetMetadataTable {
 
 #[async_trait]
 impl TableProvider for ParquetMetadataTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -479,10 +475,6 @@ struct MetadataCacheTable {
 
 #[async_trait]
 impl TableProvider for MetadataCacheTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -598,10 +590,6 @@ struct StatisticsCacheTable {
 
 #[async_trait]
 impl TableProvider for StatisticsCacheTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -734,10 +722,6 @@ struct ListFilesCacheTable {
 
 #[async_trait]
 impl TableProvider for ListFilesCacheTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

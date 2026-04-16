@@ -536,7 +536,7 @@ mod tests {
         let root = root.to_string_lossy();
 
         let url = ListingTableUrl::parse(root).unwrap();
-        let child = url.prefix.child("partition").child("file");
+        let child = url.prefix.clone().join("partition").join("file");
 
         let prefix: Vec<_> = url.strip_prefix(&child).unwrap().collect();
         assert_eq!(prefix, vec!["partition", "file"]);

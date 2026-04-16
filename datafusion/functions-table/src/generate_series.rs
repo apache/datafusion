@@ -443,10 +443,6 @@ fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
 
 #[async_trait]
 impl TableProvider for GenerateSeriesTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
