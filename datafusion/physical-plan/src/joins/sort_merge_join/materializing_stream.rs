@@ -1460,7 +1460,7 @@ impl MaterializingSortMergeJoinStream {
                             let idx = right.value(i) as usize;
                             match buffered_batch.join_filter_status[idx] {
                                 FilterState::SomePassed => {}
-                                _ if pre_mask.value(offset + i) => {
+                                _ if mask.value(offset + i) => {
                                     buffered_batch.join_filter_status[idx] =
                                         FilterState::SomePassed;
                                 }
