@@ -646,7 +646,9 @@ impl SharedBuildAccumulator {
                     }
                 } else if real_branches.is_empty() {
                     lit(false)
-                } else if num_partitions == 1 {
+                } else if real_branches.len() == 1
+                    && empty_partition_ids.len() + 1 == num_partitions
+                {
                     Arc::clone(&real_branches[0].1)
                 } else {
                     Arc::new(CaseExpr::try_new(
