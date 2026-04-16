@@ -978,14 +978,7 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Aggregate(mut agg) => {
                 // We can push down Predicate which in groupby_expr.
-                let group_expr_columns: HashSet<Column> = agg
-                    .group_expr
-                    .iter()
-                    .map(|expr| {
-                        let (relation, name) = expr.qualified_name();
-                        Column::new(relation, name)
-                    })
-                    .collect();
+                let group_expr_columns = expr_columns(&agg.group_expr);
 
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
@@ -1037,14 +1030,7 @@ impl OptimizerRule for PushDownFilter {
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
                 fn extract_partition_keys(func: &WindowFunction) -> HashSet<Column> {
-                    func.params
-                        .partition_by
-                        .iter()
-                        .map(|expr| {
-                            let (relation, name) = expr.qualified_name();
-                            Column::new(relation, name)
-                        })
-                        .collect()
+                    expr_columns(&func.params.partition_by)
                 }
 
                 let potential_partition_keys = window
@@ -1397,6 +1383,16 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
     } else {
         plan
     }
+}
+
+fn expr_columns(exprs: &[Expr]) -> HashSet<Column> {
+    exprs
+        .iter()
+        .map(|expr| {
+            let (relation, name) = expr.qualified_name();
+            Column::new(relation, name)
+        })
+        .collect()
 }
 
 #[cfg(test)]
