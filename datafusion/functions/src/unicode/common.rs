@@ -120,26 +120,26 @@ pub(crate) fn general_left_right<F: LeftRightSlicer>(
     }
 }
 
-/// Returns true if all offsets in the array fit in u32, meaning the values
-/// buffer can be referenced by StringView's u32 offset field.
-fn values_fit_in_u32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -> bool {
+/// Returns true if all offsets in the array fit in i32, meaning the values
+/// buffer can be referenced by StringView's offset field.
+fn values_fit_in_i32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -> bool {
     string_array
         .offsets()
         .last()
-        .map(|offset| offset.as_usize() <= u32::MAX as usize)
+        .map(|offset| offset.as_usize() <= i32::MAX as usize)
         .unwrap_or(true)
 }
 
 /// `left`/`right` for Utf8/LargeUtf8 input.
 ///
-/// When offsets fit in u32, produces a zero-copy `StringViewArray` with views
+/// When offsets fit in i32, produces a zero-copy `StringViewArray` with views
 /// pointing into the input values buffer. Otherwise falls back to building a
 /// `StringViewArray` by copying.
 fn general_left_right_array<T: OffsetSizeTrait, F: LeftRightSlicer>(
     string_array: &GenericStringArray<T>,
     n_array: &Int64Array,
 ) -> Result<ArrayRef> {
-    if !values_fit_in_u32(string_array) {
+    if !values_fit_in_i32(string_array) {
         let result = string_array
             .iter()
             .zip(n_array.iter())
@@ -159,7 +159,7 @@ fn general_left_right_array<T: OffsetSizeTrait, F: LeftRightSlicer>(
     let mut has_out_of_line = false;
 
     for (i, offset) in offsets.iter().enumerate().take(len) {
-        if nulls.as_ref().is_some_and(|n| !n.is_valid(i)) {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
             views_buf.push(0);
             continue;
         }
@@ -188,7 +188,7 @@ fn general_left_right_array<T: OffsetSizeTrait, F: LeftRightSlicer>(
     // - Each view is produced by `make_view` with correct bytes and offset
     // - Out-of-line views reference buffer index 0, which is the original
     //   values buffer included in data_buffers when has_out_of_line is true
-    // - values_fit_in_u32 guarantees all offsets fit in u32
+    // - values_fit_in_i32 guarantees all offsets fit in i32
     unsafe {
         let array = StringViewArray::new_unchecked(views, data_buffers, nulls);
         Ok(Arc::new(array) as ArrayRef)
@@ -207,7 +207,7 @@ fn general_left_right_view<F: LeftRightSlicer>(
 
     let new_views = (0..len)
         .map(|idx| {
-            if new_nulls.as_ref().is_some_and(|n| !n.is_valid(idx)) {
+            if new_nulls.as_ref().is_some_and(|n| n.is_null(idx)) {
                 return 0;
             }
 
