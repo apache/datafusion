@@ -326,8 +326,6 @@ impl FilterExec {
         let total_byte_size = input_stats.total_byte_size;
 
         let (selectivity, mut column_statistics) = if is_infeasible {
-            // Contradictory equality predicates (e.g. `a = 1 AND a = 2`)
-            // can never be satisfied.
             (0.0, input_stats.to_inexact().column_statistics)
         } else if !check_support(predicate, schema) {
             (
@@ -340,17 +338,22 @@ impl FilterExec {
                 &input_stats.column_statistics,
             )?;
             let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
+            let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
+            let filtered_num_rows = num_rows.with_estimated_selectivity(selectivity);
             (
-                analysis_ctx.selectivity.unwrap_or(1.0),
+                selectivity,
                 collect_new_statistics(
                     schema,
                     &input_stats.column_statistics,
                     analysis_ctx.boundaries,
+                    match &filtered_num_rows {
+                        Precision::Absent => None,
+                        p => Some(*p),
+                    },
                 ),
             )
         };
 
-        // Estimate (inexact) selectivity of predicate
         let num_rows = num_rows.with_estimated_selectivity(selectivity);
         let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
@@ -802,7 +805,7 @@ fn collect_equality_columns(
     let mut infeasible = false;
 
     for expr in split_conjunction(predicate) {
-        let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() else {
+        let Some(binary) = expr.downcast_ref::<BinaryExpr>() else {
             continue;
         };
         if *binary.op() != Operator::Eq {
@@ -810,13 +813,13 @@ fn collect_equality_columns(
         }
         let left = binary.left();
         let right = binary.right();
-        let pair = if let Some(col) = left.as_any().downcast_ref::<Column>()
-            && let Some(lit) = right.as_any().downcast_ref::<Literal>()
+        let pair = if let Some(col) = left.downcast_ref::<Column>()
+            && let Some(lit) = right.downcast_ref::<Literal>()
             && !lit.value().is_null()
         {
             Some((col.index(), lit.value().clone()))
-        } else if let Some(col) = right.as_any().downcast_ref::<Column>()
-            && let Some(lit) = left.as_any().downcast_ref::<Literal>()
+        } else if let Some(col) = right.downcast_ref::<Column>()
+            && let Some(lit) = left.downcast_ref::<Literal>()
             && !lit.value().is_null()
         {
             Some((col.index(), lit.value().clone()))
@@ -861,6 +864,7 @@ fn collect_new_statistics(
     schema: &SchemaRef,
     input_column_stats: &[ColumnStatistics],
     analysis_boundaries: Vec<ExprBoundaries>,
+    filtered_num_rows: Option<Precision<usize>>,
 ) -> Vec<ColumnStatistics> {
     analysis_boundaries
         .into_iter()
@@ -896,11 +900,15 @@ fn collect_new_statistics(
                 let min_value = interval_bound_to_precision(lower, is_single_value);
                 let max_value = interval_bound_to_precision(upper, is_single_value);
                 // When the interval collapses to a single value (equality
-                // predicate), the column has exactly 1 distinct value
+                // predicate), the column has exactly 1 distinct value.
+                // Otherwise, cap NDV at the filtered row count.
                 let capped_distinct_count = if is_single_value {
                     Precision::Exact(1)
                 } else {
-                    distinct_count.to_inexact()
+                    match filtered_num_rows {
+                        Some(rows) => distinct_count.to_inexact().min(&rows),
+                        None => distinct_count.to_inexact(),
+                    }
                 };
                 ColumnStatistics {
                     null_count: input_column_stats[idx].null_count.to_inexact(),
@@ -1091,7 +1099,7 @@ fn collect_columns_from_predicate_inner(
 
     let predicates = split_conjunction(predicate);
     predicates.into_iter().for_each(|p| {
-        if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary) = p.downcast_ref::<BinaryExpr>() {
             // Only extract pairs where at least one side is a Column reference.
             // Pairs like `complex_expr = literal` should not create equivalence
             // classes — the literal could appear in many unrelated expressions
@@ -1100,8 +1108,8 @@ fn collect_columns_from_predicate_inner(
             // sort orderings. Constant propagation for such pairs is handled
             // separately by `extend_constants`.
             let has_direct_column_operand =
-                binary.left().as_any().downcast_ref::<Column>().is_some()
-                    || binary.right().as_any().downcast_ref::<Column>().is_some();
+                binary.left().downcast_ref::<Column>().is_some()
+                    || binary.right().downcast_ref::<Column>().is_some();
             if !has_direct_column_operand {
                 return;
             }
@@ -2584,6 +2592,255 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_filter_statistics_and_equality_ndv() -> Result<()> {
+        // a: min=1, max=100, ndv=80
+        // b: min=1, max=50, ndv=40
+        // c: min=1, max=200, ndv=150
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(1200),
+                column_statistics: vec![
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                        distinct_count: Precision::Inexact(80),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(50))),
+                        distinct_count: Precision::Inexact(40),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(200))),
+                        distinct_count: Precision::Inexact(150),
+                        ..Default::default()
+                    },
+                ],
+            },
+            schema.clone(),
+        ));
+
+        // a = 42 AND b > 10 AND c = 7
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                )),
+                Operator::And,
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("b", 1)),
+                    Operator::Gt,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+                )),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c", 2)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(7)))),
+            )),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        // a = 42 collapses to single value
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        // b > 10 narrows to [11, 50] but doesn't collapse to a single value.
+        // The combined selectivity of a=42 (1/80) and c=7 (1/150) on 100 rows
+        // computes num_rows = 1, so NDV is capped at the row count: min(40, 1) = 1.
+        assert_eq!(
+            statistics.column_statistics[1].distinct_count,
+            Precision::Inexact(1)
+        );
+        // c = 7 collapses to single value
+        assert_eq!(
+            statistics.column_statistics[2].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_absent_bounds_ndv() -> Result<()> {
+        // a: ndv=80, no min/max
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(400),
+                column_statistics: vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(80),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // a = 42: even without known bounds, interval analysis resolves
+        // the equality to [42, 42], so NDV is correctly set to Exact(1)
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_int8_ndv() -> Result<()> {
+        // a: min=-100, max=100, ndv=50
+        let schema = Schema::new(vec![Field::new("a", DataType::Int8, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(100),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int8(Some(-100))),
+                    max_value: Precision::Inexact(ScalarValue::Int8(Some(100))),
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int8(Some(42)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_int64_ndv() -> Result<()> {
+        // a: min=0, max=1_000_000, ndv=100_000
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100_000),
+                total_byte_size: Precision::Inexact(800_000),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int64(Some(0))),
+                    max_value: Precision::Inexact(ScalarValue::Int64(Some(1_000_000))),
+                    distinct_count: Precision::Inexact(100_000),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_float32_ndv() -> Result<()> {
+        // a: min=0.0, max=100.0, ndv=50
+        let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(400),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Float32(Some(0.0))),
+                    max_value: Precision::Inexact(ScalarValue::Float32(Some(100.0))),
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Float32(Some(42.5)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_reversed_ndv() -> Result<()> {
+        // a: min=1, max=100, ndv=80
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(400),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                    distinct_count: Precision::Inexact(80),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // 42 = a (literal on the left)
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+            Operator::Eq,
+            Arc::new(Column::new("a", 0)),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_collect_equality_columns() {
         use std::collections::HashSet;
@@ -2846,6 +3103,43 @@ mod tests {
         assert_eq!(out_schema.fields().len(), 2);
         assert_eq!(out_schema.field(0).name(), "ts");
         assert_eq!(out_schema.field(1).name(), "tokens");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_ndv_capped_at_row_count() -> Result<()> {
+        // Table: a: min=1, max=100, distinct_count=80, 100 rows
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(400),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                    distinct_count: Precision::Inexact(80),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // a <= 10 => ~10 rows out of 100
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("a", &schema)?, Operator::LtEq, lit(10i32), &schema)?;
+
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let statistics = filter.partition_statistics(None)?;
+        // Filter estimates ~10 rows (selectivity = 10/100)
+        assert_eq!(statistics.num_rows, Precision::Inexact(10));
+        // NDV should be capped at the filtered row count (10), not the original 80
+        let ndv = &statistics.column_statistics[0].distinct_count;
+        assert!(
+            ndv.get_value().copied() <= Some(10),
+            "Expected NDV <= 10 (filtered row count), got {ndv:?}"
+        );
         Ok(())
     }
 }

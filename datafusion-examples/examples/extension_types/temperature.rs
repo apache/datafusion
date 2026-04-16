@@ -21,7 +21,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{Float32Type, Float64Type};
 use arrow::util::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
-use arrow_schema::extension::ExtensionType;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
@@ -30,8 +30,9 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::internal_err;
 use datafusion_common::types::DFExtensionType;
 use datafusion_expr::registry::{
-    DefaultExtensionTypeRegistration, ExtensionTypeRegistry, MemoryExtensionTypeRegistry,
+    ExtensionTypeRegistration, ExtensionTypeRegistry, MemoryExtensionTypeRegistry,
 };
+use std::collections::HashMap;
 use std::fmt::{Display, Write};
 use std::sync::Arc;
 
@@ -50,13 +51,15 @@ fn create_session_context() -> Result<SessionContext> {
     let registry = MemoryExtensionTypeRegistry::new_empty();
 
     // The registration creates a new instance of the extension type with the deserialized metadata.
-    let temp_registration =
-        DefaultExtensionTypeRegistration::new_arc(|storage_type, metadata| {
-            Ok(TemperatureExtensionType::new(
-                storage_type.clone(),
-                metadata,
-            ))
-        });
+    let temp_registration = ExtensionTypeRegistration::new_arc(
+        TemperatureExtensionType::NAME,
+        |storage_type, metadata| {
+            Ok(Arc::new(TemperatureExtensionType::try_new(
+                storage_type,
+                TemperatureUnit::deserialize(metadata)?,
+            )?))
+        },
+    );
     registry.add_extension_type_registration(temp_registration)?;
 
     let state = SessionStateBuilder::default()
@@ -96,24 +99,13 @@ async fn register_temperature_table(ctx: &SessionContext) -> Result<DataFrame> {
 fn example_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("city", DataType::Utf8, false),
-        Field::new("celsius", DataType::Float64, false).with_extension_type(
-            TemperatureExtensionType::new(DataType::Float64, TemperatureUnit::Celsius),
-        ),
-        Field::new("fahrenheit", DataType::Float64, false).with_extension_type(
-            TemperatureExtensionType::new(DataType::Float64, TemperatureUnit::Fahrenheit),
-        ),
-        Field::new("kelvin", DataType::Float32, false).with_extension_type(
-            TemperatureExtensionType::new(DataType::Float32, TemperatureUnit::Kelvin),
-        ),
+        Field::new("celsius", DataType::Float64, false)
+            .with_metadata(create_metadata(TemperatureUnit::Celsius)),
+        Field::new("fahrenheit", DataType::Float64, false)
+            .with_metadata(create_metadata(TemperatureUnit::Fahrenheit)),
+        Field::new("kelvin", DataType::Float32, false)
+            .with_metadata(create_metadata(TemperatureUnit::Kelvin)),
     ]))
-}
-
-/// Represents the unit of a temperature reading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TemperatureUnit {
-    Celsius,
-    Fahrenheit,
-    Kelvin,
 }
 
 /// Represents a float that semantically represents a temperature. The temperature can be one of
@@ -143,46 +135,57 @@ pub struct TemperatureExtensionType {
 }
 
 impl TemperatureExtensionType {
+    /// The name of the extension type.
+    pub const NAME: &'static str = "custom.temperature";
+
     /// Creates a new [`TemperatureExtensionType`].
-    pub fn new(storage_type: DataType, temperature_unit: TemperatureUnit) -> Self {
-        Self {
-            storage_type,
-            temperature_unit,
+    pub fn try_new(
+        storage_type: &DataType,
+        temperature_unit: TemperatureUnit,
+    ) -> Result<Self, ArrowError> {
+        match storage_type {
+            DataType::Float32 | DataType::Float64 => {}
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Invalid data type: {storage_type} for temperature type, expected Float32 or Float64",
+                )));
+            }
         }
+
+        let result = Self {
+            storage_type: storage_type.clone(),
+            temperature_unit,
+        };
+        Ok(result)
     }
 }
 
-/// Implementation of [`ExtensionType`] for [`TemperatureExtensionType`].
-///
-/// This implements the arrow-rs trait for reading, writing, and validating extension types.
-impl ExtensionType for TemperatureExtensionType {
-    /// Arrow extension type name that is stored in the `ARROW:extension:name` field.
-    const NAME: &'static str = "custom.temperature";
-    type Metadata = TemperatureUnit;
+/// Represents the unit of a temperature reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemperatureUnit {
+    Celsius,
+    Fahrenheit,
+    Kelvin,
+}
 
-    fn metadata(&self) -> &Self::Metadata {
-        &self.temperature_unit
-    }
-
+impl TemperatureUnit {
     /// Arrow extension type metadata is encoded as a string and stored using the
     /// `ARROW:extension:metadata` key. As we only store the name of the unit, a simple string
     /// suffices. Extension types can store more complex metadata using serialization formats like
     /// JSON.
-    fn serialize_metadata(&self) -> Option<String> {
-        let s = match self.temperature_unit {
+    pub fn serialize(self) -> String {
+        let result = match self {
             TemperatureUnit::Celsius => "celsius",
             TemperatureUnit::Fahrenheit => "fahrenheit",
             TemperatureUnit::Kelvin => "kelvin",
         };
-        Some(s.to_string())
+        result.to_owned()
     }
 
-    /// Inverse operation of [`Self::serialize_metadata`]. This creates the [`TemperatureUnit`]
+    /// Inverse operation of [`TemperatureUnit::serialize`]. This creates the [`TemperatureUnit`]
     /// value from the serialized string.
-    fn deserialize_metadata(
-        metadata: Option<&str>,
-    ) -> std::result::Result<Self::Metadata, ArrowError> {
-        match metadata {
+    pub fn deserialize(value: Option<&str>) -> std::result::Result<Self, ArrowError> {
+        match value {
             Some("celsius") => Ok(TemperatureUnit::Celsius),
             Some("fahrenheit") => Ok(TemperatureUnit::Fahrenheit),
             Some("kelvin") => Ok(TemperatureUnit::Kelvin),
@@ -194,28 +197,18 @@ impl ExtensionType for TemperatureExtensionType {
             )),
         }
     }
+}
 
-    /// Checks that the extension type supports a given [`DataType`].
-    fn supports_data_type(
-        &self,
-        data_type: &DataType,
-    ) -> std::result::Result<(), ArrowError> {
-        match data_type {
-            DataType::Float32 | DataType::Float64 => Ok(()),
-            _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Invalid data type: {data_type} for temperature type, expected Float32 or Float64",
-            ))),
-        }
-    }
-
-    fn try_new(
-        data_type: &DataType,
-        metadata: Self::Metadata,
-    ) -> std::result::Result<Self, ArrowError> {
-        let instance = Self::new(data_type.clone(), metadata);
-        instance.supports_data_type(data_type)?;
-        Ok(instance)
-    }
+/// This creates a metadata map for the temperature type. Another way of writing the metadata can be
+/// implemented using arrow-rs' [`ExtensionType`](arrow_schema::extension::ExtensionType) trait.
+fn create_metadata(unit: TemperatureUnit) -> HashMap<String, String> {
+    HashMap::from([
+        (
+            EXTENSION_TYPE_NAME_KEY.to_owned(),
+            TemperatureExtensionType::NAME.to_owned(),
+        ),
+        (EXTENSION_TYPE_METADATA_KEY.to_owned(), unit.serialize()),
+    ])
 }
 
 /// Implementation of [`DFExtensionType`] for [`TemperatureExtensionType`].
@@ -227,7 +220,7 @@ impl DFExtensionType for TemperatureExtensionType {
     }
 
     fn serialize_metadata(&self) -> Option<String> {
-        ExtensionType::serialize_metadata(self)
+        Some(self.temperature_unit.serialize())
     }
 
     fn create_array_formatter<'fmt>(

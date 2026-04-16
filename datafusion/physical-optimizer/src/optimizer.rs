@@ -39,6 +39,7 @@ use crate::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
+use crate::window_topn::WindowTopN;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
@@ -183,6 +184,11 @@ impl PhysicalOptimizer {
             Arc::new(EnforceSorting::new()),
             // Run once after the local sorting requirement is changed
             Arc::new(OptimizeAggregateOrder::new()),
+            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER) → Sort
+            // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
+            // Must run after EnforceSorting (which inserts SortExec) and before
+            // ProjectionPushdown (which embeds projections into FilterExec).
+            Arc::new(WindowTopN::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
@@ -221,7 +227,7 @@ impl PhysicalOptimizer {
             Arc::new(PushdownSort::new()),
             Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
-            // Therefore it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
+            // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new_post_optimization()),
             // The SanityCheckPlan rule checks whether the order and

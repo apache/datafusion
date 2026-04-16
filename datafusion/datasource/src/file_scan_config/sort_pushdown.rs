@@ -389,7 +389,7 @@ pub(crate) fn ordered_column_indices_from_projection(
     projection
         .expr_iter()
         .map(|e| {
-            let index = e.as_any().downcast_ref::<Column>()?.index();
+            let index = e.downcast_ref::<Column>()?.index();
             Some(index)
         })
         .collect::<Option<Vec<usize>>>()
@@ -402,7 +402,7 @@ fn sort_columns_from_physical_sort_exprs_nullable(
 ) -> Option<Vec<Column>> {
     order
         .iter()
-        .map(|expr| expr.expr.as_any().downcast_ref::<Column>().cloned())
+        .map(|expr| expr.expr.downcast_ref::<Column>().cloned())
         .collect()
 }
 
