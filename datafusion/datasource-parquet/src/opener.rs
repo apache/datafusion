@@ -1862,6 +1862,7 @@ mod test {
 
             let Some(planner) = planners.pop_front() else {
                 return Ok(Box::pin(futures::stream::empty()));
+            };
 
             if let Some(mut plan) = planner.plan()? {
                 morsels.extend(plan.take_morsels());
