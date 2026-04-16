@@ -1249,22 +1249,21 @@ impl PushDecoderStreamState {
     /// - [`Data`](DecodeResult::Data) – a decoded batch is projected and returned.
     /// - [`Finished`](DecodeResult::Finished) – signals end-of-stream (`None`).
     async fn transition(&mut self) -> Option<Result<RecordBatch>> {
+        // Destructure so miri's Stacked Borrows can track disjoint field
+        // borrows across the `.await` yield point in get_byte_ranges.
+        let Self {
+            decoder, reader, ..
+        } = self;
         loop {
-            match self.decoder.try_decode() {
+            match decoder.try_decode() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
-                    // IO (get_byte_ranges) and CPU (push_ranges) are still
-                    // decoupled — they just can't live in a nested async block
-                    // because that captures `&mut self` as one opaque borrow,
-                    // which violates Stacked Borrows across the yield point.
-                    // Inlining lets the compiler split the disjoint field borrows.
-                    let data = self
-                        .reader
+                    let data = reader
                         .get_byte_ranges(ranges.clone())
                         .await
                         .map_err(DataFusionError::from);
                     match data {
                         Ok(data) => {
-                            if let Err(e) = self.decoder.push_ranges(ranges, data) {
+                            if let Err(e) = decoder.push_ranges(ranges, data) {
                                 return Some(Err(DataFusionError::from(e)));
                             }
                         }
