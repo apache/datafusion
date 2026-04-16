@@ -942,16 +942,16 @@ SELECT c2, var_samp(CASE WHEN c12 > 0.90 THEN c12 ELSE null END) FROM aggregate_
 
 
 # csv_query_approx_median_1
-query I
+query R
 SELECT approx_median(c2) FROM aggregate_test_100
 ----
 3
 
 # csv_query_approx_median_2
-query I
+query R
 SELECT approx_median(c6) FROM aggregate_test_100
 ----
-1146409980542786560
+1146409980542786600
 
 # csv_query_approx_median_3
 query R
@@ -1000,7 +1000,7 @@ SELECT median(col_i8), median(distinct col_i8) FROM median_table
 -14 100
 
 # approx_distinct_median_i8
-query I
+query R
 SELECT approx_median(distinct col_i8) FROM median_table
 ----
 100
@@ -5968,7 +5968,7 @@ select median(a) from (select 1 as a where 1=0);
 ----
 NULL
 
-query I
+query R
 select approx_median(a) from (select 1 as a where 1=0);
 ----
 NULL
