@@ -721,6 +721,33 @@ mod tests {
     }
 
     #[test]
+    fn test_try_cast_to_type_date_timestamp_lossy_not_allowed() {
+        expect_cast(
+            ScalarValue::Date32(Some(1)),
+            DataType::Timestamp(TimeUnit::Second, None),
+            ExpectedCast::NoValue,
+        );
+
+        expect_cast(
+            ScalarValue::Date64(Some(86_400_000)),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            ExpectedCast::NoValue,
+        );
+
+        expect_cast(
+            ScalarValue::TimestampSecond(Some(86_400), None),
+            DataType::Date32,
+            ExpectedCast::NoValue,
+        );
+
+        expect_cast(
+            ScalarValue::TimestampMillisecond(Some(86_400_000), None),
+            DataType::Date64,
+            ExpectedCast::NoValue,
+        );
+    }
+
+    #[test]
     fn test_try_cast_to_type_unsupported() {
         // int64 to list
         expect_cast(
