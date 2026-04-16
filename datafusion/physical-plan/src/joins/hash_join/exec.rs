@@ -35,7 +35,8 @@ use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
+    ColumnBounds, PartitionBounds, PartitionBuildData, PushdownStrategy,
+    SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -75,8 +76,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
-    plan_err, project_schema,
+    DataFusionError, JoinSide, JoinType, NullEquality, Result, assert_or_internal_err,
+    internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -1316,6 +1317,33 @@ impl ExecutionPlan for HashJoinExec {
             .with_category(MetricCategory::Rows)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
+        // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
+        // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
+        let repartition_random_state = REPARTITION_RANDOM_STATE;
+        let on_right = self
+            .on
+            .iter()
+            .map(|(_, right_expr)| Arc::clone(right_expr))
+            .collect::<Vec<_>>();
+        let build_accumulator = enable_dynamic_filter_pushdown
+            .then(|| {
+                self.dynamic_filter.as_ref().map(|df| {
+                    let filter = Arc::clone(&df.filter);
+                    Some(Arc::clone(df.build_accumulator.get_or_init(|| {
+                        Arc::new(SharedBuildAccumulator::new_from_partition_mode(
+                            self.mode,
+                            self.left.as_ref(),
+                            self.right.as_ref(),
+                            filter,
+                            on_right.clone(),
+                            repartition_random_state,
+                        ))
+                    })))
+                })
+            })
+            .flatten()
+            .flatten();
+
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
@@ -1343,20 +1371,45 @@ impl ExecutionPlan for HashJoinExec {
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
+                let build_accumulator = build_accumulator
+                    .as_ref()
+                    .map(|acc| (Arc::clone(acc), partition));
 
-                OnceFut::new(collect_left_input(
-                    self.random_state.random_state().clone(),
-                    left_stream,
-                    on_left.clone(),
-                    join_metrics.clone(),
-                    reservation,
-                    need_produce_result_in_final(self.join_type),
-                    1,
-                    enable_dynamic_filter_pushdown,
-                    Arc::clone(context.session_config().options()),
-                    self.null_equality,
-                    array_map_created_count,
-                ))
+                if build_accumulator.is_some() {
+                    let task = tokio::task::spawn(collect_left_input_and_maybe_report(
+                        self.random_state.random_state().clone(),
+                        left_stream,
+                        on_left.clone(),
+                        join_metrics.clone(),
+                        reservation,
+                        need_produce_result_in_final(self.join_type),
+                        1,
+                        enable_dynamic_filter_pushdown,
+                        Arc::clone(context.session_config().options()),
+                        self.null_equality,
+                        array_map_created_count,
+                        build_accumulator,
+                    ));
+                    OnceFut::new(async move {
+                        task.await.map_err(|err| {
+                            DataFusionError::ExecutionJoin(Box::new(err))
+                        })?
+                    })
+                } else {
+                    OnceFut::new(collect_left_input(
+                        self.random_state.random_state().clone(),
+                        left_stream,
+                        on_left.clone(),
+                        join_metrics.clone(),
+                        reservation,
+                        need_produce_result_in_final(self.join_type),
+                        1,
+                        enable_dynamic_filter_pushdown,
+                        Arc::clone(context.session_config().options()),
+                        self.null_equality,
+                        array_map_created_count,
+                    ))
+                }
             }
             PartitionMode::Auto => {
                 return plan_err!(
@@ -1367,33 +1420,6 @@ impl ExecutionPlan for HashJoinExec {
         };
 
         let batch_size = context.session_config().batch_size();
-
-        // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
-        // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
-        let repartition_random_state = REPARTITION_RANDOM_STATE;
-        let build_accumulator = enable_dynamic_filter_pushdown
-            .then(|| {
-                self.dynamic_filter.as_ref().map(|df| {
-                    let filter = Arc::clone(&df.filter);
-                    let on_right = self
-                        .on
-                        .iter()
-                        .map(|(_, right_expr)| Arc::clone(right_expr))
-                        .collect::<Vec<_>>();
-                    Some(Arc::clone(df.build_accumulator.get_or_init(|| {
-                        Arc::new(SharedBuildAccumulator::new_from_partition_mode(
-                            self.mode,
-                            self.left.as_ref(),
-                            self.right.as_ref(),
-                            filter,
-                            on_right,
-                            repartition_random_state,
-                        ))
-                    })))
-                })
-            })
-            .flatten()
-            .flatten();
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -1413,6 +1439,13 @@ impl ExecutionPlan for HashJoinExec {
             .iter()
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
+        let stream_build_accumulator = match self.mode {
+            PartitionMode::Partitioned => None,
+            PartitionMode::CollectLeft => build_accumulator,
+            PartitionMode::Auto => unreachable!(
+                "PartitionMode::Auto should not be present at execution time"
+            ),
+        };
 
         Ok(Box::pin(HashJoinStream::new(
             partition,
@@ -1430,7 +1463,7 @@ impl ExecutionPlan for HashJoinExec {
             batch_size,
             vec![],
             self.right.output_ordering().is_some(),
-            build_accumulator,
+            stream_build_accumulator,
             self.mode,
             self.null_aware,
             self.fetch,
@@ -2085,6 +2118,51 @@ async fn collect_left_input(
     Ok(data)
 }
 
+#[expect(clippy::too_many_arguments)]
+async fn collect_left_input_and_maybe_report(
+    random_state: RandomState,
+    left_stream: SendableRecordBatchStream,
+    on_left: Vec<PhysicalExprRef>,
+    metrics: BuildProbeJoinMetrics,
+    reservation: MemoryReservation,
+    with_visited_indices_bitmap: bool,
+    probe_threads_count: usize,
+    should_compute_dynamic_filters: bool,
+    config: Arc<ConfigOptions>,
+    null_equality: NullEquality,
+    array_map_created_count: Count,
+    build_accumulator: Option<(Arc<SharedBuildAccumulator>, usize)>,
+) -> Result<JoinLeftData> {
+    let left_data = collect_left_input(
+        random_state,
+        left_stream,
+        on_left,
+        metrics,
+        reservation,
+        with_visited_indices_bitmap,
+        probe_threads_count,
+        should_compute_dynamic_filters,
+        config,
+        null_equality,
+        array_map_created_count,
+    )
+    .await?;
+
+    if let Some((build_accumulator, partition_id)) = build_accumulator {
+        let build_data = PartitionBuildData::Partitioned {
+            partition_id,
+            pushdown: left_data.membership().clone(),
+            bounds: left_data
+                .bounds
+                .clone()
+                .unwrap_or_else(|| PartitionBounds::new(vec![])),
+        };
+        build_accumulator.report_build_data(build_data).await?;
+    }
+
+    Ok(left_data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2348,6 +2426,22 @@ mod tests {
         on: JoinOn,
         join_type: JoinType,
     ) -> Result<(HashJoinExec, Arc<DynamicFilterPhysicalExpr>)> {
+        hash_join_with_dynamic_filter_and_mode(
+            left,
+            right,
+            on,
+            join_type,
+            PartitionMode::CollectLeft,
+        )
+    }
+
+    fn hash_join_with_dynamic_filter_and_mode(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: JoinOn,
+        join_type: JoinType,
+        mode: PartitionMode,
+    ) -> Result<(HashJoinExec, Arc<DynamicFilterPhysicalExpr>)> {
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
         let mut join = HashJoinExec::try_new(
             left,
@@ -2356,7 +2450,7 @@ mod tests {
             None,
             &join_type,
             None,
-            PartitionMode::CollectLeft,
+            mode,
             NullEquality::NullEqualsNothing,
             false,
         )?;
@@ -5624,6 +5718,155 @@ mod tests {
         // Even with empty build side, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
         dynamic_filter.wait_complete().await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partitioned_dynamic_filter_reports_empty_canceled_partitions()
+    -> Result<()> {
+        let mut session_config = SessionConfig::default();
+        session_config.options_mut().optimizer.enable_dynamic_filter_pushdown = true;
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let child_left_schema = Arc::new(Schema::new(vec![
+            Field::new("child_left_payload", DataType::Int32, false),
+            Field::new("child_key", DataType::Int32, false),
+            Field::new("child_left_extra", DataType::Int32, false),
+        ]));
+        let child_right_schema = Arc::new(Schema::new(vec![
+            Field::new("child_right_payload", DataType::Int32, false),
+            Field::new("child_right_key", DataType::Int32, false),
+            Field::new("child_right_extra", DataType::Int32, false),
+        ]));
+        let parent_left_schema = Arc::new(Schema::new(vec![
+            Field::new("parent_payload", DataType::Int32, false),
+            Field::new("parent_key", DataType::Int32, false),
+            Field::new("parent_extra", DataType::Int32, false),
+        ]));
+
+        let child_left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[
+                vec![build_table_i32(
+                    ("child_left_payload", &vec![10]),
+                    ("child_key", &vec![0]),
+                    ("child_left_extra", &vec![100]),
+                )],
+                vec![build_table_i32(
+                    ("child_left_payload", &vec![11]),
+                    ("child_key", &vec![1]),
+                    ("child_left_extra", &vec![101]),
+                )],
+                vec![build_table_i32(
+                    ("child_left_payload", &vec![12]),
+                    ("child_key", &vec![2]),
+                    ("child_left_extra", &vec![102]),
+                )],
+                vec![build_table_i32(
+                    ("child_left_payload", &vec![13]),
+                    ("child_key", &vec![3]),
+                    ("child_left_extra", &vec![103]),
+                )],
+            ],
+            Arc::clone(&child_left_schema),
+            None,
+        )?;
+        let child_right: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[
+                vec![build_table_i32(
+                    ("child_right_payload", &vec![20]),
+                    ("child_right_key", &vec![0]),
+                    ("child_right_extra", &vec![200]),
+                )],
+                vec![build_table_i32(
+                    ("child_right_payload", &vec![21]),
+                    ("child_right_key", &vec![1]),
+                    ("child_right_extra", &vec![201]),
+                )],
+                vec![build_table_i32(
+                    ("child_right_payload", &vec![22]),
+                    ("child_right_key", &vec![2]),
+                    ("child_right_extra", &vec![202]),
+                )],
+                vec![build_table_i32(
+                    ("child_right_payload", &vec![23]),
+                    ("child_right_key", &vec![3]),
+                    ("child_right_extra", &vec![203]),
+                )],
+            ],
+            Arc::clone(&child_right_schema),
+            None,
+        )?;
+        let parent_left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[
+                vec![build_table_i32(
+                    ("parent_payload", &vec![30]),
+                    ("parent_key", &vec![0]),
+                    ("parent_extra", &vec![300]),
+                )],
+                vec![RecordBatch::new_empty(Arc::clone(&parent_left_schema))],
+                vec![build_table_i32(
+                    ("parent_payload", &vec![32]),
+                    ("parent_key", &vec![2]),
+                    ("parent_extra", &vec![302]),
+                )],
+                vec![RecordBatch::new_empty(Arc::clone(&parent_left_schema))],
+            ],
+            Arc::clone(&parent_left_schema),
+            None,
+        )?;
+
+        let child_on = vec![(
+            Arc::new(Column::new_with_schema("child_key", &child_left_schema)?) as _,
+            Arc::new(Column::new_with_schema(
+                "child_right_key",
+                &child_right_schema,
+            )?) as _,
+        )];
+        let (child_join, _child_dynamic_filter) = hash_join_with_dynamic_filter_and_mode(
+            child_left,
+            child_right,
+            child_on,
+            JoinType::Inner,
+            PartitionMode::Partitioned,
+        )?;
+        let child_join: Arc<dyn ExecutionPlan> = Arc::new(child_join);
+
+        let parent_on = vec![(
+            Arc::new(Column::new_with_schema("parent_key", &parent_left_schema)?) as _,
+            Arc::new(Column::new_with_schema("child_key", &child_join.schema())?) as _,
+        )];
+        let parent_join = HashJoinExec::try_new(
+            parent_left,
+            child_join,
+            parent_on,
+            None,
+            &JoinType::RightSemi,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        let batches = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::execution_plan::collect(Arc::new(parent_join), task_ctx),
+        )
+        .await
+        .expect("partitioned right-semi join should not hang")?;
+
+        assert_batches_sorted_eq!(
+            [
+                "+--------------------+-----------+------------------+---------------------+-----------------+-------------------+",
+                "| child_left_payload | child_key | child_left_extra | child_right_payload | child_right_key | child_right_extra |",
+                "+--------------------+-----------+------------------+---------------------+-----------------+-------------------+",
+                "| 10                 | 0         | 100              | 20                  | 0               | 200               |",
+                "| 12                 | 2         | 102              | 22                  | 2               | 202               |",
+                "+--------------------+-----------+------------------+---------------------+-----------------+-------------------+",
+            ],
+            &batches
+        );
 
         Ok(())
     }
