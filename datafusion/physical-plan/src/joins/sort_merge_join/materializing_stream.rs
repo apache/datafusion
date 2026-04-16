@@ -1423,12 +1423,15 @@ impl MaterializingSortMergeJoinStream {
                     .evaluate(&filter_batch)?
                     .into_array(filter_batch.num_rows())?;
 
-                let pre_mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+                let filter_result_mask =
+                    datafusion_common::cast::as_boolean_array(&filter_result)?;
 
-                let mask = if pre_mask.null_count() > 0 {
-                    compute::prep_null_mask_filter(pre_mask)
+                // Convert NULL filter results to false — NULL means "not satisfied"
+                // per SQL semantics, same as Left/Right outer joins.
+                let mask = if filter_result_mask.null_count() > 0 {
+                    compute::prep_null_mask_filter(filter_result_mask)
                 } else {
-                    pre_mask.clone()
+                    filter_result_mask.clone()
                 };
 
                 if needs_deferred_filtering(&self.filter, self.join_type) {
