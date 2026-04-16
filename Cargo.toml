@@ -289,22 +289,3 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
-
-[patch.crates-io]
-parquet = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-array = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-buffer = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-cast = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-ipc = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-ord = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-schema = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-string = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-select = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-data = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-arith = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-csv = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-json = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-avro = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-flight = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }
-arrow-row = { git = "https://github.com/xudong963/arrow-rs.git", branch = "skip-filter-fully-matched-row-groups" }

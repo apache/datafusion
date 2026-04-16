@@ -118,23 +118,40 @@ fn bench_fully_matched_filter(c: &mut Criterion) {
     });
 
     // Scenario 2: with pushdown, WITH fully_matched optimization
-    // (RowFilter skipped for all row groups)
+    // Uses two decoders: an empty filtered decoder (all RGs are fully matched)
+    // plus a second decoder without RowFilter for the fully matched RGs.
+    // This mirrors how DataFusion splits decoders in the opener.
     group.bench_function("all_fully_matched/pushdown_with_skip", |b| {
         b.iter(|| {
             let rf = rebuild_row_filter(dataset, &file_metrics);
+            // First decoder: with filter but no row groups (all are fully matched)
             let reader_metadata = ArrowReaderMetadata::try_new(
                 Arc::clone(&dataset.metadata),
                 Default::default(),
             )
             .unwrap();
-            let decoder = ParquetPushDecoderBuilder::new_with_metadata(reader_metadata)
-                .with_batch_size(8192)
-                .with_row_filter(rf)
-                .with_row_groups(all_rg_indices.clone())
-                .with_fully_matched_row_groups(all_rg_indices.clone())
-                .build()
-                .unwrap();
-            let rows = run_push_decoder(decoder, &dataset.file_bytes);
+            let filtered_decoder =
+                ParquetPushDecoderBuilder::new_with_metadata(reader_metadata)
+                    .with_batch_size(8192)
+                    .with_row_filter(rf)
+                    .with_row_groups(vec![]) // empty: no non-fully-matched RGs
+                    .build()
+                    .unwrap();
+            // Second decoder: no filter for fully matched row groups
+            let reader_metadata = ArrowReaderMetadata::try_new(
+                Arc::clone(&dataset.metadata),
+                Default::default(),
+            )
+            .unwrap();
+            let matched_decoder =
+                ParquetPushDecoderBuilder::new_with_metadata(reader_metadata)
+                    .with_batch_size(8192)
+                    .with_row_groups(all_rg_indices.clone())
+                    .build()
+                    .unwrap();
+            // Run filtered decoder first (finishes immediately), then matched
+            let rows = run_push_decoder(filtered_decoder, &dataset.file_bytes);
+            let rows = rows + run_push_decoder(matched_decoder, &dataset.file_bytes);
             assert_eq!(rows, TOTAL_ROWS);
         });
     });
