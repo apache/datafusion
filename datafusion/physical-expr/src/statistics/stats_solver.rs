@@ -86,7 +86,7 @@ impl ExprStatisticsGraphNode {
     /// indefinite range (i.e. `[-∞, ∞]`).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = Arc::clone(&node.expr);
-        if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(literal) = expr.downcast_ref::<Literal>() {
             let value = literal.value();
             Interval::try_new(value.clone(), value.clone())
                 .and_then(|interval| Self::new_uniform(expr, interval))

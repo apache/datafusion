@@ -759,7 +759,6 @@ async fn test_hash_join_swap_on_joins_with_projections(
 
 fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {
     let col = expr
-        .as_any()
         .downcast_ref::<Column>()
         .expect("Projection items should be Column expression");
     assert_eq!(col.name(), name);

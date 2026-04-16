@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, RwLock};
@@ -1100,10 +1099,6 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     }
 
     impl PhysicalExpr for CustomPredicateExpr {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
             unreachable!()
         }
@@ -1171,11 +1166,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             node: &Arc<dyn PhysicalExpr>,
             buf: &mut Vec<u8>,
         ) -> Result<()> {
-            if node
-                .as_any()
-                .downcast_ref::<CustomPredicateExpr>()
-                .is_some()
-            {
+            if node.downcast_ref::<CustomPredicateExpr>().is_some() {
                 buf.extend_from_slice("CustomPredicateExpr".as_bytes());
                 Ok(())
             } else {
@@ -2519,7 +2510,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     // Verify the filter predicate is a Literal(true)
     let result_filter = result.downcast_ref::<FilterExec>().unwrap();
     let predicate = result_filter.predicate();
-    let literal = predicate.as_any().downcast_ref::<Literal>().unwrap();
+    let literal = predicate.downcast_ref::<Literal>().unwrap();
     assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
 
     Ok(())
@@ -2862,10 +2853,7 @@ fn test_backward_compatibility_no_expr_id() -> Result<()> {
     )?;
 
     // Verify the result is correct
-    let col = result
-        .as_any()
-        .downcast_ref::<Column>()
-        .expect("Expected Column");
+    let col = result.downcast_ref::<Column>().expect("Expected Column");
     assert_eq!(col.name(), "a");
     assert_eq!(col.index(), 0);
 
@@ -2996,7 +2984,6 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
 
     // Check that deduplication worked within the deserialization
     let binary1 = expr1
-        .as_any()
         .downcast_ref::<BinaryExpr>()
         .expect("Expected BinaryExpr");
     assert!(
@@ -3014,7 +3001,6 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
 
     // Check that the second expression was also deserialized correctly
     let binary2 = expr2
-        .as_any()
         .downcast_ref::<BinaryExpr>()
         .expect("Expected BinaryExpr");
     assert!(

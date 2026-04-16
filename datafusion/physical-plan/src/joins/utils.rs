@@ -472,8 +472,8 @@ fn estimate_join_cardinality(
         .iter()
         .map(|(left, right)| {
             match (
-                left.as_any().downcast_ref::<Column>(),
-                right.as_any().downcast_ref::<Column>(),
+                left.downcast_ref::<Column>(),
+                right.downcast_ref::<Column>(),
             ) {
                 (Some(left), Some(right)) => (
                     left_stats.column_statistics[left.index()].clone(),
@@ -3009,7 +3009,6 @@ mod tests {
 
     fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {
         let col = expr
-            .as_any()
             .downcast_ref::<Column>()
             .expect("Projection items should be Column expression");
         assert_eq!(col.name(), name);
