@@ -511,12 +511,12 @@ CREATE EXTERNAL TABLE stored_trim_leading (
 LOCATION 'test_files/scratch/csv_files/trim_leading.csv'
 OPTIONS ('format.has_header' 'true');
 
-query IT
-select * from stored_trim_leading order by id;
+query ITT
+select id, value, 'end' from stored_trim_leading order by id;
 ----
-1 hello
-2 world
-3 no_space
+1 hello   end
+2 world   end
+3 no_space end
 
 statement ok
 DROP TABLE stored_trim_leading;
@@ -537,12 +537,12 @@ CREATE EXTERNAL TABLE stored_trim_trailing (
 LOCATION 'test_files/scratch/csv_files/trim_trailing.csv'
 OPTIONS ('format.has_header' 'true');
 
-query IT
-select * from stored_trim_trailing order by id;
+query ITT
+select id, value, 'end' from stored_trim_trailing order by id;
 ----
-1   hello
-2   world
-3 no_space
+1   hello end
+2   world end
+3 no_space end
 
 statement ok
 DROP TABLE stored_trim_trailing;
@@ -565,12 +565,12 @@ CREATE EXTERNAL TABLE stored_trim_both (
 LOCATION 'test_files/scratch/csv_files/trim_both.csv'
 OPTIONS ('format.has_header' 'true');
 
-query IT
-select * from stored_trim_both order by id;
+query ITT
+select id, value, 'end' from stored_trim_both order by id;
 ----
-1 hello
-2 world
-3 no_space
+1 hello end
+2 world end
+3 no_space end
 
 statement ok
 DROP TABLE stored_trim_both;
