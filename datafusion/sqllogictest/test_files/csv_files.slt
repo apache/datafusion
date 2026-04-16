@@ -408,7 +408,7 @@ CREATE EXTERNAL TABLE stored_quote_style_always (
   float_col TEXT
 ) STORED AS CSV
 LOCATION 'test_files/scratch/csv_files/quote_style_always.csv'
-OPTIONS ('format.has_header' 'true', 'format.quote_style' 'Never');
+OPTIONS ('format.has_header' 'true');
 
 # All values should have been quoted, but reading them back strips the quotes
 query TTT
@@ -436,7 +436,7 @@ CREATE EXTERNAL TABLE stored_quote_style_nonnumeric (
   float_col TEXT
 ) STORED AS CSV
 LOCATION 'test_files/scratch/csv_files/quote_style_nonnumeric.csv'
-OPTIONS ('format.has_header' 'true', 'format.quote_style' 'Never');
+OPTIONS ('format.has_header' 'true');
 
 query TTT
 select * from stored_quote_style_nonnumeric;
