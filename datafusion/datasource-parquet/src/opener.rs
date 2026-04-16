@@ -1130,25 +1130,35 @@ impl RowGroupsPrunedParquetOpen {
             );
         }
 
-        // Prepare the access plan (extract row groups and row selection)
-        let mut prepared_plan = access_plan.prepare(rg_metadata)?;
+        // Build the access plan optimizer from sort pushdown hints.
+        // ReorderByStatistics is preferred (handles both ASC and DESC via
+        // min/max stats). ReverseRowGroups is a fallback when no statistics
+        // are available on the sort column.
+        let optimizer: Option<
+            Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+        > = if let Some(sort_order) = &prepared.sort_order_for_reorder {
+            Some(Box::new(
+                crate::access_plan_optimizer::ReorderByStatistics::new(
+                    sort_order.clone(),
+                ),
+            ))
+        } else if prepared.reverse_row_groups {
+            Some(Box::new(crate::access_plan_optimizer::ReverseRowGroups))
+        } else {
+            None
+        };
 
-        // Reorder row groups by statistics if sort order is known.
-        // This helps TopK queries find optimal values first by placing
-        // row groups with optimal min/max values at the front.
-        // When reorder is active, skip reverse — reorder already encodes
-        // the direction (uses min for ASC, max for DESC).
-        if let Some(sort_order) = &prepared.sort_order_for_reorder {
-            prepared_plan = prepared_plan.reorder_by_statistics(
-                sort_order,
+        // Prepare the access plan and apply row group optimizer if configured.
+        let prepared_plan = if let Some(opt) = &optimizer {
+            access_plan.prepare_with_optimizer(
+                rg_metadata,
                 file_metadata.as_ref(),
                 &prepared.physical_file_schema,
-            )?;
-        } else if prepared.reverse_row_groups {
-            // Fallback: simple reverse when no sort order statistics available.
-            // See `ParquetSource::try_pushdown_sort` for the rationale.
-            prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
-        }
+                opt.as_ref(),
+            )?
+        } else {
+            access_plan.prepare(rg_metadata)?
+        };
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
         let read_plan = build_projection_read_plan(

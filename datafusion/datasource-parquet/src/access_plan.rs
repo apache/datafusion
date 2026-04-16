@@ -351,8 +351,21 @@ impl ParquetAccessPlan {
     ) -> Result<PreparedAccessPlan> {
         let row_group_indexes = self.row_group_indexes();
         let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
-
         PreparedAccessPlan::new(row_group_indexes, row_selection)
+    }
+
+    /// Like [`prepare`](Self::prepare), but also applies an
+    /// [`AccessPlanOptimizer`] to reorder/reverse row groups after
+    /// preparing the plan.
+    pub(crate) fn prepare_with_optimizer(
+        self,
+        row_group_meta_data: &[RowGroupMetaData],
+        file_metadata: &ParquetMetaData,
+        arrow_schema: &Schema,
+        optimizer: &dyn crate::access_plan_optimizer::AccessPlanOptimizer,
+    ) -> Result<PreparedAccessPlan> {
+        let plan = self.prepare(row_group_meta_data)?;
+        optimizer.optimize(plan, file_metadata, arrow_schema)
     }
 }
 
