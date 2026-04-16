@@ -1432,18 +1432,10 @@ impl MaterializingSortMergeJoinStream {
                 };
 
                 if needs_deferred_filtering(&self.filter, self.join_type) {
-                    // Full join uses pre_mask (preserving nulls) for
-                    // get_corrected_filter_mask; other outer joins use mask.
-                    let mask_to_use = if self.join_type != JoinType::Full {
-                        &mask
-                    } else {
-                        pre_mask
-                    };
-
                     self.joined_record_batches.push_batch_with_filter_metadata(
                         output_batch,
                         &combined_left_indices,
-                        mask_to_use,
+                        &mask,
                         self.streamed_batch_counter.load(Relaxed),
                         self.join_type,
                     );
