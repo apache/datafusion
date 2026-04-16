@@ -5998,34 +5998,39 @@ mod tests {
         values
             .into_iter()
             .map(|v| {
-                let arr = if v.is_some() {
-                    Arc::new(
-                        GenericListArray::<O>::from_iter_primitive::<Int64Type, _, _>(
-                            vec![v],
-                        ),
-                    )
-                } else if O::IS_LARGE {
-                    new_null_array(
-                        &DataType::LargeList(Arc::new(Field::new_list_field(
-                            DataType::Int64,
-                            true,
-                        ))),
-                        1,
-                    )
-                } else {
-                    new_null_array(
-                        &DataType::List(Arc::new(Field::new_list_field(
-                            DataType::Int64,
-                            true,
-                        ))),
-                        1,
-                    )
-                };
+                let arr = Arc::new(GenericListArray::<O>::from_iter_primitive::<
+                    Int64Type,
+                    _,
+                    _,
+                >(vec![v])) as ArrayRef;
 
                 if O::IS_LARGE {
                     ScalarValue::LargeList(arr.as_list::<i64>().to_owned().into())
                 } else {
                     ScalarValue::List(arr.as_list::<i32>().to_owned().into())
+                }
+            })
+            .collect()
+    }
+
+    fn build_list_view<O: OffsetSizeTrait>(
+        values: Vec<Option<Vec<Option<i64>>>>,
+    ) -> Vec<ScalarValue> {
+        values
+            .into_iter()
+            .map(|v| {
+                let arr = Arc::new(GenericListViewArray::<O>::from_iter_primitive::<
+                    Int64Type,
+                    _,
+                    _,
+                >(vec![v])) as ArrayRef;
+
+                if O::IS_LARGE {
+                    ScalarValue::LargeListView(
+                        arr.as_list_view::<i64>().to_owned().into(),
+                    )
+                } else {
+                    ScalarValue::ListView(arr.as_list_view::<i32>().to_owned().into())
                 }
             })
             .collect()
@@ -6193,8 +6198,8 @@ mod tests {
         assert_eq!(large_list_array, &expected);
 
         // ListView
-        // List[[1,2,3]], List[null], List[[4,5]]
-        let scalars = build_list::<i32>(vec![
+        // ListView[[1,2,3]], ListView[null], ListView[[4,5]]
+        let scalars = build_list_view::<i32>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
             Some(vec![Some(4), Some(5)]),
@@ -6202,7 +6207,7 @@ mod tests {
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
         let list_view_array = as_list_view_array(&array).unwrap();
-        // List[[1,2,3], null, [4,5]]
+        // ListView[[1,2,3], null, [4,5]]
         let expected = ListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
@@ -6211,8 +6216,8 @@ mod tests {
         assert_eq!(list_view_array, &expected);
 
         // LargeListView
-        // List[[1,2,3]], List[null], List[[4,5]]
-        let scalars = build_list::<i64>(vec![
+        // LargeListView[[1,2,3]], LargeListView[null], LargeListView[[4,5]]
+        let scalars = build_list_view::<i64>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
             Some(vec![Some(4), Some(5)]),
@@ -6220,7 +6225,7 @@ mod tests {
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
         let large_list_view_array = as_large_list_view_array(&array).unwrap();
-        // List[[1,2,3], null, [4,5]]
+        // LargeListView[[1,2,3], null, [4,5]]
         let expected = LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
@@ -9399,8 +9404,8 @@ mod tests {
             .into(),
         );
 
-        assert_eq!(s.to_string(), "todo");
-        assert_eq!(format!("{s:?}"), "todo");
+        assert_eq!(s.to_string(), "[1, , 3]");
+        assert_eq!(format!("{s:?}"), "ListView([1, , 3])");
     }
 
     #[test]
