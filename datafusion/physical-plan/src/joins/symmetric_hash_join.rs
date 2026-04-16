@@ -82,7 +82,6 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequiremen
 use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
-use parking_lot::Mutex;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
@@ -549,12 +548,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let reservation = Arc::new(Mutex::new(
+        let reservation = Arc::new(
             MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
                 .register(context.memory_pool()),
-        ));
+        );
         if let Some(g) = graph.as_ref() {
-            reservation.lock().try_grow(g.size())?;
+            reservation.try_grow(g.size())?;
         }
 
         if enforce_batch_size_in_joins {
@@ -1745,7 +1744,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         let result = combine_two_batches(&self.schema, equal_result, anti_result)?;
         let capacity = self.size();
         self.metrics.stream_memory_usage.set(capacity);
-        self.reservation.lock().try_resize(capacity)?;
+        self.reservation.try_resize(capacity)?;
         Ok(result)
     }
 }

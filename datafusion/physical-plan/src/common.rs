@@ -33,10 +33,13 @@ use datafusion_common::{Result, plan_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use futures::{StreamExt, TryStreamExt};
-use parking_lot::Mutex;
 
 /// [`MemoryReservation`] used across query execution streams
-pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
+///
+/// `MemoryReservation` is internally thread-safe (uses `AtomicUsize` for size
+/// tracking, and the underlying `MemoryPool` implementations handle their own
+/// locking), so no external `Mutex` is needed.
+pub(crate) type SharedMemoryReservation = Arc<MemoryReservation>;
 
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
