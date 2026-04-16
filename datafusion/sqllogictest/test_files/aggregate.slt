@@ -8951,3 +8951,33 @@ GROUP BY id ORDER BY id;
 
 statement ok
 DROP TABLE first_last_value_str_tests;
+
+# Regression test for incorrect MIN/MAX folding from projected expression
+# statistics. The PR branch `aggregate-stats-single-mode-and-cast` rewrites this
+# query to unattainable literals using parquet min/max envelopes for UserID and
+# ClientIP.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION '../core/tests/data/clickbench_hits_10.parquet';
+
+query II
+SELECT MIN(delta), MAX(delta)
+FROM (
+  SELECT "UserID" - CAST("ClientIP" AS BIGINT) AS delta
+  FROM hits_raw
+);
+----
+-2461439044872611287 7418527518698834918
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema;
+
+statement ok
+DROP TABLE hits_raw;
