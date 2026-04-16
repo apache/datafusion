@@ -1319,7 +1319,7 @@ impl ExecutionPlan for HashJoinExec {
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
-        let on_right = self
+        let on_right_exprs = self
             .on
             .iter()
             .map(|(_, right_expr)| Arc::clone(right_expr))
@@ -1334,7 +1334,7 @@ impl ExecutionPlan for HashJoinExec {
                             self.left.as_ref(),
                             self.right.as_ref(),
                             filter,
-                            on_right.clone(),
+                            on_right_exprs.clone(),
                             repartition_random_state,
                         ))
                     })))
@@ -1407,22 +1407,10 @@ impl ExecutionPlan for HashJoinExec {
             None => self.column_indices.clone(),
         };
 
-        let on_right = self
-            .on
-            .iter()
-            .map(|(_, right_expr)| Arc::clone(right_expr))
-            .collect::<Vec<_>>();
-        let stream_build_accumulator = match self.mode {
-            PartitionMode::Partitioned | PartitionMode::CollectLeft => build_accumulator,
-            PartitionMode::Auto => unreachable!(
-                "PartitionMode::Auto should not be present at execution time"
-            ),
-        };
-
         Ok(Box::pin(HashJoinStream::new(
             partition,
             self.schema(),
-            on_right,
+            on_right_exprs,
             self.filter.clone(),
             self.join_type,
             right_stream,
@@ -1435,7 +1423,7 @@ impl ExecutionPlan for HashJoinExec {
             batch_size,
             vec![],
             self.right.output_ordering().is_some(),
-            stream_build_accumulator,
+            build_accumulator,
             self.mode,
             self.null_aware,
             self.fetch,
