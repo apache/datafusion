@@ -58,7 +58,11 @@ pub fn is_supported_type(data_type: &DataType) -> bool {
         || is_supported_binary_type(data_type)
 }
 
-/// Returns true if unwrap_cast_in_comparison support this numeric type
+fn is_date_type(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Date32 | DataType::Date64)
+}
+
+/// Returns true if unwrap_cast_in_comparison supports this numeric type
 fn is_supported_numeric_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
@@ -70,6 +74,8 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
+            | DataType::Date32
+            | DataType::Date64
             | DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
@@ -107,6 +113,14 @@ fn try_cast_numeric_literal(
         return None;
     }
 
+    // Date↔Timestamp casts are lossy (drop time-of-day or add midnight),
+    // so unwrapping would change comparison semantics.
+    if (is_date_type(&lit_data_type) && target_type.is_temporal())
+        || (is_date_type(target_type) && lit_data_type.is_temporal())
+    {
+        return None;
+    }
+
     let mul = match target_type {
         DataType::UInt8
         | DataType::UInt16
@@ -115,7 +129,9 @@ fn try_cast_numeric_literal(
         | DataType::Int8
         | DataType::Int16
         | DataType::Int32
-        | DataType::Int64 => 1_i128,
+        | DataType::Int64
+        | DataType::Date32
+        | DataType::Date64 => 1_i128,
         DataType::Timestamp(_, _) => 1_i128,
         DataType::Decimal32(_, scale) => 10_i128.pow(*scale as u32),
         DataType::Decimal64(_, scale) => 10_i128.pow(*scale as u32),
@@ -129,8 +145,8 @@ fn try_cast_numeric_literal(
         DataType::UInt64 => (u64::MIN as i128, u64::MAX as i128),
         DataType::Int8 => (i8::MIN as i128, i8::MAX as i128),
         DataType::Int16 => (i16::MIN as i128, i16::MAX as i128),
-        DataType::Int32 => (i32::MIN as i128, i32::MAX as i128),
-        DataType::Int64 => (i64::MIN as i128, i64::MAX as i128),
+        DataType::Int32 | DataType::Date32 => (i32::MIN as i128, i32::MAX as i128),
+        DataType::Int64 | DataType::Date64 => (i64::MIN as i128, i64::MAX as i128),
         DataType::Timestamp(_, _) => (i64::MIN as i128, i64::MAX as i128),
         DataType::Decimal32(precision, _) => (
             // Different precision for decimal32 can store different range of value.
@@ -164,6 +180,8 @@ fn try_cast_numeric_literal(
         ScalarValue::UInt16(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::UInt32(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::UInt64(Some(v)) => (*v as i128).checked_mul(mul),
+        ScalarValue::Date32(Some(v)) => (*v as i128).checked_mul(mul),
+        ScalarValue::Date64(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampSecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampMillisecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampMicrosecond(Some(v), _) => (*v as i128).checked_mul(mul),
@@ -241,6 +259,8 @@ fn try_cast_numeric_literal(
                     DataType::Int16 => ScalarValue::Int16(Some(value as i16)),
                     DataType::Int32 => ScalarValue::Int32(Some(value as i32)),
                     DataType::Int64 => ScalarValue::Int64(Some(value as i64)),
+                    DataType::Date32 => ScalarValue::Date32(Some(value as i32)),
+                    DataType::Date64 => ScalarValue::Date64(Some(value as i64)),
                     DataType::UInt8 => ScalarValue::UInt8(Some(value as u8)),
                     DataType::UInt16 => ScalarValue::UInt16(Some(value as u16)),
                     DataType::UInt32 => ScalarValue::UInt32(Some(value as u32)),
