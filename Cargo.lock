@@ -2189,6 +2189,7 @@ dependencies = [
  "dashmap",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-object-store-iouring",
  "futures",
  "insta",
  "log",
@@ -2380,6 +2381,20 @@ dependencies = [
  "datafusion-expr",
  "quote",
  "syn 2.0.101",
+]
+
+[[package]]
+name = "datafusion-object-store-iouring"
+version = "47.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "io-uring",
+ "log",
+ "object_store",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -3699,6 +3714,17 @@ name = "integer-encoding"
 version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
+
+[[package]]
+name = "io-uring"
+version = "0.7.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd7bddefd0a8833b88a4b68f90dae22c7450d11b354198baee3874fd811b344"
+dependencies = [
+ "bitflags 2.9.1",
+ "cfg-if",
+ "libc",
+]
 
 [[package]]
 name = "ipnet"

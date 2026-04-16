@@ -62,6 +62,7 @@ members = [
     "benchmarks",
     "datafusion/macros",
     "datafusion/doc",
+    "datafusion/object-store-iouring",
 ]
 exclude = ["dev/depcheck"]
 resolver = "2"
@@ -131,6 +132,7 @@ datafusion-functions-table = { path = "datafusion/functions-table", version = "4
 datafusion-functions-window = { path = "datafusion/functions-window", version = "47.0.0" }
 datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "47.0.0" }
 datafusion-macros = { path = "datafusion/macros", version = "47.0.0" }
+datafusion-object-store-iouring = { path = "datafusion/object-store-iouring", version = "47.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "47.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "47.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "47.0.0", default-features = false }

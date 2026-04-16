@@ -21,7 +21,7 @@
 
 use dashmap::DashMap;
 use datafusion_common::{exec_err, DataFusionError, Result};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "io-uring")))]
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
 use std::sync::Arc;
@@ -194,11 +194,28 @@ impl Default for DefaultObjectStoreRegistry {
 }
 
 impl DefaultObjectStoreRegistry {
-    /// This will register [`LocalFileSystem`] to handle `file://` paths
+    /// This will register [`LocalFileSystem`] to handle `file://` paths.
+    ///
+    /// When the `io-uring` feature is enabled (Linux only), registers an
+    /// [`IoUringObjectStore`](datafusion_object_store_iouring::IoUringObjectStore)
+    /// instead, which uses io_uring for batched local file reads.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
-        object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
+
+        #[cfg(feature = "io-uring")]
+        {
+            object_stores.insert(
+                "file://".to_string(),
+                Arc::new(datafusion_object_store_iouring::IoUringObjectStore::new()),
+            );
+        }
+
+        #[cfg(not(feature = "io-uring"))]
+        {
+            object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
+        }
+
         Self { object_stores }
     }
 

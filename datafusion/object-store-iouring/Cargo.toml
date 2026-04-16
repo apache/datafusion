@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "datafusion-execution"
-description = "Execution configuration support for DataFusion query engine"
-keywords = ["arrow", "query", "sql"]
+name = "datafusion-object-store-iouring"
+description = "io-uring based ObjectStore for DataFusion local file I/O"
+keywords = ["arrow", "query", "sql", "io-uring"]
 readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
@@ -28,33 +28,23 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
-[package.metadata.docs.rs]
-all-features = true
-
 [lints]
 workspace = true
 
 [lib]
-name = "datafusion_execution"
-
-[features]
-default = []
-io-uring = ["datafusion-object-store-iouring"]
+name = "datafusion_object_store_iouring"
 
 [dependencies]
-arrow = { workspace = true }
-dashmap = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
-datafusion-expr = { workspace = true }
-datafusion-object-store-iouring = { workspace = true, optional = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true, features = ["fs"] }
-parking_lot = { workspace = true }
-rand = { workspace = true }
-tempfile = { workspace = true }
-url = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7"
 
 [dev-dependencies]
-chrono = { workspace = true }
-insta = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
