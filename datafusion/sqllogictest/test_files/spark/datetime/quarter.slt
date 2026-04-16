@@ -69,3 +69,16 @@ query I
 SELECT quarter('2016-12-12');
 ----
 4
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
+
+query I
+SELECT quarter('');
+----
+NULL
+
+query I
+SELECT quarter('abc');
+----
+NULL
