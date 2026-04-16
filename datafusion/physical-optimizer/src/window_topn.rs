@@ -238,15 +238,15 @@ impl PhysicalOptimizerRule for WindowTopN {
 fn extract_window_limit(
     predicate: &Arc<dyn datafusion_physical_expr::PhysicalExpr>,
 ) -> Option<(usize, usize)> {
-    let binary = predicate.as_any().downcast_ref::<BinaryExpr>()?;
+    let binary = predicate.downcast_ref::<BinaryExpr>()?;
     let op = binary.op();
     let left = binary.left();
     let right = binary.right();
 
     // Try Column op Literal
     if let (Some(col), Some(lit_val)) = (
-        left.as_any().downcast_ref::<Column>(),
-        right.as_any().downcast_ref::<Literal>(),
+        left.downcast_ref::<Column>(),
+        right.downcast_ref::<Literal>(),
     ) {
         let n = scalar_to_usize(lit_val.value())?;
         return match *op {
@@ -258,8 +258,8 @@ fn extract_window_limit(
 
     // Try Literal op Column (flipped)
     if let (Some(lit_val), Some(col)) = (
-        left.as_any().downcast_ref::<Literal>(),
-        right.as_any().downcast_ref::<Column>(),
+        left.downcast_ref::<Literal>(),
+        right.downcast_ref::<Column>(),
     ) {
         let n = scalar_to_usize(lit_val.value())?;
         return match *op {
