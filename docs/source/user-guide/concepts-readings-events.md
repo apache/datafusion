@@ -203,8 +203,8 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 # 🌎 Community Events
 
 - **2026-07-22** [Denver Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18428) - [RSVP](https://luma.com/jsu6faie)
-- **2026-05-11** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/21638) - [RSVP](https://luma.com/k3ointcl)
 - **2026-05-12** [New York City Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/20030) - [RSVP](https://luma.com/adhshv92)
+- **2026-05-11** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/21638) - [RSVP](https://luma.com/k3ointcl)
 - **2026-04-23** [Seattle Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/13500) - [RSVP](https://luma.com/hxshbp0m)
 - **2026-04-22** [Portland Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/19817) - [RSVP](https://luma.com/dsp3ud82)
 - **2026-03-05** [Stockholm Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18429) - [RSVP](https://luma.com/ctqtiqap), [Recording](https://youtu.be/9u4cNmL14Xs)
