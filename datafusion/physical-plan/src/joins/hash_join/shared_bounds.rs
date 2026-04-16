@@ -33,7 +33,7 @@ use crate::joins::hash_join::partitioned_hash_eval::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
@@ -275,7 +275,7 @@ enum AccumulatedBuildData {
 enum CompletionState {
     Pending,
     Finalizing,
-    Ready(std::result::Result<(), String>),
+    Ready(SharedResult<()>),
 }
 
 struct AccumulatorState {
@@ -507,9 +507,7 @@ impl SharedBuildAccumulator {
     }
 
     fn finish(&self, finalize_input: FinalizeInput) {
-        let result = self
-            .build_filter(finalize_input)
-            .map_err(|err| err.to_string());
+        let result = self.build_filter(finalize_input).map_err(Arc::new);
         self.dynamic_filter.mark_complete();
 
         let mut guard = self.inner.lock();
@@ -525,7 +523,7 @@ impl SharedBuildAccumulator {
                 match &guard.completion {
                     CompletionState::Ready(Ok(())) => return Ok(()),
                     CompletionState::Ready(Err(err)) => {
-                        return Err(DataFusionError::Execution(err.clone()));
+                        return Err(DataFusionError::Shared(Arc::clone(err)));
                     }
                     CompletionState::Pending | CompletionState::Finalizing => {
                         self.completion_notify.notified()
