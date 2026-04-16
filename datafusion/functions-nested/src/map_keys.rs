@@ -23,11 +23,10 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, cast::as_map_array, exec_err};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -79,10 +78,6 @@ impl MapKeysFunc {
 }
 
 impl ScalarUDFImpl for MapKeysFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_keys"
     }
@@ -101,10 +96,7 @@ impl ScalarUDFImpl for MapKeysFunc {
         ))))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(map_keys_inner)(&args.args)
     }
 

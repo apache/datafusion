@@ -25,7 +25,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err, plan_err,
 };
@@ -34,7 +34,7 @@ use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
-    Between, BinaryExpr, Expr, Like, Operator, TryCast, binary_expr, lit,
+    Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, TryCast, binary_expr, lit,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -288,16 +288,31 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast(Cast { expr, data_type }) => expressions::cast(
+        Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
-            data_type.clone(),
+            Arc::clone(field),
+            None,
         ),
-        Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
-            create_physical_expr(expr, input_dfschema, execution_props)?,
-            input_schema,
-            data_type.clone(),
-        ),
+        Expr::TryCast(TryCast { expr, field }) => {
+            if !field.metadata().is_empty() {
+                let (_, src_field) = expr.to_field(input_dfschema)?;
+                return plan_err!(
+                    "TryCast from {} to {} is not supported",
+                    format_type_and_metadata(
+                        src_field.data_type(),
+                        Some(src_field.metadata()),
+                    ),
+                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
+                );
+            }
+
+            expressions::try_cast(
+                create_physical_expr(expr, input_dfschema, execution_props)?,
+                input_schema,
+                field.data_type().clone(),
+            )
+        }
         Expr::Not(expr) => {
             expressions::not(create_physical_expr(expr, input_dfschema, execution_props)?)
         }
@@ -417,10 +432,24 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
-
-    use datafusion_expr::{Operator, col, lit};
+    use datafusion_expr::col;
 
     use super::*;
+
+    fn test_cast_schema() -> Schema {
+        Schema::new(vec![Field::new("a", DataType::Int32, false)])
+    }
+
+    fn lower_cast_expr(expr: &Expr, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        create_physical_expr(expr, &df_schema, &ExecutionProps::new())
+    }
+
+    fn as_planner_cast(physical: &Arc<dyn PhysicalExpr>) -> &expressions::CastExpr {
+        physical
+            .downcast_ref::<expressions::CastExpr>()
+            .expect("planner should lower logical CAST to CastExpr")
+    }
 
     #[test]
     fn test_create_physical_expr_scalar_input_output() -> Result<()> {
@@ -443,6 +472,68 @@ mod tests {
             &result,
             &(Arc::new(BooleanArray::from(vec![true, false, false, false,])) as ArrayRef)
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_lowering_preserves_target_field_metadata() -> Result<()> {
+        let schema = test_cast_schema();
+        let target_field = Arc::new(
+            Field::new("cast_target", DataType::Int64, true)
+                .with_metadata([("target_meta".to_string(), "1".to_string())].into()),
+        );
+        let cast_expr = Expr::Cast(Cast::new_from_field(
+            Box::new(col("a")),
+            Arc::clone(&target_field),
+        ));
+
+        let physical = lower_cast_expr(&cast_expr, &schema)?;
+        let cast = as_planner_cast(&physical);
+
+        assert_eq!(cast.target_field(), &target_field);
+        assert_eq!(physical.return_field(&schema)?, target_field);
+        assert!(physical.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_lowering_preserves_standard_cast_semantics() -> Result<()> {
+        let schema = test_cast_schema();
+        let cast_expr = Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int64));
+
+        let physical = lower_cast_expr(&cast_expr, &schema)?;
+        let cast = as_planner_cast(&physical);
+        let returned_field = physical.return_field(&schema)?;
+
+        assert_eq!(cast.cast_type(), &DataType::Int64);
+        assert_eq!(returned_field.name(), "a");
+        assert_eq!(returned_field.data_type(), &DataType::Int64);
+        assert!(!physical.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_lowering_preserves_same_type_field_semantics() -> Result<()> {
+        let schema = test_cast_schema();
+        let target_field = Arc::new(
+            Field::new("same_type_cast", DataType::Int32, true).with_metadata(
+                [("target_meta".to_string(), "same-type".to_string())].into(),
+            ),
+        );
+        let cast_expr = Expr::Cast(Cast::new_from_field(
+            Box::new(col("a")),
+            Arc::clone(&target_field),
+        ));
+
+        let physical = lower_cast_expr(&cast_expr, &schema)?;
+        let cast = as_planner_cast(&physical);
+
+        assert_eq!(cast.target_field(), &target_field);
+        assert_eq!(physical.return_field(&schema)?, target_field);
+        assert!(physical.nullable(&schema)?);
 
         Ok(())
     }

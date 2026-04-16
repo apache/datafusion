@@ -186,7 +186,7 @@ macro_rules! get_row_value {
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
 pub fn cell_to_string(col: &ArrayRef, row: usize, is_spark_path: bool) -> Result<String> {
-    if !col.is_valid(row) {
+    if col.is_null(row) {
         // represent any null value with the string "NULL"
         Ok(NULL_STR.to_string())
     } else {
@@ -253,7 +253,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize, is_spark_path: bool) -> Result
     }
 }
 
-/// Converts columns to a result as expected by sqllogicteset.
+/// Converts columns to a result as expected by sqllogictest.
 pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
     columns
         .iter()

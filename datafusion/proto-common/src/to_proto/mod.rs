@@ -174,9 +174,11 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::ListView(item_type) => Self::ListView(Box::new(protobuf::List {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
-            DataType::LargeListView(item_type) => Self::LargeListView(Box::new(protobuf::List {
-                field_type: Some(Box::new(item_type.as_ref().try_into()?)),
-            })),
+            DataType::LargeListView(item_type) => {
+                Self::LargeListView(Box::new(protobuf::List {
+                    field_type: Some(Box::new(item_type.as_ref().try_into()?)),
+                }))
+            }
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
                 sub_field_types: convert_arc_fields_to_proto_fields(struct_fields)?,
             }),
@@ -186,7 +188,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: convert_arc_fields_to_proto_fields(fields.iter().map(|(_, item)|item))?,
+                    union_types: convert_arc_fields_to_proto_fields(
+                        fields.iter().map(|(_, item)| item),
+                    )?,
                     union_mode: union_mode.into(),
                     type_ids: fields.iter().map(|(x, _)| x as i32).collect(),
                 })
@@ -197,34 +201,39 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     value: Some(Box::new(value_type.as_ref().try_into()?)),
                 }))
             }
-            DataType::Decimal32(precision, scale) => Self::Decimal32(protobuf::Decimal32Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Decimal64(precision, scale) => Self::Decimal64(protobuf::Decimal64Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Decimal128(precision, scale) => Self::Decimal128(protobuf::Decimal128Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Decimal256(precision, scale) => Self::Decimal256(protobuf::Decimal256Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Map(field, sorted) => {
-                Self::Map(Box::new(
-                    protobuf::Map {
-                        field_type: Some(Box::new(field.as_ref().try_into()?)),
-                        keys_sorted: *sorted,
-                    }
-                ))
+            DataType::Decimal32(precision, scale) => {
+                Self::Decimal32(protobuf::Decimal32Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
             }
-            DataType::RunEndEncoded(_, _) => {
-                return Err(Error::General(
-                    "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
-                ))
+            DataType::Decimal64(precision, scale) => {
+                Self::Decimal64(protobuf::Decimal64Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
+            }
+            DataType::Decimal128(precision, scale) => {
+                Self::Decimal128(protobuf::Decimal128Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
+            }
+            DataType::Decimal256(precision, scale) => {
+                Self::Decimal256(protobuf::Decimal256Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
+            }
+            DataType::Map(field, sorted) => Self::Map(Box::new(protobuf::Map {
+                field_type: Some(Box::new(field.as_ref().try_into()?)),
+                keys_sorted: *sorted,
+            })),
+            DataType::RunEndEncoded(run_ends_field, values_field) => {
+                Self::RunEndEncoded(Box::new(protobuf::RunEndEncoded {
+                    run_ends_field: Some(Box::new(run_ends_field.as_ref().try_into()?)),
+                    values_field: Some(Box::new(values_field.as_ref().try_into()?)),
+                }))
             }
         };
 
@@ -689,6 +698,18 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     ))),
                 })
             }
+
+            ScalarValue::RunEndEncoded(run_ends_field, values_field, val) => {
+                Ok(protobuf::ScalarValue {
+                    value: Some(Value::RunEndEncodedValue(Box::new(
+                        protobuf::ScalarRunEndEncodedValue {
+                            run_ends_field: Some(run_ends_field.as_ref().try_into()?),
+                            values_field: Some(values_field.as_ref().try_into()?),
+                            value: Some(Box::new(val.as_ref().try_into()?)),
+                        },
+                    ))),
+                })
+            }
         }
     }
 }
@@ -892,6 +913,13 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             skip_arrow_metadata: value.skip_arrow_metadata,
             coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
+            content_defined_chunking: value.use_content_defined_chunking.as_ref().map(|cdc|
+                protobuf::CdcOptions {
+                    min_chunk_size: cdc.min_chunk_size as u64,
+                    max_chunk_size: cdc.max_chunk_size as u64,
+                    norm_level: cdc.norm_level,
+                }
+            ),
         })
     }
 }
@@ -951,8 +979,11 @@ impl TryFrom<&TableParquetOptions> for protobuf::TableParquetOptions {
             .iter()
             .filter_map(|(k, v)| v.as_ref().map(|v| (k.clone(), v.clone())))
             .collect::<HashMap<String, String>>();
+
+        let global: protobuf::ParquetOptions = (&value.global).try_into()?;
+
         Ok(protobuf::TableParquetOptions {
-            global: Some((&value.global).try_into()?),
+            global: Some(global),
             column_specific_options,
             key_value_metadata,
         })
@@ -999,6 +1030,7 @@ impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
             compression: compression.into(),
             schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
             compression_level: opts.compression_level,
+            newline_delimited: Some(opts.newline_delimited),
         })
     }
 }
@@ -1019,21 +1051,28 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-// ScalarValue::List / FixedSizeList / LargeList / ListView / LargeListView / Struct / Map are serialized using
-// Arrow IPC messages as a single column RecordBatch
+// Nested ScalarValue types (List / FixedSizeList / LargeList / ListView / LargeListView / Struct / Map)
+// are serialized using Arrow IPC messages as a single column RecordBatch
 fn encode_scalar_nested_value(
     arr: ArrayRef,
     val: &ScalarValue,
 ) -> Result<protobuf::ScalarValue, Error> {
     let batch = RecordBatch::try_from_iter(vec![("field_name", arr)]).map_err(|e| {
         Error::General(format!(
-            "Error creating temporary batch while encoding ScalarValue::List: {e}"
+            "Error creating temporary batch while encoding nested ScalarValue: {e}"
         ))
     })?;
 
     let ipc_gen = IpcDataGenerator {};
     let mut dict_tracker = DictionaryTracker::new(false);
     let write_options = IpcWriteOptions::default();
+    // The IPC writer requires pre-allocated dictionary IDs (normally assigned when
+    // serializing the schema). Populate `dict_tracker` by encoding the schema first.
+    ipc_gen.schema_to_bytes_with_dictionary_tracker(
+        batch.schema().as_ref(),
+        &mut dict_tracker,
+        &write_options,
+    );
     let mut compression_context = CompressionContext::default();
     let (encoded_dictionaries, encoded_message) = ipc_gen
         .encode(
@@ -1043,7 +1082,7 @@ fn encode_scalar_nested_value(
             &mut compression_context,
         )
         .map_err(|e| {
-            Error::General(format!("Error encoding ScalarValue::List as IPC: {e}"))
+            Error::General(format!("Error encoding nested ScalarValue as IPC: {e}"))
         })?;
 
     let schema: protobuf::Schema = batch.schema().try_into()?;

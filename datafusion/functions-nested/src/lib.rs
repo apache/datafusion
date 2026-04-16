@@ -24,8 +24,6 @@
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-// https://github.com/apache/datafusion/issues/18881
-#![deny(clippy::allow_attributes)]
 
 //! Nested type Functions for [DataFusion].
 //!
@@ -39,7 +37,9 @@
 #[macro_use]
 pub mod macros;
 
+pub mod array_compact;
 pub mod array_has;
+pub mod arrays_zip;
 pub mod cardinality;
 pub mod concat;
 pub mod dimension;
@@ -78,9 +78,11 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::array_compact::array_compact;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::arrays_zip::arrays_zip;
     pub use super::cardinality::cardinality;
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
@@ -128,6 +130,7 @@ pub mod expr_fn {
 /// Return all default nested type functions
 pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
     vec![
+        array_compact::array_compact_udf(),
         string::array_to_string_udf(),
         string::string_to_array_udf(),
         range::range_udf(),
@@ -161,6 +164,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         set_ops::array_distinct_udf(),
         set_ops::array_intersect_udf(),
         set_ops::array_union_udf(),
+        arrays_zip::arrays_zip_udf(),
         position::array_position_udf(),
         position::array_positions_udf(),
         remove::array_remove_udf(),

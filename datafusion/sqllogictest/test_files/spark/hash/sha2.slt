@@ -75,3 +75,58 @@ SELECT sha2(expr, bit_length) FROM VALUES ('foo',0::INT), ('bar',224::INT), ('ba
 967004d25de4abc1bd6a7c9a216254a5ac0733e8ad96dc9f1ea0fad9619da7c32d654ec8ad8ba2f9b5728fed6633bd91
 8c6be9ed448a34883a13a13f4ead4aefa036b67dcda59020c01e57ea075ea8a4792d428f2c6fd0c09d1c49994d6c22789336e062188df29572ed07e7f9779c52
 NULL
+
+# All string types
+query T
+SELECT sha2(arrow_cast('foo', 'Utf8'), bit_length) FROM VALUES (224::INT), (256::INT) AS t(bit_length);
+----
+0808f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
+
+query T
+SELECT sha2(arrow_cast('foo', 'LargeUtf8'), bit_length) FROM VALUES (224::INT), (256::INT) AS t(bit_length);
+----
+0808f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
+
+query T
+SELECT sha2(arrow_cast('foo', 'Utf8View'), bit_length) FROM VALUES (224::INT), (256::INT) AS t(bit_length);
+----
+0808f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
+
+# All binary types
+query T
+SELECT sha2(arrow_cast('foo', 'Binary'), bit_length) FROM VALUES (224::INT), (256::INT) AS t(bit_length);
+----
+0808f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
+
+query T
+SELECT sha2(arrow_cast('foo', 'LargeBinary'), bit_length) FROM VALUES (224::INT), (256::INT) AS t(bit_length);
+----
+0808f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
+
+query T
+SELECT sha2(arrow_cast('foo', 'BinaryView'), bit_length) FROM VALUES (224::INT), (256::INT) AS t(bit_length);
+----
+0808f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
+
+
+# Null cases
+query T
+select sha2(null, 0);
+----
+NULL
+
+query T
+select sha2('a', null);
+----
+NULL
+
+query T
+select sha2('a', null::int);
+----
+NULL

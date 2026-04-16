@@ -106,8 +106,9 @@ pub(crate) fn start_demuxer_task(
     let file_extension = config.file_extension.clone();
     let base_output_path = config.table_paths[0].clone();
     let task = if config.table_partition_cols.is_empty() {
-        let single_file_output = !base_output_path.is_collection()
-            && base_output_path.file_extension().is_some();
+        let single_file_output = config
+            .file_output_mode
+            .single_file_output(&base_output_path);
         SpawnedTask::spawn(async move {
             row_count_demuxer(
                 tx,
@@ -259,7 +260,8 @@ fn generate_file_path(
     if !single_file_output {
         base_output_path
             .prefix()
-            .child(format!("{write_id}_{part_idx}.{file_extension}"))
+            .clone()
+            .join(format!("{write_id}_{part_idx}.{file_extension}"))
     } else {
         base_output_path.prefix().to_owned()
     }
@@ -587,8 +589,8 @@ fn compute_hive_style_file_path(
 ) -> Path {
     let mut file_path = base_output_path.prefix().clone();
     for j in 0..part_key.len() {
-        file_path = file_path.child(format!("{}={}", partition_by[j].0, part_key[j]));
+        file_path = file_path.join(format!("{}={}", partition_by[j].0, part_key[j]));
     }
 
-    file_path.child(format!("{write_id}.{file_extension}"))
+    file_path.join(format!("{write_id}.{file_extension}"))
 }

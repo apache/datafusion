@@ -1,0 +1,124 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# End-user-facing happy-path coverage for nested list/struct Parquet schema evolution.
+#
+# These tests generate mixed-schema parquet files through SQL COPY statements and
+# query them through CREATE EXTERNAL TABLE, rather than constructing batches
+# directly in Rust. Rust tests still cover more specialized fixture shapes and
+# failure paths.
+##########
+
+statement ok
+CREATE EXTERNAL TABLE list_messages (
+  row_id INT,
+  messages ARRAY<STRUCT<id BIGINT, name VARCHAR, chain VARCHAR>>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_nested/list_messages/';
+
+statement ok
+COPY (
+  SELECT
+    1 AS row_id,
+    [
+      named_struct('id', 10, 'name', 'alpha'),
+      named_struct('id', 20, 'name', 'beta')
+    ] AS messages
+) TO 'test_files/scratch/schema_evolution_nested/list_messages/old.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT
+    2 AS row_id,
+    [
+      named_struct('id', 30, 'name', 'gamma', 'chain', 'eth', 'ignored', 99)
+    ] AS messages
+) TO 'test_files/scratch/schema_evolution_nested/list_messages/new.parquet'
+STORED AS PARQUET;
+
+query I?
+SELECT row_id, messages FROM list_messages ORDER BY row_id;
+----
+1 [{id: 10, name: alpha, chain: NULL}, {id: 20, name: beta, chain: NULL}]
+2 [{id: 30, name: gamma, chain: eth}]
+
+query IIT rowsort
+SELECT
+  row_id,
+  get_field(messages[1], 'id') AS msg_id,
+  get_field(messages[1], 'chain') AS chain
+FROM list_messages;
+----
+1 10 NULL
+2 30 eth
+
+statement ok
+COPY (
+  SELECT
+    1 AS row_id,
+    arrow_cast(
+      [
+        named_struct('id', 10, 'name', 'alpha'),
+        named_struct('id', 20, 'name', 'beta')
+      ],
+      'LargeList(Struct("id": Int64, "name": Utf8View))'
+    ) AS messages
+) TO 'test_files/scratch/schema_evolution_nested/large_list_messages/old.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT
+    2 AS row_id,
+    arrow_cast(
+      [
+        named_struct('id', 30, 'name', 'gamma', 'chain', 'eth', 'ignored', 99)
+      ],
+      'LargeList(Struct("id": Int64, "name": Utf8View, "chain": Utf8View, "ignored": Int64))'
+    ) AS messages
+) TO 'test_files/scratch/schema_evolution_nested/large_list_messages/new.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE large_list_messages
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_nested/large_list_messages/';
+
+query TTT
+DESCRIBE large_list_messages;
+----
+row_id Int64 NO
+messages LargeList(Struct("id": Int64, "name": Utf8View, "chain": Utf8View, "ignored": Int64)) NO
+
+query I?
+SELECT row_id, messages FROM large_list_messages ORDER BY row_id;
+----
+1 [{id: 10, name: alpha, chain: NULL, ignored: NULL}, {id: 20, name: beta, chain: NULL, ignored: NULL}]
+2 [{id: 30, name: gamma, chain: eth, ignored: 99}]
+
+query IIT rowsort
+SELECT
+  row_id,
+  get_field(messages[1], 'id') AS msg_id,
+  get_field(messages[1], 'chain') AS chain
+FROM large_list_messages;
+----
+1 10 NULL
+2 30 eth

@@ -26,7 +26,6 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 /// range for which it is valid) and `x` is not `NULL`
 ///
 /// For details see [`datafusion_expr::ScalarUDFImpl::preimage`]
-///
 pub(super) fn rewrite_with_preimage(
     preimage_interval: Interval,
     op: Operator,
@@ -69,14 +68,14 @@ pub(super) fn rewrite_with_preimage(
 
 #[cfg(test)]
 mod test {
-    use std::any::Any;
+
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::{
         ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility, and, binary_expr, col, lit, preimage::PreimageResult,
+        Signature, Volatility, and, binary_expr, col, lit, or, preimage::PreimageResult,
         simplify::SimplifyContext,
     };
 
@@ -121,10 +120,6 @@ mod test {
     }
 
     impl ScalarUDFImpl for PreimageUdf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "preimage_func"
         }
@@ -165,13 +160,24 @@ mod test {
                         )?),
                     })
                 }
+                Expr::Literal(ScalarValue::Int32(Some(600)), _) => {
+                    Ok(PreimageResult::Range {
+                        expr,
+                        interval: Box::new(Interval::try_new(
+                            ScalarValue::Int32(Some(300)),
+                            ScalarValue::Int32(Some(400)),
+                        )?),
+                    })
+                }
                 _ => Ok(PreimageResult::None),
             }
         }
     }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
-        let simplify_context = SimplifyContext::default().with_schema(Arc::clone(schema));
+        let simplify_context = SimplifyContext::builder()
+            .with_schema(Arc::clone(schema))
+            .build();
         ExprSimplifier::new(simplify_context)
             .simplify(expr)
             .unwrap()
@@ -310,6 +316,38 @@ mod test {
             .or(col("x").is_null());
 
         assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_in_list_rewrite() {
+        let schema = test_schema();
+        let expr = preimage_udf_expr().in_list(vec![lit(500), lit(600)], false);
+        let expected = or(
+            and(col("x").gt_eq(lit(100)), col("x").lt(lit(200))),
+            and(col("x").gt_eq(lit(300)), col("x").lt(lit(400))),
+        );
+
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_not_in_list_rewrite() {
+        let schema = test_schema();
+        let expr = preimage_udf_expr().in_list(vec![lit(500), lit(600)], true);
+        let expected = and(
+            or(col("x").lt(lit(100)), col("x").gt_eq(lit(200))),
+            or(col("x").lt(lit(300)), col("x").gt_eq(lit(400))),
+        );
+
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_in_list_long_list_no_rewrite() {
+        let schema = test_schema();
+        let expr = preimage_udf_expr().in_list((1..100).map(lit).collect(), false);
+
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
     }
 
     #[test]

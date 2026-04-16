@@ -99,3 +99,41 @@ FROM VALUES
 NULL
 NULL
 NULL
+
+query ?
+SELECT slice(['2001-09-28T01:00:00'::timestamp, '2001-08-28T01:00:00'::timestamp, '2001-07-28T01:00:00'::timestamp, '2001-06-28T01:00:00'::timestamp, '2001-05-28T01:00:00'::timestamp], 1, 3);
+----
+[2001-09-28T01:00:00, 2001-08-28T01:00:00, 2001-07-28T01:00:00]
+
+query ?
+SELECT slice(slice([1, 2, 3, 4], 1, 3), 1, 2);
+----
+[1, 2]
+
+query ?
+SELECT slice([1, 2, 3, 4], CAST('2' AS INT), 4);
+----
+[2, 3, 4]
+
+query ?
+SELECT slice(column1, column2, column3)
+FROM VALUES
+(NULL, 1, 2),
+(NULL, 1, -2),
+(NULL, -1, 2),
+(NULL, 0, 2);
+----
+NULL
+NULL
+NULL
+NULL
+
+query ?
+SELECT slice(slice(NULL, 1, 2), 1, 2)
+----
+NULL
+
+query ?
+SELECT slice(slice(make_array(NULL), 1, 2), 1, 2)
+----
+[NULL]

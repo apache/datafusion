@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -77,11 +76,6 @@ impl fmt::Display for TryCastExpr {
 }
 
 impl PhysicalExpr for TryCastExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.cast_type.clone())
     }
@@ -206,7 +200,7 @@ mod tests {
             for (i, x) in $VEC.iter().enumerate() {
                 match x {
                     Some(x) => assert_eq!(result.value(i), *x),
-                    None => assert!(!result.is_valid(i)),
+                    None => assert!(result.is_null(i)),
                 }
             }
         }};
@@ -260,7 +254,7 @@ mod tests {
             for (i, x) in $VEC.iter().enumerate() {
                 match x {
                     Some(x) => assert_eq!(result.value(i), *x),
-                    None => assert!(!result.is_valid(i)),
+                    None => assert!(result.is_null(i)),
                 }
             }
         }};

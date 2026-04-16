@@ -480,6 +480,12 @@ impl SessionConfig {
         self.options.execution.enforce_batch_size_in_joins
     }
 
+    /// Toggle SQL ANSI mode for expressions, casting, and error handling
+    pub fn with_enable_ansi_mode(mut self, enable_ansi_mode: bool) -> Self {
+        self.options_mut().execution.enable_ansi_mode = enable_ansi_mode;
+        self
+    }
+
     /// Convert configuration options to name-value pairs with values
     /// converted to strings.
     ///

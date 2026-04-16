@@ -24,7 +24,6 @@
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-#![deny(clippy::allow_attributes)]
 
 //! [DataFusion](https://github.com/apache/datafusion)
 //! is an extensible query execution framework that uses
@@ -53,6 +52,7 @@ pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
+pub mod extension_types;
 pub mod function;
 pub mod select_expr;
 pub mod groups_accumulator {
@@ -96,6 +96,7 @@ pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
+pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
     ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature,
     TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
@@ -125,7 +126,9 @@ pub use udaf::{
     udaf_default_schema_name, udaf_default_window_function_display_name,
     udaf_default_window_function_schema_name,
 };
-pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+pub use udf::{
+    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, StructFieldMapping,
+};
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 

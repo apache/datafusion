@@ -134,7 +134,7 @@ To get started, see
    :caption: Library User Guide
    
    library-user-guide/index
-   library-user-guide/upgrading
+   library-user-guide/upgrading/index
    library-user-guide/extensions
    library-user-guide/using-the-sql-api
    library-user-guide/extending-sql
@@ -163,6 +163,7 @@ To get started, see
    contributor-guide/testing
    contributor-guide/api-health
    contributor-guide/howtos
+   contributor-guide/release_management
    contributor-guide/roadmap
    contributor-guide/governance
    contributor-guide/inviting

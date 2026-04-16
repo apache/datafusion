@@ -20,6 +20,7 @@ use std::process::Command;
 use rstest::rstest;
 
 use async_trait::async_trait;
+use insta::internals::SettingsBindDropGuard;
 use insta::{Settings, glob};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
@@ -44,7 +45,7 @@ fn make_settings() -> Settings {
     settings
 }
 
-async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
+async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String> {
     const MINIO_ROOT_USER: &str = "TEST-DataFusionLogin";
     const MINIO_ROOT_PASSWORD: &str = "TEST-DataFusionPassword";
 
@@ -99,27 +100,23 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
                     let stdout = container.stdout_to_vec().await.unwrap_or_default();
                     let stderr = container.stderr_to_vec().await.unwrap_or_default();
 
-                    panic!(
+                    return Err(format!(
                         "Failed to execute command: {}\nError: {}\nStdout: {:?}\nStderr: {:?}",
                         cmd_ref,
                         e,
                         String::from_utf8_lossy(&stdout),
                         String::from_utf8_lossy(&stderr)
-                    );
+                    ));
                 }
             }
 
-            container
+            Ok(container)
         }
 
-        Err(TestcontainersError::Client(e)) => {
-            panic!(
-                "Failed to start MinIO container. Ensure Docker is running and accessible: {e}"
-            );
-        }
-        Err(e) => {
-            panic!("Failed to start MinIO container: {e}");
-        }
+        Err(TestcontainersError::Client(e)) => Err(format!(
+            "Failed to start MinIO container. Ensure Docker is running and accessible: {e}"
+        )),
+        Err(e) => Err(format!("Failed to start MinIO container: {e}")),
     }
 }
 
@@ -219,6 +216,42 @@ fn test_cli_top_memory_consumers<'a>(
     #[case] snapshot_name: &str,
     #[case] top_memory_consumers: impl IntoIterator<Item = &'a str>,
 ) {
+    let _bound = bind_to_settings(snapshot_name);
+
+    let mut cmd = cli();
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
+    cmd.args(["--memory-limit", "10M", "--command", sql]);
+    cmd.args(top_memory_consumers);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[rstest]
+#[case("no_track", ["--top-memory-consumers", "0"])]
+#[case("top2", ["--top-memory-consumers", "2"])]
+#[test]
+fn test_cli_top_memory_consumers_with_mem_pool_type<'a>(
+    #[case] snapshot_name: &str,
+    #[case] top_memory_consumers: impl IntoIterator<Item = &'a str>,
+) {
+    let _bound = bind_to_settings(snapshot_name);
+
+    let mut cmd = cli();
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
+    cmd.args([
+        "--memory-limit",
+        "10M",
+        "--mem-pool-type",
+        "fair",
+        "--command",
+        sql,
+    ]);
+    cmd.args(top_memory_consumers);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+fn bind_to_settings(snapshot_name: &str) -> SettingsBindDropGuard {
     let mut settings = make_settings();
 
     settings.set_snapshot_suffix(snapshot_name);
@@ -236,12 +269,20 @@ fn test_cli_top_memory_consumers<'a>(
         "Resources exhausted: Failed to allocate",
     );
 
+    settings.bind_to_scope()
+}
+
+#[test]
+fn test_cli_with_unbounded_memory_pool() {
+    let mut settings = make_settings();
+
+    settings.set_snapshot_suffix("default");
+
     let _bound = settings.bind_to_scope();
 
     let mut cmd = cli();
     let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
-    cmd.args(["--memory-limit", "10M", "--command", sql]);
-    cmd.args(top_memory_consumers);
+    cmd.args(["--maxrows", "10", "--command", sql]);
 
     assert_cmd_snapshot!(cmd);
 }
@@ -253,7 +294,14 @@ async fn test_cli() {
         return;
     }
 
-    let container = setup_minio_container().await;
+    let container = match setup_minio_container().await {
+        Ok(c) => c,
+        Err(e) if e.contains("toomanyrequests") => {
+            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
+            return;
+        }
+        e @ Err(_) => e.unwrap(),
+    };
 
     let settings = make_settings();
     let _bound = settings.bind_to_scope();
@@ -286,7 +334,14 @@ async fn test_aws_options() {
     let settings = make_settings();
     let _bound = settings.bind_to_scope();
 
-    let container = setup_minio_container().await;
+    let container = match setup_minio_container().await {
+        Ok(c) => c,
+        Err(e) if e.contains("toomanyrequests") => {
+            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
+            return;
+        }
+        e @ Err(_) => e.unwrap(),
+    };
     let port = container.get_host_port_ipv4(9000).await.unwrap();
 
     let input = format!(
@@ -359,14 +414,12 @@ fn test_backtrace_output(#[case] query: &str) {
     let output = cmd.output().expect("Failed to execute command");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined_output = format!("{}{}", stdout, stderr);
+    let combined_output = format!("{stdout}{stderr}");
 
     // Assert that the output includes literal 'backtrace'
     assert!(
         combined_output.to_lowercase().contains("backtrace"),
-        "Expected output to contain 'backtrace', but got stdout: '{}' stderr: '{}'",
-        stdout,
-        stderr
+        "Expected output to contain 'backtrace', but got stdout: '{stdout}' stderr: '{stderr}'"
     );
 }
 
@@ -377,7 +430,14 @@ async fn test_s3_url_fallback() {
         return;
     }
 
-    let container = setup_minio_container().await;
+    let container = match setup_minio_container().await {
+        Ok(c) => c,
+        Err(e) if e.contains("toomanyrequests") => {
+            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
+            return;
+        }
+        e @ Err(_) => e.unwrap(),
+    };
 
     let mut settings = make_settings();
     settings.set_snapshot_suffix("s3_url_fallback");
@@ -407,8 +467,14 @@ async fn test_object_store_profiling() {
         return;
     }
 
-    let container = setup_minio_container().await;
-
+    let container = match setup_minio_container().await {
+        Ok(c) => c,
+        Err(e) if e.contains("toomanyrequests") => {
+            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
+            return;
+        }
+        e @ Err(_) => e.unwrap(),
+    };
     let mut settings = make_settings();
 
     // as the object store profiling contains timestamps and durations, we must

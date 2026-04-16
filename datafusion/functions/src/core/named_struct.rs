@@ -15,20 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::getfield::GetFieldFunc;
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    StructFieldMapping,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
     doc_section(label = "Struct Functions"),
-    description = "Returns an Arrow struct using the specified name and input expressions pairs.",
+    description = "Returns an Arrow struct using the specified name and input expressions pairs.
+For information on comparing and ordering struct values (including `NULL` handling),
+see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).",
     syntax_example = "named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])",
     sql_example = r#"
 For example, this query converts two columns `a` and `b` to a single column with
@@ -78,10 +81,6 @@ impl NamedStructFunc {
 }
 
 impl ScalarUDFImpl for NamedStructFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "named_struct"
     }
@@ -176,5 +175,32 @@ impl ScalarUDFImpl for NamedStructFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn struct_field_mapping(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        if literal_args.is_empty() || !literal_args.len().is_multiple_of(2) {
+            return None;
+        }
+
+        let mut fields = Vec::with_capacity(literal_args.len() / 2);
+        for (i, chunk) in literal_args.chunks(2).enumerate() {
+            match chunk {
+                [Some(ScalarValue::Utf8(Some(name))), _] => {
+                    fields.push((
+                        vec![ScalarValue::Utf8(Some(name.clone()))],
+                        i * 2 + 1, // index of the value argument
+                    ));
+                }
+                _ => return None,
+            }
+        }
+
+        Some(StructFieldMapping {
+            field_accessor: Arc::new(ScalarUDF::from(GetFieldFunc::new())),
+            fields,
+        })
     }
 }

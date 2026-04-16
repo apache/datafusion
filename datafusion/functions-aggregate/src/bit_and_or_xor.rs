@@ -17,18 +17,17 @@
 
 //! Defines `BitAnd`, `BitOr`, `BitXor` and `BitXor DISTINCT` aggregate accumulators
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::mem::{size_of, size_of_val};
 
-use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, AsArray, downcast_integer};
 use arrow::datatypes::{
     ArrowNativeType, ArrowNumericType, DataType, Field, FieldRef, Int8Type, Int16Type,
     Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
+use datafusion_common::hash_utils::RandomState;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
@@ -240,10 +239,6 @@ impl BitwiseOperation {
 }
 
 impl AggregateUDFImpl for BitwiseOperation {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.func_name
     }

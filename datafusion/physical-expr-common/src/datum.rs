@@ -17,7 +17,7 @@
 
 use arrow::array::BooleanArray;
 use arrow::array::{ArrayRef, Datum, make_comparator};
-use arrow::buffer::NullBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::{
     distinct, eq, gt, gt_eq, lt, lt_eq, neq, not_distinct,
 };
@@ -171,9 +171,9 @@ pub fn compare_op_for_nested(
     };
 
     let values = match (is_l_scalar, is_r_scalar) {
-        (false, false) => (0..len).map(|i| cmp_with_op(i, i)).collect(),
-        (true, false) => (0..len).map(|i| cmp_with_op(0, i)).collect(),
-        (false, true) => (0..len).map(|i| cmp_with_op(i, 0)).collect(),
+        (false, false) => BooleanBuffer::collect_bool(len, |i| cmp_with_op(i, i)),
+        (true, false) => BooleanBuffer::collect_bool(len, |i| cmp_with_op(0, i)),
+        (false, true) => BooleanBuffer::collect_bool(len, |i| cmp_with_op(i, 0)),
         (true, true) => std::iter::once(cmp_with_op(0, 0)).collect(),
     };
 
@@ -189,14 +189,14 @@ pub fn compare_op_for_nested(
             (false, false) | (true, true) => NullBuffer::union(l.nulls(), r.nulls()),
             (true, false) => {
                 // When left is null-scalar and right is array, expand left nulls to match result length
-                match l.nulls().filter(|nulls| !nulls.is_valid(0)) {
+                match l.nulls().filter(|nulls| nulls.is_null(0)) {
                     Some(_) => Some(NullBuffer::new_null(len)), // Left scalar is null
                     None => r.nulls().cloned(),                 // Left scalar is non-null
                 }
             }
             (false, true) => {
                 // When right is null-scalar and left is array, expand right nulls to match result length
-                match r.nulls().filter(|nulls| !nulls.is_valid(0)) {
+                match r.nulls().filter(|nulls| nulls.is_null(0)) {
                     Some(_) => Some(NullBuffer::new_null(len)), // Right scalar is null
                     None => l.nulls().cloned(), // Right scalar is non-null
                 }

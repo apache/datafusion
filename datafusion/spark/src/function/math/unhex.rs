@@ -27,7 +27,6 @@ use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#unhex>
@@ -53,10 +52,6 @@ impl SparkUnhex {
 }
 
 impl ScalarUDFImpl for SparkUnhex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "unhex"
     }

@@ -24,8 +24,6 @@
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-// https://github.com/apache/datafusion/issues/18881
-#![deny(clippy::allow_attributes)]
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 //!
@@ -65,6 +63,7 @@ mod visitor;
 pub mod aggregates;
 pub mod analyze;
 pub mod async_func;
+pub mod buffer;
 pub mod coalesce;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
@@ -81,6 +80,7 @@ pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
+pub mod operator_statistics;
 pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;

@@ -261,9 +261,16 @@ fn coerce_exprs_for_schema(
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
                     _ => {
-                        // maintain the original name when casting
-                        let name = dst_schema.field(idx).name();
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                        match expr {
+                            // maintain the original name when casting a column, to avoid the
+                            // tablename being added to it when not explicitly set by the query
+                            // (see: https://github.com/apache/datafusion/issues/18818)
+                            Expr::Column(ref column) => {
+                                let name = column.name().to_owned();
+                                Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                            }
+                            _ => Ok(expr.cast_to(new_type, src_schema)?),
+                        }
                     }
                 }
             } else {

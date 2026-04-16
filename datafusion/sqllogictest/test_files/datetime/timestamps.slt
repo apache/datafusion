@@ -771,6 +771,18 @@ select to_timestamp_seconds(cast (1 as int));
 ## test date_bin function
 ##########
 
+# NULL stride should return NULL, not a planning error
+query P
+SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:00:00')
+----
+NULL
+
+# NULL stride should return NULL, not a planning error
+query P
+SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00')
+----
+NULL
+
 # invalid second arg type
 query error
 SELECT DATE_BIN(INTERVAL '0 second', 25, TIMESTAMP '1970-01-01T00:00:00Z')
@@ -3064,7 +3076,7 @@ NULL
 query error DataFusion error: Error during planning: Function 'make_date' expects 3 arguments but received 1
 select make_date(1);
 
-query error DataFusion error: Error during planning: Function 'make_date' requires TypeSignatureClass::Native\(LogicalType\(Native\(Int32\), Int32\)\), but received Interval\(MonthDayNano\) \(DataType: Interval\(MonthDayNano\)\)
+query error DataFusion error: Error during planning: Function 'make_date' requires Int32, but received Interval\(MonthDayNano\) \(DataType: Interval\(MonthDayNano\)\).
 select make_date(interval '1 day', '2001-05-21'::timestamp, '2001-05-21'::timestamp);
 
 ##########
@@ -3337,7 +3349,7 @@ select make_time(22, '', 27);
 query error Cannot cast string '' to value of Int32 type
 select make_time(22, 1, '');
 
-query error DataFusion error: Error during planning: Function 'make_time' requires TypeSignatureClass::Native\(LogicalType\(Native\(Int32\), Int32\)\), but received Float64 \(DataType: Float64\)
+query error DataFusion error: Error during planning: Function 'make_time' requires Int32, but received Float64 \(DataType: Float64\)
 select make_time(arrow_cast(22, 'Float64'), 1, '');
 
 ##########
@@ -3664,10 +3676,10 @@ select to_char(arrow_cast(123456, 'Duration(Second)'), null);
 ----
 NULL
 
-query error DataFusion error: Execution error: Cast error: Format error
+query error DataFusion error: Arrow error: Cast error: Format error
 SELECT to_char(timestamps, '%X%K') from formats;
 
-query error DataFusion error: Execution error: Cast error: Format error
+query error DataFusion error: Arrow error: Cast error: Format error
 SELECT to_char('2000-02-03'::date, '%X%K');
 
 query T
@@ -3713,6 +3725,21 @@ query T
 select to_char('2020-01-01 00:10:20.123'::timestamp at time zone 'America/New_York', '%Y-%m-%d %H:%M:%S.%3f');
 ----
 2020-01-01 00:10:20.123
+
+# Null values with array format
+query T
+SELECT to_char(column1, column2)
+FROM (VALUES
+    (DATE '2020-09-01', '%Y-%m-%d'),
+    (NULL, '%Y-%m-%d'),
+    (DATE '2020-09-02', NULL),
+    (NULL, NULL)
+);
+----
+2020-09-01
+NULL
+NULL
+NULL
 
 statement ok
 drop table formats;
@@ -3952,7 +3979,7 @@ statement error
 select to_local_time('2024-04-01T00:00:20Z'::timestamp, 'some string');
 
 # invalid argument data type
-statement error DataFusion error: Error during planning: Function 'to_local_time' requires TypeSignatureClass::Timestamp, but received String \(DataType: Utf8\)
+statement error DataFusion error: Error during planning: Function 'to_local_time' requires Timestamp, but received String \(DataType: Utf8\)
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone
@@ -5328,3 +5355,39 @@ drop table ts_data_secs
 
 statement ok
 drop table ts_data_micros_kolkata
+
+##########
+## Test to_timestamp with scalar float inputs
+##########
+
+statement ok
+create table test_to_timestamp_scalar(id int, name varchar) as values
+  (1, 'foo'),
+  (2, 'bar');
+
+query P
+SELECT to_timestamp(123.5, name) FROM test_to_timestamp_scalar ORDER BY id;
+----
+1970-01-01T00:02:03.500
+1970-01-01T00:02:03.500
+
+query P
+SELECT to_timestamp(456.789::float, name) FROM test_to_timestamp_scalar ORDER BY id;
+----
+1970-01-01T00:07:36.789001464
+1970-01-01T00:07:36.789001464
+
+query P
+SELECT to_timestamp(arrow_cast(100.5, 'Float16'), name) FROM test_to_timestamp_scalar ORDER BY id;
+----
+1970-01-01T00:01:40.500
+1970-01-01T00:01:40.500
+
+statement ok
+drop table test_to_timestamp_scalar
+
+# date_bin with NULL interval should return NULL, not a planning error
+query P
+SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:00:00')
+----
+NULL

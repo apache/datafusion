@@ -50,7 +50,7 @@ pub struct GroupedTopKAggregateStream {
     baseline_metrics: BaselineMetrics,
     group_by_metrics: GroupByMetrics,
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    group_by: PhysicalGroupBy,
+    group_by: Arc<PhysicalGroupBy>,
     priority_map: PriorityMap,
 }
 
@@ -62,7 +62,7 @@ impl GroupedTopKAggregateStream {
         limit: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&aggr.schema);
-        let group_by = aggr.group_by.clone();
+        let group_by = Arc::clone(&aggr.group_by);
         let input = aggr.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);

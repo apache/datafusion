@@ -241,6 +241,7 @@ impl JsonOptionsProto {
                 compression: options.compression as i32,
                 schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
                 compression_level: options.compression_level,
+                newline_delimited: Some(options.newline_delimited),
             }
         } else {
             JsonOptionsProto::default()
@@ -260,6 +261,7 @@ impl From<&JsonOptionsProto> for JsonOptions {
             },
             schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
             compression_level: proto.compression_level,
+            newline_delimited: proto.newline_delimited.unwrap_or(true),
         }
     }
 }
@@ -349,13 +351,13 @@ mod parquet {
     use super::*;
 
     use crate::protobuf::{
-        ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
-        ParquetOptions as ParquetOptionsProto,
+        CdcOptions as CdcOptionsProto, ParquetColumnOptions as ParquetColumnOptionsProto,
+        ParquetColumnSpecificOptions, ParquetOptions as ParquetOptionsProto,
         TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
         parquet_options,
     };
     use datafusion_common::config::{
-        ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        CdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     };
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
@@ -423,6 +425,13 @@ mod parquet {
                 }),
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
+                }),
+                content_defined_chunking: global_options.global.use_content_defined_chunking.as_ref().map(|cdc| {
+                    CdcOptionsProto {
+                        min_chunk_size: cdc.min_chunk_size as u64,
+                        max_chunk_size: cdc.max_chunk_size as u64,
+                        norm_level: cdc.norm_level,
+                    }
                 }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
@@ -523,6 +532,17 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
+            use_content_defined_chunking: proto.content_defined_chunking.map(|cdc| {
+                let defaults = CdcOptions::default();
+                CdcOptions {
+                    // proto3 uses 0 as the wire default for uint64; a zero chunk size is
+                    // invalid, so treat it as "field not set" and fall back to the default.
+                    min_chunk_size: if cdc.min_chunk_size != 0 { cdc.min_chunk_size as usize } else { defaults.min_chunk_size },
+                    max_chunk_size: if cdc.max_chunk_size != 0 { cdc.max_chunk_size as usize } else { defaults.max_chunk_size },
+                    // norm_level = 0 is a valid value (and the default), so pass it through directly.
+                    norm_level: cdc.norm_level,
+                }
+            }),
         }
         }
     }
@@ -583,7 +603,7 @@ mod parquet {
                     .iter()
                     .map(|(k, v)| (k.clone(), Some(v.clone())))
                     .collect(),
-                crypto: Default::default(),
+                ..Default::default()
             }
         }
     }

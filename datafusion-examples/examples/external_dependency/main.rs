@@ -26,8 +26,12 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `dataframe_to_s3` — run a query using a DataFrame against a parquet file from AWS S3 and writing back to AWS S3
-//! - `query_aws_s3` — configure `object_store` and run a query against files stored in AWS S3
+//!
+//! - `dataframe_to_s3`
+//!   (file: dataframe_to_s3.rs, desc: Query DataFrames and write results to S3)
+//!
+//! - `query_aws_s3`
+//!   (file: query_aws_s3.rs, desc: Query S3-backed data using object_store)
 
 mod dataframe_to_s3;
 mod query_aws_s3;

@@ -123,7 +123,7 @@ physical_plan
 03)----RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
 04)------StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
 
-# Start repratition on empty column test.
+# Start repartition on empty column test.
 # See https://github.com/apache/datafusion/issues/12057
 
 statement ok
@@ -137,6 +137,16 @@ SELECT sum(1) OVER (PARTITION BY false=false)
 FROM t1 WHERE ((false > (v1 = v1)) IS DISTINCT FROM true);
 ----
 1
+
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.enable_round_robin_repartition;
 
 statement ok
 DROP TABLE t1;

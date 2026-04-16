@@ -49,5 +49,5 @@ pub use datafusion_datasource::file_scan_config::{
 pub use datafusion_datasource::file_sink_config::*;
 
 pub use datafusion_datasource::file_stream::{
-    FileOpenFuture, FileOpener, FileStream, OnError,
+    FileOpenFuture, FileOpener, FileStream, FileStreamBuilder, OnError,
 };

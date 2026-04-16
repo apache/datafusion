@@ -125,6 +125,36 @@ CREATE TABLE group_median_table_nullable (
 ( 'group1', 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100,  101,   4294967294, arrow_cast(100,'UInt64'), 3.2,  5.5,   arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
 ( 'group1', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255,  65535, 4294967295, 18446744073709551615,     2.2,  2.2,   arrow_cast('NAN','Float64'), 0.0005, 0.0005 )
 
+query R
+select quantile_cont(col0, 0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+2.5
+
+query R
+select quantile_cont(col0, 0.75 order by col0 desc)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+1.5
+
+query R
+select quantile_cont(0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+2.5
+
+query R
+select quantile_cont(0.75 order by col0 desc)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+1.5
+
+query R
+select quantile_cont(0.75) within group (order by col0)
+from values (1), (2), (3) t(col0);
+----
+2.5
+
 #######
 # Error tests
 #######
@@ -570,6 +600,16 @@ query R
 SELECT covar(c2, c12) FROM aggregate_test_100
 ----
 -0.079969012479
+
+query R
+SELECT covar_pop(arrow_cast(c2, 'Float16'), arrow_cast(c12, 'Float16')) FROM aggregate_test_100
+----
+-0.079163311005
+
+query R
+SELECT covar(arrow_cast(c2, 'Float16'), arrow_cast(c12, 'Float16')) FROM aggregate_test_100
+----
+-0.079962940409
 
 # single_row_query_covar_1
 query R
@@ -1183,6 +1223,22 @@ ORDER BY tags, timestamp;
 4 tag2 90 75 80 95
 5 tag2 100 80 80 100
 
+# Test median on a sliding RANGE window with repeated values.
+query RR
+SELECT
+    x,
+    median(x) OVER (
+        ORDER BY x
+        RANGE BETWEEN 1 PRECEDING AND CURRENT ROW
+    ) AS median_val
+FROM (VALUES (1.0), (1.0), (2.0), (5.0)) AS t(x)
+ORDER BY x;
+----
+1 1
+1 1
+2 1
+5 5
+
 ###########
 # Issue #19612: Test that percentile_cont produces correct results
 # in window frame queries. Previously percentile_cont consumed its internal state
@@ -1310,6 +1366,24 @@ DROP TABLE median_window_test;
 
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
+----
+2.75 Float16
+
+# This shouldn't be NaN, see:
+# https://github.com/apache/datafusion/issues/18945
+query RT
+select
+  percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')),
+  arrow_typeof(percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
+from median_table;
+----
+2.75 Float16
+
+query RT
+select
+  approx_percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')),
+  arrow_typeof(approx_percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
+from median_table;
 ----
 2.75 Float16
 
@@ -1748,7 +1822,7 @@ SELECT approx_distinct(null)
 query II
 SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_100
 ----
-100 100
+99 99
 
 # csv_query_approx_count_date_timestamp
 query IIIII
@@ -2029,11 +2103,12 @@ statement ok
 INSERT INTO t1 VALUES (TRUE);
 
 # ISSUE: https://github.com/apache/datafusion/issues/12716
-# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN' and returns 'inf'
+# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN'
+# With weight=0, the data point does not contribute, so result is NULL
 query R
 SELECT approx_percentile_cont_with_weight(0, 0) WITHIN GROUP (ORDER BY 'NaN'::DOUBLE) FROM t1 WHERE t1.v1;
 ----
-Infinity
+NULL
 
 statement ok
 DROP TABLE t1;
@@ -2352,21 +2427,21 @@ e 115
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123
+e 110
 
 # approx_percentile_cont_with_weight with centroids
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123
+e 110
 
 # csv_query_sum_crossjoin
 query TTI
@@ -6718,7 +6793,12 @@ from aggregate_test_100;
 ----
 0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
-
+query R
+select
+    regr_slope(arrow_cast(c12, 'Float16'), arrow_cast(c11, 'Float16'))
+from aggregate_test_100;
+----
+0.051477733249
 
 # regr_*() functions ignore NULLs
 query RRIRRRRRR
@@ -6957,7 +7037,7 @@ SELECT STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
 ----
 a|b|i|j|p|x|y|z
 
-query error This feature is not implemented: The second argument of the string_agg function must be a string literal
+query error This feature is not implemented: string_agg delimiter must be a string literal
 SELECT STRING_AGG(DISTINCT x,y) FROM strings
 
 query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
@@ -7951,8 +8031,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count()]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count()]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(1), count(*) from t;
@@ -7967,8 +8048,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(), count(*) from t;
@@ -7983,8 +8065,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query TT
 explain select count(1) * count(2) from t;
@@ -8013,21 +8096,21 @@ group0 -14
 group1 100
 
 # group median i16 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_i16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -16334
 group1 100
 
 # group median i32 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_i32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -1073741774
 group1 100
 
 # group median i64 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_i64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -4611686018427387854
@@ -8041,56 +8124,56 @@ group0 50
 group1 100
 
 # group median u16 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_u16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u32 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_u32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u64 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_u64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median f32 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 2.75
 group1 3.2
 
 # group median f64 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 2.75
 group1 3.3
 
 # group median f64_nan non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f64_nan) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 NaN
 group1 NaN
 
 # group median decimal128 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_decimal128) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 0.0002
 group1 0.0003
 
 # group median decimal256 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_decimal256) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 0.0002
@@ -8741,9 +8824,130 @@ ORDER BY g;
 2 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
 3 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
 
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 statement ok
 DROP TABLE stream_test;
 
-# Restore default target partitions
+
+#################
+# first_value on strings/binary with groups and ordering
+#################
+
 statement ok
-set datafusion.execution.target_partitions = 4;
+CREATE TABLE first_last_value_str_tests(id INT, sort_key INT, val TEXT) AS VALUES
+(1, 10, 'apple'),
+(1, 2,  'banana'),
+(1, 5,  'cherry'),
+(2, 100, 'dog'),
+(2, 200, 'elephant');
+
+# Utf8
+query IT
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 banana
+2 dog
+
+query IT
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 apple
+2 elephant
+
+# LargeUtf8
+query IT
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeUtf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 banana
+2 dog
+
+query IT
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeUtf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 apple
+2 elephant
+
+# Utf8View
+query IT
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8View') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 banana
+2 dog
+
+query IT
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8View') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 apple
+2 elephant
+
+# Binary
+query I?
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Binary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 62616e616e61
+2 646f67
+
+query I?
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Binary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 6170706c65
+2 656c657068616e74
+
+# LargeBinary
+query I?
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeBinary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 62616e616e61
+2 646f67
+
+query I?
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeBinary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 6170706c65
+2 656c657068616e74
+
+# BinaryView
+query I?
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(arrow_cast(val, 'Binary'), 'BinaryView') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 62616e616e61
+2 646f67
+
+query I?
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(arrow_cast(val, 'Binary'), 'BinaryView') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 6170706c65
+2 656c657068616e74
+
+statement ok
+DROP TABLE first_last_value_str_tests;
