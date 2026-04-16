@@ -767,7 +767,7 @@ fn compute_bounds_and_exactness(
     expr: &dyn PhysicalExpr,
     column_stats: &[ColumnStatistics],
 ) -> Option<(Interval, bool)> {
-    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+    if let Some(col) = expr.downcast_ref::<Column>() {
         let stats = &column_stats[col.index()];
         let min = stats.min_value.get_value()?;
         let max = stats.max_value.get_value()?;
@@ -776,7 +776,7 @@ fn compute_bounds_and_exactness(
         return Some((Interval::try_new(min.clone(), max.clone()).ok()?, exact));
     }
 
-    if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+    if let Some(lit) = expr.downcast_ref::<Literal>() {
         let val = lit.value();
         return Some((Interval::try_new(val.clone(), val.clone()).ok()?, true));
     }
