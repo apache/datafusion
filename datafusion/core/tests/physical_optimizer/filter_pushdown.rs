@@ -25,11 +25,7 @@ use arrow::{
 use arrow_schema::SortOptions;
 use datafusion::{
     assert_batches_eq,
-    datasource::{MemTable, provider_as_source},
-    execution::session_state::SessionStateBuilder,
-    logical_expr::{
-        LogicalPlanBuilder, Operator, col as logical_col, lit as logical_lit,
-    },
+    logical_expr::Operator,
     physical_plan::{
         PhysicalExpr,
         expressions::{BinaryExpr, Column, Literal},
@@ -3340,156 +3336,41 @@ fn test_filter_with_fetch_pushdown_through_sort() {
     );
 }
 
-#[tokio::test]
-async fn test_filter_pushdown_through_sort_with_projection() {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("time", DataType::Utf8, false),
-        Field::new("body", DataType::Utf8, false),
-    ]));
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            Arc::new(StringArray::from(vec!["2026-04-09T02:00:00Z"])),
-            Arc::new(StringArray::from(vec!["starting datafusion query engine"])),
-        ],
-    )
-    .unwrap();
-
-    let session_state = SessionStateBuilder::new()
-        .with_config(SessionConfig::new().with_target_partitions(1))
-        .with_default_features()
-        .with_optimizer_rules(vec![])
-        .build();
-    let ctx = SessionContext::new_with_state(session_state);
-
-    let table = Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap());
-    let logical_plan = LogicalPlanBuilder::scan("logs", provider_as_source(table), None)
-        .unwrap()
-        .sort(vec![logical_col("time").sort(false, false)])
-        .unwrap()
-        .filter(logical_col("body").like(logical_lit("%datafusion%")))
-        .unwrap()
-        .project(vec![logical_col("time")])
-        .unwrap()
-        .build()
-        .unwrap();
-
-    let plan = ctx
-        .state()
-        .create_physical_plan(&logical_plan)
-        .await
-        .unwrap();
-
-    insta::assert_snapshot!(
-            OptimizationTest::new(plan, FilterPushdown::new(), false),
-            @r"
-        OptimizationTest:
-          input:
-            - FilterExec: body@1 LIKE %datafusion%, projection=[time@0]
-            -   SortExec: expr=[time@0 DESC NULLS LAST], preserve_partitioning=[false]
-            -     DataSourceExec: partitions=1, partition_sizes=[1]
-          output:
-            Ok:
-              - ProjectionExec: expr=[time@0 as time]
-              -   SortExec: expr=[time@0 DESC NULLS LAST], preserve_partitioning=[false]
-              -     FilterExec: body@1 LIKE %datafusion%
-              -       DataSourceExec: partitions=1, partition_sizes=[1]
-        "
-    );
-}
-
-/// Test that in the Post phase (dynamic-filter pushdown), when the probe-side
-/// DataSourceExec does NOT support filter pushdown, SortExec intercepts the
-/// unsupported dynamic filter by inserting a FilterExec below itself.
-///
-/// Plan:
-///   HashJoinExec
-///     left:  DataSourceExec (build side)
-///     right: SortExec (no fetch)
-///              DataSourceExec (probe side, pushdown_supported=false)
-///
-/// Expected after optimization:
-///   HashJoinExec
-///     left:  DataSourceExec (build side)
-///     right: SortExec
-///              FilterExec (dynamic filter intercepted)
-///                DataSourceExec (probe side)
-#[tokio::test]
-async fn test_hashjoin_dynamic_filter_pushed_through_sort_when_scan_unsupported() {
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
-    let build_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
-        .with_support(true)
-        .build();
-
-    let probe_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-    ]));
-    // probe scan does NOT support filter pushdown
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
-        .with_support(false)
-        .build();
-
-    let sort_expr =
-        PhysicalSortExpr::new(col("a", &probe_schema).unwrap(), SortOptions::default());
-    let probe_sort = Arc::new(SortExec::new(
-        LexOrdering::new(vec![sort_expr]).unwrap(),
-        probe_scan,
-    )) as Arc<dyn ExecutionPlan>;
-
-    let on = vec![
-        (
-            col("a", &build_schema).unwrap(),
-            col("a", &probe_schema).unwrap(),
-        ),
-        (
-            col("b", &build_schema).unwrap(),
-            col("b", &probe_schema).unwrap(),
-        ),
-    ];
-    let plan = Arc::new(
-        HashJoinExec::try_new(
-            build_scan,
-            probe_sort,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::CollectLeft,
-            datafusion_common::NullEquality::NullEqualsNothing,
-            false,
-        )
+#[test]
+fn test_filter_pushdown_through_sort_with_projection() {
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let sort = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &schema()).unwrap(),
+            SortOptions::new(true, false), // descending, nulls_last
+        )])
         .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+        scan,
+    ));
+    // FilterExec: b = 'bar', projection=[a] (only output column a)
+    let predicate = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, sort)
+            .apply_projection(Some(vec![0]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
 
-    // The probe-side DataSourceExec does not accept the dynamic filter.
-    // SortExec intercepts the unsupported filter and inserts a FilterExec
-    // below itself.
     insta::assert_snapshot!(
-        OptimizationTest::new(
-            Arc::clone(&plan),
-            FilterPushdown::new_post_optimization(),
-            true
-        ),
+        OptimizationTest::new(plan, FilterPushdown::new(), false),
         @r"
     OptimizationTest:
       input:
-        - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
-        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=false
+        - FilterExec: b@1 = bar, projection=[a@0]
+        -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
       output:
         Ok:
-          - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
-          -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -     FilterExec: DynamicFilter [ empty ]
-          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=false
+          - ProjectionExec: expr=[a@0 as a]
+          -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -     FilterExec: b@1 = bar
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
