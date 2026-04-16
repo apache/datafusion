@@ -15,17 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::{
-    TPCH_QUERY_END_ID, TPCH_QUERY_START_ID, TPCH_TABLES, get_query_sql,
+    TPCH_QUERY_END_ID, TPCH_QUERY_START_ID, TPCH_TABLES, get_query_sql_for_scale_factor,
     get_tbl_tpch_table_schema, get_tpch_table_schema,
 };
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
+use datafusion::common::exec_err;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -70,6 +71,11 @@ pub struct RunOpt {
     /// Path to data files
     #[arg(required = true, short = 'p', long = "path")]
     path: PathBuf,
+
+    /// TPC-H scale factor used for query substitutions such as Q11 FRACTION.
+    /// If omitted, the benchmark tries to infer it from paths like `.../tpch_sf10/...`.
+    #[arg(long)]
+    scale_factor: Option<f64>,
 
     /// File format: `csv` or `parquet`
     #[arg(short = 'f', long = "format", default_value = "csv")]
@@ -133,10 +139,11 @@ impl RunOpt {
         let ctx = SessionContext::new_with_config_rt(config, rt);
         // register tables
         self.register_tables(&ctx).await?;
+        let scale_factor = self.scale_factor()?;
 
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let query_run = self.benchmark_query(query_id, &ctx).await;
+            let query_run = self.benchmark_query(query_id, scale_factor, &ctx).await;
             match query_run {
                 Ok(query_results) => {
                     for iter in query_results {
@@ -157,13 +164,14 @@ impl RunOpt {
     async fn benchmark_query(
         &self,
         query_id: usize,
+        scale_factor: f64,
         ctx: &SessionContext,
     ) -> Result<Vec<QueryResult>> {
         let mut millis = vec![];
         // run benchmark
         let mut query_results = vec![];
 
-        let sql = &get_query_sql(query_id)?;
+        let sql = &get_query_sql_for_scale_factor(query_id, scale_factor)?;
 
         for i in 0..self.iterations() {
             let start = Instant::now();
@@ -346,6 +354,82 @@ impl RunOpt {
             .partitions
             .unwrap_or_else(get_available_parallelism)
     }
+
+    fn scale_factor(&self) -> Result<f64> {
+        resolve_scale_factor(self.scale_factor, &self.path)
+    }
+}
+
+fn resolve_scale_factor(scale_factor: Option<f64>, path: &Path) -> Result<f64> {
+    let scale_factor = scale_factor
+        .or_else(|| infer_scale_factor_from_path(path))
+        .unwrap_or(1.0);
+
+    if scale_factor.is_finite() && scale_factor > 0.0 {
+        Ok(scale_factor)
+    } else {
+        exec_err!(
+            "Invalid TPC-H scale factor {scale_factor}. Expected a positive finite value"
+        )
+    }
+}
+
+fn infer_scale_factor_from_path(path: &Path) -> Option<f64> {
+    path.iter().find_map(|component| {
+        component
+            .to_str()?
+            .strip_prefix("tpch_sf")?
+            .parse::<f64>()
+            .ok()
+    })
+}
+
+#[cfg(test)]
+mod scale_factor_tests {
+    use std::path::Path;
+
+    use super::{infer_scale_factor_from_path, resolve_scale_factor};
+    use datafusion::error::Result;
+
+    #[test]
+    fn uses_explicit_scale_factor_when_provided() -> Result<()> {
+        let scale_factor =
+            resolve_scale_factor(Some(30.0), Path::new("benchmarks/data/tpch_sf10"))?;
+        assert_eq!(scale_factor, 30.0);
+        Ok(())
+    }
+
+    #[test]
+    fn infers_scale_factor_from_standard_tpch_path() -> Result<()> {
+        let scale_factor =
+            resolve_scale_factor(None, Path::new("benchmarks/data/tpch_sf10"))?;
+        assert_eq!(scale_factor, 10.0);
+        assert_eq!(
+            infer_scale_factor_from_path(Path::new("benchmarks/data/tpch_sf0.1")),
+            Some(0.1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn defaults_to_sf1_when_path_has_no_scale_factor() -> Result<()> {
+        let scale_factor = resolve_scale_factor(None, Path::new("benchmarks/data"))?;
+        assert_eq!(scale_factor, 1.0);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_scale_factors() {
+        assert!(resolve_scale_factor(Some(0.0), Path::new("benchmarks/data")).is_err());
+        assert!(resolve_scale_factor(Some(-1.0), Path::new("benchmarks/data")).is_err());
+        assert!(
+            resolve_scale_factor(Some(f64::NAN), Path::new("benchmarks/data")).is_err()
+        );
+        assert!(
+            resolve_scale_factor(Some(f64::INFINITY), Path::new("benchmarks/data"))
+                .is_err()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -392,6 +476,7 @@ mod tests {
             query: Some(query),
             common,
             path: PathBuf::from(path.to_string()),
+            scale_factor: Some(1.0),
             file_format: "tbl".to_string(),
             mem_table: false,
             output_path: None,
@@ -402,7 +487,7 @@ mod tests {
             hash_join_buffering_capacity: 0,
         };
         opt.register_tables(&ctx).await?;
-        let queries = get_query_sql(query)?;
+        let queries = crate::tpch::get_query_sql(query)?;
         for query in queries {
             let plan = ctx.sql(&query).await?;
             let plan = plan.into_optimized_plan()?;
@@ -432,6 +517,7 @@ mod tests {
             query: Some(query),
             common,
             path: PathBuf::from(path.to_string()),
+            scale_factor: Some(1.0),
             file_format: "tbl".to_string(),
             mem_table: false,
             output_path: None,
@@ -442,7 +528,7 @@ mod tests {
             hash_join_buffering_capacity: 0,
         };
         opt.register_tables(&ctx).await?;
-        let queries = get_query_sql(query)?;
+        let queries = crate::tpch::get_query_sql(query)?;
         for query in queries {
             let plan = ctx.sql(&query).await?;
             let plan = plan.create_physical_plan().await?;

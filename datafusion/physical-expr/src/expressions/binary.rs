@@ -20,7 +20,7 @@ mod kernels;
 use crate::PhysicalExpr;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use std::hash::Hash;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
@@ -130,7 +130,7 @@ impl std::fmt::Display for BinaryExpr {
             expr: &dyn PhysicalExpr,
             precedence: u8,
         ) -> std::fmt::Result {
-            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(child) = expr.downcast_ref::<BinaryExpr>() {
                 let p = child.op.precedence();
                 if p == 0 || p < precedence {
                     write!(f, "({child})")?;
@@ -252,11 +252,6 @@ fn duration_to_days(array: &ArrayRef) -> Result<ArrayRef> {
 }
 
 impl PhysicalExpr for BinaryExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         BinaryTypeCoercer::new(
             &self.left.data_type(input_schema)?,
@@ -590,7 +585,7 @@ impl PhysicalExpr for BinaryExpr {
             expr: &dyn PhysicalExpr,
             precedence: u8,
         ) -> std::fmt::Result {
-            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(child) = expr.downcast_ref::<BinaryExpr>() {
                 let p = child.op.precedence();
                 if p == 0 || p < precedence {
                     write!(f, "(")?;
@@ -933,6 +928,18 @@ fn pre_selection_scatter(
 }
 
 fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
+    if *left.data_type() == DataType::Binary && *right.data_type() == DataType::Binary {
+        // Cast Binary to Utf8 to validate UTF-8 encoding before concatenation
+        // Follow widespread approach of PostgreSQL, sqlite, DuckDB, Snowflake
+        // Spark does it in a different way by making a binary-to-binary concatenation
+        let left = cast(left.as_ref(), &DataType::Utf8)?;
+        let right = cast(right.as_ref(), &DataType::Utf8)?;
+        return Ok(Arc::new(concat_elements_utf8(
+            left.as_string::<i32>(),
+            right.as_string::<i32>(),
+        )?));
+    }
+
     Ok(match left.data_type() {
         DataType::Utf8 => Arc::new(concat_elements_utf8(
             left.as_string::<i32>(),
@@ -4656,7 +4663,6 @@ mod tests {
         schema: &Schema,
     ) -> Result<BinaryExpr> {
         Ok(binary_op(left, op, right, schema)?
-            .as_any()
             .downcast_ref::<BinaryExpr>()
             .unwrap()
             .clone())

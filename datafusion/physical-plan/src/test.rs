@@ -17,7 +17,6 @@
 
 //! Utilities for testing datafusion-physical-plan
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -131,10 +130,6 @@ impl DisplayAs for TestMemoryExec {
 impl ExecutionPlan for TestMemoryExec {
     fn name(&self) -> &'static str {
         "DataSourceExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

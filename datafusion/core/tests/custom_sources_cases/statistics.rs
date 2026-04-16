@@ -17,7 +17,7 @@
 
 //! This module contains end to end tests of statistics propagation
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::execution::context::TaskContext;
@@ -77,10 +77,6 @@ impl StatisticsValidation {
 
 #[async_trait]
 impl TableProvider for StatisticsValidation {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -153,10 +149,6 @@ impl DisplayAs for StatisticsValidation {
 impl ExecutionPlan for StatisticsValidation {
     fn name(&self) -> &'static str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -272,7 +264,7 @@ async fn sql_filter() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
     let stats = physical_plan.partition_statistics(None)?;
-    assert_eq!(stats.num_rows, Precision::Inexact(1));
+    assert_eq!(stats.num_rows, Precision::Inexact(7));
 
     Ok(())
 }
@@ -285,17 +277,18 @@ async fn sql_limit() -> Result<()> {
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").await.unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is smaller than the original number of lines we mark the statistics as inexact
+    // and cap NDV at the new row count
+    let limit_stats = physical_plan.partition_statistics(None)?;
+    assert_eq!(limit_stats.num_rows, Precision::Exact(5));
+    // c1: NDV=2 stays at 2 (already below limit of 5)
     assert_eq!(
-        Statistics {
-            num_rows: Precision::Exact(5),
-            column_statistics: stats
-                .column_statistics
-                .iter()
-                .map(|c| c.clone().to_inexact())
-                .collect(),
-            total_byte_size: Precision::Absent
-        },
-        *physical_plan.partition_statistics(None)?
+        limit_stats.column_statistics[0].distinct_count,
+        Precision::Inexact(2)
+    );
+    // c2: NDV=13 capped to 5 (the limit row count)
+    assert_eq!(
+        limit_stats.column_statistics[1].distinct_count,
+        Precision::Inexact(5)
     );
 
     let df = ctx

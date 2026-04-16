@@ -24,7 +24,6 @@ use arrow::array::{
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
-use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
@@ -178,7 +177,9 @@ impl ScalarUDFImpl for RPadFunc {
     }
 }
 
-use super::common::{try_as_scalar_i64, try_as_scalar_str};
+use super::common::{
+    StringCharLen, char_count_or_boundary, try_as_scalar_i64, try_as_scalar_str,
+};
 
 /// Optimized rpad for constant target_len and fill arguments.
 fn rpad_scalar_args<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
@@ -271,28 +272,23 @@ fn rpad_scalar_unicode<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
     let data_capacity = string_array.len().saturating_mul(target_len * 4);
     let mut builder =
         GenericStringBuilder::<T>::with_capacity(string_array.len(), data_capacity);
-    let mut graphemes_buf = Vec::new();
 
     for maybe_string in string_array.iter() {
         match maybe_string {
-            Some(string) => {
-                graphemes_buf.clear();
-                graphemes_buf.extend(string.graphemes(true));
-
-                if target_len < graphemes_buf.len() {
-                    let end: usize =
-                        graphemes_buf[..target_len].iter().map(|g| g.len()).sum();
-                    builder.append_value(&string[..end]);
-                } else if fill_chars.is_empty() {
-                    builder.append_value(string);
-                } else {
-                    let pad_chars = target_len - graphemes_buf.len();
-                    let pad_bytes = char_byte_offsets[pad_chars];
+            Some(string) => match char_count_or_boundary(string, target_len) {
+                StringCharLen::ByteOffset(offset) => {
+                    builder.append_value(&string[..offset]);
+                }
+                StringCharLen::CharCount(char_count) => {
                     builder.write_str(string)?;
-                    builder.write_str(&padding_buf[..pad_bytes])?;
+                    if !fill_chars.is_empty() {
+                        let pad_chars = target_len - char_count;
+                        let pad_bytes = char_byte_offsets[pad_chars];
+                        builder.write_str(&padding_buf[..pad_bytes])?;
+                    }
                     builder.append_value("");
                 }
-            }
+            },
             None => builder.append_null(),
         }
     }
@@ -377,7 +373,6 @@ where
 {
     let array = if let Some(fill_array) = fill_array {
         let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
-        let mut graphemes_buf = Vec::new();
         let mut fill_chars_buf = Vec::new();
 
         for ((string, target_len), fill) in string_array
@@ -406,8 +401,7 @@ where
                 }
 
                 if string.is_ascii() && fill.is_ascii() {
-                    // ASCII fast path: byte length == character length,
-                    // so we skip expensive grapheme segmentation.
+                    // ASCII fast path: byte length == character length.
                     let str_len = string.len();
                     if target_len < str_len {
                         builder.append_value(&string[..target_len]);
@@ -428,26 +422,25 @@ where
                         builder.append_value("");
                     }
                 } else {
-                    graphemes_buf.clear();
-                    graphemes_buf.extend(string.graphemes(true));
-
                     fill_chars_buf.clear();
                     fill_chars_buf.extend(fill.chars());
 
-                    if target_len < graphemes_buf.len() {
-                        let end: usize =
-                            graphemes_buf[..target_len].iter().map(|g| g.len()).sum();
-                        builder.append_value(&string[..end]);
-                    } else if fill_chars_buf.is_empty() {
-                        builder.append_value(string);
-                    } else {
-                        builder.write_str(string)?;
-                        for l in 0..target_len - graphemes_buf.len() {
-                            let c =
-                                *fill_chars_buf.get(l % fill_chars_buf.len()).unwrap();
-                            builder.write_char(c)?;
+                    match char_count_or_boundary(string, target_len) {
+                        StringCharLen::ByteOffset(offset) => {
+                            builder.append_value(&string[..offset]);
                         }
-                        builder.append_value("");
+                        StringCharLen::CharCount(char_count) => {
+                            builder.write_str(string)?;
+                            if !fill_chars_buf.is_empty() {
+                                for l in 0..target_len - char_count {
+                                    let c = *fill_chars_buf
+                                        .get(l % fill_chars_buf.len())
+                                        .unwrap();
+                                    builder.write_char(c)?;
+                                }
+                            }
+                            builder.append_value("");
+                        }
                     }
                 }
             } else {
@@ -458,7 +451,6 @@ where
         builder.finish()
     } else {
         let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
-        let mut graphemes_buf = Vec::new();
 
         for (string, target_len) in string_array.iter().zip(length_array.iter()) {
             if let (Some(string), Some(target_len)) = (string, target_len) {
@@ -492,19 +484,17 @@ where
                         builder.append_value("");
                     }
                 } else {
-                    graphemes_buf.clear();
-                    graphemes_buf.extend(string.graphemes(true));
-
-                    if target_len < graphemes_buf.len() {
-                        let end: usize =
-                            graphemes_buf[..target_len].iter().map(|g| g.len()).sum();
-                        builder.append_value(&string[..end]);
-                    } else {
-                        builder.write_str(string)?;
-                        for _ in 0..(target_len - graphemes_buf.len()) {
-                            builder.write_str(" ")?;
+                    match char_count_or_boundary(string, target_len) {
+                        StringCharLen::ByteOffset(offset) => {
+                            builder.append_value(&string[..offset]);
                         }
-                        builder.append_value("");
+                        StringCharLen::CharCount(char_count) => {
+                            builder.write_str(string)?;
+                            for _ in 0..(target_len - char_count) {
+                                builder.write_str(" ")?;
+                            }
+                            builder.append_value("");
+                        }
                     }
                 }
             } else {

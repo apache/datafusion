@@ -306,10 +306,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 data_type,
                 value,
                 uses_odbc_syntax: _,
-            }) => Ok(Expr::Cast(Cast::new_from_field(
-                Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type_to_field(&data_type)?,
-            ))),
+            }) => {
+                let value = match value.into_string() {
+                    Some(value) => value,
+                    None => {
+                        return plan_err!("Typed literal requires a string payload");
+                    }
+                };
+
+                Ok(Expr::Cast(Cast::new_from_field(
+                    Box::new(lit(value)),
+                    self.convert_data_type_to_field(&data_type)?,
+                )))
+            }
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,

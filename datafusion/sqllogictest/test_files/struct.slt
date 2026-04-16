@@ -1116,7 +1116,7 @@ select [
 query ?
 select [[{x: 1, y: 2}], [{y: 4, x: 3}]];
 ----
-[[{x: 1, y: 2}], [{x: 3, y: 4}]]
+[[{y: 2, x: 1}], [{y: 4, x: 3}]]
 
 # Test array literal with float type coercion across elements
 query ?

@@ -44,7 +44,7 @@ use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 pub const INFORMATION_SCHEMA: &str = "information_schema";
 pub(crate) const TABLES: &str = "tables";
@@ -532,10 +532,6 @@ fn remove_native_type_prefix(native_type: &NativeType) -> String {
 
 #[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         INFORMATION_SCHEMA_TABLES
             .iter()
@@ -1454,10 +1450,6 @@ mod tests {
             )
         }
 
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!("not required for these tests")
-        }
-
         fn table_names(&self) -> Vec<String> {
             vec!["atable".to_string()]
         }
@@ -1468,10 +1460,6 @@ mod tests {
     }
 
     impl CatalogProviderList for Fixture {
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!("not required for these tests")
-        }
-
         fn register_catalog(
             &self,
             _: String,
@@ -1490,10 +1478,6 @@ mod tests {
     }
 
     impl CatalogProvider for Fixture {
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!("not required for these tests")
-        }
-
         fn schema_names(&self) -> Vec<String> {
             vec!["aschema".to_string()]
         }

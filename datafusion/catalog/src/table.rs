@@ -48,11 +48,7 @@ use datafusion_physical_plan::ExecutionPlan;
 /// [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
 /// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
-pub trait TableProvider: Debug + Sync + Send {
-    /// Returns the table provider as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait TableProvider: Any + Debug + Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
@@ -268,7 +264,6 @@ pub trait TableProvider: Debug + Sync + Send {
     ///
     /// #[async_trait]
     /// impl TableProvider for TestDataSource {
-    /// # fn as_any(&self) -> &dyn Any { todo!() }
     /// # fn schema(&self) -> SchemaRef { todo!() }
     /// # fn table_type(&self) -> TableType { todo!() }
     /// # async fn scan(&self, s: &dyn Session, p: Option<&Vec<usize>>, f: &[Expr], l: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -382,6 +377,26 @@ pub trait TableProvider: Debug + Sync + Send {
     /// representing the number of rows removed.
     async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("TRUNCATE not supported for {} table", self.table_type())
+    }
+}
+
+impl dyn TableProvider {
+    /// Returns `true` if the table provider is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn TableProvider>` via auto-deref.
+    pub fn is<T: TableProvider>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this table provider to a concrete type `T`,
+    /// returning `None` if the provider is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn TableProvider>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: TableProvider>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
     }
 }
 

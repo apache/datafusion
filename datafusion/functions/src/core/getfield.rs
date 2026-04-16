@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -440,9 +439,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 func,
                 args: inner_args,
             }) = current_expr
-                && (func.inner().as_ref() as &dyn Any)
-                    .downcast_ref::<GetFieldFunc>()
-                    .is_some()
+                && func.inner().is::<GetFieldFunc>()
             {
                 // Store this level's path arguments (all except the first, which is base/nested call)
                 path_args_stack.push(&inner_args[1..]);

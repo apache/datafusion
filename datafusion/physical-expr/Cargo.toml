@@ -87,5 +87,9 @@ name = "binary_op"
 harness = false
 name = "simplify"
 
+[[bench]]
+harness = false
+name = "string_concat"
+
 [package.metadata.cargo-machete]
 ignored = ["half"]

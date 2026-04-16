@@ -19,7 +19,6 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -31,8 +30,10 @@ use crate::execution_plan::{
     Boundedness, CardinalityEffect, EmissionType, has_same_children_properties,
 };
 use crate::expressions::PhysicalSortExpr;
+use crate::filter::FilterExec;
 use crate::filter_pushdown::{
-    ChildFilterDescription, FilterDescription, FilterPushdownPhase,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDown,
 };
 use crate::limit::LimitStream;
 use crate::metrics::{
@@ -1176,10 +1177,6 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -1247,7 +1244,6 @@ impl ExecutionPlan for SortExec {
         let children = self.children().into_iter().cloned().collect();
         let new_sort = self.with_new_children(children)?;
         let mut new_sort = new_sort
-            .as_any()
             .downcast_ref::<SortExec>()
             .expect("cloned 1 lines above this line, we know the type")
             .clone();
@@ -1430,6 +1426,58 @@ impl ExecutionPlan for SortExec {
 
         Ok(FilterDescription::new().with_child(child))
     }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &datafusion_common::config::ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // For a plain sort (no fetch) we intercept any unsupported filters
+        // by inserting a FilterExec below this Sort. Moving the filter below
+        // Sort is safe because Sort preserves all rows.
+        //
+        // Why not fetch (TopK)?
+        // A sort with fetch limits the number of output rows.  Inserting a
+        // FilterExec *below* the TopK would change semantics.  A filter *above*
+        // the TopK is supposed to post-filter its output (e.g. "take the top 10
+        // rows, then keep only those with a > 5").  Pushing the filter below
+        // Sort changes the meaning to "filter first, then take top 10", which
+        // produces a different result.
+        if self.fetch.is_some() {
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        }
+
+        // Collect parent filters that were NOT successfully pushed to our child.
+        let unsupported_filters: Vec<Arc<dyn PhysicalExpr>> = child_pushdown_result
+            .parent_filters
+            .iter()
+            .filter(|&f| matches!(f.all(), PushedDown::No))
+            .map(|f| Arc::clone(&f.filter))
+            .collect();
+
+        if unsupported_filters.is_empty() {
+            // All filters were pushed — nothing extra to do.
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        }
+
+        // Build a single conjunctive predicate from the unsupported filters
+        // and insert a FilterExec between this SortExec and its child.
+        let predicate = datafusion_physical_expr::conjunction(unsupported_filters);
+        let new_child =
+            Arc::new(FilterExec::try_new(predicate, Arc::clone(self.input()))?)
+                as Arc<dyn ExecutionPlan>;
+        let new_sort = Arc::new(
+            SortExec::new(self.expr.clone(), new_child)
+                .with_fetch(self.fetch())
+                .with_preserve_partitioning(self.preserve_partitioning()),
+        ) as Arc<dyn ExecutionPlan>;
+
+        Ok(FilterPushdownPropagation {
+            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
+            updated_node: Some(new_sort),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1507,10 +1555,6 @@ mod tests {
     impl ExecutionPlan for SortedUnboundedExec {
         fn name(&self) -> &'static str {
             Self::static_name()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {

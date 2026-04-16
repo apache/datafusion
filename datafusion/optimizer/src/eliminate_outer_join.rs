@@ -23,7 +23,7 @@ use datafusion_expr::{Expr, Filter, Operator};
 
 use crate::optimizer::ApplyOrder;
 use datafusion_common::tree_node::Transformed;
-use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
+use datafusion_expr::expr::{BinaryExpr, Cast, InList, Like, TryCast};
 use std::sync::Arc;
 
 ///
@@ -298,6 +298,54 @@ fn extract_non_nullable_columns(
             right_schema,
             false,
         ),
+        // IN list and BETWEEN are null-rejecting on the input expression:
+        // if the input column is NULL, the result is NULL (filtered out),
+        // regardless of whether the list/range contains NULLs.
+        Expr::InList(InList { expr, .. }) => extract_non_nullable_columns(
+            expr,
+            non_nullable_cols,
+            left_schema,
+            right_schema,
+            false,
+        ),
+        Expr::Between(between) => extract_non_nullable_columns(
+            &between.expr,
+            non_nullable_cols,
+            left_schema,
+            right_schema,
+            false,
+        ),
+        // LIKE is null-rejecting: if either the input column or the pattern
+        // is NULL, the result is NULL (filtered out by WHERE).
+        Expr::Like(Like { expr, pattern, .. }) => {
+            extract_non_nullable_columns(
+                expr,
+                non_nullable_cols,
+                left_schema,
+                right_schema,
+                false,
+            );
+            extract_non_nullable_columns(
+                pattern,
+                non_nullable_cols,
+                left_schema,
+                right_schema,
+                false,
+            );
+        }
+        // IS TRUE, IS FALSE, and IS NOT UNKNOWN are null-rejecting:
+        // if the input is NULL, they return false (filtered out by WHERE).
+        // Note: IS NOT TRUE, IS NOT FALSE, and IS UNKNOWN are NOT null-rejecting
+        // because they return true for NULL input.
+        Expr::IsTrue(arg) | Expr::IsFalse(arg) | Expr::IsNotUnknown(arg) => {
+            extract_non_nullable_columns(
+                arg,
+                non_nullable_cols,
+                left_schema,
+                right_schema,
+                false,
+            )
+        }
         _ => {}
     }
 }
@@ -309,6 +357,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
     use arrow::datatypes::DataType;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::{
         Operator::{And, Or},
         binary_expr, cast, col, lit,
@@ -437,6 +486,419 @@ mod tests {
     }
 
     #[test]
+    fn eliminate_left_with_in_list() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // t2.b IN (1, 2, 3) rejects nulls — if t2.b is NULL the IN returns
+        // NULL which is filtered out. So Left Join should become Inner Join.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").in_list(vec![lit(1u32), lit(2u32), lit(3u32)], false))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b IN ([UInt32(1), UInt32(2), UInt32(3)])
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_in_list_containing_null() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // IN list with NULL still rejects null input columns:
+        // if t2.b is NULL, NULL IN (1, NULL) evaluates to NULL, which is filtered out
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(
+                col("t2.b")
+                    .in_list(vec![lit(1u32), lit(ScalarValue::UInt32(None))], false),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b IN ([UInt32(1), UInt32(NULL)])
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_not_in_list() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // NOT IN also rejects nulls: if t2.b is NULL, NOT (NULL IN (...))
+        // evaluates to NULL, which is filtered out
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").in_list(vec![lit(1u32), lit(2u32)], true))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b NOT IN ([UInt32(1), UInt32(2)])
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_between() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // BETWEEN rejects nulls: if t2.b is NULL, NULL BETWEEN 1 AND 10
+        // evaluates to NULL, which is filtered out
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").between(lit(1u32), lit(10u32)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b BETWEEN UInt32(1) AND UInt32(10)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_right_with_between() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Right join: filter on left (nullable) side with BETWEEN should convert to Inner
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Right,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t1.b").between(lit(1u32), lit(10u32)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t1.b BETWEEN UInt32(1) AND UInt32(10)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_full_with_between() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Full join with BETWEEN on both sides should become Inner
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t1.b").between(lit(1u32), lit(10u32)),
+                And,
+                col("t2.b").between(lit(5u32), lit(20u32)),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t1.b BETWEEN UInt32(1) AND UInt32(10) AND t2.b BETWEEN UInt32(5) AND UInt32(20)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_full_with_in_list() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Full join with IN filters on both sides should become Inner
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t1.b").in_list(vec![lit(1u32), lit(2u32)], false),
+                And,
+                col("t2.b").in_list(vec![lit(3u32), lit(4u32)], false),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t1.b IN ([UInt32(1), UInt32(2)]) AND t2.b IN ([UInt32(3), UInt32(4)])
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_in_list_or_is_null() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // WHERE (t2.b IN (1, 2)) OR (t2.b IS NULL)
+        // The OR with IS NULL makes the predicate null-tolerant:
+        // when t2.b is NULL, IS NULL returns true, so the whole OR is true.
+        // The outer join must be preserved.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t2.b").in_list(vec![lit(1u32), lit(2u32)], false),
+                Or,
+                col("t2.b").is_null(),
+            ))?
+            .build()?;
+
+        // Should NOT be converted to Inner — OR with IS NULL preserves null rows
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b IN ([UInt32(1), UInt32(2)]) OR t2.b IS NULL
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_like() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // LIKE rejects nulls: if t2.b is NULL, the result is NULL (filtered out)
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").like(lit("%pattern%")))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r#"
+        Filter: t2.b LIKE Utf8("%pattern%")
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        "#)
+    }
+
+    #[test]
+    fn eliminate_left_with_like_pattern_column() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // LIKE with nullable column on the pattern side:
+        // 'x' LIKE t2.b → if t2.b is NULL, result is NULL (filtered out)
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(lit("x").like(col("t2.b")))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r#"
+        Filter: Utf8("x") LIKE t2.b
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        "#)
+    }
+
+    #[test]
+    fn eliminate_full_with_like_cross_side() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // LIKE with columns from both sides: t1.c LIKE t2.b
+        // If t1 is NULL → NULL LIKE t2.b → NULL → filtered out (left non-nullable)
+        // If t2 is NULL → t1.c LIKE NULL → NULL → filtered out (right non-nullable)
+        // Both sides are non-nullable → FULL → INNER
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t1.c").like(col("t2.b")))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t1.c LIKE t2.b
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_is_true() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // IS TRUE rejects nulls: if the expression is NULL, IS TRUE returns false
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").gt(lit(10u32)).is_true())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b > UInt32(10) IS TRUE
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_is_false() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // IS FALSE rejects nulls: if the expression is NULL, IS FALSE returns false
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").gt(lit(10u32)).is_false())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b > UInt32(10) IS FALSE
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_is_not_unknown() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // IS NOT UNKNOWN rejects nulls: if the expression is NULL, IS NOT UNKNOWN returns false
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").gt(lit(10u32)).is_not_unknown())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b > UInt32(10) IS NOT UNKNOWN
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_is_not_true() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // IS NOT TRUE is NOT null-rejecting: if the expression is NULL,
+        // IS NOT TRUE returns true, so null rows pass through
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").gt(lit(10u32)).is_not_true())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b > UInt32(10) IS NOT TRUE
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_is_unknown() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // IS UNKNOWN is NOT null-rejecting: if the expression is NULL,
+        // IS UNKNOWN returns true, so null rows pass through
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").gt(lit(10u32)).is_unknown())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b > UInt32(10) IS UNKNOWN
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
     fn eliminate_full_with_type_cast() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
@@ -458,6 +920,254 @@ mod tests {
 
         assert_optimized_plan_equal!(plan, @r"
         Filter: CAST(t1.b AS Int64) > UInt32(10) AND TRY_CAST(t2.c AS Int64) < UInt32(20)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    // ----- FULL JOIN → LEFT / RIGHT tests -----
+    #[test]
+    fn eliminate_full_to_left_with_left_filter() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // FULL JOIN with null-rejecting filter only on left side → LEFT JOIN
+        // (left side becomes non-nullable, right side stays nullable)
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t1.b").gt(lit(10u32)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t1.b > UInt32(10)
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_full_to_right_with_right_filter() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // FULL JOIN with null-rejecting filter only on right side → RIGHT JOIN
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").in_list(vec![lit(1u32), lit(2u32)], false))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b IN ([UInt32(1), UInt32(2)])
+          Right Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_full_to_left_with_like() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // FULL JOIN with LIKE on left side only → LEFT JOIN
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t1.b").like(lit("%val%")))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r#"
+        Filter: t1.b LIKE Utf8("%val%")
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        "#)
+    }
+
+    #[test]
+    fn eliminate_full_to_right_with_is_true() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // FULL JOIN with IS TRUE on right side only → RIGHT JOIN
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").gt(lit(10u32)).is_true())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b > UInt32(10) IS TRUE
+          Right Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    // ----- Nested AND / OR tests -----
+
+    #[test]
+    fn eliminate_left_with_and_multiple_null_rejecting() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Multiple null-rejecting predicates combined with AND on nullable side
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t2.b").in_list(vec![lit(1u32), lit(2u32)], false),
+                And,
+                col("t2.c").between(lit(5u32), lit(20u32)),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b IN ([UInt32(1), UInt32(2)]) AND t2.c BETWEEN UInt32(5) AND UInt32(20)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn eliminate_left_with_or_same_side() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // OR of two null-rejecting predicates on different columns of the same
+        // nullable side. If t2 rows are NULL (from LEFT JOIN), both t2.b and
+        // t2.c are NULL, so the entire OR evaluates to NULL → filtered out.
+        // This IS null-rejecting, so join should be eliminated.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t2.b").gt(lit(10u32)),
+                Or,
+                col("t2.c").lt(lit(20u32)),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b > UInt32(10) OR t2.c < UInt32(20)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn no_eliminate_left_with_or_cross_side() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // OR with columns from different sides — t1.b (preserved) OR t2.b
+        // (nullable). When t2 is NULL, t1.b > 10 can still be true, so the
+        // OR is NOT null-rejecting. Join must be preserved.
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t1.b").gt(lit(10u32)),
+                Or,
+                col("t2.b").lt(lit(20u32)),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t1.b > UInt32(10) OR t2.b < UInt32(20)
+          Left Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        ")
+    }
+
+    // ----- Mixed predicate tests -----
+
+    #[test]
+    fn eliminate_full_with_mixed_predicates() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // FULL JOIN with different null-rejecting expr types on each side:
+        // LIKE on left, BETWEEN on right → INNER JOIN
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t1.b").like(lit("%pattern%")),
+                And,
+                col("t2.b").between(lit(1u32), lit(10u32)),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r#"
+        Filter: t1.b LIKE Utf8("%pattern%") AND t2.b BETWEEN UInt32(1) AND UInt32(10)
+          Inner Join: t1.a = t2.a
+            TableScan: t1
+            TableScan: t2
+        "#)
+    }
+
+    #[test]
+    fn eliminate_left_with_is_true_and_in_list() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // AND of IS TRUE and IN on nullable side — both null-rejecting
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t2.b").gt(lit(5u32)).is_true(),
+                And,
+                col("t2.c").in_list(vec![lit(1u32), lit(2u32)], false),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b > UInt32(5) IS TRUE AND t2.c IN ([UInt32(1), UInt32(2)])
           Inner Join: t1.a = t2.a
             TableScan: t1
             TableScan: t2
