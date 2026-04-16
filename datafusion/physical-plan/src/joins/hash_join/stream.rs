@@ -219,6 +219,8 @@ pub(super) struct HashJoinStream {
     /// Optional future to signal when build information has been reported by all partitions
     /// and the dynamic filter has been updated
     build_waiter: Option<OnceFut<()>>,
+    /// Tracks whether this partition has already reported build information to the coordinator.
+    build_reported: bool,
     /// Partitioning mode to use
     mode: PartitionMode,
     /// Output buffer for coalescing small batches into larger ones with optional fetch limit.
@@ -400,6 +402,7 @@ impl HashJoinStream {
             right_side_ordered,
             build_accumulator,
             build_waiter: None,
+            build_reported: false,
             mode,
             output_buffer,
             null_aware,
@@ -555,6 +558,7 @@ impl HashJoinStream {
             self.build_waiter = Some(OnceFut::new(async move {
                 build_accumulator.report_build_data(build_data).await
             }));
+            self.build_reported = true;
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;
         } else {
             self.state =
@@ -945,5 +949,17 @@ impl Stream for HashJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
+    }
+}
+
+impl Drop for HashJoinStream {
+    fn drop(&mut self) {
+        if self.mode == PartitionMode::Partitioned
+            && !self.build_reported
+            && let Some(build_accumulator) = &self.build_accumulator
+        {
+            build_accumulator.report_canceled_partition(self.partition);
+            self.build_reported = true;
+        }
     }
 }

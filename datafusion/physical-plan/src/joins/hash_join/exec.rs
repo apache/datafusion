@@ -35,8 +35,7 @@ use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, PartitionBuildData, PushdownStrategy,
-    SharedBuildAccumulator,
+    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -76,10 +75,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    DataFusionError, JoinSide, JoinType, NullEquality, Result, assert_or_internal_err,
-    internal_err, plan_err, project_schema,
+    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
+    plan_err, project_schema,
 };
-use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Accumulator;
@@ -96,7 +94,6 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
-use tokio::sync::oneshot;
 
 use super::partitioned_hash_eval::SeededRandomState;
 
@@ -1373,60 +1370,19 @@ impl ExecutionPlan for HashJoinExec {
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
-                let build_accumulator = build_accumulator
-                    .as_ref()
-                    .map(|acc| (Arc::clone(acc), partition));
-                let random_state = self.random_state.random_state().clone();
-                let with_visited_indices_bitmap =
-                    need_produce_result_in_final(self.join_type);
-                let config = Arc::clone(context.session_config().options());
-                let null_equality = self.null_equality;
-                let background_join_metrics = join_metrics.clone();
-
-                if let Some((build_accumulator, partition)) = build_accumulator {
-                    let (tx, rx) = oneshot::channel();
-                    let background_build_accumulator = Arc::clone(&build_accumulator);
-                    let task = SpawnedTask::spawn(async move {
-                        let result = collect_left_input_and_maybe_report(
-                            random_state,
-                            left_stream,
-                            on_left.clone(),
-                            background_join_metrics,
-                            reservation,
-                            with_visited_indices_bitmap,
-                            1,
-                            enable_dynamic_filter_pushdown,
-                            config,
-                            null_equality,
-                            array_map_created_count,
-                            Some((background_build_accumulator, partition)),
-                        )
-                        .await;
-                        let _ = tx.send(result);
-                    });
-                    build_accumulator.register_background_task(task);
-                    OnceFut::new(async move {
-                        rx.await.map_err(|err| {
-                            DataFusionError::Execution(format!(
-                                "hash join build task ended before sending its result: {err}"
-                            ))
-                        })?
-                    })
-                } else {
-                    OnceFut::new(collect_left_input(
-                        self.random_state.random_state().clone(),
-                        left_stream,
-                        on_left.clone(),
-                        join_metrics.clone(),
-                        reservation,
-                        need_produce_result_in_final(self.join_type),
-                        1,
-                        enable_dynamic_filter_pushdown,
-                        Arc::clone(context.session_config().options()),
-                        self.null_equality,
-                        array_map_created_count,
-                    ))
-                }
+                OnceFut::new(collect_left_input(
+                    self.random_state.random_state().clone(),
+                    left_stream,
+                    on_left.clone(),
+                    join_metrics.clone(),
+                    reservation,
+                    need_produce_result_in_final(self.join_type),
+                    1,
+                    enable_dynamic_filter_pushdown,
+                    Arc::clone(context.session_config().options()),
+                    self.null_equality,
+                    array_map_created_count,
+                ))
             }
             PartitionMode::Auto => {
                 return plan_err!(
@@ -1457,8 +1413,7 @@ impl ExecutionPlan for HashJoinExec {
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
         let stream_build_accumulator = match self.mode {
-            PartitionMode::Partitioned => None,
-            PartitionMode::CollectLeft => build_accumulator,
+            PartitionMode::Partitioned | PartitionMode::CollectLeft => build_accumulator,
             PartitionMode::Auto => unreachable!(
                 "PartitionMode::Auto should not be present at execution time"
             ),
@@ -2133,51 +2088,6 @@ async fn collect_left_input(
     };
 
     Ok(data)
-}
-
-#[expect(clippy::too_many_arguments)]
-async fn collect_left_input_and_maybe_report(
-    random_state: RandomState,
-    left_stream: SendableRecordBatchStream,
-    on_left: Vec<PhysicalExprRef>,
-    metrics: BuildProbeJoinMetrics,
-    reservation: MemoryReservation,
-    with_visited_indices_bitmap: bool,
-    probe_threads_count: usize,
-    should_compute_dynamic_filters: bool,
-    config: Arc<ConfigOptions>,
-    null_equality: NullEquality,
-    array_map_created_count: Count,
-    build_accumulator: Option<(Arc<SharedBuildAccumulator>, usize)>,
-) -> Result<JoinLeftData> {
-    let left_data = collect_left_input(
-        random_state,
-        left_stream,
-        on_left,
-        metrics,
-        reservation,
-        with_visited_indices_bitmap,
-        probe_threads_count,
-        should_compute_dynamic_filters,
-        config,
-        null_equality,
-        array_map_created_count,
-    )
-    .await?;
-
-    if let Some((build_accumulator, partition_id)) = build_accumulator {
-        let build_data = PartitionBuildData::Partitioned {
-            partition_id,
-            pushdown: left_data.membership().clone(),
-            bounds: left_data
-                .bounds
-                .clone()
-                .unwrap_or_else(|| PartitionBounds::new(vec![])),
-        };
-        build_accumulator.report_build_data(build_data).await?;
-    }
-
-    Ok(left_data)
 }
 
 #[cfg(test)]
