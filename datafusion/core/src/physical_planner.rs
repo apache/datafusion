@@ -2768,6 +2768,12 @@ impl DefaultPhysicalPlanner {
             .optimizer
             .use_expression_analyzer;
         let mut new_plan = Arc::clone(&plan);
+        if use_expression_analyzer {
+            new_plan = Self::inject_expression_analyzer(
+                new_plan,
+                session_state.expression_analyzer_registry(),
+            )?;
+        }
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             let plan_before_rule = Arc::clone(&new_plan);
