@@ -587,7 +587,10 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let require_group_indices = !accumulators.is_empty()
+            || matches!(group_ordering, GroupOrdering::Partial(_));
+        let group_values =
+            new_group_values(group_schema, &group_ordering, require_group_indices)?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
@@ -947,62 +950,87 @@ impl GroupedHashAggregateStream {
         for group_values in &group_by_values {
             let groups_start_time = Instant::now();
 
-            // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
-            let group_indices = &self.current_group_indices;
+            let needs_group_indices = !self.accumulators.is_empty()
+                || matches!(self.group_ordering, GroupOrdering::Partial(_));
 
-            // Update ordering information if necessary
-            let total_num_groups = self.group_values.len();
-            if total_num_groups > starting_num_groups {
-                self.group_ordering.new_groups(
-                    group_values,
-                    group_indices,
-                    total_num_groups,
-                )?;
-            }
+            if needs_group_indices {
+                // calculate the group indices for each input row
+                self.group_values
+                    .intern(group_values, &mut self.current_group_indices)?;
+                let group_indices = &self.current_group_indices;
 
-            // Use this instant for both measurements to save a syscall
-            let agg_start_time = Instant::now();
-            self.group_by_metrics
-                .time_calculating_group_ids
-                .add_duration(agg_start_time - groups_start_time);
-
-            // Gather the inputs to call the actual accumulator
-            let t = self
-                .accumulators
-                .iter_mut()
-                .zip(input_values.iter())
-                .zip(filter_values.iter());
-
-            for ((acc, values), opt_filter) in t {
-                let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
-
-                // Call the appropriate method on each aggregator with
-                // the entire input row and the relevant group indexes
-                if self.mode.input_mode() == AggregateInputMode::Raw
-                    && !self.spill_state.is_stream_merging
-                {
-                    acc.update_batch(
-                        values,
+                // Update ordering information if necessary
+                let total_num_groups = self.group_values.len();
+                if total_num_groups > starting_num_groups {
+                    self.group_ordering.new_groups(
+                        group_values,
                         group_indices,
-                        opt_filter,
                         total_num_groups,
                     )?;
-                } else {
-                    assert_or_internal_err!(
-                        opt_filter.is_none(),
-                        "aggregate filter should be applied in partial stage, there should be no filter in final stage"
-                    );
-
-                    // if aggregation is over intermediate states,
-                    // use merge
-                    acc.merge_batch(values, group_indices, None, total_num_groups)?;
                 }
+
+                // Use this instant for both measurements to save a syscall
+                let agg_start_time = Instant::now();
                 self.group_by_metrics
-                    .aggregation_time
-                    .add_elapsed(agg_start_time);
+                    .time_calculating_group_ids
+                    .add_duration(agg_start_time - groups_start_time);
+
+                // Gather the inputs to call the actual accumulator
+                let t = self
+                    .accumulators
+                    .iter_mut()
+                    .zip(input_values.iter())
+                    .zip(filter_values.iter());
+
+                for ((acc, values), opt_filter) in t {
+                    let opt_filter =
+                        opt_filter.as_ref().map(|filter| filter.as_boolean());
+
+                    // Call the appropriate method on each aggregator with
+                    // the entire input row and the relevant group indexes
+                    if self.mode.input_mode() == AggregateInputMode::Raw
+                        && !self.spill_state.is_stream_merging
+                    {
+                        acc.update_batch(
+                            values,
+                            group_indices,
+                            opt_filter,
+                            total_num_groups,
+                        )?;
+                    } else {
+                        assert_or_internal_err!(
+                            opt_filter.is_none(),
+                            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+                        );
+
+                        // if aggregation is over intermediate states,
+                        // use merge
+                        acc.merge_batch(values, group_indices, None, total_num_groups)?;
+                    }
+                    self.group_by_metrics
+                        .aggregation_time
+                        .add_elapsed(agg_start_time);
+                }
+            } else {
+                self.group_values.intern_no_group_ids(group_values)?;
+
+                let total_num_groups = self.group_values.len();
+                if total_num_groups > starting_num_groups {
+                    match &mut self.group_ordering {
+                        GroupOrdering::None => {}
+                        GroupOrdering::Full(ordering) => {
+                            ordering.new_groups(total_num_groups);
+                        }
+                        GroupOrdering::Partial(_) => unreachable!(
+                            "partial ordering requires per-row group indices"
+                        ),
+                    }
+                }
+
+                self.group_by_metrics
+                    .time_calculating_group_ids
+                    .add_duration(Instant::now() - groups_start_time);
             }
         }
 
@@ -1260,16 +1288,23 @@ impl GroupedHashAggregateStream {
             // on the grouping columns.
             self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
 
-            // Recreate `group_values` for streaming merge so group ids are assigned
-            // in first-seen order, as required by `GroupOrderingFull`.
-            // The pre-spill multi-column collector may use `vectorized_intern`, which
-            // can assign new group ids out of input order under hash collisions.
+            // Recreate `group_values` for streaming merge when the previous collector
+            // could emit groups out of first-seen order. This is required for:
+            // - the multi-column collector, which may use `vectorized_intern`
+            // - the unordered distinct-only collectors, which deliberately do not
+            //   preserve first-seen order while building the hash table
             let group_schema = self
                 .spill_state
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
-            if group_schema.fields().len() > 1 {
-                self.group_values = new_group_values(group_schema, &self.group_ordering)?;
+            let require_group_indices = !self.accumulators.is_empty()
+                || matches!(self.group_ordering, GroupOrdering::Partial(_));
+            if group_schema.fields().len() > 1 || !require_group_indices {
+                self.group_values = new_group_values(
+                    group_schema,
+                    &self.group_ordering,
+                    require_group_indices,
+                )?;
             }
 
             // Use `OutOfMemoryMode::ReportError` from this point on

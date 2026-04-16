@@ -83,6 +83,32 @@ impl GroupValues for GroupValuesBoolean {
         Ok(())
     }
 
+    fn intern_no_group_ids(&mut self, cols: &[ArrayRef]) -> Result<()> {
+        let array = cols[0].as_boolean();
+
+        for value in array.iter() {
+            match value {
+                Some(false) => {
+                    if self.false_group.is_none() {
+                        self.false_group = Some(self.len());
+                    }
+                }
+                Some(true) => {
+                    if self.true_group.is_none() {
+                        self.true_group = Some(self.len());
+                    }
+                }
+                None => {
+                    if self.null_group.is_none() {
+                        self.null_group = Some(self.len());
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn size(&self) -> usize {
         size_of::<Self>()
     }

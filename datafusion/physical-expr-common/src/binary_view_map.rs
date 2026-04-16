@@ -21,12 +21,12 @@ use crate::binary_map::OutputType;
 use arrow::array::NullBufferBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
-use arrow::buffer::{Buffer, ScalarBuffer};
+use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::HashTableAllocExt;
 use std::fmt::Debug;
+use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -139,8 +139,8 @@ where
 
     /// random state used to generate hashes
     random_state: RandomState,
-    /// buffer that stores hash values (reused across batches to save allocations)
-    hashes_buffer: Vec<u64>,
+    /// Number of new non-null entries inserted by the previous batch.
+    last_batch_new_entries: usize,
     /// `(payload, null_index)` for the 'null' value, if any
     /// NOTE null_index is the logical index in the final array, not the index
     /// in the buffer
@@ -164,7 +164,7 @@ where
             completed: Vec::new(),
             nulls: NullBufferBuilder::new(0),
             random_state: RandomState::default(),
-            hashes_buffer: vec![],
+            last_batch_new_entries: 0,
             null: None,
         }
     }
@@ -252,27 +252,15 @@ where
         OP: FnMut(V),
         B: ByteViewType,
     {
-        // step 1: compute hashes
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(values.len(), 0);
-        create_hashes([values], &self.random_state, batch_hashes)
-            // hash is supported for all types and create_hashes only
-            // returns errors for unsupported types
-            .unwrap();
-
-        // step 2: insert each value into the set, if not already present
         let values = values.as_byte_view::<B>();
-
-        // Get raw views buffer for direct comparison
         let input_views = values.views();
-
-        // Ensure lengths are equivalent
-        assert_eq!(values.len(), self.hashes_buffer.len());
+        let input_buffers = values.data_buffers();
+        let starting_len = self.map.len();
+        self.reserve_for_batch(values.len() - values.null_count());
+        let mut adopted_buffer_start = None;
 
         for i in 0..values.len() {
             let view_u128 = input_views[i];
-            let hash = self.hashes_buffer[i];
 
             // handle null value via validity bitmap check
             if values.is_null(i) {
@@ -290,47 +278,29 @@ where
                 continue;
             }
 
-            // Extract length from the view (first 4 bytes of u128 in little-endian)
             let len = view_u128 as u32;
+            let input_value = (len > 12).then(|| {
+                let value = values.value(i);
+                let bytes: &[u8] = value.as_ref();
+                bytes
+            });
+            let hash = hash_input_view(&self.random_state, view_u128, input_value);
 
-            // Check if value already exists
             let maybe_payload = {
-                // Borrow completed and in_progress for comparison
                 let completed = &self.completed;
                 let in_progress = &self.in_progress;
 
                 self.map
                     .find(hash, |header| {
-                        if header.hash != hash {
-                            return false;
-                        }
-
-                        // Fast path: inline strings can be compared directly
-                        if len <= 12 {
-                            return header.view == view_u128;
-                        }
-
-                        // For larger strings: first compare the 4-byte prefix
-                        let stored_prefix = (header.view >> 32) as u32;
-                        let input_prefix = (view_u128 >> 32) as u32;
-                        if stored_prefix != input_prefix {
-                            return false;
-                        }
-
-                        // Prefix matched - compare full bytes
-                        let byte_view = ByteView::from(header.view);
-                        let stored_len = byte_view.length as usize;
-                        let buffer_index = byte_view.buffer_index as usize;
-                        let offset = byte_view.offset as usize;
-
-                        let stored_value = if buffer_index < completed.len() {
-                            &completed[buffer_index].as_slice()
-                                [offset..offset + stored_len]
-                        } else {
-                            &in_progress[offset..offset + stored_len]
-                        };
-                        let input_value: &[u8] = values.value(i).as_ref();
-                        stored_value == input_value
+                        view_matches(
+                            hash,
+                            view_u128,
+                            input_value,
+                            header.hash,
+                            header.view,
+                            completed,
+                            in_progress,
+                        )
                     })
                     .map(|entry| entry.payload)
             };
@@ -338,12 +308,40 @@ where
             let payload = if let Some(payload) = maybe_payload {
                 payload
             } else {
-                // no existing value, make a new one
-                let value: &[u8] = values.value(i).as_ref();
+                let value = input_value.unwrap_or_else(|| {
+                    let value = values.value(i);
+                    let bytes: &[u8] = value.as_ref();
+                    bytes
+                });
                 let payload = make_payload_fn(Some(value));
 
-                // Create view pointing to our buffers
-                let new_view = self.append_value(value);
+                let new_view = if len <= 12 {
+                    append_view(view_u128, Some(&mut self.views), Some(&mut self.nulls))
+                } else if let Some(starting_buffer) = adopted_buffer_start.or_else(|| {
+                    (!input_buffers.is_empty()).then(|| {
+                        adopt_input_buffers(
+                            input_buffers,
+                            &mut self.in_progress,
+                            &mut self.completed,
+                        )
+                    })
+                }) {
+                    adopted_buffer_start = Some(starting_buffer);
+                    append_input_view(
+                        view_u128,
+                        starting_buffer,
+                        Some(&mut self.views),
+                        Some(&mut self.nulls),
+                    )
+                } else {
+                    append_value(
+                        value,
+                        &mut self.in_progress,
+                        &mut self.completed,
+                        Some(&mut self.views),
+                        Some(&mut self.nulls),
+                    )
+                };
                 let new_header = Entry {
                     view: new_view,
                     hash,
@@ -356,6 +354,45 @@ where
             };
             observe_payload_fn(payload);
         }
+
+        self.last_batch_new_entries = self.map.len() - starting_len;
+    }
+
+    fn flush_in_progress(&mut self) {
+        if self.in_progress.is_empty() {
+            return;
+        }
+
+        let flushed = std::mem::replace(
+            &mut self.in_progress,
+            Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
+        );
+        self.completed.push(Buffer::from_vec(flushed));
+    }
+
+    fn reserve_for_batch(&mut self, non_null_rows: usize) {
+        if non_null_rows == 0 {
+            return;
+        }
+
+        let expected_new_entries = if self.last_batch_new_entries == 0 {
+            non_null_rows
+        } else {
+            self.last_batch_new_entries
+                .saturating_mul(2)
+                .min(non_null_rows)
+        };
+
+        let remaining_capacity = self.map.capacity().saturating_sub(self.map.len());
+        let additional = expected_new_entries.saturating_sub(remaining_capacity);
+        if additional == 0 {
+            return;
+        }
+
+        let previous_capacity = self.map.capacity();
+        self.map.reserve(additional, |h| h.hash);
+        self.map_size +=
+            (self.map.capacity() - previous_capacity) * size_of::<Entry<V>>();
     }
 
     /// Converts this set into a `StringViewArray`, or `BinaryViewArray`,
@@ -365,55 +402,14 @@ where
     /// The values are guaranteed to be returned in the same order in which
     /// they were first seen.
     pub fn into_state(mut self) -> ArrayRef {
-        // Flush any remaining in-progress buffer
-        if !self.in_progress.is_empty() {
-            let flushed = std::mem::take(&mut self.in_progress);
-            self.completed.push(Buffer::from_vec(flushed));
-        }
+        self.flush_in_progress();
 
-        // Build null buffer if we have any nulls
-        let null_buffer = self.nulls.finish();
-
-        let views = ScalarBuffer::from(self.views);
-        let array =
-            unsafe { BinaryViewArray::new_unchecked(views, self.completed, null_buffer) };
-
-        match self.output_type {
-            OutputType::BinaryView => Arc::new(array),
-            OutputType::Utf8View => {
-                // SAFETY: all input was valid utf8
-                let array = unsafe { array.to_string_view_unchecked() };
-                Arc::new(array)
-            }
-            _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
-        }
-    }
-
-    /// Append a value to our buffers and return the view pointing to it
-    fn append_value(&mut self, value: &[u8]) -> u128 {
-        let len = value.len();
-        let view = if len <= 12 {
-            make_view(value, 0, 0)
-        } else {
-            // Ensure buffer is big enough
-            if self.in_progress.len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
-                let flushed = std::mem::replace(
-                    &mut self.in_progress,
-                    Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
-                );
-                self.completed.push(Buffer::from_vec(flushed));
-            }
-
-            let buffer_index = self.completed.len() as u32;
-            let offset = self.in_progress.len() as u32;
-            self.in_progress.extend_from_slice(value);
-
-            make_view(value, buffer_index, offset)
-        };
-
-        self.views.push(view);
-        self.nulls.append_non_null();
-        view
+        build_view_array(
+            self.output_type,
+            self.views,
+            self.completed,
+            self.nulls.finish(),
+        )
     }
 
     /// Total number of entries (including null, if present)
@@ -439,12 +435,7 @@ where
         let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
         let nulls_size = self.nulls.allocated_size();
 
-        self.map_size
-            + views_size
-            + in_progress_size
-            + completed_size
-            + nulls_size
-            + self.hashes_buffer.allocated_size()
+        self.map_size + views_size + in_progress_size + completed_size + nulls_size
     }
 }
 
@@ -459,7 +450,6 @@ where
             .field("views_len", &self.views.len())
             .field("completed_buffers", &self.completed.len())
             .field("random_state", &self.random_state)
-            .field("hashes_buffer", &self.hashes_buffer)
             .finish()
     }
 }
@@ -484,6 +474,149 @@ where
 
     /// value stored by the entry
     payload: V,
+}
+
+fn hash_input_view(
+    random_state: &RandomState,
+    view_u128: u128,
+    input_value: Option<&[u8]>,
+) -> u64 {
+    input_value.map_or_else(
+        || random_state.hash_one(view_u128),
+        |value| random_state.hash_one(value),
+    )
+}
+
+fn view_matches(
+    input_hash: u64,
+    input_view: u128,
+    input_value: Option<&[u8]>,
+    stored_hash: u64,
+    stored_view: u128,
+    completed: &[Buffer],
+    in_progress: &[u8],
+) -> bool {
+    if stored_hash != input_hash {
+        return false;
+    }
+
+    let len = input_view as u32;
+    if len <= 12 {
+        return stored_view == input_view;
+    }
+
+    if stored_view as u32 != len {
+        return false;
+    }
+
+    let stored_prefix = (stored_view >> 32) as u32;
+    let input_prefix = (input_view >> 32) as u32;
+    if stored_prefix != input_prefix {
+        return false;
+    }
+
+    let byte_view = ByteView::from(stored_view);
+    let stored_len = byte_view.length as usize;
+    let buffer_index = byte_view.buffer_index as usize;
+    let offset = byte_view.offset as usize;
+
+    let stored_value = if buffer_index < completed.len() {
+        &completed[buffer_index].as_slice()[offset..offset + stored_len]
+    } else {
+        &in_progress[offset..offset + stored_len]
+    };
+    stored_value == input_value.expect("non-inline value")
+}
+
+fn append_value(
+    value: &[u8],
+    in_progress: &mut Vec<u8>,
+    completed: &mut Vec<Buffer>,
+    views: Option<&mut Vec<u128>>,
+    nulls: Option<&mut NullBufferBuilder>,
+) -> u128 {
+    let len = value.len();
+    let view = if len <= 12 {
+        make_view(value, 0, 0)
+    } else {
+        if in_progress.len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
+            let flushed = std::mem::replace(
+                in_progress,
+                Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
+            );
+            completed.push(Buffer::from_vec(flushed));
+        }
+
+        let buffer_index = completed.len() as u32;
+        let offset = in_progress.len() as u32;
+        in_progress.extend_from_slice(value);
+
+        make_view(value, buffer_index, offset)
+    };
+
+    append_view(view, views, nulls)
+}
+
+fn adopt_input_buffers(
+    input_buffers: &[Buffer],
+    in_progress: &mut Vec<u8>,
+    completed: &mut Vec<Buffer>,
+) -> u32 {
+    if !in_progress.is_empty() {
+        let flushed =
+            std::mem::replace(in_progress, Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE));
+        completed.push(Buffer::from_vec(flushed));
+    }
+
+    let starting_buffer = completed.len().try_into().expect("too many buffers");
+    completed.extend(input_buffers.iter().cloned());
+    starting_buffer
+}
+
+fn append_input_view(
+    input_view: u128,
+    starting_buffer: u32,
+    views: Option<&mut Vec<u128>>,
+    nulls: Option<&mut NullBufferBuilder>,
+) -> u128 {
+    let byte_view = ByteView::from(input_view);
+    let view = byte_view
+        .with_buffer_index(byte_view.buffer_index + starting_buffer)
+        .as_u128();
+    append_view(view, views, nulls)
+}
+
+fn append_view(
+    view: u128,
+    views: Option<&mut Vec<u128>>,
+    nulls: Option<&mut NullBufferBuilder>,
+) -> u128 {
+    if let Some(views) = views {
+        views.push(view);
+    }
+    if let Some(nulls) = nulls {
+        nulls.append_non_null();
+    }
+    view
+}
+
+fn build_view_array(
+    output_type: OutputType,
+    views: Vec<u128>,
+    completed: Vec<Buffer>,
+    null_buffer: Option<NullBuffer>,
+) -> ArrayRef {
+    let views = ScalarBuffer::from(views);
+    let array = unsafe { BinaryViewArray::new_unchecked(views, completed, null_buffer) };
+
+    match output_type {
+        OutputType::BinaryView => Arc::new(array),
+        OutputType::Utf8View => {
+            let array = unsafe { array.to_string_view_unchecked() };
+            Arc::new(array)
+        }
+        _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
+    }
 }
 
 #[cfg(test)]
