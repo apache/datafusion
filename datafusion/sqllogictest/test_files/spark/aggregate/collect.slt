@@ -105,7 +105,7 @@ ORDER BY g;
 # collect_set with GROUP BY: string values with duplicates
 query T?
 SELECT g, array_sort(collect_set(v))
-FROM (VALUES ('a', 'x'), ('a', 'y'), ('a', 'x'), ('b', 'z'), ('b', 'z')) AS t(g, v)
+FROM (VALUES ('a'::TEXT, 'x'::TEXT), ('a'::TEXT, 'y'::TEXT), ('a'::TEXT, 'x'::TEXT), ('b'::TEXT, 'z'::TEXT), ('b'::TEXT, 'z'::TEXT)) AS t(g, v)
 GROUP BY g
 ORDER BY g;
 ----
