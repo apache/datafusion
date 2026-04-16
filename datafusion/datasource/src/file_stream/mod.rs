@@ -23,6 +23,7 @@
 
 mod builder;
 mod metrics;
+mod prefetch_state;
 mod scan_state;
 pub(crate) mod work_source;
 
@@ -43,6 +44,7 @@ use futures::Stream;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 
+use self::prefetch_state::PrefetchState;
 use self::scan_state::{ScanAndReturn, ScanState};
 
 pub use builder::FileStreamBuilder;
@@ -82,6 +84,9 @@ impl FileStream {
     pub fn with_on_error(mut self, on_error: OnError) -> Self {
         match &mut self.state {
             FileStreamState::Scan { scan_state } => scan_state.set_on_error(on_error),
+            FileStreamState::Prefetch { prefetch_state } => {
+                prefetch_state.set_on_error(on_error)
+            }
             FileStreamState::Error | FileStreamState::Done => {
                 // no effect as there are no more files to process
             }
@@ -91,25 +96,26 @@ impl FileStream {
 
     fn poll_inner(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<RecordBatch>>> {
         loop {
-            match &mut self.state {
-                FileStreamState::Scan { scan_state: queue } => {
-                    let action = queue.poll_scan(cx);
-                    match action {
-                        ScanAndReturn::Continue => continue,
-                        ScanAndReturn::Done(result) => {
-                            self.state = FileStreamState::Done;
-                            return Poll::Ready(result);
-                        }
-                        ScanAndReturn::Error(err) => {
-                            self.state = FileStreamState::Error;
-                            return Poll::Ready(Some(Err(err)));
-                        }
-                        ScanAndReturn::Return(result) => return result,
-                    }
+            let action = match &mut self.state {
+                FileStreamState::Scan { scan_state } => scan_state.poll_scan(cx),
+                FileStreamState::Prefetch { prefetch_state } => {
+                    prefetch_state.poll_scan(cx)
                 }
                 FileStreamState::Error | FileStreamState::Done => {
                     return Poll::Ready(None);
                 }
+            };
+            match action {
+                ScanAndReturn::Continue => continue,
+                ScanAndReturn::Done(result) => {
+                    self.state = FileStreamState::Done;
+                    return Poll::Ready(result);
+                }
+                ScanAndReturn::Error(err) => {
+                    self.state = FileStreamState::Error;
+                    return Poll::Ready(Some(Err(err)));
+                }
+                ScanAndReturn::Return(result) => return result,
             }
         }
     }
@@ -162,6 +168,12 @@ enum FileStreamState {
     Scan {
         /// The ready queues and active reader for the current file.
         scan_state: Box<ScanState>,
+    },
+    /// Like [`FileStreamState::Scan`], but with concurrent planner I/O and a
+    /// bounded prefetch queue that overlaps I/O with CPU decoding.
+    Prefetch {
+        /// The prefetch queues and active reader.
+        prefetch_state: Box<PrefetchState>,
     },
     /// Encountered an error
     Error,
@@ -1259,6 +1271,122 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies that prefetching overlaps I/O across files: while file1's
+    /// planner I/O is pending, file2 is morselized and its planner I/O is
+    /// also issued, so both I/Os are in flight concurrently.
+    #[tokio::test]
+    async fn morsel_prefetch_overlaps_io_across_files() -> Result<()> {
+        let test = FileStreamMorselTest::new()
+            .with_file(
+                MockPlanner::builder("file1.parquet")
+                    .add_plan(
+                        PendingPlannerBuilder::new(IoFutureId(1))
+                            .with_polls_to_resolve(PollsToResolve(2)),
+                    )
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 41))
+                    .return_none(),
+            )
+            .with_file(
+                MockPlanner::builder("file2.parquet")
+                    .add_plan(
+                        PendingPlannerBuilder::new(IoFutureId(2))
+                            .with_polls_to_resolve(PollsToResolve(1)),
+                    )
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 42))
+                    .return_none(),
+            );
+
+        // Note the `morselize_file: file2.parquet` and `io_future_created:
+        // IoFutureId(2)` events appear *before* IoFutureId(1) resolves: the
+        // two planner I/Os are in flight concurrently.
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Output Stream -----
+        Batch: 41
+        Batch: 42
+        Done
+        ----- File Stream Events -----
+        morselize_file: file1.parquet
+        planner_created: file1.parquet
+        planner_called: file1.parquet
+        io_future_created: file1.parquet, IoFutureId(1)
+        io_future_polled: file1.parquet, IoFutureId(1)
+        morselize_file: file2.parquet
+        planner_created: file2.parquet
+        io_future_polled: file1.parquet, IoFutureId(1)
+        planner_called: file2.parquet
+        io_future_created: file2.parquet, IoFutureId(2)
+        io_future_polled: file1.parquet, IoFutureId(1)
+        io_future_resolved: file1.parquet, IoFutureId(1)
+        io_future_polled: file2.parquet, IoFutureId(2)
+        planner_called: file1.parquet
+        morsel_produced: file1.parquet, MorselId(10)
+        io_future_polled: file2.parquet, IoFutureId(2)
+        io_future_resolved: file2.parquet, IoFutureId(2)
+        planner_called: file2.parquet
+        morsel_produced: file2.parquet, MorselId(11)
+        morsel_stream_started: MorselId(10)
+        morsel_stream_batch_produced: MorselId(10), BatchId(41)
+        morsel_stream_finished: MorselId(10)
+        morsel_stream_started: MorselId(11)
+        morsel_stream_batch_produced: MorselId(11), BatchId(42)
+        morsel_stream_finished: MorselId(11)
+        ");
+
+        Ok(())
+    }
+
+    /// Verifies that opting out of prefetching preserves the legacy
+    /// single-I/O-per-partition behavior: file2 is not morselized until
+    /// file1's reader is done.
+    #[tokio::test]
+    async fn morsel_no_prefetch_keeps_files_sequential() -> Result<()> {
+        let test = FileStreamMorselTest::new()
+            .with_prefetch(false)
+            .with_file(
+                MockPlanner::builder("file1.parquet")
+                    .add_plan(
+                        PendingPlannerBuilder::new(IoFutureId(1))
+                            .with_polls_to_resolve(PollsToResolve(1)),
+                    )
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 41))
+                    .return_none(),
+            )
+            .with_file(
+                MockPlanner::builder("file2.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 42))
+                    .return_none(),
+            );
+
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Output Stream -----
+        Batch: 41
+        Batch: 42
+        Done
+        ----- File Stream Events -----
+        morselize_file: file1.parquet
+        planner_created: file1.parquet
+        planner_called: file1.parquet
+        io_future_created: file1.parquet, IoFutureId(1)
+        io_future_polled: file1.parquet, IoFutureId(1)
+        io_future_polled: file1.parquet, IoFutureId(1)
+        io_future_resolved: file1.parquet, IoFutureId(1)
+        planner_called: file1.parquet
+        morsel_produced: file1.parquet, MorselId(10)
+        morsel_stream_started: MorselId(10)
+        morsel_stream_batch_produced: MorselId(10), BatchId(41)
+        morsel_stream_finished: MorselId(10)
+        morselize_file: file2.parquet
+        planner_created: file2.parquet
+        planner_called: file2.parquet
+        morsel_produced: file2.parquet, MorselId(11)
+        morsel_stream_started: MorselId(11)
+        morsel_stream_batch_produced: MorselId(11), BatchId(42)
+        morsel_stream_finished: MorselId(11)
+        ");
+
+        Ok(())
+    }
+
     /// Tests how one or more `FileStream`s consume morselized file work.
     #[derive(Clone)]
     struct FileStreamMorselTest {
@@ -1270,6 +1398,7 @@ mod tests {
         build_streams_on_first_read: bool,
         reads: Vec<PartitionId>,
         limit: Option<usize>,
+        prefetch: bool,
     }
 
     impl FileStreamMorselTest {
@@ -1284,6 +1413,7 @@ mod tests {
                 build_streams_on_first_read: false,
                 reads: vec![],
                 limit: None,
+                prefetch: true,
             }
         }
 
@@ -1370,6 +1500,13 @@ mod tests {
             self
         }
 
+        /// Enables or disables prefetching for all streams created by this
+        /// test.
+        fn with_prefetch(mut self, prefetch: bool) -> Self {
+            self.prefetch = prefetch;
+            self
+        }
+
         /// Runs the test and returns combined stream output and scheduler
         /// trace text.
         async fn run(self) -> Result<String> {
@@ -1412,6 +1549,7 @@ mod tests {
                         .with_shared_work_source(shared_work_source.clone())
                         .with_morselizer(Box::new(self.morselizer.clone()))
                         .with_metrics(&metrics_set)
+                        .with_prefetch(self.prefetch)
                         .build()?;
                     partitions[partition].set_stream(stream);
                 }
@@ -1439,6 +1577,7 @@ mod tests {
                         .with_shared_work_source(shared_work_source.clone())
                         .with_morselizer(Box::new(self.morselizer.clone()))
                         .with_metrics(&metrics_set)
+                        .with_prefetch(self.prefetch)
                         .build()?;
                     partition_state.set_stream(stream);
                 }

@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use crate::file_scan_config::FileScanConfig;
+use crate::file_stream::prefetch_state::PrefetchState;
 use crate::file_stream::scan_state::ScanState;
 use crate::file_stream::work_source::{SharedWorkSource, WorkSource};
 use crate::morsel::{FileOpenerMorselizer, Morselizer};
@@ -35,6 +36,7 @@ pub struct FileStreamBuilder<'a> {
     metrics: Option<&'a ExecutionPlanMetricsSet>,
     on_error: OnError,
     shared_work_source: Option<SharedWorkSource>,
+    prefetch: bool,
 }
 
 impl<'a> FileStreamBuilder<'a> {
@@ -47,6 +49,7 @@ impl<'a> FileStreamBuilder<'a> {
             metrics: None,
             on_error: OnError::Fail,
             shared_work_source: None,
+            prefetch: true,
         }
     }
 
@@ -93,6 +96,17 @@ impl<'a> FileStreamBuilder<'a> {
         self
     }
 
+    /// Enable or disable prefetching of planner I/O across files.
+    ///
+    /// When prefetching is enabled (the default) the stream may have multiple
+    /// planner I/O operations in flight concurrently, morselizing upcoming
+    /// files while the active reader is blocked. Disable prefetching to fall
+    /// back to the legacy single-I/O-per-partition behavior.
+    pub fn with_prefetch(mut self, prefetch: bool) -> Self {
+        self.prefetch = prefetch;
+        self
+    }
+
     /// Build the configured [`FileStream`].
     pub fn build(self) -> Result<FileStream> {
         let Self {
@@ -102,6 +116,7 @@ impl<'a> FileStreamBuilder<'a> {
             metrics,
             on_error,
             shared_work_source,
+            prefetch,
         } = self;
 
         let Some(partition) = partition else {
@@ -125,17 +140,31 @@ impl<'a> FileStreamBuilder<'a> {
         };
 
         let file_stream_metrics = FileStreamMetrics::new(metrics, partition);
-        let scan_state = Box::new(ScanState::new(
-            work_source,
-            config.limit,
-            morselizer,
-            on_error,
-            file_stream_metrics,
-        ));
+        let state = if prefetch {
+            FileStreamState::Prefetch {
+                prefetch_state: Box::new(PrefetchState::new(
+                    work_source,
+                    config.limit,
+                    morselizer,
+                    on_error,
+                    file_stream_metrics,
+                )),
+            }
+        } else {
+            FileStreamState::Scan {
+                scan_state: Box::new(ScanState::new(
+                    work_source,
+                    config.limit,
+                    morselizer,
+                    on_error,
+                    file_stream_metrics,
+                )),
+            }
+        };
 
         Ok(FileStream {
             projected_schema,
-            state: FileStreamState::Scan { scan_state },
+            state,
             baseline_metrics: BaselineMetrics::new(metrics, partition),
         })
     }
