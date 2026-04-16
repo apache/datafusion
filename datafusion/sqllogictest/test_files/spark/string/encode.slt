@@ -15,13 +15,60 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+# UTF-8 encoding
+query ?
+SELECT encode('Spark SQL'::string, 'utf-8'::string);
+----
+537061726b2053514c
 
-## Original Query: SELECT encode('abc', 'utf-8');
-## PySpark 3.5.5 Result: {'encode(abc, utf-8)': bytearray(b'abc'), 'typeof(encode(abc, utf-8))': 'binary', 'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
-#query
-#SELECT encode('abc'::string, 'utf-8'::string);
+# US-ASCII encoding
+query ?
+SELECT encode('Hello'::string, 'us-ascii'::string);
+----
+48656c6c6f
+
+# ISO-8859-1 encoding (ï = 0xEF in ISO-8859-1)
+query ?
+SELECT encode('naïve'::string, 'iso-8859-1'::string);
+----
+6e61ef7665
+
+# UTF-16BE encoding
+query ?
+SELECT encode('AB'::string, 'utf-16be'::string);
+----
+00410042
+
+# UTF-32BE encoding
+query ?
+SELECT encode('A'::string, 'utf-32be'::string);
+----
+00000041
+
+# Case-insensitive charset
+query ?
+SELECT encode('hello'::string, 'Utf-8'::string);
+----
+68656c6c6f
+
+# NULL input
+query ?
+SELECT encode(NULL::string, 'utf-8'::string);
+----
+NULL
+
+# Array input with NULLs
+query ?
+SELECT encode(s, 'utf-8'::string) FROM (VALUES ('hello'::string), (NULL::string), ('world'::string)) AS t(s);
+----
+68656c6c6f
+NULL
+776f726c64
+
+# Error: unsupported charset
+statement error Unsupported charset for encode
+SELECT encode('hello'::string, 'EBCDIC'::string);
+
+# Error: no arguments
+statement error 'encode' does not support zero arguments
+SELECT encode();

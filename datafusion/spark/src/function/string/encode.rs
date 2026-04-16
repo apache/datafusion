@@ -337,9 +337,8 @@ impl ScalarUDFImpl for SparkEncode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, BinaryArray, StringArray, StringViewArray};
+    use arrow::array::{BinaryArray, StringViewArray};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::ScalarUDF;
 
     /// Helper to invoke encode as a scalar with two literal string arguments.
     fn eval_encode_scalar_with_ansi(
@@ -377,37 +376,6 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_utf8() {
-        let result =
-            eval_encode_scalar(ScalarValue::Utf8(Some("Spark SQL".into())), "UTF-8")
-                .unwrap();
-        let bytes = expect_binary_scalar(result);
-        assert_eq!(bytes, b"Spark SQL");
-    }
-
-    #[test]
-    fn test_encode_us_ascii() {
-        let result =
-            eval_encode_scalar(ScalarValue::Utf8(Some("Hello".into())), "US-ASCII")
-                .unwrap();
-        assert_eq!(expect_binary_scalar(result), b"Hello");
-    }
-
-    #[test]
-    fn test_encode_iso_8859_1() {
-        // "naïve" — U+00EF (ï) is 0xEF in ISO-8859-1
-        let result = eval_encode_scalar(
-            ScalarValue::Utf8(Some("na\u{00EF}ve".into())),
-            "ISO-8859-1",
-        )
-        .unwrap();
-        assert_eq!(
-            expect_binary_scalar(result),
-            vec![0x6E, 0x61, 0xEF, 0x76, 0x65]
-        );
-    }
-
-    #[test]
     fn test_encode_utf16() {
         let result =
             eval_encode_scalar(ScalarValue::Utf8(Some("Spark SQL".into())), "UTF-16")
@@ -421,37 +389,10 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_utf16be() {
-        let result =
-            eval_encode_scalar(ScalarValue::Utf8(Some("AB".into())), "UTF-16BE").unwrap();
-        assert_eq!(expect_binary_scalar(result), vec![0x00, 0x41, 0x00, 0x42]);
-    }
-
-    #[test]
     fn test_encode_utf16le() {
         let result =
             eval_encode_scalar(ScalarValue::Utf8(Some("AB".into())), "UTF-16LE").unwrap();
         assert_eq!(expect_binary_scalar(result), vec![0x41, 0x00, 0x42, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_case_insensitive_charset() {
-        let result =
-            eval_encode_scalar(ScalarValue::Utf8(Some("hello".into())), "utf-8").unwrap();
-        assert_eq!(expect_binary_scalar(result), b"hello");
-    }
-
-    #[test]
-    fn test_encode_unsupported_charset() {
-        let result =
-            eval_encode_scalar(ScalarValue::Utf8(Some("hello".into())), "EBCDIC");
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Unsupported charset")
-        );
     }
 
     #[test]
@@ -498,34 +439,6 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot encode"));
-    }
-
-    #[test]
-    fn test_encode_null_input() {
-        let func = SparkEncode::new();
-        let arr: ArrayRef =
-            Arc::new(StringArray::from(vec![Some("hello"), None, Some("world")]));
-        let result = func
-            .invoke_with_args(ScalarFunctionArgs {
-                args: vec![
-                    ColumnarValue::Array(arr),
-                    ColumnarValue::Scalar(ScalarValue::Utf8(Some("UTF-8".into()))),
-                ],
-                arg_fields: vec![
-                    Arc::new(Field::new("input", DataType::Utf8, true)),
-                    Arc::new(Field::new("charset", DataType::Utf8, false)),
-                ],
-                number_rows: 3,
-                return_field: Arc::new(Field::new("encode", DataType::Binary, true)),
-                config_options: Arc::new(ConfigOptions::default()),
-            })
-            .unwrap();
-
-        let arr = result.into_array(3).unwrap();
-        let binary = arr.as_any().downcast_ref::<BinaryArray>().unwrap();
-        assert_eq!(binary.value(0), b"hello");
-        assert!(binary.is_null(1));
-        assert_eq!(binary.value(2), b"world");
     }
 
     #[test]
@@ -579,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn test_return_field_nullable() {
+    fn test_encode_return_field_nullable() {
         let func = SparkEncode::new();
 
         let nullable = func
@@ -604,18 +517,6 @@ mod tests {
             })
             .unwrap();
         assert!(!non_nullable.is_nullable());
-    }
-
-    #[test]
-    fn test_function_name() {
-        let func = SparkEncode::new();
-        assert_eq!(func.name(), "encode");
-    }
-
-    #[test]
-    fn test_udf_registration() {
-        let udf = ScalarUDF::from(SparkEncode::new());
-        assert_eq!(udf.name(), "encode");
     }
 
     #[test]
@@ -668,17 +569,6 @@ mod tests {
         assert_eq!(
             expect_binary_scalar(result),
             vec![0xFE, 0xFF, 0xD8, 0x3D, 0xDE, 0x00]
-        );
-    }
-
-    #[test]
-    fn test_encode_utf32be() {
-        // 'A' = U+0041 → 00 00 00 41, 'B' = U+0042 → 00 00 00 42
-        let result =
-            eval_encode_scalar(ScalarValue::Utf8(Some("AB".into())), "UTF-32BE").unwrap();
-        assert_eq!(
-            expect_binary_scalar(result),
-            vec![0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x42]
         );
     }
 
