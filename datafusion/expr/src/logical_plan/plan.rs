@@ -2500,7 +2500,7 @@ impl Filter {
     /// Skips the type-checking and dealiasing done in [Self::try_new].
     /// For internal use in DataFusion only.
     #[doc(hidden)]
-    pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
+    pub fn new_unchecked(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
     }
 

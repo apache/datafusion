@@ -500,11 +500,15 @@ fn push_down_all_join(
     }
 
     if let Some(predicate) = conjunction(left_push) {
-        join.left = Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.left)));
+        join.left = Arc::new(LogicalPlan::Filter(Filter::new_unchecked(
+            predicate, join.left,
+        )));
     }
 
     if let Some(predicate) = conjunction(right_push) {
-        join.right = Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.right)));
+        join.right = Arc::new(LogicalPlan::Filter(Filter::new_unchecked(
+            predicate, join.right,
+        )));
     }
 
     // Add any new join conditions as the non join predicates
@@ -963,7 +967,7 @@ impl OptimizerRule for PushDownFilter {
 
                     let push_predicate =
                         replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
-                    inputs.push(Arc::new(LogicalPlan::Filter(Filter::new(
+                    inputs.push(Arc::new(LogicalPlan::Filter(Filter::new_unchecked(
                         push_predicate,
                         input,
                     ))))
@@ -1225,7 +1229,7 @@ impl OptimizerRule for PushDownFilter {
                     .inputs()
                     .into_iter()
                     .map(|child| {
-                        LogicalPlan::Filter(Filter::new(
+                        LogicalPlan::Filter(Filter::new_unchecked(
                             predicate.clone(),
                             Arc::new(child.clone()),
                         ))
@@ -1308,7 +1312,7 @@ fn rewrite_projection(
     let projection = if let Some(expr) = conjunction(push_predicates) {
         // re-write all filters based on this projection
         // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
-        projection.input = Arc::new(LogicalPlan::Filter(Filter::new(
+        projection.input = Arc::new(LogicalPlan::Filter(Filter::new_unchecked(
             replace_cols_by_name(expr, &pushable_map)?,
             projection.input,
         )));
@@ -1389,7 +1393,7 @@ fn contain<T>(expr: &Expr, check_map: &HashMap<String, T>) -> bool {
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
     if let Some(predicate) = conjunction(predicates) {
-        LogicalPlan::Filter(Filter::new(predicate, Arc::new(plan)))
+        LogicalPlan::Filter(Filter::new_unchecked(predicate, Arc::new(plan)))
     } else {
         plan
     }
