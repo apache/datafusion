@@ -21,7 +21,7 @@ use arrow::array::{AsArray, StringArray};
 use arrow::compute::{DatePart, date_part};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -88,14 +88,8 @@ impl ScalarUDFImpl for SparkMonthName {
                 let month_val = month_arr
                     .as_primitive::<arrow::datatypes::Int32Type>()
                     .value(0);
-                match month_number_to_name(month_val) {
-                    Some(name) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                        name.to_string(),
-                    )))),
-                    None => {
-                        exec_err!("Invalid month number: {month_val}")
-                    }
-                }
+                let name = month_number_to_name(month_val).map(|s| s.to_string());
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(name)))
             }
             ColumnarValue::Array(arr) => {
                 let month_arr = date_part(&arr, DatePart::Month)?;
@@ -103,11 +97,8 @@ impl ScalarUDFImpl for SparkMonthName {
 
                 let result: StringArray = int_arr
                     .iter()
-                    .map(|maybe_month| match maybe_month {
-                        Some(m) => Ok(month_number_to_name(m)),
-                        None => Ok(None),
-                    })
-                    .collect::<Result<StringArray>>()?;
+                    .map(|maybe_month| maybe_month.and_then(month_number_to_name))
+                    .collect();
 
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
