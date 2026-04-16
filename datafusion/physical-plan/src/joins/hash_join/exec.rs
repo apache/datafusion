@@ -5726,7 +5726,10 @@ mod tests {
     async fn test_partitioned_dynamic_filter_reports_empty_canceled_partitions()
     -> Result<()> {
         let mut session_config = SessionConfig::default();
-        session_config.options_mut().optimizer.enable_dynamic_filter_pushdown = true;
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_dynamic_filter_pushdown = true;
         let task_ctx =
             Arc::new(TaskContext::default().with_session_config(session_config));
 

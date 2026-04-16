@@ -983,6 +983,7 @@ impl ExecutionPlan for RepartitionExec {
             spill_metrics,
             input.schema(),
         );
+
         // Get existing ordering to use for merging
         let sort_exprs = self.sort_exprs().cloned();
 
@@ -1627,7 +1628,10 @@ impl PerPartitionStream {
                     // Poll the memory channel for next message
                     let value = match self.receiver.recv().poll_unpin(cx) {
                         Poll::Ready(v) => v,
-                        Poll::Pending => return Poll::Pending,
+                        Poll::Pending => {
+                            // Nothing from channel, wait
+                            return Poll::Pending;
+                        }
                     };
 
                     match value {
@@ -1660,7 +1664,10 @@ impl PerPartitionStream {
                             // Continue to poll for more data from other partitions
                             continue;
                         }
-                        None => return Poll::Ready(None),
+                        None => {
+                            // Channel closed unexpectedly
+                            return Poll::Ready(None);
+                        }
                     }
                 }
                 StreamState::ReadingSpilled => {
@@ -1673,8 +1680,15 @@ impl PerPartitionStream {
                         Poll::Ready(Some(Err(e))) => {
                             return Poll::Ready(Some(Err(e)));
                         }
-                        Poll::Ready(None) => self.state = StreamState::ReadingMemory,
-                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(None) => {
+                            // Spill stream ended, keep draining the memory channel
+                            self.state = StreamState::ReadingMemory;
+                        }
+                        Poll::Pending => {
+                            // Spilled batch not ready yet, must wait
+                            // This preserves ordering by blocking until spill data arrives
+                            return Poll::Pending;
+                        }
                     }
                 }
             }
