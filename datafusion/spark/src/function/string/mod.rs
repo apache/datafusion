@@ -26,6 +26,7 @@ pub mod is_valid_utf8;
 pub mod length;
 pub mod like;
 pub mod luhn_check;
+pub mod make_valid_utf8;
 pub mod soundex;
 pub mod space;
 pub mod substring;
@@ -48,6 +49,7 @@ make_udf_function!(space::SparkSpace, space);
 make_udf_function!(substring::SparkSubstring, substring);
 make_udf_function!(base64::SparkUnBase64, unbase64);
 make_udf_function!(soundex::SparkSoundex, soundex);
+make_udf_function!(make_valid_utf8::SparkMakeValidUtf8, make_valid_utf8);
 make_udf_function!(is_valid_utf8::SparkIsValidUtf8, is_valid_utf8);
 
 pub mod expr_fn {
@@ -120,6 +122,11 @@ pub mod expr_fn {
         "Returns true if str is a valid UTF-8 string, otherwise returns false",
         str
     ));
+    export_functions!((
+        make_valid_utf8,
+        "Returns the original string if str is a valid UTF-8 string, otherwise returns a new string whose invalid UTF8 byte sequences are replaced using the UNICODE replacement character U+FFFD.",
+        str
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -138,6 +145,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         substring(),
         unbase64(),
         soundex(),
+        make_valid_utf8(),
         is_valid_utf8(),
     ]
 }

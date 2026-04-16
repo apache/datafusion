@@ -1020,7 +1020,7 @@ fn collect_columns_from_predicate_inner(
 
     let predicates = split_conjunction(predicate);
     predicates.into_iter().for_each(|p| {
-        if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary) = p.downcast_ref::<BinaryExpr>() {
             // Only extract pairs where at least one side is a Column reference.
             // Pairs like `complex_expr = literal` should not create equivalence
             // classes — the literal could appear in many unrelated expressions
@@ -1029,8 +1029,8 @@ fn collect_columns_from_predicate_inner(
             // sort orderings. Constant propagation for such pairs is handled
             // separately by `extend_constants`.
             let has_direct_column_operand =
-                binary.left().as_any().downcast_ref::<Column>().is_some()
-                    || binary.right().as_any().downcast_ref::<Column>().is_some();
+                binary.left().downcast_ref::<Column>().is_some()
+                    || binary.right().downcast_ref::<Column>().is_some();
             if !has_direct_column_operand {
                 return;
             }

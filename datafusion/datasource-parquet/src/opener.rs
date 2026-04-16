@@ -75,7 +75,6 @@ use parquet::arrow::parquet_column;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::errors::ParquetError;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
 /// Stateless Parquet morselizer implementation.
@@ -1253,13 +1252,23 @@ impl PushDecoderStreamState {
         loop {
             match self.decoder.try_decode() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
-                    let fetch = async {
-                        let data = self.reader.get_byte_ranges(ranges.clone()).await?;
-                        self.decoder.push_ranges(ranges, data)?;
-                        Ok::<_, ParquetError>(())
-                    };
-                    if let Err(e) = fetch.await {
-                        return Some(Err(DataFusionError::from(e)));
+                    // IO (get_byte_ranges) and CPU (push_ranges) are still
+                    // decoupled — they just can't live in a nested async block
+                    // because that captures `&mut self` as one opaque borrow,
+                    // which violates Stacked Borrows across the yield point.
+                    // Inlining lets the compiler split the disjoint field borrows.
+                    let data = self
+                        .reader
+                        .get_byte_ranges(ranges.clone())
+                        .await
+                        .map_err(DataFusionError::from);
+                    match data {
+                        Ok(data) => {
+                            if let Err(e) = self.decoder.push_ranges(ranges, data) {
+                                return Some(Err(DataFusionError::from(e)));
+                            }
+                        }
+                        Err(e) => return Some(Err(e)),
                     }
                 }
                 Ok(DecodeResult::Data(batch)) => {
@@ -1916,8 +1925,8 @@ mod test {
             .try_map_exprs(|expr| replace_columns_with_literals(expr, &constants))
             .unwrap();
         let exprs = rewritten.as_ref();
-        assert!(exprs[0].expr.as_any().downcast_ref::<Literal>().is_some());
-        assert!(exprs[1].expr.as_any().downcast_ref::<Column>().is_some());
+        assert!(exprs[0].expr.downcast_ref::<Literal>().is_some());
+        assert!(exprs[1].expr.downcast_ref::<Column>().is_some());
 
         // Only column `b` should remain in the projection mask
         assert_eq!(rewritten.column_indices(), vec![1]);
@@ -1930,7 +1939,7 @@ mod test {
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
 
         let rewritten = replace_columns_with_literals(expr, &constants).unwrap();
-        assert!(rewritten.as_any().downcast_ref::<Literal>().is_some());
+        assert!(rewritten.downcast_ref::<Literal>().is_some());
     }
 
     async fn count_batches_and_rows(

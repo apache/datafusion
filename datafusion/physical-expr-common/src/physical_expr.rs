@@ -72,9 +72,6 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 /// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
 pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
-    /// Returns the physical expression as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
     /// Get the data type of this expression, given the schema of the input
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_field(input_schema)?.data_type().to_owned())
@@ -449,9 +446,29 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
 )]
 pub use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 
+impl dyn PhysicalExpr {
+    /// Returns `true` if the expression is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn PhysicalExpr>` via auto-deref.
+    pub fn is<T: PhysicalExpr>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this expression to a concrete type `T`, returning
+    /// `None` if the expression is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn PhysicalExpr>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: PhysicalExpr>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 impl PartialEq for dyn PhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.dyn_eq(other.as_any())
+        self.dyn_eq(other as &dyn Any)
     }
 }
 impl Eq for dyn PhysicalExpr {}
@@ -528,7 +545,6 @@ where
 /// # Example
 /// ```
 /// # // The boilerplate needed to create a `PhysicalExpr` for the example
-/// # use std::any::Any;
 /// use std::collections::HashMap;
 /// # use std::fmt::Formatter;
 /// # use std::sync::Arc;
@@ -539,7 +555,7 @@ where
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
 /// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct MyExpr {}
-/// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
+/// # impl PhysicalExpr for MyExpr {
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
 /// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
@@ -684,10 +700,6 @@ mod test {
     struct TestExpr {}
 
     impl PhysicalExpr for TestExpr {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn data_type(&self, _schema: &Schema) -> datafusion_common::Result<DataType> {
             Ok(DataType::Int64)
         }
