@@ -448,8 +448,8 @@ impl ExpressionAnalyzer for ColumnAOnlyAnalyzer {
         _input_stats: &Statistics,
         _registry: &ExpressionAnalyzerRegistry,
     ) -> AnalysisResult<f64> {
-        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>()
-            && let Some(col) = binary.left().as_any().downcast_ref::<Column>()
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>()
+            && let Some(col) = binary.left().downcast_ref::<Column>()
             && col.name() == "a"
             && matches!(binary.op(), Operator::Eq)
         {

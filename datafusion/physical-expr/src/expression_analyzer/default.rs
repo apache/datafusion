@@ -40,7 +40,7 @@ pub struct DefaultExpressionAnalyzer;
 impl DefaultExpressionAnalyzer {
     /// Get column index from a Column expression
     fn get_column_index(expr: &Arc<dyn PhysicalExpr>) -> Option<usize> {
-        expr.as_any().downcast_ref::<Column>().map(|c| c.index())
+        expr.downcast_ref::<Column>().map(|c| c.index())
     }
 
     /// Get column statistics for an expression if it's a column reference
@@ -80,7 +80,7 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
         registry: &ExpressionAnalyzerRegistry,
     ) -> AnalysisResult<f64> {
         // Binary expressions: AND, OR, comparisons
-        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
             match binary.op() {
                 // AND/OR: only provide a value when both children have estimates.
                 // Delegating when either child has no information prevents arbitrary
@@ -131,7 +131,7 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
         }
 
         // NOT expression: 1 - child selectivity. Delegate if child has no estimate.
-        if let Some(not_expr) = expr.as_any().downcast_ref::<NotExpr>() {
+        if let Some(not_expr) = expr.downcast_ref::<NotExpr>() {
             if let Some(child_sel) = registry.get_selectivity(not_expr.arg(), input_stats)
             {
                 return AnalysisResult::Computed(1.0 - child_sel);
@@ -140,13 +140,12 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
         }
 
         // Literal boolean: exact selectivity, no statistics needed.
-        if let Some(b) = expr
-            .as_any()
-            .downcast_ref::<Literal>()
-            .and_then(|lit| match lit.value() {
-                ScalarValue::Boolean(Some(b)) => Some(*b),
-                _ => None,
-            })
+        if let Some(b) =
+            expr.downcast_ref::<Literal>()
+                .and_then(|lit| match lit.value() {
+                    ScalarValue::Boolean(Some(b)) => Some(*b),
+                    _ => None,
+                })
         {
             return AnalysisResult::Computed(if b { 1.0 } else { 0.0 });
         }
@@ -168,19 +167,19 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
         }
 
         // Literal: NDV = 1
-        if expr.as_any().downcast_ref::<Literal>().is_some() {
+        if expr.downcast_ref::<Literal>().is_some() {
             return AnalysisResult::Computed(1);
         }
 
         // BinaryExpr: addition/subtraction with a literal is always injective
         // TODO: support more injective operators (e.g. multiply by non-zero)
-        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
             let is_injective = matches!(binary.op(), Operator::Plus | Operator::Minus);
 
             if is_injective {
                 // If one side is a literal, the operation is injective on the other side
-                let left_is_literal = binary.left().as_any().is::<Literal>();
-                let right_is_literal = binary.right().as_any().is::<Literal>();
+                let left_is_literal = binary.left().is::<Literal>();
+                let right_is_literal = binary.right().is::<Literal>();
 
                 if left_is_literal
                     && let Some(ndv) =
@@ -222,7 +221,7 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
         }
 
         // Literal: min = max = value
-        if let Some(lit_expr) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(lit_expr) = expr.downcast_ref::<Literal>() {
             let val = lit_expr.value().clone();
             return AnalysisResult::Computed((val.clone(), val));
         }
@@ -252,7 +251,7 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
         }
 
         // Literal: null fraction depends on whether it's null
-        if let Some(lit_expr) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(lit_expr) = expr.downcast_ref::<Literal>() {
             let is_null = lit_expr.value().is_null();
             return AnalysisResult::Computed(if is_null { 1.0 } else { 0.0 });
         }
