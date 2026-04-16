@@ -22,7 +22,8 @@ use std::sync::Arc;
 
 use crate::string::concat;
 use crate::strings::{
-    ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
+    ColumnarValueRef, ConcatLargeStringBuilder, ConcatStringBuilder,
+    ConcatStringViewBuilder,
 };
 use datafusion_common::cast::{as_binary_array, as_string_array, as_string_view_array};
 use datafusion_common::{
@@ -242,7 +243,7 @@ impl ScalarUDFImpl for ConcatFunc {
 
         match return_datatype {
             DataType::Utf8 => {
-                let mut builder = StringArrayBuilder::with_capacity(len, data_size);
+                let mut builder = ConcatStringBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     columns
                         .iter()
@@ -254,7 +255,7 @@ impl ScalarUDFImpl for ConcatFunc {
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             DataType::Utf8View => {
-                let mut builder = StringViewArrayBuilder::with_capacity(len, data_size);
+                let mut builder = ConcatStringViewBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     columns
                         .iter()
@@ -266,7 +267,7 @@ impl ScalarUDFImpl for ConcatFunc {
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             DataType::LargeUtf8 => {
-                let mut builder = LargeStringArrayBuilder::with_capacity(len, data_size);
+                let mut builder = ConcatLargeStringBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     columns
                         .iter()

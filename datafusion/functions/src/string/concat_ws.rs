@@ -24,7 +24,8 @@ use crate::string::concat;
 use crate::string::concat::simplify_concat;
 use crate::string::concat_ws;
 use crate::strings::{
-    ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
+    ColumnarValueRef, ConcatLargeStringBuilder, ConcatStringBuilder,
+    ConcatStringViewBuilder,
 };
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
@@ -311,7 +312,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
         match return_datatype {
             DataType::Utf8View => {
-                let mut builder = StringViewArrayBuilder::with_capacity(len, data_size);
+                let mut builder = ConcatStringViewBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     if !sep.is_valid(i) {
                         builder.append_offset()?;
@@ -332,7 +333,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
             }
             DataType::LargeUtf8 => {
-                let mut builder = LargeStringArrayBuilder::with_capacity(len, data_size);
+                let mut builder = ConcatLargeStringBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     if !sep.is_valid(i) {
                         builder.append_offset()?;
@@ -353,7 +354,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
             }
             _ => {
-                let mut builder = StringArrayBuilder::with_capacity(len, data_size);
+                let mut builder = ConcatStringBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     if !sep.is_valid(i) {
                         builder.append_offset()?;
