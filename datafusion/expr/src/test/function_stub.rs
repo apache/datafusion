@@ -450,9 +450,6 @@ impl Avg {
                 TypeSignature::Coercible(vec![Coercion::new_exact(
                     TypeSignatureClass::Decimal,
                 )]),
-                TypeSignature::Coercible(vec![Coercion::new_exact(
-                    TypeSignatureClass::Duration,
-                )]),
                 TypeSignature::Coercible(vec![Coercion::new_implicit(
                     TypeSignatureClass::Native(logical_float64()),
                     vec![TypeSignatureClass::Integer, TypeSignatureClass::Float],

@@ -130,7 +130,6 @@ impl ApproxPercentileCont {
     /// Create a new [`ApproxPercentileCont`] aggregate function.
     pub fn new() -> Self {
         // Accept any numeric value paired with a float64 percentile
-        // Additionally accept an integer number of centroids for T-Digest
         let signature = Signature::one_of(
             vec![
                 // 2 args - numeric, percentile (float)
@@ -146,7 +145,7 @@ impl ApproxPercentileCont {
                         NativeType::Float64,
                     ),
                 ]),
-                // 3 args - numeric, percentile (float), centroid (integer)
+                // 3 args - numeric, percentile (float), number of centroid for T-Digest (integer)
                 TypeSignature::Coercible(vec![
                     Coercion::new_implicit(
                         TypeSignatureClass::Float,
