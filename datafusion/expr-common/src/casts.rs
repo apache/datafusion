@@ -62,6 +62,23 @@ fn is_date_type(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Date32 | DataType::Date64)
 }
 
+/// Returns true when unwrapping a date/timestamp cast could change comparison
+/// semantics.
+///
+/// A `Date` stores only a calendar day, while a `Timestamp` stores a specific
+/// instant or wall-clock time. `Timestamp -> Date` is lossy because it drops the
+/// time-of-day. `Date -> Timestamp` is also lossy in this optimizer context
+/// because there is no unique inverse: converting a date to a timestamp has to
+/// invent a time component such as midnight.
+///
+/// For example, `CAST(ts AS DATE) = DATE '2024-01-01'` means "any timestamp
+/// during that day", but unwrapping it to `ts = TIMESTAMP '2024-01-01
+/// 00:00:00'` matches only midnight.
+fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
+    (is_date_type(from_type) && to_type.is_temporal())
+        || (is_date_type(to_type) && from_type.is_temporal())
+}
+
 /// Returns true if unwrap_cast_in_comparison supports this numeric type
 fn is_supported_numeric_type(data_type: &DataType) -> bool {
     matches!(
@@ -113,11 +130,7 @@ fn try_cast_numeric_literal(
         return None;
     }
 
-    // Date↔Timestamp casts are lossy (drop time-of-day or add midnight),
-    // so unwrapping would change comparison semantics.
-    if (is_date_type(&lit_data_type) && target_type.is_temporal())
-        || (is_date_type(target_type) && lit_data_type.is_temporal())
-    {
+    if is_lossy_temporal_cast(&lit_data_type, target_type) {
         return None;
     }
 
