@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::types::logical_date;
+use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::expr::ScalarFunction;
@@ -49,6 +49,11 @@ impl SparkQuarter {
                     )]),
                     TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Native(logical_date()),
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_date()),
+                        vec![TypeSignatureClass::Native(logical_string())],
+                        NativeType::Date,
                     )]),
                 ],
                 Volatility::Immutable,
