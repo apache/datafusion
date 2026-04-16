@@ -1383,10 +1383,8 @@ impl ExecutionPlan for HashJoinExec {
                 let null_equality = self.null_equality;
                 let background_join_metrics = join_metrics.clone();
 
-                if build_accumulator.is_some() {
+                if let Some((build_accumulator, partition)) = build_accumulator {
                     let (tx, rx) = oneshot::channel();
-                    let (build_accumulator, partition) =
-                        build_accumulator.expect("checked is_some above");
                     let background_build_accumulator = Arc::clone(&build_accumulator);
                     let task = SpawnedTask::spawn(async move {
                         let result = collect_left_input_and_maybe_report(
