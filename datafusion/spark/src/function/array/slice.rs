@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayData, ArrayRef, Int64Builder, ListArray};
+use arrow::array::{Array, ArrayRef, Int64Builder};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
+use datafusion_common::{
+    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
+};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, ReturnFieldArgs,
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -93,11 +95,11 @@ impl ScalarUDFImpl for SparkSlice {
         mut func_args: ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         if func_args.args[0].data_type() == DataType::Null {
-            let len = match &func_args.args[0] {
-                ColumnarValue::Array(a) => a.len(),
-                ColumnarValue::Scalar(_) => func_args.number_rows,
-            };
-            return Ok(ColumnarValue::Array(list_null_array(len)));
+            return Ok(ColumnarValue::Scalar(ScalarValue::new_null_list(
+                DataType::Null,
+                true,
+                1,
+            )));
         }
 
         let array_len = func_args
@@ -132,11 +134,6 @@ impl ScalarUDFImpl for SparkSlice {
             config_options: func_args.config_options,
         })
     }
-}
-
-fn list_null_array(len: usize) -> ArrayRef {
-    let list_type = DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)));
-    Arc::new(ListArray::from(ArrayData::new_null(&list_type, len)))
 }
 
 fn calculate_start_end(args: &[ArrayRef]) -> Result<(ArrayRef, ArrayRef)> {
