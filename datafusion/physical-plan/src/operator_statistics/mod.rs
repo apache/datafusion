@@ -93,7 +93,9 @@ use std::sync::Arc;
 
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
+use datafusion_physical_expr::expressions::Column;
 
 use crate::ExecutionPlan;
 
@@ -779,14 +781,23 @@ impl StatisticsProvider for JoinStatisticsProvider {
             return Ok(StatisticsResult::Delegate);
         };
 
-        let default_analyzer;
-        let analyzer = match plan.expression_analyzer_registry() {
-            Some(r) => r,
-            None => {
-                default_analyzer = ExpressionAnalyzerRegistry::new();
-                &default_analyzer
+        let analyzer = plan.expression_analyzer_registry();
+
+        /// Resolve NDV for a join key expression. Uses the ExpressionAnalyzer
+        /// when available (handles arbitrary expressions), otherwise falls back
+        /// to direct column statistics lookup (bare column keys only).
+        fn resolve_key_ndv(
+            key: &Arc<dyn PhysicalExpr>,
+            stats: &Statistics,
+            analyzer: Option<&ExpressionAnalyzerRegistry>,
+        ) -> Option<usize> {
+            if let Some(a) = analyzer {
+                return a.get_distinct_count(key, stats);
             }
-        };
+            key.downcast_ref::<Column>()
+                .and_then(|c| stats.column_statistics.get(c.index()))
+                .and_then(|s| s.distinct_count.get_value().copied())
+        }
 
         /// Estimate equi-join output using NDV of join key expressions:
         ///   left_rows * right_rows / product(max(left_ndv_i, right_ndv_i))
@@ -797,15 +808,15 @@ impl StatisticsProvider for JoinStatisticsProvider {
             right: &Statistics,
             left_rows: usize,
             right_rows: usize,
-            analyzer: &ExpressionAnalyzerRegistry,
+            analyzer: Option<&ExpressionAnalyzerRegistry>,
         ) -> usize {
             if on.is_empty() {
                 return left_rows.saturating_mul(right_rows);
             }
             let mut ndv_divisor: usize = 1;
             for (left_key, right_key) in on {
-                let left_ndv = analyzer.get_distinct_count(left_key, left);
-                let right_ndv = analyzer.get_distinct_count(right_key, right);
+                let left_ndv = resolve_key_ndv(left_key, left, analyzer);
+                let right_ndv = resolve_key_ndv(right_key, right, analyzer);
                 match (left_ndv, right_ndv) {
                     (Some(l), Some(r)) if l > 0 && r > 0 => {
                         ndv_divisor = ndv_divisor.saturating_mul(l.max(r));
