@@ -242,7 +242,7 @@ fn minimize_join_filter(
 ) -> JoinFilter {
     let mut used_columns = HashSet::new();
     expr.apply(|expr| {
-        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(col) = expr.downcast_ref::<Column>() {
             used_columns.insert(col.index());
         }
         Ok(TreeNodeRecursion::Continue)
@@ -265,7 +265,7 @@ fn minimize_join_filter(
         .collect::<Fields>();
 
     let final_expr = expr
-        .transform_up(|expr| match expr.as_any().downcast_ref::<Column>() {
+        .transform_up(|expr| match expr.downcast_ref::<Column>() {
             None => Ok(Transformed::no(expr)),
             Some(column) => {
                 let new_idx = used_columns
@@ -378,7 +378,7 @@ impl<'a> JoinFilterRewriter<'a> {
         // executed against the filter schema.
         let new_idx = self.join_side_projections.len();
         let rewritten_expr = expr.transform_up(|expr| {
-            Ok(match expr.as_any().downcast_ref::<Column>() {
+            Ok(match expr.downcast_ref::<Column>() {
                 None => Transformed::no(expr),
                 Some(column) => {
                     let intermediate_column =
@@ -412,7 +412,7 @@ impl<'a> JoinFilterRewriter<'a> {
         join_side: JoinSide,
     ) -> Result<bool> {
         let mut result = false;
-        expr.apply(|expr| match expr.as_any().downcast_ref::<Column>() {
+        expr.apply(|expr| match expr.downcast_ref::<Column>() {
             None => Ok(TreeNodeRecursion::Continue),
             Some(c) => {
                 let column_index = &self.intermediate_column_indices[c.index()];

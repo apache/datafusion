@@ -713,17 +713,13 @@ impl FileMetadata for CachedParquetMetaData {
 pub(crate) fn sort_expr_to_sorting_column(
     sort_expr: &PhysicalSortExpr,
 ) -> Result<SortingColumn> {
-    let column = sort_expr
-        .expr
-        .as_any()
-        .downcast_ref::<Column>()
-        .ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "Parquet sorting_columns only supports simple column references, \
+    let column = sort_expr.expr.downcast_ref::<Column>().ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "Parquet sorting_columns only supports simple column references, \
                  but got expression: {}",
-                sort_expr.expr
-            ))
-        })?;
+            sort_expr.expr
+        ))
+    })?;
 
     let column_idx: i32 = column.index().try_into().map_err(|_| {
         DataFusionError::Plan(format!(

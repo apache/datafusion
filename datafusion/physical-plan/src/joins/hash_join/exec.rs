@@ -1594,10 +1594,7 @@ impl ExecutionPlan for HashJoinExec {
                     .on
                     .iter()
                     .filter_map(|(left_key, _)| {
-                        left_key
-                            .as_any()
-                            .downcast_ref::<Column>()
-                            .map(|c| c.index())
+                        left_key.downcast_ref::<Column>().map(|c| c.index())
                     })
                     .collect();
                 for (output_idx, ci) in column_indices.iter().enumerate() {
@@ -1611,10 +1608,7 @@ impl ExecutionPlan for HashJoinExec {
                     .on
                     .iter()
                     .filter_map(|(_, right_key)| {
-                        right_key
-                            .as_any()
-                            .downcast_ref::<Column>()
-                            .map(|c| c.index())
+                        right_key.downcast_ref::<Column>().map(|c| c.index())
                     })
                     .collect();
                 for (output_idx, ci) in column_indices.iter().enumerate() {
