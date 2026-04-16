@@ -185,7 +185,7 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
         // kernel / expression. For example, DataFusion Comet has a custom cast
         // kernel in its native Spark expression implementation.
         expr.transform(|expr| {
-            if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
+            if let Some(cast) = expr.downcast_ref::<CastExpr>() {
                 let input_data_type =
                     cast.expr().data_type(&self.physical_file_schema)?;
                 let output_data_type = cast.target_field().data_type();
