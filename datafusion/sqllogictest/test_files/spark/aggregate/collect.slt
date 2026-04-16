@@ -95,7 +95,7 @@ ORDER BY g;
 # collect_set with GROUP BY: group where all values are NULL returns empty list
 query I?
 SELECT g, array_sort(collect_set(a))
-FROM (VALUES (1, 10), (1, 20), (2, NULL), (2, NULL)) AS t(g, a)
+FROM (VALUES (1::INT, 10::INT), (1::INT, 20::INT), (2::INT, NULL::INT), (2::INT, NULL::INT)) AS t(g, a)
 GROUP BY g
 ORDER BY g;
 ----
