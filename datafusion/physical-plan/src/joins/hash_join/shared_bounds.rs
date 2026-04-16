@@ -576,65 +576,83 @@ impl SharedBuildAccumulator {
                     lit(ScalarValue::UInt64(Some(num_partitions as u64))),
                 )) as Arc<dyn PhysicalExpr>;
 
-                let when_then_branches = partitions
-                    .iter()
-                    .enumerate()
-                    .map(|(partition_id, partition)| -> Result<_> {
-                        let then_expr = match partition {
-                            PartitionStatus::Reported(partition)
-                                if matches!(
-                                    partition.pushdown,
-                                    PushdownStrategy::Empty
-                                ) =>
-                            {
-                                lit(false)
-                            }
-                            PartitionStatus::Reported(partition) => {
-                                let membership_expr = create_membership_predicate(
-                                    &self.on_right,
-                                    partition.pushdown.clone(),
-                                    &HASH_JOIN_SEED,
-                                    self.probe_schema.as_ref(),
-                                )?;
-                                let bounds_expr = create_bounds_predicate(
-                                    &self.on_right,
-                                    &partition.bounds,
-                                );
-                                match (membership_expr, bounds_expr) {
-                                    (Some(membership), Some(bounds)) => Arc::new(
-                                        BinaryExpr::new(
-                                            bounds,
-                                            Operator::And,
-                                            membership,
-                                        ),
-                                    )
-                                        as Arc<dyn PhysicalExpr>,
-                                    (Some(membership), None) => membership,
-                                    (None, Some(bounds)) => bounds,
-                                    (None, None) => lit(true),
-                                }
-                            }
-                            PartitionStatus::CanceledUnknown => lit(true),
-                            PartitionStatus::Pending => {
-                                return datafusion_common::internal_err!(
-                                    "attempted to finalize dynamic filter with pending partition"
-                                )
-                            }
-                        };
-                        Ok((
-                            lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                            then_expr,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let mut real_branches = Vec::new();
+                let mut empty_partition_ids = Vec::new();
+                let mut has_canceled_unknown = false;
 
-                let filter_expr = if when_then_branches.len() == 1 {
-                    Arc::clone(&when_then_branches[0].1)
+                for (partition_id, partition) in partitions.iter().enumerate() {
+                    match partition {
+                        PartitionStatus::Reported(partition)
+                            if matches!(partition.pushdown, PushdownStrategy::Empty) =>
+                        {
+                            empty_partition_ids.push(partition_id);
+                        }
+                        PartitionStatus::Reported(partition) => {
+                            let membership_expr = create_membership_predicate(
+                                &self.on_right,
+                                partition.pushdown.clone(),
+                                &HASH_JOIN_SEED,
+                                self.probe_schema.as_ref(),
+                            )?;
+                            let bounds_expr = create_bounds_predicate(
+                                &self.on_right,
+                                &partition.bounds,
+                            );
+                            let then_expr = match (membership_expr, bounds_expr) {
+                                (Some(membership), Some(bounds)) => Arc::new(
+                                    BinaryExpr::new(bounds, Operator::And, membership),
+                                )
+                                    as Arc<dyn PhysicalExpr>,
+                                (Some(membership), None) => membership,
+                                (None, Some(bounds)) => bounds,
+                                (None, None) => lit(true),
+                            };
+                            real_branches.push((
+                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                                then_expr,
+                            ));
+                        }
+                        PartitionStatus::CanceledUnknown => {
+                            has_canceled_unknown = true;
+                        }
+                        PartitionStatus::Pending => {
+                            return datafusion_common::internal_err!(
+                                "attempted to finalize dynamic filter with pending partition"
+                            );
+                        }
+                    }
+                }
+
+                let filter_expr = if has_canceled_unknown {
+                    let mut when_then_branches = empty_partition_ids
+                        .into_iter()
+                        .map(|partition_id| {
+                            (
+                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                                lit(false),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    when_then_branches.extend(real_branches);
+
+                    if when_then_branches.is_empty() {
+                        lit(true)
+                    } else {
+                        Arc::new(CaseExpr::try_new(
+                            Some(modulo_expr),
+                            when_then_branches,
+                            Some(lit(true)),
+                        )?) as Arc<dyn PhysicalExpr>
+                    }
+                } else if real_branches.is_empty() {
+                    lit(false)
+                } else if num_partitions == 1 {
+                    Arc::clone(&real_branches[0].1)
                 } else {
                     Arc::new(CaseExpr::try_new(
                         Some(modulo_expr),
-                        when_then_branches,
-                        Some(lit(true)),
+                        real_branches,
+                        Some(lit(false)),
                     )?) as Arc<dyn PhysicalExpr>
                 };
 
