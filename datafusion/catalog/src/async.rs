@@ -37,10 +37,6 @@ impl SchemaProvider for ResolvedSchemaProvider {
         self.owner_name.as_deref()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.cached_tables.keys().cloned().collect()
     }
@@ -115,10 +111,6 @@ struct ResolvedCatalogProvider {
     cached_schemas: HashMap<String, Arc<dyn SchemaProvider>>,
 }
 impl CatalogProvider for ResolvedCatalogProvider {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.cached_schemas.keys().cloned().collect()
     }
@@ -160,10 +152,6 @@ struct ResolvedCatalogProviderList {
     cached_catalogs: HashMap<String, Arc<dyn CatalogProvider>>,
 }
 impl CatalogProviderList for ResolvedCatalogProviderList {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         _name: String,
@@ -424,12 +412,9 @@ pub trait AsyncCatalogProviderList: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        any::Any,
-        sync::{
-            Arc,
-            atomic::{AtomicU32, Ordering},
-        },
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
     };
 
     use arrow::datatypes::SchemaRef;
@@ -447,10 +432,6 @@ mod tests {
     struct MockTableProvider {}
     #[async_trait]
     impl TableProvider for MockTableProvider {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         /// Get a reference to the schema for this table
         fn schema(&self) -> SchemaRef {
             unimplemented!()

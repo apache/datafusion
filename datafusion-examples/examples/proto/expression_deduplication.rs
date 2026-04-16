@@ -129,7 +129,6 @@ pub async fn expression_deduplication() -> Result<()> {
     };
     let predicate = Arc::clone(filter_exec.predicate());
     let binary_expr = predicate
-        .as_any()
         .downcast_ref::<BinaryExpr>()
         .expect("Predicate is not a BinaryExpr");
     let left = &binary_expr.left();
