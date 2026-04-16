@@ -169,7 +169,7 @@ impl IoUringObjectStore {
     ) -> Result<GetResult> {
         // Get file metadata via the inner store
         let meta = self.inner.head(location).await?;
-        let file_size = meta.size as u64;
+        let file_size = meta.size;
 
         // Resolve the requested byte range
         let range = match &options.range {

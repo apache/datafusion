@@ -205,11 +205,11 @@ impl Default for DefaultObjectStoreRegistry {
 }
 
 impl DefaultObjectStoreRegistry {
-    /// This will register [`LocalFileSystem`] to handle `file://` paths.
+    /// This will register a local filesystem object store to handle `file://` paths.
     ///
     /// When the `io-uring` feature is enabled (Linux only), registers an
-    /// [`IoUringObjectStore`](datafusion_object_store_iouring::IoUringObjectStore)
-    /// instead, which uses io_uring for batched local file reads.
+    /// `IoUringObjectStore` instead, which uses io_uring for batched local
+    /// file reads (falling back to `LocalFileSystem` if io_uring is unavailable).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
@@ -240,7 +240,7 @@ impl DefaultObjectStoreRegistry {
 
 ///
 /// Stores are registered based on the scheme, host and port of the provided URL
-/// with a [`LocalFileSystem::new`] automatically registered for `file://` (if the
+/// with a local filesystem store automatically registered for `file://` (if the
 /// target arch is not `wasm32`).
 ///
 /// For example:

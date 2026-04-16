@@ -96,6 +96,7 @@ pub(crate) fn run_uring_loop(mut rx: mpsc::UnboundedReceiver<IoCommand>) {
 ///
 /// Opens the file, submits all read SQEs (chunked by ring capacity),
 /// waits for CQEs, and returns the results in order.
+#[allow(clippy::result_large_err)] // object_store::Error is large by design
 fn execute_read_ranges(
     ring: &mut IoUring,
     path: &std::path::Path,
