@@ -1208,6 +1208,72 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies that a sibling hitting its limit does not count shared files
+    /// left in the queue as already processed by that stream.
+    #[tokio::test]
+    async fn morsel_shared_limit_does_not_double_count_files_processed() -> Result<()> {
+        let test = two_partition_morsel_test();
+        let unlimited_config = test.test_config();
+        let limited_config = test.clone().with_limit(1).test_config();
+        let shared_work_source = limited_config
+            .create_sibling_state()
+            .and_then(|state| state.as_ref().downcast_ref::<SharedWorkSource>().cloned())
+            .expect("shared work source");
+        let limited_metrics = ExecutionPlanMetricsSet::new();
+        let unlimited_metrics = ExecutionPlanMetricsSet::new();
+
+        let limited_stream = FileStreamBuilder::new(&limited_config)
+            .with_partition(1)
+            .with_shared_work_source(Some(shared_work_source.clone()))
+            .with_morselizer(Box::new(test.morselizer.clone()))
+            .with_metrics(&limited_metrics)
+            .build()?;
+
+        let unlimited_stream = FileStreamBuilder::new(&unlimited_config)
+            .with_partition(0)
+            .with_shared_work_source(Some(shared_work_source))
+            .with_morselizer(Box::new(test.morselizer))
+            .with_metrics(&unlimited_metrics)
+            .build()?;
+
+        let limited_output = drain_stream_output(limited_stream).await?;
+        let unlimited_output = drain_stream_output(unlimited_stream).await?;
+
+        insta::assert_snapshot!(format!(
+            "----- Limited Stream -----\n{limited_output}\n----- Unlimited Stream -----\n{unlimited_output}"
+        ), @r"
+        ----- Limited Stream -----
+        Batch: 101
+        ----- Unlimited Stream -----
+        Batch: 102
+        Batch: 103
+        Batch: 201
+        ");
+
+        assert_eq!(
+            metric_count(&limited_metrics, "files_opened"),
+            1,
+            "the limited stream should only open the file that produced its output"
+        );
+        assert_eq!(
+            metric_count(&limited_metrics, "files_processed"),
+            1,
+            "the limited stream should only mark its own file as processed"
+        );
+        assert_eq!(
+            metric_count(&unlimited_metrics, "files_opened"),
+            3,
+            "the draining stream should open the remaining shared files"
+        );
+        assert_eq!(
+            metric_count(&unlimited_metrics, "files_processed"),
+            3,
+            "the draining stream should process exactly the files it opened"
+        );
+
+        Ok(())
+    }
+
     /// Verifies that one fast sibling can drain shared files that originated
     /// in more than one other partition.
     #[tokio::test]
@@ -1545,6 +1611,24 @@ mod tests {
                 format!("Error: {message}")
             }
         }
+    }
+
+    async fn drain_stream_output(stream: FileStream) -> Result<String> {
+        let output = stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|result| result.map(|batch| format_result(Ok(batch))))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(output.join("\n"))
+    }
+
+    fn metric_count(metrics: &ExecutionPlanMetricsSet, name: &str) -> usize {
+        metrics
+            .clone_inner()
+            .sum_by_name(name)
+            .unwrap_or_else(|| panic!("missing metric: {name}"))
+            .as_usize()
     }
 
     /// Test-only state for one stream partition in [`FileStreamMorselTest`].
