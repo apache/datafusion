@@ -662,10 +662,6 @@ impl Dialect for BigQueryDialect {
         ast::DataType::String(None)
     }
 
-    fn int64_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Int64
-    }
-
     fn timestamp_cast_dtype(
         &self,
         _time_unit: &TimeUnit,

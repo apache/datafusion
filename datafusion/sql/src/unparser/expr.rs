@@ -3507,11 +3507,6 @@ mod tests {
         let actual = format!("{}", unparser.expr_to_sql(&expr)?);
         assert_eq!(actual, "CAST(`a` AS STRING)");
 
-        // int64_cast_dtype: INT64 instead of BIGINT
-        let expr = cast(col("a"), DataType::Int64);
-        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
-        assert_eq!(actual, "CAST(`a` AS INT64)");
-
         // timestamp_cast_dtype: TIMESTAMP (no WITH TIME ZONE)
         let expr = cast(
             col("a"),
