@@ -23,10 +23,7 @@ use arrow::array::{Array, Float16Array};
 use arrow::compute::{filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{
-    array::{
-        ArrayRef, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-        Int64Array, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
-    },
+    array::{ArrayRef, Float32Array, Float64Array},
     datatypes::{DataType, Field},
 };
 use datafusion_common::types::{NativeType, logical_float64};
@@ -200,17 +197,7 @@ impl ApproxPercentileCont {
 
         let data_type = args.expr_fields[0].data_type();
         let accumulator: ApproxPercentileAccumulator = match data_type {
-            DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64 => {
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
                 if let Some(max_size) = tdigest_max_size {
                     ApproxPercentileAccumulator::new_with_max_size(
                         percentile,
@@ -397,38 +384,6 @@ impl ApproxPercentileAccumulator {
                     .map(|v| v.to_f64())
                     .collect::<Vec<_>>())
             }
-            DataType::Int64 => {
-                let array = downcast_value!(values, Int64Array);
-                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
-            }
-            DataType::Int32 => {
-                let array = downcast_value!(values, Int32Array);
-                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
-            }
-            DataType::Int16 => {
-                let array = downcast_value!(values, Int16Array);
-                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
-            }
-            DataType::Int8 => {
-                let array = downcast_value!(values, Int8Array);
-                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
-            }
-            DataType::UInt64 => {
-                let array = downcast_value!(values, UInt64Array);
-                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
-            }
-            DataType::UInt32 => {
-                let array = downcast_value!(values, UInt32Array);
-                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
-            }
-            DataType::UInt16 => {
-                let array = downcast_value!(values, UInt16Array);
-                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
-            }
-            DataType::UInt8 => {
-                let array = downcast_value!(values, UInt8Array);
-                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
-            }
             e => internal_err!(
                 "APPROX_PERCENTILE_CONT is not expected to receive the type {e:?}"
             ),
@@ -462,14 +417,6 @@ impl Accumulator for ApproxPercentileAccumulator {
         // These acceptable return types MUST match the validation in
         // ApproxPercentile::create_accumulator.
         Ok(match &self.return_type {
-            DataType::Int8 => ScalarValue::Int8(Some(q as i8)),
-            DataType::Int16 => ScalarValue::Int16(Some(q as i16)),
-            DataType::Int32 => ScalarValue::Int32(Some(q as i32)),
-            DataType::Int64 => ScalarValue::Int64(Some(q as i64)),
-            DataType::UInt8 => ScalarValue::UInt8(Some(q as u8)),
-            DataType::UInt16 => ScalarValue::UInt16(Some(q as u16)),
-            DataType::UInt32 => ScalarValue::UInt32(Some(q as u32)),
-            DataType::UInt64 => ScalarValue::UInt64(Some(q as u64)),
             DataType::Float16 => ScalarValue::Float16(Some(half::f16::from_f64(q))),
             DataType::Float32 => ScalarValue::Float32(Some(q as f32)),
             DataType::Float64 => ScalarValue::Float64(Some(q)),
