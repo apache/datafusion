@@ -115,7 +115,7 @@ b [z]
 # collect_set with GROUP BY: multiple groups with mixed NULLs and duplicates
 query I?
 SELECT g, array_sort(collect_set(a))
-FROM (VALUES (1, 5), (1, 5), (1, NULL), (2, 10), (2, 20), (2, 10), (3, NULL), (3, NULL)) AS t(g, a)
+FROM (VALUES (1::INT, 5::INT), (1::INT, 5::INT), (1::INT, NULL::INT), (2::INT, 10::INT), (2::INT, 20::INT), (2::INT, 10::INT), (3::INT, NULL::INT), (3::INT, NULL::INT)) AS t(g, a)
 GROUP BY g
 ORDER BY g;
 ----
