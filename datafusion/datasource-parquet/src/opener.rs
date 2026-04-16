@@ -1401,8 +1401,7 @@ fn split_decoder_runs(
             continue;
         }
         let needs_filter = !fully_matched_set.contains(&idx);
-        if let Some((_, plan)) = runs.last_mut().filter(|(nf, _)| *nf == needs_filter)
-        {
+        if let Some((_, plan)) = runs.last_mut().filter(|(nf, _)| *nf == needs_filter) {
             plan[idx] = access;
         } else {
             let mut plan = vec![RowGroupAccess::Skip; num_rgs];
