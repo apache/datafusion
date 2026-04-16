@@ -34,6 +34,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
@@ -216,6 +217,8 @@ fn create_bounds_predicate(
 pub(crate) struct SharedBuildAccumulator {
     /// Build-side data protected by a single mutex to avoid ordering concerns
     inner: Mutex<AccumulatedBuildData>,
+    /// Keeps background build/report tasks alive until all partitions have reported.
+    background_tasks: Mutex<Vec<SpawnedTask<()>>>,
     barrier: Barrier,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
@@ -337,12 +340,17 @@ impl SharedBuildAccumulator {
 
         Self {
             inner: Mutex::new(mode_data),
+            background_tasks: Mutex::new(vec![]),
             barrier: Barrier::new(expected_calls),
             dynamic_filter,
             on_right,
             repartition_random_state,
             probe_schema: right_child.schema(),
         }
+    }
+
+    pub(crate) fn register_background_task(&self, task: SpawnedTask<()>) {
+        self.background_tasks.lock().push(task);
     }
 
     /// Report build-side data from a partition

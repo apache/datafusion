@@ -79,6 +79,7 @@ use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, assert_or_internal_err,
     internal_err, plan_err, project_schema,
 };
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Accumulator;
@@ -95,6 +96,7 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
+use tokio::sync::oneshot;
 
 use super::partitioned_hash_eval::SeededRandomState;
 
@@ -1374,25 +1376,42 @@ impl ExecutionPlan for HashJoinExec {
                 let build_accumulator = build_accumulator
                     .as_ref()
                     .map(|acc| (Arc::clone(acc), partition));
+                let random_state = self.random_state.random_state().clone();
+                let with_visited_indices_bitmap =
+                    need_produce_result_in_final(self.join_type);
+                let config = Arc::clone(context.session_config().options());
+                let null_equality = self.null_equality;
+                let background_join_metrics = join_metrics.clone();
 
                 if build_accumulator.is_some() {
-                    let task = tokio::task::spawn(collect_left_input_and_maybe_report(
-                        self.random_state.random_state().clone(),
-                        left_stream,
-                        on_left.clone(),
-                        join_metrics.clone(),
-                        reservation,
-                        need_produce_result_in_final(self.join_type),
-                        1,
-                        enable_dynamic_filter_pushdown,
-                        Arc::clone(context.session_config().options()),
-                        self.null_equality,
-                        array_map_created_count,
-                        build_accumulator,
-                    ));
+                    let (tx, rx) = oneshot::channel();
+                    let (build_accumulator, partition) =
+                        build_accumulator.expect("checked is_some above");
+                    let background_build_accumulator = Arc::clone(&build_accumulator);
+                    let task = SpawnedTask::spawn(async move {
+                        let result = collect_left_input_and_maybe_report(
+                            random_state,
+                            left_stream,
+                            on_left.clone(),
+                            background_join_metrics,
+                            reservation,
+                            with_visited_indices_bitmap,
+                            1,
+                            enable_dynamic_filter_pushdown,
+                            config,
+                            null_equality,
+                            array_map_created_count,
+                            Some((background_build_accumulator, partition)),
+                        )
+                        .await;
+                        let _ = tx.send(result);
+                    });
+                    build_accumulator.register_background_task(task);
                     OnceFut::new(async move {
-                        task.await.map_err(|err| {
-                            DataFusionError::ExecutionJoin(Box::new(err))
+                        rx.await.map_err(|err| {
+                            DataFusionError::Execution(format!(
+                                "hash join build task ended before sending its result: {err}"
+                            ))
                         })?
                     })
                 } else {
