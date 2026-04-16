@@ -1015,14 +1015,7 @@ impl DataFrame {
         let supported_describe_functions =
             vec!["count", "null_count", "mean", "std", "min", "max", "median"];
         let supports_describe_min_max = |data_type: &DataType| {
-            !matches!(
-                data_type,
-                DataType::Boolean
-                    | DataType::Binary
-                    | DataType::LargeBinary
-                    | DataType::BinaryView
-                    | DataType::FixedSizeBinary(_)
-            )
+            !matches!(data_type, DataType::Boolean) && !data_type.is_binary()
         };
 
         let original_schema_fields = self.schema().fields().iter();
