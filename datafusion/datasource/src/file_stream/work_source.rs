@@ -45,11 +45,12 @@ impl WorkSource {
         }
     }
 
-    /// Return the number of files that are still waiting to be planned.
-    pub(super) fn len(&self) -> usize {
+    /// Return how many queued files should be counted as already processed
+    /// when this stream stops early after hitting a global limit.
+    pub(super) fn skipped_on_limit(&self) -> usize {
         match self {
             Self::Local(files) => files.len(),
-            Self::Shared(shared) => shared.len(),
+            Self::Shared(_) => 0,
         }
     }
 }
@@ -93,10 +94,5 @@ impl SharedWorkSource {
     /// Returns `None` if the queue is empty
     fn pop_front(&self) -> Option<PartitionedFile> {
         self.inner.files.lock().pop_front()
-    }
-
-    /// Return the number of files still waiting in the shared queue.
-    fn len(&self) -> usize {
-        self.inner.files.lock().len()
     }
 }

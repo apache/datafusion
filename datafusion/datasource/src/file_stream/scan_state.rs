@@ -172,7 +172,7 @@ impl ScanState {
                                 (batch, false)
                             } else {
                                 let batch = batch.slice(0, *remain);
-                                let done = 1 + self.work_source.len();
+                                let done = 1 + self.work_source.skipped_on_limit();
                                 self.metrics.files_processed.add(done);
                                 *remain = 0;
                                 (batch, true)
