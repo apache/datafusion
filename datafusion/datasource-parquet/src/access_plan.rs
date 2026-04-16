@@ -415,8 +415,7 @@ impl PreparedAccessPlan {
         let first_sort_expr = sort_order.first();
 
         // Extract column name from sort expression
-        let column: &Column = match first_sort_expr.expr.as_any().downcast_ref::<Column>()
-        {
+        let column: &Column = match first_sort_expr.expr.downcast_ref::<Column>() {
             Some(col) => col,
             None => {
                 debug!("Skipping RG reorder: sort expr is not a simple column");
