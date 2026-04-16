@@ -46,6 +46,5 @@ pub mod topk_aggregation;
 pub mod topk_repartition;
 pub mod update_aggr_exprs;
 pub mod utils;
-pub mod window_topn;
 
 pub use optimizer::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};
