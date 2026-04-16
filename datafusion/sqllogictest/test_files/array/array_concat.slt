@@ -388,4 +388,77 @@ select array_concat(make_array(column3), column1, column2) from arrays_values_v2
 [NULL]
 
 
+## concat() delegates to array_concat when all arguments are arrays.
+## An analyzer-phase FunctionRewrite rewrites the call before execution, so
+## the string concat path never sees array inputs.
+
+query ?
+select concat(make_array(1, 2, 3), make_array(4, 5));
+----
+[1, 2, 3, 4, 5]
+
+query ?
+select concat(make_array(1, 2), make_array(3, 4), make_array(5, 6));
+----
+[1, 2, 3, 4, 5, 6]
+
+query ?
+select concat(make_array(1, NULL, 3), make_array(4));
+----
+[1, NULL, 3, 4]
+
+query ?
+select concat(make_array('a', 'b'), make_array('c', 'd'));
+----
+[a, b, c, d]
+
+query ?
+select concat(NULL::integer[], make_array(1, 2));
+----
+[1, 2]
+
+query ?
+select concat(make_array(1, 2), NULL::integer[]);
+----
+[1, 2]
+
+query ?
+select concat(column1, column2) from arrays_values_v2;
+----
+[NULL, 2, 3, 4, 5, NULL]
+[7, NULL, 8]
+[9, NULL, 10]
+[NULL, 1, NULL, 21]
+[11, 12]
+NULL
+
+query ?
+select concat(
+  arrow_cast(['1', '2'], 'LargeList(Utf8)'),
+  arrow_cast(['3'], 'LargeList(Utf8)')
+);
+----
+[1, 2, 3]
+
+query ?
+select concat(
+  arrow_cast(['1', '2'], 'FixedSizeList(2, Utf8)'),
+  arrow_cast(['3'], 'FixedSizeList(1, Utf8)')
+);
+----
+[1, 2, 3]
+
+query ?
+select concat(NULL::integer[], NULL::integer[]);
+----
+NULL
+
+# Mixed array + non-array arguments are rejected at plan time.
+statement error Cannot mix array and non-array arguments in concat function
+select concat(make_array(1), 'x');
+
+statement error Cannot mix array and non-array arguments in concat function
+select concat('x', make_array(1));
+
+
 include ./cleanup.slt.part

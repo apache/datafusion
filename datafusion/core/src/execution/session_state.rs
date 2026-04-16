@@ -1156,6 +1156,11 @@ impl SessionStateBuilder {
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_expr_planners());
 
+        let analyzer = self.analyzer.get_or_insert_with(Analyzer::default);
+        for rewrite in SessionStateDefaults::default_function_rewrites() {
+            analyzer.add_function_rewrite(rewrite);
+        }
+
         self.scalar_functions
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_scalar_functions());

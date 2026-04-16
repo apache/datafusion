@@ -35,6 +35,7 @@ use datafusion_catalog::{MemoryCatalogProvider, MemorySchemaProvider};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::ExtensionTypeRegistrationRef;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
@@ -100,6 +101,16 @@ impl SessionStateDefaults {
         ];
 
         expr_planners
+    }
+
+    /// returns the list of default [`FunctionRewrite`]s installed on the analyzer.
+    pub fn default_function_rewrites() -> Vec<Arc<dyn FunctionRewrite + Send + Sync>> {
+        let rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>> = vec![
+            #[cfg(feature = "nested_expressions")]
+            Arc::new(functions_nested::concat_rewrite::ConcatArrayRewrite),
+        ];
+
+        rewrites
     }
 
     /// returns the list of default [`ScalarUDF`]s

@@ -42,6 +42,7 @@ pub mod array_has;
 pub mod arrays_zip;
 pub mod cardinality;
 pub mod concat;
+pub mod concat_rewrite;
 pub mod dimension;
 pub mod distance;
 pub mod empty;
@@ -191,6 +192,10 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         }
         Ok(()) as Result<()>
     })?;
+
+    // Register the analyzer rewrite that turns `concat(array, ...)` into
+    // `array_concat(...)`.
+    registry.register_function_rewrite(Arc::new(concat_rewrite::ConcatArrayRewrite))?;
 
     Ok(())
 }
