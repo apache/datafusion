@@ -72,8 +72,9 @@ use object_store::{
 pub struct IoUringObjectStore {
     inner: Arc<LocalFileSystem>,
     root: PathBuf,
+    /// `None` when io_uring is unavailable (non-Linux, or EPERM in containers).
     #[cfg(target_os = "linux")]
-    uring_sender: tokio::sync::mpsc::UnboundedSender<uring::IoCommand>,
+    uring_sender: Option<tokio::sync::mpsc::UnboundedSender<uring::IoCommand>>,
 }
 
 impl IoUringObjectStore {
@@ -91,17 +92,34 @@ impl IoUringObjectStore {
         };
 
         #[cfg(target_os = "linux")]
-        {
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            std::thread::Builder::new()
-                .name("io-uring-worker".to_string())
-                .spawn(move || uring::run_uring_loop(rx))
-                .expect("failed to spawn io-uring thread");
+        let uring_sender = {
+            // Probe whether io_uring is available (may fail with EPERM
+            // inside Docker / seccomp-restricted environments).
+            match uring::is_available() {
+                Ok(()) => {
+                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                    std::thread::Builder::new()
+                        .name("io-uring-worker".to_string())
+                        .spawn(move || uring::run_uring_loop(rx))
+                        .expect("failed to spawn io-uring thread");
+                    log::info!("io_uring available — using IoUringObjectStore");
+                    Some(tx)
+                }
+                Err(e) => {
+                    log::warn!(
+                        "io_uring unavailable ({e}), falling back to LocalFileSystem"
+                    );
+                    None
+                }
+            }
+        };
 
+        #[cfg(target_os = "linux")]
+        {
             Self {
                 inner,
                 root,
-                uring_sender: tx,
+                uring_sender,
             }
         }
 
@@ -179,7 +197,9 @@ impl IoUringObjectStore {
         let fs_path = self.resolve_path(location);
         let (tx, rx) = tokio::sync::oneshot::channel();
 
-        self.uring_sender
+        // SAFETY: callers check uring_sender.is_some() before calling
+        let sender = self.uring_sender.as_ref().unwrap();
+        sender
             .send(uring::IoCommand::ReadRanges {
                 path: fs_path,
                 ranges: vec![range.clone()],
@@ -218,7 +238,9 @@ impl IoUringObjectStore {
         let fs_path = self.resolve_path(location);
         let (tx, rx) = tokio::sync::oneshot::channel();
 
-        self.uring_sender
+        // SAFETY: callers check uring_sender.is_some() before calling
+        let sender = self.uring_sender.as_ref().unwrap();
+        sender
             .send(uring::IoCommand::ReadRanges {
                 path: fs_path,
                 ranges: ranges.to_vec(),
@@ -266,14 +288,11 @@ impl ObjectStore for IoUringObjectStore {
         }
 
         #[cfg(target_os = "linux")]
-        {
+        if self.uring_sender.is_some() {
             return self.get_opts_uring(location, options).await;
         }
 
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.inner.get_opts(location, options).await
-        }
+        self.inner.get_opts(location, options).await
     }
 
     async fn get_ranges(
@@ -282,14 +301,11 @@ impl ObjectStore for IoUringObjectStore {
         ranges: &[Range<u64>],
     ) -> Result<Vec<Bytes>> {
         #[cfg(target_os = "linux")]
-        {
+        if self.uring_sender.is_some() {
             return self.get_ranges_uring(location, ranges).await;
         }
 
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.inner.get_ranges(location, ranges).await
-        }
+        self.inner.get_ranges(location, ranges).await
     }
 
     fn delete_stream(

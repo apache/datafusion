@@ -34,6 +34,12 @@ use tokio::sync::{mpsc, oneshot};
 /// handles typical Parquet column-chunk batches without overflow.
 const RING_ENTRIES: u32 = 256;
 
+/// Probe whether the kernel supports io_uring (may fail with EPERM in
+/// Docker / seccomp-restricted environments).
+pub(crate) fn is_available() -> std::result::Result<(), std::io::Error> {
+    IoUring::new(2).map(|_| ())
+}
+
 /// Command sent from the async ObjectStore methods to the io_uring thread.
 pub(crate) enum IoCommand {
     /// Read one or more byte ranges from a file.
