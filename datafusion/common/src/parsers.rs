@@ -95,14 +95,25 @@ impl FromStr for CsvQuoteStyle {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Always" | "ALWAYS" | "always" => Ok(Self::Always),
-            "Necessary" | "NECESSARY" | "necessary" | "" => Ok(Self::Necessary),
-            "NonNumeric" | "NON_NUMERIC" | "nonnumeric" => Ok(Self::NonNumeric),
-            "Never" | "NEVER" | "never" => Ok(Self::Never),
+        match s.to_lowercase().as_str() {
+            "always" => Ok(Self::Always),
+            "necessary" => Ok(Self::Necessary),
+            "non_numeric" | "nonnumeric" => Ok(Self::NonNumeric),
+            "never" => Ok(Self::Never),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported CSV quote style {s}"
             ))),
+        }
+    }
+}
+
+impl From<CsvQuoteStyle> for arrow::csv::QuoteStyle {
+    fn from(style: CsvQuoteStyle) -> Self {
+        match style {
+            CsvQuoteStyle::Always => Self::Always,
+            CsvQuoteStyle::NonNumeric => Self::NonNumeric,
+            CsvQuoteStyle::Never => Self::Never,
+            CsvQuoteStyle::Necessary => Self::Necessary,
         }
     }
 }
