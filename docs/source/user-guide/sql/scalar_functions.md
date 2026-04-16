@@ -5039,6 +5039,11 @@ SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
 
 SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
 ----
+[NULL]
+
+-- non-existing key
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'a');
+----
 []
 ```
 
