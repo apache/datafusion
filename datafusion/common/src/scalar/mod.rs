@@ -44,9 +44,9 @@ use crate::cast::{
     as_float16_array, as_float32_array, as_float64_array, as_int8_array, as_int16_array,
     as_int32_array, as_int64_array, as_interval_dt_array, as_interval_mdn_array,
     as_interval_ym_array, as_large_binary_array, as_large_list_array,
-    as_large_string_array, as_list_view_array, as_run_array, as_string_array,
-    as_string_view_array, as_time32_millisecond_array, as_time32_second_array,
-    as_time64_microsecond_array, as_time64_nanosecond_array,
+    as_large_list_view_array, as_large_string_array, as_list_view_array, as_run_array,
+    as_string_array, as_string_view_array, as_time32_millisecond_array,
+    as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array, as_uint8_array,
     as_uint16_array, as_uint32_array, as_uint64_array, as_union_array,
@@ -3974,7 +3974,7 @@ impl ScalarValue {
                     .build_list_view_scalar()
             }
             DataType::LargeListView(field) => {
-                let list_array = as_list_view_array(array)?;
+                let list_array = as_large_list_view_array(array)?;
                 let nested_array = list_array.value(index);
                 // Produces a single element `LargeListViewArray` with the value at `index`.
                 SingleRowListArrayBuilder::new(nested_array)
