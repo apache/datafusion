@@ -71,15 +71,14 @@ impl ConstExpr {
             input_eqs: &EquivalenceProperties,
         ) -> Option<AcrossPartitions> {
             input_eqs.is_expr_constant(expr).or_else(|| {
-                expr.as_any()
-                    .downcast_ref::<Literal>()
+                expr.downcast_ref::<Literal>()
                     .map(|l| AcrossPartitions::Uniform(Some(l.value().clone())))
             })
         }
 
         let mut constants = Vec::new();
         for conjunction in split_conjunction(predicate) {
-            if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>()
+            if let Some(binary) = conjunction.downcast_ref::<BinaryExpr>()
                 && binary.op() == &Operator::Eq
             {
                 // Check if either side is constant — either already known
@@ -145,7 +144,7 @@ fn split_impl<'a>(
     predicate: &'a Arc<dyn PhysicalExpr>,
     mut exprs: Vec<&'a Arc<dyn PhysicalExpr>>,
 ) -> Vec<&'a Arc<dyn PhysicalExpr>> {
-    match predicate.as_any().downcast_ref::<BinaryExpr>() {
+    match predicate.downcast_ref::<BinaryExpr>() {
         Some(binary) if binary.op() == &operator => {
             let exprs = split_impl(operator, binary.left(), exprs);
             split_impl(operator, binary.right(), exprs)
@@ -176,16 +175,14 @@ pub fn map_columns_before_projection(
     let column_mapping = proj_exprs
         .iter()
         .filter_map(|(expr, name)| {
-            expr.as_any()
-                .downcast_ref::<Column>()
+            expr.downcast_ref::<Column>()
                 .map(|column| (name.clone(), column.clone()))
         })
         .collect::<HashMap<_, _>>();
     parent_required
         .iter()
         .filter_map(|r| {
-            r.as_any()
-                .downcast_ref::<Column>()
+            r.downcast_ref::<Column>()
                 .and_then(|c| column_mapping.get(c.name()))
         })
         .map(|e| Arc::new(e.clone()) as _)
@@ -289,7 +286,7 @@ where
 pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
     expr.apply(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(column) = expr.downcast_ref::<Column>() {
             columns.get_or_insert_with(column, |c| c.clone());
         }
         Ok(TreeNodeRecursion::Continue)
@@ -313,7 +310,7 @@ pub fn reassign_expr_columns(
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.transform_down(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(column) = expr.downcast_ref::<Column>() {
             let index = schema.index_of(column.name())?;
 
             return Ok(Transformed::yes(Arc::new(Column::new(
@@ -452,11 +449,11 @@ pub(crate) mod tests {
 
     fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> Result<PhysicalExprDummyNode> {
         let expr = Arc::clone(&node.expr);
-        let dummy_property = if expr.as_any().is::<BinaryExpr>() {
+        let dummy_property = if expr.is::<BinaryExpr>() {
             "Binary"
-        } else if expr.as_any().is::<Column>() {
+        } else if expr.is::<Column>() {
             "Column"
-        } else if expr.as_any().is::<Literal>() {
+        } else if expr.is::<Literal>() {
             "Literal"
         } else {
             "Other"

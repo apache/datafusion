@@ -341,6 +341,10 @@ impl FilterExec {
             schema,
             &input_stats.column_statistics,
             analysis_ctx.boundaries,
+            match &num_rows {
+                Precision::Absent => None,
+                p => Some(*p),
+            },
         );
         Ok(Statistics {
             num_rows,
@@ -781,6 +785,7 @@ fn collect_new_statistics(
     schema: &SchemaRef,
     input_column_stats: &[ColumnStatistics],
     analysis_boundaries: Vec<ExprBoundaries>,
+    filtered_num_rows: Option<Precision<usize>>,
 ) -> Vec<ColumnStatistics> {
     analysis_boundaries
         .into_iter()
@@ -816,11 +821,15 @@ fn collect_new_statistics(
                 let min_value = interval_bound_to_precision(lower, is_single_value);
                 let max_value = interval_bound_to_precision(upper, is_single_value);
                 // When the interval collapses to a single value (equality
-                // predicate), the column has exactly 1 distinct value
+                // predicate), the column has exactly 1 distinct value.
+                // Otherwise, cap NDV at the filtered row count.
                 let capped_distinct_count = if is_single_value {
                     Precision::Exact(1)
                 } else {
-                    distinct_count.to_inexact()
+                    match filtered_num_rows {
+                        Some(rows) => distinct_count.to_inexact().min(&rows),
+                        None => distinct_count.to_inexact(),
+                    }
                 };
                 ColumnStatistics {
                     null_count: input_column_stats[idx].null_count.to_inexact(),
@@ -1011,7 +1020,7 @@ fn collect_columns_from_predicate_inner(
 
     let predicates = split_conjunction(predicate);
     predicates.into_iter().for_each(|p| {
-        if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary) = p.downcast_ref::<BinaryExpr>() {
             // Only extract pairs where at least one side is a Column reference.
             // Pairs like `complex_expr = literal` should not create equivalence
             // classes — the literal could appear in many unrelated expressions
@@ -1020,8 +1029,8 @@ fn collect_columns_from_predicate_inner(
             // sort orderings. Constant propagation for such pairs is handled
             // separately by `extend_constants`.
             let has_direct_column_operand =
-                binary.left().as_any().downcast_ref::<Column>().is_some()
-                    || binary.right().as_any().downcast_ref::<Column>().is_some();
+                binary.left().downcast_ref::<Column>().is_some()
+                    || binary.right().downcast_ref::<Column>().is_some();
             if !has_direct_column_operand {
                 return;
             }
@@ -2398,10 +2407,12 @@ mod tests {
             statistics.column_statistics[0].distinct_count,
             Precision::Exact(1)
         );
-        // b > 10 narrows to [11, 50] but doesn't collapse
+        // b > 10 narrows to [11, 50] but doesn't collapse to a single value.
+        // The combined selectivity of a=42 (1/80) and c=7 (1/150) on 100 rows
+        // computes num_rows = 1, so NDV is capped at the row count: min(40, 1) = 1.
         assert_eq!(
             statistics.column_statistics[1].distinct_count,
-            Precision::Inexact(40)
+            Precision::Inexact(1)
         );
         // c = 7 collapses to single value
         assert_eq!(
@@ -2637,6 +2648,43 @@ mod tests {
         assert_eq!(out_schema.fields().len(), 2);
         assert_eq!(out_schema.field(0).name(), "ts");
         assert_eq!(out_schema.field(1).name(), "tokens");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_ndv_capped_at_row_count() -> Result<()> {
+        // Table: a: min=1, max=100, distinct_count=80, 100 rows
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(400),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                    distinct_count: Precision::Inexact(80),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // a <= 10 => ~10 rows out of 100
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("a", &schema)?, Operator::LtEq, lit(10i32), &schema)?;
+
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let statistics = filter.partition_statistics(None)?;
+        // Filter estimates ~10 rows (selectivity = 10/100)
+        assert_eq!(statistics.num_rows, Precision::Inexact(10));
+        // NDV should be capped at the filtered row count (10), not the original 80
+        let ndv = &statistics.column_statistics[0].distinct_count;
+        assert!(
+            ndv.get_value().copied() <= Some(10),
+            "Expected NDV <= 10 (filtered row count), got {ndv:?}"
+        );
         Ok(())
     }
 }

@@ -163,6 +163,7 @@ To get started, see
    contributor-guide/testing
    contributor-guide/api-health
    contributor-guide/howtos
+   contributor-guide/release_management
    contributor-guide/roadmap
    contributor-guide/governance
    contributor-guide/inviting

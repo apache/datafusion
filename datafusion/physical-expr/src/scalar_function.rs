@@ -29,7 +29,6 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
-use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -105,11 +104,7 @@ impl ScalarFunctionExpr {
 
         let arguments = args
             .iter()
-            .map(|e| {
-                e.as_any()
-                    .downcast_ref::<Literal>()
-                    .map(|literal| literal.value())
-            })
+            .map(|e| e.downcast_ref::<Literal>().map(|literal| literal.value()))
             .collect::<Vec<_>>();
         let ret_args = ReturnFieldArgs {
             arg_fields: &arg_fields,
@@ -171,7 +166,7 @@ impl ScalarFunctionExpr {
     where
         T: ScalarUDFImpl,
     {
-        match expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
+        match expr.downcast_ref::<ScalarFunctionExpr>() {
             Some(scalar_expr) if scalar_expr.fun().inner().is::<T>() => Some(scalar_expr),
             _ => None,
         }
@@ -230,11 +225,6 @@ fn sorted_config_entries(config_options: &ConfigOptions) -> Vec<ConfigEntry> {
 }
 
 impl PhysicalExpr for ScalarFunctionExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_field.data_type().clone())
     }

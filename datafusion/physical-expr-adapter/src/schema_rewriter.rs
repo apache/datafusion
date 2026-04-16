@@ -69,7 +69,7 @@ where
     V: Borrow<ScalarValue>,
 {
     expr.transform_down(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>()
+        if let Some(column) = expr.downcast_ref::<Column>()
             && let Some(replacement_value) = replacements.get(column.name())
         {
             return Ok(Transformed::yes(expressions::lit(
@@ -117,7 +117,7 @@ where
 /// impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
 ///     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 ///         expr.transform(|expr| {
-///             if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+///             if let Some(column) = expr.downcast_ref::<Column>() {
 ///                 // Check if the column exists in the physical schema
 ///                 if self.physical_file_schema.index_of(column.name()).is_err() {
 ///                     // If the column is missing, fill it with a default value instead of null
@@ -281,7 +281,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             return Ok(Transformed::yes(transformed));
         }
 
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(column) = expr.downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
         }
 
@@ -311,10 +311,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             None => return Ok(None),
         };
 
-        let lit = match field_name_expr
-            .as_any()
-            .downcast_ref::<expressions::Literal>()
-        {
+        let lit = match field_name_expr.downcast_ref::<expressions::Literal>() {
             Some(lit) => lit,
             None => return Ok(None),
         };
@@ -324,7 +321,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             None => return Ok(None),
         };
 
-        let column = match source_expr.as_any().downcast_ref::<Column>() {
+        let column = match source_expr.downcast_ref::<Column>() {
             Some(column) => column,
             None => return Ok(None),
         };
@@ -639,15 +636,12 @@ mod tests {
     use datafusion_physical_expr::expressions::{Column, Literal, col};
 
     fn assert_cast_expr(expr: &Arc<dyn PhysicalExpr>) -> &CastExpr {
-        expr.as_any()
-            .downcast_ref::<CastExpr>()
-            .expect("Expected CastExpr")
+        expr.downcast_ref::<CastExpr>().expect("Expected CastExpr")
     }
 
     fn assert_cast_input_column(cast_expr: &CastExpr, name: &str, index: usize) {
         let inner_col = cast_expr
             .expr()
-            .as_any()
             .downcast_ref::<Column>()
             .expect("Expected inner Column");
         assert_eq!(inner_col.name(), name);
@@ -696,7 +690,7 @@ mod tests {
         let result = adapter.rewrite(column_expr).unwrap();
 
         // Should be wrapped in a cast expression
-        assert!(result.as_any().downcast_ref::<CastExpr>().is_some());
+        assert!(result.downcast_ref::<CastExpr>().is_some());
     }
 
     #[test]
@@ -757,14 +751,12 @@ mod tests {
 
         let result = adapter.rewrite(Arc::new(expr)).unwrap();
         let outer = result
-            .as_any()
             .downcast_ref::<expressions::BinaryExpr>()
             .expect("Expected outer BinaryExpr");
         assert_eq!(*outer.op(), Operator::Or);
 
         let left = outer
             .left()
-            .as_any()
             .downcast_ref::<expressions::BinaryExpr>()
             .expect("Expected left BinaryExpr");
         assert_eq!(*left.op(), Operator::Plus);
@@ -775,13 +767,11 @@ mod tests {
 
         let right = outer
             .right()
-            .as_any()
             .downcast_ref::<expressions::BinaryExpr>()
             .expect("Expected right BinaryExpr");
         assert_eq!(*right.op(), Operator::Gt);
         let null_literal = right
             .left()
-            .as_any()
             .downcast_ref::<Literal>()
             .expect("Expected null literal");
         assert_eq!(*null_literal.value(), ScalarValue::Float64(None));
@@ -882,7 +872,7 @@ mod tests {
         let result = adapter.rewrite(column_expr)?;
 
         // Should be replaced with a literal null
-        if let Some(literal) = result.as_any().downcast_ref::<Literal>() {
+        if let Some(literal) = result.downcast_ref::<Literal>() {
             assert_eq!(*literal.value(), ScalarValue::Float64(None));
         } else {
             panic!("Expected literal expression");
@@ -909,7 +899,6 @@ mod tests {
 
         let result = adapter.rewrite(Arc::new(Column::new("b", 1)))?;
         let literal = result
-            .as_any()
             .downcast_ref::<Literal>()
             .expect("Expected literal expression");
 
@@ -975,7 +964,6 @@ mod tests {
 
         // Should be replaced with the partition value
         let literal = result
-            .as_any()
             .downcast_ref::<Literal>()
             .expect("Expected literal expression");
         assert_eq!(*literal.value(), partition_value);
@@ -992,7 +980,7 @@ mod tests {
             Arc::new(Column::new("partition_col", 0)) as Arc<dyn PhysicalExpr>;
         let result = replace_columns_with_literals(column_expr, &replacements)?;
 
-        assert!(result.as_any().downcast_ref::<Column>().is_some());
+        assert!(result.downcast_ref::<Column>().is_some());
         Ok(())
     }
 
