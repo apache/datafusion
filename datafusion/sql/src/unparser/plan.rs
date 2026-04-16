@@ -828,6 +828,50 @@ impl Unparser<'_> {
                     Some(plan_alias.alias.clone()),
                     select.already_projected(),
                 )?;
+
+                // If the (possibly rewritten) inner plan builds its own
+                // SELECT clauses (e.g. Aggregate adds GROUP BY, Window adds
+                // OVER, etc.) and unparse_table_scan_pushdown couldn't reduce it,
+                // we must emit a derived subquery: (SELECT ...) AS alias.
+                // Without this, the recursive handler would merge those clauses
+                // into the outer SELECT, losing the subquery structure entirely.
+                if unparsed_table_scan.is_none() && Self::requires_derived_subquery(plan)
+                {
+                    // When the dialect does not support column aliases in
+                    // table aliases (e.g. SQLite), inject the aliases into
+                    // the inner projection before wrapping as a derived
+                    // subquery.
+                    if !columns.is_empty()
+                        && !self.dialect.supports_column_alias_in_table_alias()
+                    {
+                        let Ok(rewritten_plan) =
+                            inject_column_aliases_into_subquery(plan.clone(), columns)
+                        else {
+                            return internal_err!(
+                                "Failed to transform SubqueryAlias plan"
+                            );
+                        };
+                        return self.derive(
+                            &rewritten_plan,
+                            relation,
+                            Some(self.new_table_alias(
+                                plan_alias.alias.table().to_string(),
+                                vec![],
+                            )),
+                            false,
+                        );
+                    }
+                    return self.derive(
+                        plan,
+                        relation,
+                        Some(self.new_table_alias(
+                            plan_alias.alias.table().to_string(),
+                            columns,
+                        )),
+                        false,
+                    );
+                }
+
                 // if the child plan is a TableScan with pushdown operations, we don't need to
                 // create an additional subquery for it
                 if !select.already_projected() && unparsed_table_scan.is_none() {
@@ -1058,6 +1102,22 @@ impl Unparser<'_> {
 
     fn is_scan_with_pushdown(scan: &TableScan) -> bool {
         scan.projection.is_some() || !scan.filters.is_empty() || scan.fetch.is_some()
+    }
+
+    /// Returns true if a plan, when used as the direct child of a SubqueryAlias,
+    /// must be emitted as a derived subquery `(SELECT ...) AS alias`.
+    ///
+    /// Plans like Aggregate or Window build their own SELECT clauses (GROUP BY,
+    /// window functions).
+    fn requires_derived_subquery(plan: &LogicalPlan) -> bool {
+        matches!(
+            plan,
+            LogicalPlan::Aggregate(_)
+                | LogicalPlan::Window(_)
+                | LogicalPlan::Sort(_)
+                | LogicalPlan::Limit(_)
+                | LogicalPlan::Union(_)
+        )
     }
 
     /// Try to unparse a table scan with pushdown operations into a new subquery plan.

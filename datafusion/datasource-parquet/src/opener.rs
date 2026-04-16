@@ -15,28 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetOpener`] for opening Parquet files
+//! [`ParquetMorselizer`] state machines for opening Parquet files
 
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_filter::build_projection_read_plan;
-use crate::row_group_filter::RowGroupAccessPlanFilter;
+use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::{DataType, Schema};
-use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
+use arrow::datatypes::DataType;
+use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
-use parquet::errors::ParquetError;
 use std::collections::HashMap;
+use std::fmt;
+use std::future::Future;
+use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::datatypes::{SchemaRef, TimeUnit};
+use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -58,7 +60,9 @@ use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::{Stream, StreamExt, ready};
+use futures::{
+    FutureExt, Stream, StreamExt, future::BoxFuture, ready, stream::BoxStream,
+};
 use log::debug;
 use parquet::DecodeResult;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -67,11 +71,19 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::parquet_column;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use parquet::basic::Type;
+use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
-/// Implements [`FileOpener`] for a parquet file
-pub(super) struct ParquetOpener {
+/// Stateless Parquet morselizer implementation.
+///
+/// Reading a Parquet file is a multi-stage process, with multiple CPU-intensive
+/// steps interspersed with I/O steps. The code in this module implements the steps
+/// as an explicit state machine -- see [`ParquetOpenState`] for details.
+#[derive(Clone)]
+pub(super) struct ParquetMorselizer {
     /// Execution partition index
     pub(crate) partition_index: usize,
     /// Projection to apply on top of the table schema (i.e. can reference partition columns).
@@ -126,15 +138,406 @@ pub(super) struct ParquetOpener {
     pub reverse_row_groups: bool,
 }
 
-impl FileOpener for ParquetOpener {
-    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
-        // -----------------------------------
-        // Step: prepare configurations, etc.
-        // -----------------------------------
+impl fmt::Debug for ParquetMorselizer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetMorselizer")
+            .field("partition_index", &self.partition_index)
+            .field("preserve_order", &self.preserve_order)
+            .field("enable_page_index", &self.enable_page_index)
+            .field("enable_bloom_filter", &self.enable_bloom_filter)
+            .finish()
+    }
+}
+
+impl Morselizer for ParquetMorselizer {
+    fn plan_file(&self, file: PartitionedFile) -> Result<Box<dyn MorselPlanner>> {
+        Ok(Box::new(ParquetMorselPlanner::try_new(self, file)?))
+    }
+}
+
+/// States for [`ParquetMorselPlanner`]
+///
+/// These states correspond to the steps required to read and apply various
+/// filter operations.
+///
+/// States whose names beginning with `Load` represent waiting on IO to resolve
+///
+/// ```text
+///      Start
+///        |
+///        v
+/// [LoadEncryption]?
+///        |
+///        v
+///    PruneFile
+///        |
+///        v
+///   LoadMetadata
+///        |
+///        v
+///  PrepareFilters
+///        |
+///        v
+///   LoadPageIndex
+///        |
+///        v
+/// PruneWithStatistics
+///        |
+///        v
+///  LoadBloomFilters
+///        |
+///        v
+/// PruneWithBloomFilters
+///        |
+///        v
+///   BuildStream
+///        |
+///        v
+///       Done
+/// ```
+///
+/// Note: `LoadEncryption` is only present when the `parquet_encryption` feature is
+/// enabled. All other states are always visited in the order shown above,
+/// though any async state may return `Poll::Pending` and then resume later.
+enum ParquetOpenState {
+    Start {
+        prepared: Box<PreparedParquetOpen>,
+        #[cfg(feature = "parquet_encryption")]
+        encryption_context: Arc<EncryptionContext>,
+    },
+    /// Loading encryption footers
+    #[cfg(feature = "parquet_encryption")]
+    LoadEncryption(BoxFuture<'static, Result<Box<PreparedParquetOpen>>>),
+    /// Try to prune file using only file-level statistics and partition
+    /// values before loading any parquet metadata
+    PruneFile(Box<PreparedParquetOpen>),
+    /// Loading Parquet metadata (in footer)
+    LoadMetadata(BoxFuture<'static, Result<MetadataLoadedParquetOpen>>),
+    /// Specialize any filters for the actual file schema (only known after
+    /// metadata is loaded)
+    PrepareFilters(Box<MetadataLoadedParquetOpen>),
+    /// Loading [Parquet Page Index](https://parquet.apache.org/docs/file-format/pageindex/)
+    LoadPageIndex(BoxFuture<'static, Result<FiltersPreparedParquetOpen>>),
+    /// Pruning Row Groups
+    PruneWithStatistics(Box<FiltersPreparedParquetOpen>),
+    /// Loading bloom filters required for row-group pruning
+    LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
+    /// Pruning with preloaded Bloom Filters
+    PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
+    /// Builds the final reader stream
+    ///
+    /// TODO: split state as this currently does both I/O and CPU work.
+    BuildStream(Box<RowGroupsPrunedParquetOpen>),
+    /// Terminal state: the final opened stream is ready to return.
+    Ready(BoxStream<'static, Result<RecordBatch>>),
+    /// Terminal state: reading complete
+    Done,
+}
+
+impl fmt::Debug for ParquetOpenState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = match self {
+            ParquetOpenState::Start { .. } => "Start",
+            #[cfg(feature = "parquet_encryption")]
+            ParquetOpenState::LoadEncryption(_) => "LoadEncryption",
+            ParquetOpenState::PruneFile(_) => "PruneFile",
+            ParquetOpenState::LoadMetadata(_) => "LoadMetadata",
+            ParquetOpenState::PrepareFilters(_) => "PrepareFilters",
+            ParquetOpenState::LoadPageIndex(_) => "LoadPageIndex",
+            ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
+            ParquetOpenState::LoadBloomFilters(_) => "LoadBloomFilters",
+            ParquetOpenState::PruneWithBloomFilters(_) => "PruneWithBloomFilters",
+            ParquetOpenState::BuildStream(_) => "BuildStream",
+            ParquetOpenState::Ready(_) => "Ready",
+            ParquetOpenState::Done => "Done",
+        };
+        f.write_str(state)
+    }
+}
+
+struct PreparedParquetOpen {
+    partition_index: usize,
+    partitioned_file: PartitionedFile,
+    file_range: Option<datafusion_datasource::FileRange>,
+    extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    file_name: String,
+    file_metrics: ParquetFileMetrics,
+    baseline_metrics: BaselineMetrics,
+    file_pruner: Option<FilePruner>,
+    metadata_size_hint: Option<usize>,
+    metrics: ExecutionPlanMetricsSet,
+    parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    async_file_reader: Box<dyn AsyncFileReader>,
+    batch_size: usize,
+    logical_file_schema: SchemaRef,
+    physical_file_schema: SchemaRef,
+    output_schema: SchemaRef,
+    projection: ProjectionExprs,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    reorder_predicates: bool,
+    pushdown_filters: bool,
+    force_filter_selections: bool,
+    enable_page_index: bool,
+    enable_bloom_filter: bool,
+    enable_row_group_stats_pruning: bool,
+    limit: Option<usize>,
+    coerce_int96: Option<TimeUnit>,
+    expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
+    predicate_creation_errors: Count,
+    max_predicate_cache_size: Option<usize>,
+    reverse_row_groups: bool,
+    preserve_order: bool,
+    #[cfg(feature = "parquet_encryption")]
+    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+}
+
+/// State of [`ParquetOpenState`]
+///
+/// Result of loading parquet metadata after file-level pruning is complete.
+struct MetadataLoadedParquetOpen {
+    prepared: PreparedParquetOpen,
+    reader_metadata: ArrowReaderMetadata,
+    options: ArrowReaderOptions,
+}
+
+/// State of [`ParquetOpenState`]
+///
+/// Pruning Predicate and DataPage pruning information
+/// specialized for the files specific schema.
+struct FiltersPreparedParquetOpen {
+    loaded: MetadataLoadedParquetOpen,
+    pruning_predicate: Option<Arc<PruningPredicate>>,
+    page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
+}
+
+/// State of [`ParquetOpenState`]
+///
+/// Result of CPU-only row-group pruning before optional bloom-filter I/O.
+struct RowGroupsPrunedParquetOpen {
+    prepared: FiltersPreparedParquetOpen,
+    row_groups: RowGroupAccessPlanFilter,
+}
+
+/// State of [`ParquetOpenState`]
+///
+/// Result of loading bloom filters needed for row-group pruning.
+struct BloomFiltersLoadedParquetOpen {
+    prepared: RowGroupsPrunedParquetOpen,
+    /// Bloom filters loaded for each row group that remains under consideration.
+    ///
+    /// indexed by parquet row-group index
+    row_group_bloom_filters: Vec<BloomFilterStatistics>,
+}
+
+impl ParquetOpenState {
+    /// Applies one CPU-only state transition.
+    ///
+    /// `Load*` states do not transition here and are returned unchanged so the
+    /// driver loop can poll their inner futures separately.
+    ///
+    /// Implements state machine described in [`ParquetOpenState`]
+    fn transition(self) -> Result<ParquetOpenState> {
+        match self {
+            ParquetOpenState::Start {
+                prepared,
+                #[cfg(feature = "parquet_encryption")]
+                encryption_context,
+            } => {
+                #[cfg(feature = "parquet_encryption")]
+                {
+                    let mut prepared = *prepared;
+                    let future = async move {
+                        let file_location =
+                            &prepared.partitioned_file.object_meta.location;
+                        prepared.file_decryption_properties = encryption_context
+                            .get_file_decryption_properties(file_location)
+                            .await?;
+                        Ok(Box::new(prepared))
+                    }
+                    .boxed();
+                    Ok(ParquetOpenState::LoadEncryption(future))
+                }
+                #[cfg(not(feature = "parquet_encryption"))]
+                {
+                    Ok(ParquetOpenState::PruneFile(prepared))
+                }
+            }
+            #[cfg(feature = "parquet_encryption")]
+            ParquetOpenState::LoadEncryption(future) => {
+                Ok(ParquetOpenState::LoadEncryption(future))
+            }
+            ParquetOpenState::PruneFile(prepared) => {
+                let Some(prepared) = (*prepared).prune_file()? else {
+                    return Ok(ParquetOpenState::Done);
+                };
+                Ok(ParquetOpenState::LoadMetadata(prepared.load().boxed()))
+            }
+            ParquetOpenState::LoadMetadata(future) => {
+                Ok(ParquetOpenState::LoadMetadata(future))
+            }
+            ParquetOpenState::PrepareFilters(loaded) => {
+                let prepared_filters = loaded.prepare_filters()?;
+                Ok(ParquetOpenState::LoadPageIndex(
+                    prepared_filters.load_page_index().boxed(),
+                ))
+            }
+            ParquetOpenState::LoadPageIndex(future) => {
+                Ok(ParquetOpenState::LoadPageIndex(future))
+            }
+            ParquetOpenState::PruneWithStatistics(prepared) => {
+                let prepared_row_groups = prepared.prune_row_groups()?;
+                Ok(ParquetOpenState::LoadBloomFilters(
+                    prepared_row_groups.load_bloom_filters().boxed(),
+                ))
+            }
+            ParquetOpenState::LoadBloomFilters(future) => {
+                Ok(ParquetOpenState::LoadBloomFilters(future))
+            }
+            ParquetOpenState::PruneWithBloomFilters(loaded) => Ok(
+                ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
+            ),
+            ParquetOpenState::BuildStream(prepared) => {
+                Ok(ParquetOpenState::Ready(prepared.build_stream()?))
+            }
+            ParquetOpenState::Ready(stream) => Ok(ParquetOpenState::Ready(stream)),
+            ParquetOpenState::Done => {
+                panic!("ParquetOpenFuture polled after completion");
+            }
+        }
+    }
+}
+
+/// Implements the Morsel API
+struct ParquetStreamMorsel {
+    stream: BoxStream<'static, Result<RecordBatch>>,
+}
+
+impl ParquetStreamMorsel {
+    fn new(stream: BoxStream<'static, Result<RecordBatch>>) -> Self {
+        Self { stream }
+    }
+}
+
+impl fmt::Debug for ParquetStreamMorsel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetStreamMorsel")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Morsel for ParquetStreamMorsel {
+    fn into_stream(self: Box<Self>) -> BoxStream<'static, Result<RecordBatch>> {
+        self.stream
+    }
+}
+
+/// Per-file planner that owns the current [`ParquetOpenState`].
+struct ParquetMorselPlanner {
+    /// Ready to perform CPU-only planning work.
+    state: ParquetOpenState,
+}
+
+impl fmt::Debug for ParquetMorselPlanner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ParquetMorselPlanner::Ready")
+            .field(&self.state)
+            .finish()
+    }
+}
+
+impl ParquetMorselPlanner {
+    fn try_new(morselizer: &ParquetMorselizer, file: PartitionedFile) -> Result<Self> {
+        let prepared = morselizer.prepare_open_file(file)?;
+        #[cfg(feature = "parquet_encryption")]
+        let state = ParquetOpenState::Start {
+            prepared: Box::new(prepared),
+            encryption_context: Arc::new(morselizer.get_encryption_context()),
+        };
+        #[cfg(not(feature = "parquet_encryption"))]
+        let state = ParquetOpenState::Start {
+            prepared: Box::new(prepared),
+        };
+        Ok(Self { state })
+    }
+
+    /// Schedule an I/O future that resolves to the next planner to run.
+    ///
+    /// This helper
+    ///
+    /// 1. drives one I/O phase to completion
+    /// 2. wraps the resulting state in a new [`ParquetMorselPlanner`]
+    /// 3. returns a [`MorselPlan`] containing the boxed future for the caller
+    ///    to poll
+    ///
+    fn schedule_io<F>(future: F) -> MorselPlan
+    where
+        F: Future<Output = Result<ParquetOpenState>> + Send + 'static,
+    {
+        let io_future = async move {
+            let next_state = future.await?;
+            Ok(Box::new(ParquetMorselPlanner { state: next_state }) as _)
+        };
+        MorselPlan::new().with_pending_planner(io_future)
+    }
+}
+
+impl MorselPlanner for ParquetMorselPlanner {
+    fn plan(self: Box<Self>) -> Result<Option<MorselPlan>> {
+        if let ParquetOpenState::Done = self.state {
+            return Ok(None);
+        }
+
+        let state = self.state.transition()?;
+
+        match state {
+            #[cfg(feature = "parquet_encryption")]
+            ParquetOpenState::LoadEncryption(future) => {
+                Ok(Some(Self::schedule_io(async move {
+                    Ok(ParquetOpenState::PruneFile(future.await?))
+                })))
+            }
+            ParquetOpenState::LoadMetadata(future) => {
+                Ok(Some(Self::schedule_io(async move {
+                    Ok(ParquetOpenState::PrepareFilters(Box::new(future.await?)))
+                })))
+            }
+            ParquetOpenState::LoadPageIndex(future) => {
+                Ok(Some(Self::schedule_io(async move {
+                    Ok(ParquetOpenState::PruneWithStatistics(Box::new(
+                        future.await?,
+                    )))
+                })))
+            }
+            ParquetOpenState::LoadBloomFilters(future) => {
+                Ok(Some(Self::schedule_io(async move {
+                    Ok(ParquetOpenState::PruneWithBloomFilters(Box::new(
+                        future.await?,
+                    )))
+                })))
+            }
+            ParquetOpenState::Ready(stream) => {
+                let morsels: Vec<Box<dyn Morsel>> =
+                    vec![Box::new(ParquetStreamMorsel::new(stream))];
+                Ok(Some(MorselPlan::new().with_morsels(morsels)))
+            }
+            ParquetOpenState::Done => Ok(None),
+            cpu_state => Ok(Some(
+                MorselPlan::new()
+                    .with_planners(vec![Box::new(Self { state: cpu_state })]),
+            )),
+        }
+    }
+}
+
+impl ParquetMorselizer {
+    /// Perform the CPU-only setup for opening a parquet file.
+    fn prepare_open_file(
+        &self,
+        partitioned_file: PartitionedFile,
+    ) -> Result<PreparedParquetOpen> {
         let file_range = partitioned_file.range.clone();
         let extensions = partitioned_file.extensions.clone();
-        let file_location = partitioned_file.object_meta.location.clone();
-        let file_name = file_location.to_string();
+        let file_name = partitioned_file.object_meta.location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
         let baseline_metrics = BaselineMetrics::new(&self.metrics, self.partition_index);
@@ -143,15 +546,13 @@ impl FileOpener for ParquetOpener {
             .metadata_size_hint
             .or(self.metadata_size_hint);
 
-        let mut async_file_reader: Box<dyn AsyncFileReader> =
+        let async_file_reader: Box<dyn AsyncFileReader> =
             self.parquet_file_reader_factory.create_reader(
                 self.partition_index,
                 partitioned_file.clone(),
                 metadata_size_hint,
                 &self.metrics,
             )?;
-
-        let batch_size = self.batch_size;
 
         // Calculate the output schema from the original projection (before literal replacement)
         // so we get correct field names from column references
@@ -195,7 +596,6 @@ impl FileOpener for ParquetOpener {
             &logical_file_schema,
         ));
 
-        // Apply literal replacements to projection and predicate
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
         if !literal_columns.is_empty() {
@@ -207,444 +607,614 @@ impl FileOpener for ParquetOpener {
                 .transpose()?;
         }
 
-        let reorder_predicates = self.reorder_filters;
-        let pushdown_filters = self.pushdown_filters;
-        let force_filter_selections = self.force_filter_selections;
-        let coerce_int96 = self.coerce_int96;
-        let enable_bloom_filter = self.enable_bloom_filter;
-        let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
-        let limit = self.limit;
-        let parquet_file_reader_factory = Arc::clone(&self.parquet_file_reader_factory);
-        let partition_index = self.partition_index;
-        let metrics = self.metrics.clone();
-
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
             .with_category(MetricCategory::Rows)
             .global_counter("num_predicate_creation_errors");
 
-        let expr_adapter_factory = Arc::clone(&self.expr_adapter_factory);
+        // Apply literal replacements to projection and predicate
+        let file_pruner = predicate
+            .as_ref()
+            .filter(|p| is_dynamic_physical_expr(p) || partitioned_file.has_statistics())
+            .and_then(|p| {
+                FilePruner::try_new(
+                    Arc::clone(p),
+                    &logical_file_schema,
+                    &partitioned_file,
+                    predicate_creation_errors.clone(),
+                )
+            });
 
-        let enable_page_index = self.enable_page_index;
+        Ok(PreparedParquetOpen {
+            partition_index: self.partition_index,
+            partitioned_file,
+            file_range,
+            extensions,
+            file_name,
+            file_metrics,
+            baseline_metrics,
+            file_pruner,
+            metadata_size_hint,
+            metrics: self.metrics.clone(),
+            parquet_file_reader_factory: Arc::clone(&self.parquet_file_reader_factory),
+            async_file_reader,
+            batch_size: self.batch_size,
+            logical_file_schema: Arc::clone(&logical_file_schema),
+            physical_file_schema: logical_file_schema,
+            output_schema,
+            projection,
+            predicate,
+            reorder_predicates: self.reorder_filters,
+            pushdown_filters: self.pushdown_filters,
+            force_filter_selections: self.force_filter_selections,
+            enable_page_index: self.enable_page_index,
+            enable_bloom_filter: self.enable_bloom_filter,
+            enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+            limit: self.limit,
+            coerce_int96: self.coerce_int96,
+            expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
+            predicate_creation_errors,
+            max_predicate_cache_size: self.max_predicate_cache_size,
+            reverse_row_groups: self.reverse_row_groups,
+            preserve_order: self.preserve_order,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+        })
+    }
+}
+
+impl PreparedParquetOpen {
+    /// Attempt file-level pruning before any metadata is loaded.
+    ///
+    /// Returns `None` if the file can be skipped completely.
+    fn prune_file(mut self) -> Result<Option<Self>> {
+        // Prune this file using the file level statistics and partition values.
+        // Since dynamic filters may have been updated since planning it is possible that we are able
+        // to prune files now that we couldn't prune at planning time.
+        // It is assumed that there is no point in doing pruning here if the predicate is not dynamic,
+        // as it would have been done at planning time.
+        // We'll also check this after every record batch we read,
+        // and if at some point we are able to prove we can prune the file using just the file level statistics
+        // we can end the stream early.
+        //
+        // Make a FilePruner only if there is either
+        // 1. a dynamic expr in the predicate
+        // 2. the file has file-level statistics.
+        //
+        // File-level statistics may prune the file without loading
+        // any row groups or metadata.
+        //
+        // Dynamic filters may prune the file after initial
+        // planning, as the dynamic filter is updated during
+        // execution.
+        //
+        // The case where there is a dynamic filter but no
+        // statistics corresponds to a dynamic filter that
+        // references partition columns. While rare, this is possible
+        // e.g. `select * from table order by partition_col limit
+        // 10` could hit this condition.
+        if let Some(file_pruner) = &mut self.file_pruner
+            && file_pruner.should_prune()?
+        {
+            self.file_metrics
+                .files_ranges_pruned_statistics
+                .add_pruned(1);
+            return Ok(None);
+        }
+
+        self.file_metrics
+            .files_ranges_pruned_statistics
+            .add_matched(1);
+        Ok(Some(self))
+    }
+
+    /// Load parquet metadata after file-level pruning is complete.
+    async fn load(mut self) -> Result<MetadataLoadedParquetOpen> {
+        // Don't load the page index yet. Since it is not stored inline in
+        // the footer, loading the page index if it is not needed will do
+        // unnecessary I/O. We decide later if it is needed to evaluate the
+        // pruning predicates. Thus default to not requesting it from the
+        // underlying reader.
+        let options =
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
         #[cfg(feature = "parquet_encryption")]
-        let encryption_context = self.get_encryption_context();
-        let max_predicate_cache_size = self.max_predicate_cache_size;
+        let mut options = options;
+        #[cfg(feature = "parquet_encryption")]
+        if let Some(fd_val) = &self.file_decryption_properties {
+            options = options.with_file_decryption_properties(Arc::clone(fd_val));
+        }
 
-        let reverse_row_groups = self.reverse_row_groups;
-        let preserve_order = self.preserve_order;
-
-        Ok(Box::pin(async move {
-            #[cfg(feature = "parquet_encryption")]
-            let file_decryption_properties = encryption_context
-                .get_file_decryption_properties(&file_location)
+        let mut metadata_timer = self.file_metrics.metadata_load_time.timer();
+        // Begin by loading the metadata from the underlying reader (note
+        // the returned metadata may actually include page indexes as some
+        // readers may return page indexes even when not requested -- for
+        // example when they are cached)
+        let reader_metadata =
+            ArrowReaderMetadata::load_async(&mut self.async_file_reader, options.clone())
                 .await?;
+        metadata_timer.stop();
+        drop(metadata_timer);
 
-            // ---------------------------------------------
-            // Step: try to prune the current file partition
-            // ---------------------------------------------
+        Ok(MetadataLoadedParquetOpen {
+            prepared: self,
+            reader_metadata,
+            options,
+        })
+    }
+}
 
-            // Prune this file using the file level statistics and partition values.
-            // Since dynamic filters may have been updated since planning it is possible that we are able
-            // to prune files now that we couldn't prune at planning time.
-            // It is assumed that there is no point in doing pruning here if the predicate is not dynamic,
-            // as it would have been done at planning time.
-            // We'll also check this after every record batch we read,
-            // and if at some point we are able to prove we can prune the file using just the file level statistics
-            // we can end the stream early.
-            let mut file_pruner = predicate
-                .as_ref()
-                .filter(|p| {
-                    // Make a FilePruner only if there is either
-                    // 1. a dynamic expr in the predicate
-                    // 2. the file has file-level statistics.
-                    //
-                    // File-level statistics may prune the file without loading
-                    // any row groups or metadata.
-                    //
-                    // Dynamic filters may prune the file after initial
-                    // planning, as the dynamic filter is updated during
-                    // execution.
-                    //
-                    // The case where there is a dynamic filter but no
-                    // statistics corresponds to a dynamic filter that
-                    // references partition columns. While rare, this is possible
-                    // e.g. `select * from table order by partition_col limit
-                    // 10` could hit this condition.
-                    is_dynamic_physical_expr(p) || partitioned_file.has_statistics()
-                })
-                .and_then(|p| {
-                    FilePruner::try_new(
-                        Arc::clone(p),
-                        &logical_file_schema,
-                        &partitioned_file,
-                        predicate_creation_errors.clone(),
-                    )
-                });
+impl MetadataLoadedParquetOpen {
+    /// Prepare file-schema coercions and pruning predicates once metadata is
+    /// loaded.
+    fn prepare_filters(self) -> Result<FiltersPreparedParquetOpen> {
+        let MetadataLoadedParquetOpen {
+            mut prepared,
+            mut reader_metadata,
+            mut options,
+        } = self;
 
-            if let Some(file_pruner) = &mut file_pruner
-                && file_pruner.should_prune()?
-            {
-                // Return an empty stream immediately to skip the work of setting up the actual stream
-                file_metrics.files_ranges_pruned_statistics.add_pruned(1);
-                return Ok(futures::stream::empty().boxed());
-            }
+        // Note about schemas: we are actually dealing with **3 different schemas** here:
+        // - The table schema as defined by the TableProvider.
+        //   This is what the user sees, what they get when they `SELECT * FROM table`, etc.
+        // - The logical file schema: this is the table schema minus any hive partition columns and projections.
+        //   This is what the physical file schema is coerced to.
+        // - The physical file schema: this is the schema that the arrow-rs
+        //   parquet reader will actually produce.
+        let mut physical_file_schema = Arc::clone(reader_metadata.schema());
 
-            file_metrics.files_ranges_pruned_statistics.add_matched(1);
+        // The schema loaded from the file may not be the same as the
+        // desired schema (for example if we want to instruct the parquet
+        // reader to read strings using Utf8View instead). Update if necessary
+        if let Some(merged) = apply_file_schema_type_coercions(
+            &prepared.logical_file_schema,
+            &physical_file_schema,
+        ) {
+            physical_file_schema = Arc::new(merged);
+            options = options.with_schema(Arc::clone(&physical_file_schema));
+            reader_metadata = ArrowReaderMetadata::try_new(
+                Arc::clone(reader_metadata.metadata()),
+                options.clone(),
+            )?;
+        }
 
-            // --------------------------------------------------------
-            // Step: fetch Parquet metadata (and optionally page index)
-            // --------------------------------------------------------
-
-            // Don't load the page index yet. Since it is not stored inline in
-            // the footer, loading the page index if it is not needed will do
-            // unnecessary I/O. We decide later if it is needed to evaluate the
-            // pruning predicates. Thus default to not requesting it from the
-            // underlying reader.
-            let mut options =
-                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
-            #[cfg(feature = "parquet_encryption")]
-            if let Some(fd_val) = file_decryption_properties {
-                options = options.with_file_decryption_properties(Arc::clone(&fd_val));
-            }
-            let mut metadata_timer = file_metrics.metadata_load_time.timer();
-
-            // Begin by loading the metadata from the underlying reader (note
-            // the returned metadata may actually include page indexes as some
-            // readers may return page indexes even when not requested -- for
-            // example when they are cached)
-            let mut reader_metadata =
-                ArrowReaderMetadata::load_async(&mut async_file_reader, options.clone())
-                    .await?;
-
-            // Note about schemas: we are actually dealing with **3 different schemas** here:
-            // - The table schema as defined by the TableProvider.
-            //   This is what the user sees, what they get when they `SELECT * FROM table`, etc.
-            // - The logical file schema: this is the table schema minus any hive partition columns and projections.
-            //   This is what the physical file schema is coerced to.
-            // - The physical file schema: this is the schema that the arrow-rs
-            //   parquet reader will actually produce.
-            let mut physical_file_schema = Arc::clone(reader_metadata.schema());
-
-            // The schema loaded from the file may not be the same as the
-            // desired schema (for example if we want to instruct the parquet
-            // reader to read strings using Utf8View instead). Update if necessary
-            if let Some(merged) = apply_file_schema_type_coercions(
-                &logical_file_schema,
-                &physical_file_schema,
-            ) {
-                physical_file_schema = Arc::new(merged);
-                options = options.with_schema(Arc::clone(&physical_file_schema));
-                reader_metadata = ArrowReaderMetadata::try_new(
-                    Arc::clone(reader_metadata.metadata()),
-                    options.clone(),
-                )?;
-            }
-
-            if let Some(ref coerce) = coerce_int96
-                && let Some(merged) = coerce_int96_to_resolution(
-                    reader_metadata.parquet_schema(),
-                    &physical_file_schema,
-                    coerce,
-                )
-            {
-                physical_file_schema = Arc::new(merged);
-                options = options.with_schema(Arc::clone(&physical_file_schema));
-                reader_metadata = ArrowReaderMetadata::try_new(
-                    Arc::clone(reader_metadata.metadata()),
-                    options.clone(),
-                )?;
-            }
-
-            // Adapt the projection & filter predicate to the physical file schema.
-            // This evaluates missing columns and inserts any necessary casts.
-            // After rewriting to the file schema, further simplifications may be possible.
-            // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
-            // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
-            // Additionally, if any casts were inserted we can move casts from the column to the literal side:
-            // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
-            //
-            // When the schemas are identical and there is no predicate, the
-            // rewriter is a no-op: column indices already match (partition
-            // columns are appended after file columns in the table schema),
-            // types are the same, and there are no missing columns. Skip the
-            // tree walk entirely in that case.
-            let needs_rewrite =
-                predicate.is_some() || logical_file_schema != physical_file_schema;
-            if needs_rewrite {
-                let rewriter = expr_adapter_factory.create(
-                    Arc::clone(&logical_file_schema),
-                    Arc::clone(&physical_file_schema),
-                )?;
-                let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
-                predicate = predicate
-                    .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
-                    .transpose()?;
-                // Adapt projections to the physical file schema as well
-                projection = projection
-                    .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
-            }
-
-            // Build predicates for this specific file
-            let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
-                predicate.as_ref(),
-                &physical_file_schema,
-                &predicate_creation_errors,
-            );
-
-            // The page index is not stored inline in the parquet footer so the
-            // code above may not have read the page index structures yet. If we
-            // need them for reading and they aren't yet loaded, we need to load them now.
-            if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
-                reader_metadata = load_page_index(
-                    reader_metadata,
-                    &mut async_file_reader,
-                    // Since we're manually loading the page index the option here should not matter but we pass it in for consistency
-                    options.with_page_index_policy(PageIndexPolicy::Optional),
-                )
-                .await?;
-            }
-
-            metadata_timer.stop();
-
-            // ------------------------------------------------------------
-            // Step: prune row groups by range, predicate and bloom filter
-            // ------------------------------------------------------------
-
-            // Determine which row groups to actually read. The idea is to skip
-            // as many row groups as possible based on the metadata and query
-            let file_metadata = Arc::clone(reader_metadata.metadata());
-            let pruning_pred = pruning_predicate.as_ref().map(|p| p.as_ref());
-            let rg_metadata = file_metadata.row_groups();
-            // track which row groups to actually read
-            let access_plan =
-                create_initial_plan(&file_name, extensions, rg_metadata.len())?;
-            let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
-            // if there is a range restricting what parts of the file to read
-            if let Some(range) = file_range.as_ref() {
-                row_groups.prune_by_range(rg_metadata, range);
-            }
-
-            // If there is a predicate that can be evaluated against the metadata
-            if let Some(pruning_pred) = pruning_pred.as_ref() {
-                if enable_row_group_stats_pruning {
-                    row_groups.prune_by_statistics(
-                        &physical_file_schema,
-                        reader_metadata.parquet_schema(),
-                        rg_metadata,
-                        pruning_pred,
-                        &file_metrics,
-                    );
-                } else {
-                    // Update metrics: statistics unavailable, so all row groups are
-                    // matched (not pruned)
-                    file_metrics
-                        .row_groups_pruned_statistics
-                        .add_matched(row_groups.remaining_row_group_count());
-                }
-
-                if enable_bloom_filter && !row_groups.is_empty() {
-                    // Use the existing reader for bloom filter I/O;
-                    // replace with a fresh reader for decoding below.
-                    let bf_reader = std::mem::replace(
-                        &mut async_file_reader,
-                        parquet_file_reader_factory.create_reader(
-                            partition_index,
-                            partitioned_file.clone(),
-                            metadata_size_hint,
-                            &metrics,
-                        )?,
-                    );
-                    let mut bf_builder =
-                        ParquetRecordBatchStreamBuilder::new_with_metadata(
-                            bf_reader,
-                            reader_metadata.clone(),
-                        );
-                    row_groups
-                        .prune_by_bloom_filters(
-                            &physical_file_schema,
-                            &mut bf_builder,
-                            pruning_pred,
-                            &file_metrics,
-                        )
-                        .await;
-                } else {
-                    // Update metrics: bloom filter unavailable, so all row groups are
-                    // matched (not pruned)
-                    file_metrics
-                        .row_groups_pruned_bloom_filter
-                        .add_matched(row_groups.remaining_row_group_count());
-                }
-            } else {
-                // Update metrics: no predicate, so all row groups are matched (not pruned)
-                let n_remaining_row_groups = row_groups.remaining_row_group_count();
-                file_metrics
-                    .row_groups_pruned_statistics
-                    .add_matched(n_remaining_row_groups);
-                file_metrics
-                    .row_groups_pruned_bloom_filter
-                    .add_matched(n_remaining_row_groups);
-            }
-
-            // Prune by limit if limit is set and limit order is not sensitive
-            if let (Some(limit), false) = (limit, preserve_order) {
-                row_groups.prune_by_limit(limit, rg_metadata, &file_metrics);
-            }
-
-            // --------------------------------------------------------
-            // Step: prune pages from the kept row groups
-            //
-            let mut access_plan = row_groups.build();
-            // page index pruning: if all data on individual pages can
-            // be ruled using page metadata, rows from other columns
-            // with that range can be skipped as well
-            // --------------------------------------------------------
-            if enable_page_index
-                && !access_plan.is_empty()
-                && let Some(p) = page_pruning_predicate
-            {
-                access_plan = p.prune_plan_with_page_index(
-                    access_plan,
-                    &physical_file_schema,
-                    reader_metadata.parquet_schema(),
-                    file_metadata.as_ref(),
-                    &file_metrics,
-                );
-            }
-
-            // Prepare the access plan (extract row groups and row selection)
-            let mut prepared_plan = access_plan.prepare(rg_metadata)?;
-
-            // ----------------------------------------------------------
-            // Step: potentially reverse the access plan for performance.
-            // See `ParquetSource::try_pushdown_sort` for the rationale.
-            // ----------------------------------------------------------
-            if reverse_row_groups {
-                prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
-            }
-
-            if prepared_plan.row_group_indexes.is_empty() {
-                return Ok(futures::stream::empty().boxed());
-            }
-
-            // ---------------------------------------------------------
-            // Step: construct builder for the final RecordBatch stream
-            // ---------------------------------------------------------
-
-            let mut builder =
-                ParquetPushDecoderBuilder::new_with_metadata(reader_metadata.clone())
-                    .with_batch_size(batch_size);
-
-            // ---------------------------------------------------------------------
-            // Step: optionally add row filter to the builder
-            //
-            // Row filter is used for late materialization in parquet decoding, see
-            // `row_filter` for details.
-            // ---------------------------------------------------------------------
-
-            // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) =
-                pushdown_filters.then_some(predicate.as_ref()).flatten()
-            {
-                let row_filter = row_filter::build_row_filter(
-                    predicate,
-                    &physical_file_schema,
-                    file_metadata.as_ref(),
-                    reorder_predicates,
-                    &file_metrics,
-                );
-
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{predicate:?}': {e}"
-                        );
-                    }
-                };
-            };
-            if force_filter_selections {
-                builder =
-                    builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
-            }
-
-            // Apply the prepared plan to the builder
-            if let Some(row_selection) = prepared_plan.row_selection {
-                builder = builder.with_row_selection(row_selection);
-            }
-            builder = builder.with_row_groups(prepared_plan.row_group_indexes);
-
-            if let Some(limit) = limit {
-                builder = builder.with_limit(limit)
-            }
-
-            if let Some(max_predicate_cache_size) = max_predicate_cache_size {
-                builder = builder.with_max_predicate_cache_size(max_predicate_cache_size);
-            }
-
-            // metrics from the arrow reader itself
-            let arrow_reader_metrics = ArrowReaderMetrics::enabled();
-
-            let read_plan = build_projection_read_plan(
-                projection.expr_iter(),
-                &physical_file_schema,
+        if let Some(ref coerce) = prepared.coerce_int96
+            && let Some(merged) = coerce_int96_to_resolution(
                 reader_metadata.parquet_schema(),
+                &physical_file_schema,
+                coerce,
+            )
+        {
+            physical_file_schema = Arc::new(merged);
+            options = options.with_schema(Arc::clone(&physical_file_schema));
+            reader_metadata = ArrowReaderMetadata::try_new(
+                Arc::clone(reader_metadata.metadata()),
+                options.clone(),
+            )?;
+        }
+
+        // Adapt the projection & filter predicate to the physical file schema.
+        // This evaluates missing columns and inserts any necessary casts.
+        // After rewriting to the file schema, further simplifications may be possible.
+        // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+        // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
+        // Additionally, if any casts were inserted we can move casts from the column to the literal side:
+        // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
+        //
+        // When the schemas are identical and there is no predicate, the
+        // rewriter is a no-op: column indices already match (partition
+        // columns are appended after file columns in the table schema),
+        // types are the same, and there are no missing columns. Skip the
+        // tree walk entirely in that case.
+        let needs_rewrite = prepared.predicate.is_some()
+            || prepared.logical_file_schema != physical_file_schema;
+        if needs_rewrite {
+            let rewriter = prepared.expr_adapter_factory.create(
+                Arc::clone(&prepared.logical_file_schema),
+                Arc::clone(&physical_file_schema),
+            )?;
+            let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
+            prepared.predicate = prepared
+                .predicate
+                .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
+                .transpose()?;
+            prepared.projection = prepared
+                .projection
+                .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
+        }
+        prepared.physical_file_schema = Arc::clone(&physical_file_schema);
+
+        // Build predicates for this specific file
+        let pruning_predicate = build_pruning_predicates(
+            prepared.predicate.as_ref(),
+            &physical_file_schema,
+            &prepared.predicate_creation_errors,
+        );
+
+        // Only build page pruning predicate if page index is enabled
+        let page_pruning_predicate = if prepared.enable_page_index {
+            prepared.predicate.as_ref().and_then(|predicate| {
+                let p = build_page_pruning_predicate(predicate, &physical_file_schema);
+                (p.filter_number() > 0).then_some(p)
+            })
+        } else {
+            None
+        };
+
+        Ok(FiltersPreparedParquetOpen {
+            loaded: MetadataLoadedParquetOpen {
+                prepared,
+                reader_metadata,
+                options,
+            },
+            pruning_predicate,
+            page_pruning_predicate,
+        })
+    }
+}
+
+impl FiltersPreparedParquetOpen {
+    /// Load the page index if pruning requires it and metadata did not include it.
+    async fn load_page_index(mut self) -> Result<Self> {
+        // The page index is not stored inline in the parquet footer so the
+        // metadata load above may not have read the page index structures yet.
+        // If we need them for reading and they aren't yet loaded, we need to
+        // load them now.
+        if self.page_pruning_predicate.is_some() {
+            self.loaded.reader_metadata = load_page_index(
+                self.loaded.reader_metadata,
+                &mut self.loaded.prepared.async_file_reader,
+                self.loaded
+                    .options
+                    .clone()
+                    .with_page_index_policy(PageIndexPolicy::Optional),
+            )
+            .await?;
+        }
+
+        Ok(self)
+    }
+
+    /// Prune row groups using file ranges and parquet metadata.
+    fn prune_row_groups(self) -> Result<RowGroupsPrunedParquetOpen> {
+        let loaded = &self.loaded;
+        let prepared = &loaded.prepared;
+        let file_metadata = Arc::clone(loaded.reader_metadata.metadata());
+        let rg_metadata = file_metadata.row_groups();
+
+        // Determine which row groups to actually read. The idea is to skip
+        // as many row groups as possible based on the metadata and query
+        let mut row_groups = RowGroupAccessPlanFilter::new(create_initial_plan(
+            &prepared.file_name,
+            prepared.extensions.clone(),
+            rg_metadata.len(),
+        )?);
+
+        // If there is a range restricting what parts of the file to read
+        if let Some(range) = prepared.file_range.as_ref() {
+            row_groups.prune_by_range(rg_metadata, range);
+        }
+
+        // If there is a predicate that can be evaluated against the metadata
+        if let Some(predicate) = self.pruning_predicate.as_ref().map(|p| p.as_ref()) {
+            if prepared.enable_row_group_stats_pruning {
+                row_groups.prune_by_statistics(
+                    &prepared.physical_file_schema,
+                    loaded.reader_metadata.parquet_schema(),
+                    rg_metadata,
+                    predicate,
+                    &prepared.file_metrics,
+                );
+            } else {
+                // Update metrics: statistics unavailable, so all row groups are
+                // matched (not pruned)
+                prepared
+                    .file_metrics
+                    .row_groups_pruned_statistics
+                    .add_matched(row_groups.remaining_row_group_count());
+            }
+
+            if !prepared.enable_bloom_filter || row_groups.is_empty() {
+                // Update metrics: bloom filter unavailable, so all row groups are
+                // matched (not pruned)
+                prepared
+                    .file_metrics
+                    .row_groups_pruned_bloom_filter
+                    .add_matched(row_groups.remaining_row_group_count());
+            }
+        } else {
+            // Update metrics: no predicate, so all row groups are matched (not pruned)
+            let remaining = row_groups.remaining_row_group_count();
+            prepared
+                .file_metrics
+                .row_groups_pruned_statistics
+                .add_matched(remaining);
+            prepared
+                .file_metrics
+                .row_groups_pruned_bloom_filter
+                .add_matched(remaining);
+        }
+
+        Ok(RowGroupsPrunedParquetOpen {
+            prepared: self,
+            row_groups,
+        })
+    }
+}
+
+impl RowGroupsPrunedParquetOpen {
+    /// Load bloom filters needed for pruning when enabled and a pruning predicate exists.
+    async fn load_bloom_filters(mut self) -> Result<BloomFiltersLoadedParquetOpen> {
+        let num_row_groups = self
+            .prepared
+            .loaded
+            .reader_metadata
+            .metadata()
+            .num_row_groups();
+        let mut row_group_bloom_filters =
+            vec![BloomFilterStatistics::new(); num_row_groups];
+
+        if let Some(predicate) =
+            self.prepared.pruning_predicate.as_ref().map(|p| p.as_ref())
+            && self.prepared.loaded.prepared.enable_bloom_filter
+            && !self.row_groups.is_empty()
+        {
+            // Use the existing reader for bloom filter I/O;
+            // replace with a fresh reader for decoding below.
+            let reader_metadata = self.prepared.loaded.reader_metadata.clone();
+            let replacement_reader = {
+                let prepared = &self.prepared.loaded.prepared;
+                prepared.parquet_file_reader_factory.create_reader(
+                    prepared.partition_index,
+                    prepared.partitioned_file.clone(),
+                    prepared.metadata_size_hint,
+                    &prepared.metrics,
+                )?
+            };
+
+            let prepared = &mut self.prepared.loaded.prepared;
+            let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
+                mem::replace(&mut prepared.async_file_reader, replacement_reader),
+                reader_metadata,
+            );
+            let parquet_columns: Vec<(String, usize, Type)> = predicate
+                .literal_columns()
+                .into_iter()
+                .filter_map(|column_name| {
+                    let parquet_schema = builder.parquet_schema();
+                    let (column_idx, _) = parquet_column(
+                        parquet_schema,
+                        &prepared.physical_file_schema,
+                        &column_name,
+                    )?;
+                    Some((
+                        column_name,
+                        column_idx,
+                        parquet_schema.column(column_idx).physical_type(),
+                    ))
+                })
+                .collect();
+
+            for idx in self.row_groups.row_group_indexes() {
+                let mut row_group_filters =
+                    BloomFilterStatistics::with_capacity(parquet_columns.len());
+                for (column_name, column_idx, physical_type) in &parquet_columns {
+                    let bf: Sbbf = match builder
+                        .get_row_group_column_bloom_filter(idx, *column_idx)
+                        .await
+                    {
+                        Ok(Some(bf)) => bf,
+                        Ok(None) => continue,
+                        Err(e) => {
+                            debug!("Ignoring error reading bloom filter: {e}");
+                            prepared.file_metrics.predicate_evaluation_errors.add(1);
+                            continue;
+                        }
+                    };
+                    row_group_filters.insert(column_name, bf, *physical_type);
+                }
+                row_group_bloom_filters[idx] = row_group_filters;
+            }
+        }
+
+        Ok(BloomFiltersLoadedParquetOpen {
+            prepared: self,
+            row_group_bloom_filters,
+        })
+    }
+}
+
+impl BloomFiltersLoadedParquetOpen {
+    /// Apply bloom filter pruning using already loaded bloom filters.
+    fn prune_bloom_filters(mut self) -> RowGroupsPrunedParquetOpen {
+        let bloom_filter_eval_time = self
+            .prepared
+            .prepared
+            .loaded
+            .prepared
+            .file_metrics
+            .bloom_filter_eval_time
+            .clone();
+        let _timer_guard = bloom_filter_eval_time.timer();
+        if let Some(predicate) = self
+            .prepared
+            .prepared
+            .pruning_predicate
+            .as_ref()
+            .map(|p| p.as_ref())
+            && self.prepared.prepared.loaded.prepared.enable_bloom_filter
+            && !self.prepared.row_groups.is_empty()
+        {
+            self.prepared.row_groups.prune_by_bloom_filters(
+                predicate,
+                &self.prepared.prepared.loaded.prepared.file_metrics,
+                &self.row_group_bloom_filters,
+            );
+        }
+
+        self.prepared
+    }
+}
+
+impl RowGroupsPrunedParquetOpen {
+    /// Build the final parquet stream once all pruning work is complete.
+    fn build_stream(self) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+        let RowGroupsPrunedParquetOpen {
+            prepared,
+            mut row_groups,
+        } = self;
+        let FiltersPreparedParquetOpen {
+            loaded,
+            pruning_predicate: _,
+            page_pruning_predicate,
+        } = prepared;
+        let MetadataLoadedParquetOpen {
+            prepared,
+            reader_metadata,
+            options: _,
+        } = loaded;
+
+        let file_metadata = Arc::clone(reader_metadata.metadata());
+        let rg_metadata = file_metadata.row_groups();
+
+        // Filter pushdown: evaluate predicates during scan
+        let row_filter = if let Some(predicate) = prepared
+            .pushdown_filters
+            .then_some(prepared.predicate.clone())
+            .flatten()
+        {
+            let row_filter = row_filter::build_row_filter(
+                &predicate,
+                &prepared.physical_file_schema,
+                file_metadata.as_ref(),
+                prepared.reorder_predicates,
+                &prepared.file_metrics,
             );
 
-            let decoder = builder
-                .with_projection(read_plan.projection_mask)
-                .with_metrics(arrow_reader_metrics.clone())
-                .build()?;
-
-            let files_ranges_pruned_statistics =
-                file_metrics.files_ranges_pruned_statistics.clone();
-            let predicate_cache_inner_records =
-                file_metrics.predicate_cache_inner_records.clone();
-            let predicate_cache_records = file_metrics.predicate_cache_records.clone();
-
-            // Rebase column indices to match the narrowed stream schema.
-            // The projection expressions have indices based on physical_file_schema,
-            // but the stream only contains the columns selected by the ProjectionMask.
-            let stream_schema = read_plan.projected_schema;
-            let replace_schema = stream_schema != output_schema;
-            let projection = projection
-                .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
-            let projector = projection.make_projector(&stream_schema)?;
-            let stream = futures::stream::unfold(
-                PushDecoderStreamState {
-                    decoder,
-                    reader: async_file_reader,
-                    projector,
-                    output_schema,
-                    replace_schema,
-                    arrow_reader_metrics,
-                    predicate_cache_inner_records,
-                    predicate_cache_records,
-                    baseline_metrics,
-                },
-                |mut state| async move {
-                    let result = state.transition().await;
-                    result.map(|r| (r, state))
-                },
-            )
-            .fuse();
-
-            // ----------------------------------------------------------------------
-            // Step: wrap the stream so a dynamic filter can stop the file scan early
-            // ----------------------------------------------------------------------
-            if let Some(file_pruner) = file_pruner {
-                let boxed_stream = stream.boxed();
-                Ok(EarlyStoppingStream::new(
-                    boxed_stream,
-                    file_pruner,
-                    files_ranges_pruned_statistics,
-                )
-                .boxed())
-            } else {
-                Ok(stream.boxed())
+            match row_filter {
+                Ok(Some(filter)) => Some(filter),
+                Ok(None) => None,
+                Err(e) => {
+                    debug!("Ignoring error building row filter for '{predicate:?}': {e}");
+                    None
+                }
             }
-        }))
+        } else {
+            None
+        };
+
+        // Prune by limit if limit is set and limit order is not sensitive
+        if let (Some(limit), false) = (prepared.limit, prepared.preserve_order) {
+            row_groups.prune_by_limit(limit, rg_metadata, &prepared.file_metrics);
+        }
+
+        // Page index pruning: if all data on individual pages can
+        // be ruled using page metadata, rows from other columns
+        // with that range can be skipped as well.
+        let mut access_plan = row_groups.build();
+        if prepared.enable_page_index
+            && !access_plan.is_empty()
+            && let Some(page_pruning_predicate) = page_pruning_predicate
+        {
+            access_plan = page_pruning_predicate.prune_plan_with_page_index(
+                access_plan,
+                &prepared.physical_file_schema,
+                reader_metadata.parquet_schema(),
+                file_metadata.as_ref(),
+                &prepared.file_metrics,
+            );
+        }
+
+        // Prepare the access plan (extract row groups and row selection)
+        let mut prepared_plan = access_plan.prepare(rg_metadata)?;
+
+        // Potentially reverse the access plan for performance.
+        // See `ParquetSource::try_pushdown_sort` for the rationale.
+        if prepared.reverse_row_groups {
+            prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
+        }
+
+        let arrow_reader_metrics = ArrowReaderMetrics::enabled();
+        let read_plan = build_projection_read_plan(
+            prepared.projection.expr_iter(),
+            &prepared.physical_file_schema,
+            reader_metadata.parquet_schema(),
+        );
+
+        let mut decoder_builder =
+            ParquetPushDecoderBuilder::new_with_metadata(reader_metadata)
+                .with_projection(read_plan.projection_mask)
+                .with_batch_size(prepared.batch_size)
+                .with_metrics(arrow_reader_metrics.clone());
+
+        if let Some(row_filter) = row_filter {
+            decoder_builder = decoder_builder.with_row_filter(row_filter);
+        }
+        if prepared.force_filter_selections {
+            decoder_builder =
+                decoder_builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
+        }
+        if let Some(row_selection) = prepared_plan.row_selection {
+            decoder_builder = decoder_builder.with_row_selection(row_selection);
+        }
+        decoder_builder =
+            decoder_builder.with_row_groups(prepared_plan.row_group_indexes);
+        if let Some(limit) = prepared.limit {
+            decoder_builder = decoder_builder.with_limit(limit);
+        }
+        if let Some(max_predicate_cache_size) = prepared.max_predicate_cache_size {
+            decoder_builder =
+                decoder_builder.with_max_predicate_cache_size(max_predicate_cache_size);
+        }
+
+        let decoder = decoder_builder.build()?;
+
+        let predicate_cache_inner_records =
+            prepared.file_metrics.predicate_cache_inner_records.clone();
+        let predicate_cache_records =
+            prepared.file_metrics.predicate_cache_records.clone();
+
+        // Check if we need to replace the schema to handle things like differing nullability or metadata.
+        // See note below about file vs. output schema.
+        let stream_schema = read_plan.projected_schema;
+        let replace_schema = stream_schema != prepared.output_schema;
+
+        // Rebase column indices to match the narrowed stream schema.
+        // The projection expressions have indices based on physical_file_schema,
+        // but the stream only contains the columns selected by the ProjectionMask.
+        let projection = prepared
+            .projection
+            .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
+        let projector = projection.make_projector(&stream_schema)?;
+        let output_schema = Arc::clone(&prepared.output_schema);
+        let files_ranges_pruned_statistics =
+            prepared.file_metrics.files_ranges_pruned_statistics.clone();
+        let stream = futures::stream::unfold(
+            PushDecoderStreamState {
+                decoder,
+                reader: prepared.async_file_reader,
+                projector,
+                output_schema,
+                replace_schema,
+                arrow_reader_metrics,
+                predicate_cache_inner_records,
+                predicate_cache_records,
+                baseline_metrics: prepared.baseline_metrics,
+            },
+            |state| async move { state.transition().await },
+        )
+        .fuse();
+
+        // Wrap the stream so a dynamic filter can stop the file scan early.
+        if let Some(file_pruner) = prepared.file_pruner {
+            let stream = stream.boxed();
+            Ok(EarlyStoppingStream::new(
+                stream,
+                file_pruner,
+                files_ranges_pruned_statistics,
+            )
+            .boxed())
+        } else {
+            Ok(stream.boxed())
+        }
     }
 }
 
@@ -675,17 +1245,27 @@ impl PushDecoderStreamState {
     ///   fetched from the [`AsyncFileReader`] and fed back into the decoder.
     /// - [`Data`](DecodeResult::Data) – a decoded batch is projected and returned.
     /// - [`Finished`](DecodeResult::Finished) – signals end-of-stream (`None`).
-    async fn transition(&mut self) -> Option<Result<RecordBatch>> {
+    ///
+    /// Takes `self` by value (rather than `&mut self`) so the generated future
+    /// owns the state directly. This avoids a Stacked Borrows violation under
+    /// miri where `&mut self` creates a single opaque borrow that conflicts
+    /// with `unfold`'s ownership across yield points.
+    async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
         loop {
             match self.decoder.try_decode() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
-                    let fetch = async {
-                        let data = self.reader.get_byte_ranges(ranges.clone()).await?;
-                        self.decoder.push_ranges(ranges, data)?;
-                        Ok::<_, ParquetError>(())
-                    };
-                    if let Err(e) = fetch.await {
-                        return Some(Err(DataFusionError::from(e)));
+                    let data = self
+                        .reader
+                        .get_byte_ranges(ranges.clone())
+                        .await
+                        .map_err(DataFusionError::from);
+                    match data {
+                        Ok(data) => {
+                            if let Err(e) = self.decoder.push_ranges(ranges, data) {
+                                return Some((Err(DataFusionError::from(e)), self));
+                            }
+                        }
+                        Err(e) => return Some((Err(e), self)),
                     }
                 }
                 Ok(DecodeResult::Data(batch)) => {
@@ -693,13 +1273,15 @@ impl PushDecoderStreamState {
                     self.copy_arrow_reader_metrics();
                     let result = self.project_batch(&batch);
                     timer.stop();
-                    return Some(result);
+                    // Release the borrow on baseline_metrics before moving self
+                    drop(timer);
+                    return Some((result, self));
                 }
                 Ok(DecodeResult::Finished) => {
                     return None;
                 }
                 Err(e) => {
-                    return Some(Err(DataFusionError::from(e)));
+                    return Some((Err(DataFusionError::from(e)), self));
                 }
             }
         }
@@ -719,7 +1301,15 @@ impl PushDecoderStreamState {
     fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         let mut batch = self.projector.project_batch(batch)?;
         if self.replace_schema {
-            let (_schema, arrays, num_rows) = batch.into_parts();
+            // Ensure the output batch has the expected schema.
+            // This handles things like schema level and field level metadata, which may not be present
+            // in the physical file schema.
+            // It is also possible for nullability to differ; some writers create files with
+            // OPTIONAL fields even when there are no nulls in the data.
+            // In these cases it may make sense for the logical schema to be `NOT NULL`.
+            // RecordBatch::try_new_with_options checks that if the schema is NOT NULL
+            // the array cannot contain nulls, amongst other checks.
+            let (_stream_schema, arrays, num_rows) = batch.into_parts();
             let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
             batch = RecordBatch::try_new_with_options(
                 Arc::clone(&self.output_schema),
@@ -924,7 +1514,7 @@ impl EncryptionContext {
     }
 }
 
-impl ParquetOpener {
+impl ParquetMorselizer {
     #[cfg(feature = "parquet_encryption")]
     fn get_encryption_context(&self) -> EncryptionContext {
         EncryptionContext::new(
@@ -990,20 +1580,13 @@ pub(crate) fn build_pruning_predicates(
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
-) -> (
-    Option<Arc<PruningPredicate>>,
-    Option<Arc<PagePruningAccessPlanFilter>>,
-) {
-    let Some(predicate) = predicate.as_ref() else {
-        return (None, None);
-    };
-    let pruning_predicate = build_pruning_predicate(
+) -> Option<Arc<PruningPredicate>> {
+    let predicate = predicate.as_ref()?;
+    build_pruning_predicate(
         Arc::clone(predicate),
         file_schema,
         predicate_creation_errors,
-    );
-    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema);
-    (pruning_predicate, Some(page_pruning_predicate))
+    )
 }
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
@@ -1037,31 +1620,20 @@ async fn load_page_index<T: AsyncFileReader>(
     }
 }
 
-fn should_enable_page_index(
-    enable_page_index: bool,
-    page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
-) -> bool {
-    enable_page_index
-        && page_pruning_predicate.is_some()
-        && page_pruning_predicate
-            .as_ref()
-            .map(|p| p.filter_number() > 0)
-            .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
-    use super::{ConstantColumns, constant_columns_from_stats};
-    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
+    use super::*;
+    use super::{ConstantColumns, ParquetMorselizer, constant_columns_from_stats};
+    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess};
+    use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        ColumnStatistics, DataFusionError, ScalarValue, Statistics, record_batch,
+        ColumnStatistics, ScalarValue, Statistics, internal_err, record_batch,
         stats::Precision,
     };
-    use datafusion_datasource::{PartitionedFile, TableSchema, file_stream::FileOpener};
+    use datafusion_datasource::morsel::{Morsel, Morselizer};
+    use datafusion_datasource::{PartitionedFile, TableSchema};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
@@ -1073,14 +1645,17 @@ mod test {
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-    use futures::{Stream, StreamExt};
+    use futures::StreamExt;
+    use futures::stream::BoxStream;
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
 
-    /// Builder for creating [`ParquetOpener`] instances with sensible defaults for tests.
+    /// Builder for creating [`ParquetMorselizer`] instances with sensible defaults for tests.
     /// This helps reduce code duplication and makes it clear what differs between test cases.
-    struct ParquetOpenerBuilder {
+    struct ParquetMorselizerBuilder {
         store: Option<Arc<dyn ObjectStore>>,
         table_schema: Option<TableSchema>,
         partition_index: usize,
@@ -1097,13 +1672,13 @@ mod test {
         enable_page_index: bool,
         enable_bloom_filter: bool,
         enable_row_group_stats_pruning: bool,
-        coerce_int96: Option<arrow::datatypes::TimeUnit>,
+        coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
         preserve_order: bool,
     }
 
-    impl ParquetOpenerBuilder {
+    impl ParquetMorselizerBuilder {
         /// Create a new builder with sensible defaults for tests.
         fn new() -> Self {
             Self {
@@ -1178,23 +1753,29 @@ mod test {
             self
         }
 
+        /// Enable page index.
+        fn with_enable_page_index(mut self, enable: bool) -> Self {
+            self.enable_page_index = enable;
+            self
+        }
+
         /// Set reverse row groups flag.
         fn with_reverse_row_groups(mut self, enable: bool) -> Self {
             self.reverse_row_groups = enable;
             self
         }
 
-        /// Build the ParquetOpener instance.
+        /// Build the ParquetMorselizer instance.
         ///
         /// # Panics
         ///
         /// Panics if required fields (store, schema/table_schema) are not set.
-        fn build(self) -> ParquetOpener {
+        fn build(self) -> ParquetMorselizer {
             let store = self
                 .store
-                .expect("ParquetOpenerBuilder: store must be set via with_store()");
+                .expect("ParquetMorselizerBuilder: store must be set via with_store()");
             let table_schema = self.table_schema.expect(
-                "ParquetOpenerBuilder: table_schema must be set via with_schema() or with_table_schema()",
+                "ParquetMorselizerBuilder: table_schema must be set via with_schema() or with_table_schema()",
             );
             let file_schema = Arc::clone(table_schema.file_schema());
 
@@ -1208,11 +1789,12 @@ mod test {
                 ProjectionExprs::from_indices(&all_indices, &file_schema)
             };
 
-            ParquetOpener {
+            ParquetMorselizer {
                 partition_index: self.partition_index,
                 projection,
                 batch_size: self.batch_size,
                 limit: self.limit,
+                preserve_order: self.preserve_order,
                 predicate: self.predicate,
                 table_schema,
                 metadata_size_hint: self.metadata_size_hint,
@@ -1234,7 +1816,44 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
-                preserve_order: self.preserve_order,
+            }
+        }
+    }
+
+    /// Test helper that drives a [`ParquetMorselizer`] to completion and returns
+    /// the first stream morsel it produces.
+    ///
+    /// This mirrors how `FileStream` consumes the morsel APIs: it repeatedly
+    /// plans CPU work, awaits any discovered I/O futures, and feeds the planner
+    /// back into the ready queue until a stream morsel is ready.
+    async fn open_file(
+        morselizer: &ParquetMorselizer,
+        file: PartitionedFile,
+    ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+        let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
+        let mut morsels: VecDeque<Box<dyn Morsel>> = VecDeque::new();
+
+        loop {
+            if let Some(morsel) = morsels.pop_front() {
+                return Ok(Box::pin(morsel.into_stream()));
+            }
+
+            let Some(planner) = planners.pop_front() else {
+                return Ok(Box::pin(futures::stream::empty()));
+            };
+
+            if let Some(mut plan) = planner.plan()? {
+                morsels.extend(plan.take_morsels());
+                planners.extend(plan.take_ready_planners());
+
+                if let Some(pending_planner) = plan.take_pending_planner() {
+                    planners.push_front(pending_planner.await?);
+                    continue;
+                }
+
+                if morsels.is_empty() && planners.is_empty() {
+                    return internal_err!("planner returned an empty morsel plan");
+                }
             }
         }
     }
@@ -1305,8 +1924,8 @@ mod test {
             .try_map_exprs(|expr| replace_columns_with_literals(expr, &constants))
             .unwrap();
         let exprs = rewritten.as_ref();
-        assert!(exprs[0].expr.as_any().downcast_ref::<Literal>().is_some());
-        assert!(exprs[1].expr.as_any().downcast_ref::<Column>().is_some());
+        assert!(exprs[0].expr.downcast_ref::<Literal>().is_some());
+        assert!(exprs[1].expr.downcast_ref::<Column>().is_some());
 
         // Only column `b` should remain in the projection mask
         assert_eq!(rewritten.column_indices(), vec![1]);
@@ -1319,16 +1938,11 @@ mod test {
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
 
         let rewritten = replace_columns_with_literals(expr, &constants).unwrap();
-        assert!(rewritten.as_any().downcast_ref::<Literal>().is_some());
+        assert!(rewritten.downcast_ref::<Literal>().is_some());
     }
 
     async fn count_batches_and_rows(
-        mut stream: std::pin::Pin<
-            Box<
-                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
-                    + Send,
-            >,
-        >,
+        mut stream: BoxStream<'static, Result<RecordBatch>>,
     ) -> (usize, usize) {
         let mut num_batches = 0;
         let mut num_rows = 0;
@@ -1341,12 +1955,7 @@ mod test {
 
     /// Helper to collect all int32 values from the first column of batches
     async fn collect_int32_values(
-        mut stream: std::pin::Pin<
-            Box<
-                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
-                    + Send,
-            >,
-        >,
+        mut stream: BoxStream<'static, Result<RecordBatch>>,
     ) -> Vec<i32> {
         use arrow::array::Array;
         let mut values = vec![];
@@ -1432,7 +2041,7 @@ mod test {
         ));
 
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0, 1])
@@ -1445,7 +2054,7 @@ mod test {
         let expr = col("a").eq(lit(1));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1454,7 +2063,7 @@ mod test {
         let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1485,7 +2094,7 @@ mod test {
             vec![Arc::new(Field::new("part", DataType::Int32, false))],
         );
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_table_schema(table_schema_for_opener.clone())
                 .with_projection_indices(&[0])
@@ -1500,7 +2109,7 @@ mod test {
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1511,7 +2120,7 @@ mod test {
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1554,7 +2163,7 @@ mod test {
             vec![Arc::new(Field::new("part", DataType::Int32, false))],
         );
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_table_schema(table_schema_for_opener.clone())
                 .with_projection_indices(&[0])
@@ -1567,7 +2176,7 @@ mod test {
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1576,7 +2185,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1585,7 +2194,7 @@ mod test {
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(7.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1594,7 +2203,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(7.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1626,7 +2235,7 @@ mod test {
             vec![Arc::new(Field::new("part", DataType::Int32, false))],
         );
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_table_schema(table_schema_for_opener.clone())
                 .with_projection_indices(&[0])
@@ -1640,7 +2249,7 @@ mod test {
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(1)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1649,7 +2258,7 @@ mod test {
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1658,7 +2267,7 @@ mod test {
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(1)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 1);
@@ -1667,7 +2276,7 @@ mod test {
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1707,7 +2316,7 @@ mod test {
             vec![Arc::new(Field::new("part", DataType::Int32, false))],
         );
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_table_schema(table_schema_for_opener.clone())
                 .with_projection_indices(&[0])
@@ -1720,7 +2329,7 @@ mod test {
         let expr = col("a").eq(lit(42));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1729,7 +2338,7 @@ mod test {
         // This allows dynamic filters to prune partitions/files even if they are populated late into execution.
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1739,7 +2348,7 @@ mod test {
         let expr = col("part").eq(lit(2));
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1748,7 +2357,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("a").eq(lit(42)));
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1789,7 +2398,7 @@ mod test {
         );
 
         let make_opener = |reverse_scan: bool| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0])
@@ -1799,12 +2408,12 @@ mod test {
 
         // Test normal scan (forward)
         let opener = make_opener(false);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let forward_values = collect_int32_values(stream).await;
 
         // Test reverse scan
         let opener = make_opener(true);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let reverse_values = collect_int32_values(stream).await;
 
         // The forward scan should return data in the order written
@@ -1831,7 +2440,7 @@ mod test {
         );
 
         let make_opener = |reverse_scan: bool| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0])
@@ -1842,11 +2451,11 @@ mod test {
         // With a single row group, forward and reverse should be the same
         // (only the row group order is reversed, not the rows within)
         let opener_forward = make_opener(false);
-        let stream_forward = opener_forward.open(file.clone()).unwrap().await.unwrap();
+        let stream_forward = open_file(&opener_forward, file.clone()).await.unwrap();
         let (batches_forward, _) = count_batches_and_rows(stream_forward).await;
 
         let opener_reverse = make_opener(true);
-        let stream_reverse = opener_reverse.open(file).unwrap().await.unwrap();
+        let stream_reverse = open_file(&opener_reverse, file).await.unwrap();
         let (batches_reverse, _) = count_batches_and_rows(stream_reverse).await;
 
         // Both should have the same number of batches since there's only one row group
@@ -1907,7 +2516,7 @@ mod test {
         .with_extensions(Arc::new(access_plan));
 
         let make_opener = |reverse_scan: bool| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0])
@@ -1917,7 +2526,7 @@ mod test {
 
         // Forward scan: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
         let opener = make_opener(false);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let forward_values = collect_int32_values(stream).await;
 
         // Forward scan should produce: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
@@ -1933,7 +2542,7 @@ mod test {
         // - RG1 is read second, WITH RG1's selection (select all) -> 5, 6, 7, 8
         // - RG0 is read third, WITH RG0's selection (skip 2, select 2) -> 3, 4
         let opener = make_opener(true);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let reverse_values = collect_int32_values(stream).await;
 
         // Correct expected result: row groups reversed but each keeps its own selection
@@ -2008,7 +2617,7 @@ mod test {
         .with_extensions(Arc::new(access_plan));
 
         let make_opener = |reverse_scan: bool| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0])
@@ -2019,7 +2628,7 @@ mod test {
         // Forward scan: RG0(1), RG2(5), RG3(7)
         // Note: RG1 is completely skipped
         let opener = make_opener(false);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let forward_values = collect_int32_values(stream).await;
 
         assert_eq!(
@@ -2032,13 +2641,83 @@ mod test {
         // WITHOUT the bug fix, this would return WRONG values
         // because the RowSelection would be incorrectly mapped
         let opener = make_opener(true);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let reverse_values = collect_int32_values(stream).await;
 
         assert_eq!(
             reverse_values,
             vec![7, 5, 1],
             "Reverse scan with non-contiguous row groups should correctly map RowSelection"
+        );
+    }
+
+    /// Test that page pruning predicates are only built and applied when `enable_page_index` is true.
+    ///
+    /// The file has a single row group with 10 pages (10 rows each, values 1..100).
+    /// With page index enabled, pages whose max value <= 90 are pruned, returning only
+    /// the last page (rows 91..100). With page index disabled, all 100 rows are returned
+    /// since neither pushdown nor row-group pruning is active.
+    #[tokio::test]
+    async fn test_page_pruning_predicate_respects_enable_page_index() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // 100 rows with values 1..=100, written as a single row group with 10 rows per page
+        let values: Vec<i32> = (1..=100).collect();
+        let batch = record_batch!((
+            "a",
+            Int32,
+            values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
+        ))
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(10)
+            .set_write_batch_size(10)
+            .build();
+        let schema = batch.schema();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+
+        let file = PartitionedFile::new("test.parquet".to_string(), data_size as u64);
+
+        // predicate: a > 90 — should allow page index to prune first 9 pages
+        let predicate = logical2physical(&col("a").gt(lit(90i32)), &schema);
+
+        let make_morselizer = |enable_page_index| {
+            ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(Arc::clone(&predicate))
+                .with_enable_page_index(enable_page_index)
+                // disable pushdown and row-group pruning so the only pruning path is page index
+                .with_pushdown_filters(false)
+                .with_row_group_stats_pruning(false)
+                .build()
+        };
+        let (_, rows_with_page_index) = count_batches_and_rows(
+            open_file(&make_morselizer(true), file.clone())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let (_, rows_without_page_index) = count_batches_and_rows(
+            open_file(&make_morselizer(false), file).await.unwrap(),
+        )
+        .await;
+
+        assert_eq!(
+            rows_with_page_index, 10,
+            "page index should prune 9 of 10 pages"
+        );
+        assert_eq!(
+            rows_without_page_index, 100,
+            "without page index all rows are returned"
         );
     }
 }

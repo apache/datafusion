@@ -64,11 +64,11 @@ impl OptimizerRule for OptimizeUnions {
                 let inputs = inputs
                     .into_iter()
                     .flat_map(extract_plans_from_union)
-                    .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
+                    .map(|plan| Ok(Arc::new(coerce_plan_expr_for_schema(plan, &schema)?)))
                     .collect::<Result<Vec<_>>>()?;
 
                 Ok(Transformed::yes(LogicalPlan::Union(Union {
-                    inputs: inputs.into_iter().map(Arc::new).collect_vec(),
+                    inputs,
                     schema,
                 })))
             }

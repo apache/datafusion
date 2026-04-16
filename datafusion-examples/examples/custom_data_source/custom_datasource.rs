@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
@@ -162,10 +161,6 @@ impl Default for CustomDataSource {
 
 #[async_trait]
 impl TableProvider for CustomDataSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         SchemaRef::new(Schema::new(vec![
             Field::new("id", DataType::UInt8, false),
@@ -233,10 +228,6 @@ impl DisplayAs for CustomExec {
 impl ExecutionPlan for CustomExec {
     fn name(&self) -> &'static str {
         "CustomExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

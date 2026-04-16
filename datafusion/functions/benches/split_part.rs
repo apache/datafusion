@@ -18,6 +18,7 @@
 use arrow::array::{ArrayRef, Int64Array, StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string::split_part;
@@ -29,15 +30,15 @@ use std::sync::Arc;
 
 const N_ROWS: usize = 8192;
 
-/// Creates strings with `num_parts` random alphanumeric segments of `part_len`
-/// bytes each, joined by `delimiter`.
-fn gen_split_part_data(
+/// Creates an array of strings with `num_parts` random alphanumeric segments
+/// of `part_len` bytes each, joined by `delimiter`.
+fn gen_string_array(
     n_rows: usize,
     num_parts: usize,
     part_len: usize,
     delimiter: &str,
     use_string_view: bool,
-) -> (ColumnarValue, ColumnarValue) {
+) -> ColumnarValue {
     let mut rng = StdRng::seed_from_u64(42);
 
     let mut strings: Vec<String> = Vec::with_capacity(n_rows);
@@ -54,22 +55,12 @@ fn gen_split_part_data(
         strings.push(parts.join(delimiter));
     }
 
-    let delimiters: Vec<String> = vec![delimiter.to_string(); n_rows];
-
     if use_string_view {
         let string_array: StringViewArray = strings.into_iter().map(Some).collect();
-        let delimiter_array: StringViewArray = delimiters.into_iter().map(Some).collect();
-        (
-            ColumnarValue::Array(Arc::new(string_array) as ArrayRef),
-            ColumnarValue::Array(Arc::new(delimiter_array) as ArrayRef),
-        )
+        ColumnarValue::Array(Arc::new(string_array) as ArrayRef)
     } else {
         let string_array: StringArray = strings.into_iter().map(Some).collect();
-        let delimiter_array: StringArray = delimiters.into_iter().map(Some).collect();
-        (
-            ColumnarValue::Array(Arc::new(string_array) as ArrayRef),
-            ColumnarValue::Array(Arc::new(delimiter_array) as ArrayRef),
-        )
+        ColumnarValue::Array(Arc::new(string_array) as ArrayRef)
     }
 }
 
@@ -81,12 +72,10 @@ fn bench_split_part(
     name: &str,
     tag: &str,
     strings: ColumnarValue,
-    delimiters: ColumnarValue,
-    position: i64,
+    delimiter: ColumnarValue,
+    position: ColumnarValue,
 ) {
-    let positions: ColumnarValue =
-        ColumnarValue::Array(Arc::new(Int64Array::from(vec![position; N_ROWS])));
-    let args = vec![strings, delimiters, positions];
+    let args = vec![strings, delimiter, position];
     let arg_fields: Vec<_> = args
         .iter()
         .enumerate()
@@ -119,108 +108,160 @@ fn criterion_benchmark(c: &mut Criterion) {
     let config_options = Arc::new(ConfigOptions::default());
     let mut group = c.benchmark_group("split_part");
 
-    // Utf8, single-char delimiter, first position
+    // ── Scalar delimiter and position ────────────────
+
+    // Utf8, single-char delimiter, scalar args
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", false);
+        let strings = gen_string_array(N_ROWS, 10, 8, ".", false);
+        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some(".".into())));
+        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
         bench_split_part(
             &mut group,
             &split_part_func,
             &config_options,
-            "utf8_single_char",
+            "scalar_utf8_single_char",
             "pos_first",
             strings,
-            delimiters,
-            1,
+            delimiter,
+            position,
         );
     }
 
-    // Utf8, single-char delimiter, middle position
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", false);
+        let strings = gen_string_array(N_ROWS, 10, 8, ".", false);
+        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some(".".into())));
+        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(5)));
         bench_split_part(
             &mut group,
             &split_part_func,
             &config_options,
-            "utf8_single_char",
+            "scalar_utf8_single_char",
             "pos_middle",
             strings,
-            delimiters,
-            5,
+            delimiter,
+            position,
         );
     }
 
-    // Utf8, single-char delimiter, negative position
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", false);
+        let strings = gen_string_array(N_ROWS, 10, 8, ".", false);
+        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some(".".into())));
+        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(-1)));
         bench_split_part(
             &mut group,
             &split_part_func,
             &config_options,
-            "utf8_single_char",
+            "scalar_utf8_single_char",
             "pos_negative",
             strings,
-            delimiters,
-            -1,
+            delimiter,
+            position,
         );
     }
 
-    // Utf8, multi-char delimiter, middle position
+    // Utf8, multi-char delimiter, scalar args
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, "~@~", false);
+        let strings = gen_string_array(N_ROWS, 10, 8, "~@~", false);
+        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some("~@~".into())));
+        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(5)));
         bench_split_part(
             &mut group,
             &split_part_func,
             &config_options,
-            "utf8_multi_char",
+            "scalar_utf8_multi_char",
             "pos_middle",
             strings,
-            delimiters,
-            5,
+            delimiter,
+            position,
         );
     }
 
-    // Utf8View, single-char delimiter, first position
+    // Utf8, long strings, scalar args
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", true);
+        let strings = gen_string_array(N_ROWS, 50, 16, ".", false);
+        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8(Some(".".into())));
+        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(25)));
         bench_split_part(
             &mut group,
             &split_part_func,
             &config_options,
-            "utf8view_single_char",
+            "scalar_utf8_long_strings",
+            "pos_middle",
+            strings,
+            delimiter,
+            position,
+        );
+    }
+
+    // Utf8View, long parts, scalar args
+    {
+        let strings = gen_string_array(N_ROWS, 10, 32, ".", true);
+        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8View(Some(".".into())));
+        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(5)));
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "scalar_utf8view_long_parts",
+            "pos_middle",
+            strings,
+            delimiter,
+            position,
+        );
+    }
+
+    // Utf8View, very long parts (256 bytes), position 1
+    {
+        let strings = gen_string_array(N_ROWS, 5, 256, ".", true);
+        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8View(Some(".".into())));
+        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "scalar_utf8view_very_long_parts",
             "pos_first",
             strings,
-            delimiters,
-            1,
+            delimiter,
+            position,
         );
     }
 
-    // Utf8, single-char delimiter, many long parts
+    // ── Array delimiter and position ─────────────────
+
+    // Utf8, single-char delimiter, array args
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 50, 16, ".", false);
+        let strings = gen_string_array(N_ROWS, 10, 8, ".", false);
+        let delimiters: StringArray = vec![Some("."); N_ROWS].into_iter().collect();
+        let delimiter = ColumnarValue::Array(Arc::new(delimiters) as ArrayRef);
+        let positions = ColumnarValue::Array(Arc::new(Int64Array::from(vec![5; N_ROWS])));
         bench_split_part(
             &mut group,
             &split_part_func,
             &config_options,
-            "utf8_long_strings",
+            "array_utf8_single_char",
             "pos_middle",
             strings,
-            delimiters,
-            25,
+            delimiter,
+            positions,
         );
     }
 
-    // Utf8View, single-char delimiter, middle position, long parts
+    // Utf8, multi-char delimiter, array args
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 32, ".", true);
+        let strings = gen_string_array(N_ROWS, 10, 8, "~@~", false);
+        let delimiters: StringArray = vec![Some("~@~"); N_ROWS].into_iter().collect();
+        let delimiter = ColumnarValue::Array(Arc::new(delimiters) as ArrayRef);
+        let positions = ColumnarValue::Array(Arc::new(Int64Array::from(vec![5; N_ROWS])));
         bench_split_part(
             &mut group,
             &split_part_func,
             &config_options,
-            "utf8view_long_parts",
+            "array_utf8_multi_char",
             "pos_middle",
             strings,
-            delimiters,
-            5,
+            delimiter,
+            positions,
         );
     }
 

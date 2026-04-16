@@ -17,7 +17,6 @@
 
 //! [`StringAgg`] accumulator for the `string_agg` function
 
-use std::any::Any;
 use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
@@ -121,7 +120,7 @@ impl StringAgg {
 
     /// Extract the delimiter string from the second argument expression.
     fn extract_delimiter(args: &AccumulatorArgs) -> Result<String> {
-        let Some(lit) = args.exprs[1].as_any().downcast_ref::<Literal>() else {
+        let Some(lit) = args.exprs[1].downcast_ref::<Literal>() else {
             return not_impl_err!("string_agg delimiter must be a string literal");
         };
 
@@ -152,10 +151,6 @@ impl Default for StringAgg {
 /// - No DISTINCT / ORDER BY without GROUP BY: `SimpleStringAggAccumulator`
 /// - With DISTINCT or ORDER BY: `StringAggAccumulator` (delegates to `ArrayAgg`)
 impl AggregateUDFImpl for StringAgg {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "string_agg"
     }

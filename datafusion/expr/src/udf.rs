@@ -38,6 +38,25 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+/// Describes how a struct-producing UDF's output fields correspond to its
+/// input arguments. This enables the optimizer to propagate orderings
+/// through struct projections (e.g., so that sorting by a struct field
+/// can be recognized as equivalent to sorting by the source column).
+///
+/// See [`ScalarUDFImpl::struct_field_mapping`] for details.
+pub struct StructFieldMapping {
+    /// The UDF used to construct field access expressions on the output.
+    /// For example, the `get_field` UDF for accessing struct fields.
+    pub field_accessor: Arc<ScalarUDF>,
+    /// For each output field: the literal arguments to pass to the
+    /// `field_accessor` UDF (after the base expression), and the index
+    /// of the corresponding input argument that produces the field's value.
+    ///
+    /// For `named_struct('a', col1, 'b', col2)`, this would be:
+    /// `[(["a"], 1), (["b"], 3)]` — field `"a"` comes from arg index 1.
+    pub fields: Vec<(Vec<ScalarValue>, usize)>,
+}
+
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -305,6 +324,14 @@ impl ScalarUDF {
         self.inner.evaluate_bounds(inputs)
     }
 
+    /// See [`ScalarUDFImpl::struct_field_mapping`] for more details.
+    pub fn struct_field_mapping(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        self.inner.struct_field_mapping(literal_args)
+    }
+
     /// Updates bounds for child expressions, given a known interval for this
     /// function. This is used to propagate constraints down through an expression
     /// tree.
@@ -360,7 +387,7 @@ impl ScalarUDF {
 
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
-        (self.inner().as_ref() as &dyn Any).downcast_ref::<AsyncScalarUDF>()
+        self.inner().downcast_ref::<AsyncScalarUDF>()
     }
 
     /// Returns placement information for this function.
@@ -560,7 +587,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// If you provide an implementation for [`Self::return_field_from_args`],
     /// DataFusion will not call `return_type` (this function). While it is
-    /// valid to to put [`unimplemented!()`] or [`unreachable!()`], it is
+    /// valid to put [`unimplemented!()`] or [`unreachable!()`], it is
     /// recommended to return [`DataFusionError::Internal`] instead, which
     /// reduces the severity of symptoms if bugs occur (an error rather than a
     /// panic).
@@ -961,6 +988,25 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
+    /// For struct-producing functions, return how output fields map to input
+    /// arguments. This enables the optimizer to propagate orderings through
+    /// struct projections.
+    ///
+    /// `literal_args[i]` is `Some(value)` if argument `i` is a known literal,
+    /// allowing extraction of field names from arguments like
+    /// `named_struct('field_name', value, ...)`.
+    ///
+    /// For example, `named_struct('a', col1, 'b', col2)` would return a
+    /// mapping indicating that output field `'a'` (accessed via
+    /// `get_field(output, 'a')`) corresponds to input argument `col1` at
+    /// index 1, and field `'b'` corresponds to `col2` at index 3.
+    fn struct_field_mapping(
+        &self,
+        _literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        None
+    }
+
     /// Returns the documentation for this Scalar UDF.
     ///
     /// Documentation can be accessed programmatically as well as generating
@@ -981,6 +1027,25 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// closer to the data source.
     fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
+    }
+}
+
+impl dyn ScalarUDFImpl {
+    /// Returns `true` if the implementation is of type `T`.
+    ///
+    /// Works correctly when called on `Arc<dyn ScalarUDFImpl>` via auto-deref.
+    pub fn is<T: ScalarUDFImpl>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast to a concrete type `T`, returning `None` if the
+    /// implementation is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn ScalarUDFImpl>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: ScalarUDFImpl>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
     }
 }
 
@@ -1088,6 +1153,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         self.inner.propagate_constraints(interval, inputs)
+    }
+
+    fn struct_field_mapping(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        self.inner.struct_field_mapping(literal_args)
     }
 
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {

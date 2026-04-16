@@ -904,6 +904,13 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             skip_arrow_metadata: value.skip_arrow_metadata,
             coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
+            content_defined_chunking: value.use_content_defined_chunking.as_ref().map(|cdc|
+                protobuf::CdcOptions {
+                    min_chunk_size: cdc.min_chunk_size as u64,
+                    max_chunk_size: cdc.max_chunk_size as u64,
+                    norm_level: cdc.norm_level,
+                }
+            ),
         })
     }
 }
@@ -963,8 +970,11 @@ impl TryFrom<&TableParquetOptions> for protobuf::TableParquetOptions {
             .iter()
             .filter_map(|(k, v)| v.as_ref().map(|v| (k.clone(), v.clone())))
             .collect::<HashMap<String, String>>();
+
+        let global: protobuf::ParquetOptions = (&value.global).try_into()?;
+
         Ok(protobuf::TableParquetOptions {
-            global: Some((&value.global).try_into()?),
+            global: Some(global),
             column_specific_options,
             key_value_metadata,
         })

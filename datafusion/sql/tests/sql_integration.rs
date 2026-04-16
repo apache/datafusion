@@ -26,7 +26,7 @@ use std::vec;
 
 use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
-use datafusion_common::{DataFusionError, Result, assert_contains};
+use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
     ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, col, logical_plan::LogicalPlan,
@@ -35,7 +35,7 @@ use datafusion_expr::{
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{NullOrdering, ParserOptions, SqlToRel},
+    planner::{NullOrdering, ParserOptions, PlannerContext, SqlToRel},
 };
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
@@ -52,6 +52,7 @@ use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+use sqlparser::parser::Parser;
 
 mod cases;
 mod common;
@@ -252,6 +253,25 @@ fn within_group_rejected_for_non_ordered_set_udaf() {
         err,
         "WITHIN GROUP is only supported for ordered-set aggregate functions"
     );
+}
+
+#[test]
+fn typed_literal_without_string_payload_returns_error() {
+    let sql_expr = Parser::new(&GenericDialect {})
+        .try_with_sql("time 17542368000000000")
+        .unwrap()
+        .parse_expr()
+        .unwrap();
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+
+    let err = sql_to_rel
+        .sql_to_expr(sql_expr, &DFSchema::empty(), &mut PlannerContext::new())
+        .expect_err("planning invalid typed literals should return an error");
+
+    assert_contains!(err.to_string(), "Typed literal requires a string payload");
 }
 
 #[test]
@@ -2655,6 +2675,106 @@ fn union_all_by_name_same_column_names() {
 }
 
 #[test]
+fn union_all_with_duplicate_expressions() {
+    let sql = "\
+        SELECT 0 a, 0 b \
+        UNION ALL SELECT 1, 1 \
+        UNION ALL SELECT count(*), count(*) FROM orders";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Union
+      Union
+        Projection: Int64(0) AS a, Int64(0) AS b
+          EmptyRelation: rows=1
+        Projection: Int64(1) AS a, Int64(1) AS b
+          EmptyRelation: rows=1
+      Projection: count(*) AS a, count(*) AS b
+        Aggregate: groupBy=[[]], aggr=[[count(*)]]
+          TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn union_with_qualified_and_duplicate_expressions() {
+    let sql = "\
+        SELECT 0 a, id b, price c, 0 d FROM test_decimal \
+        UNION SELECT 1, *, 1 FROM test_decimal";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @"
+    Distinct:
+      Union
+        Projection: Int64(0) AS a, test_decimal.id AS b, test_decimal.price AS c, Int64(0) AS d
+          TableScan: test_decimal
+        Projection: Int64(1) AS a, test_decimal.id, test_decimal.price, Int64(1) AS d
+          TableScan: test_decimal
+    "
+    );
+}
+
+#[test]
+fn intersect_with_duplicate_expressions() {
+    let sql = "\
+        SELECT 0 a, 0 b \
+        INTERSECT SELECT 1, 1 \
+        INTERSECT SELECT count(*), count(*) FROM orders";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    LeftSemi Join: left.a = right.a, left.b = right.b
+      Distinct:
+        SubqueryAlias: left
+          LeftSemi Join: left.a = right.a, left.b = right.b
+            Distinct:
+              SubqueryAlias: left
+                Projection: Int64(0) AS a, Int64(0) AS b
+                  EmptyRelation: rows=1
+            SubqueryAlias: right
+              Projection: Int64(1) AS a, Int64(1) AS b
+                EmptyRelation: rows=1
+      SubqueryAlias: right
+        Projection: count(*) AS a, count(*) AS b
+          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn except_with_duplicate_expressions() {
+    let sql = "\
+        SELECT 0 a, 0 b \
+        EXCEPT SELECT 1, 1 \
+        EXCEPT SELECT count(*), count(*) FROM orders";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    LeftAnti Join: left.a = right.a, left.b = right.b
+      Distinct:
+        SubqueryAlias: left
+          LeftAnti Join: left.a = right.a, left.b = right.b
+            Distinct:
+              SubqueryAlias: left
+                Projection: Int64(0) AS a, Int64(0) AS b
+                  EmptyRelation: rows=1
+            SubqueryAlias: right
+              Projection: Int64(1) AS a, Int64(1) AS b
+                EmptyRelation: rows=1
+      SubqueryAlias: right
+        Projection: count(*) AS a, count(*) AS b
+          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
 fn empty_over() {
     let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
     let plan = logical_plan(sql).unwrap();
@@ -3358,6 +3478,13 @@ fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }
 
+fn logical_plan_with_config(
+    sql: &str,
+    config_options: datafusion_common::config::ConfigOptions,
+) -> Result<LogicalPlan> {
+    logical_plan_with_config_and_options(sql, config_options, ParserOptions::default())
+}
+
 fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<LogicalPlan> {
     let dialect = &GenericDialect {};
     logical_plan_with_dialect_and_options(sql, dialect, options)
@@ -3377,7 +3504,25 @@ fn logical_plan_with_dialect_and_options(
     dialect: &dyn Dialect,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
-    let state = MockSessionState::default()
+    let state = mock_session_state();
+
+    logical_plan_from_state(sql, dialect, options, state)
+}
+
+fn logical_plan_with_config_and_options(
+    sql: &str,
+    config_options: datafusion_common::config::ConfigOptions,
+    options: ParserOptions,
+) -> Result<LogicalPlan> {
+    let dialect = &GenericDialect {};
+    let mut state = mock_session_state();
+    state.config_options = config_options;
+
+    logical_plan_from_state(sql, dialect, options, state)
+}
+
+fn mock_session_state() -> MockSessionState {
+    MockSessionState::default()
         .with_scalar_function(Arc::new(unicode::character_length().as_ref().clone()))
         .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
         .with_scalar_function(Arc::new(make_udf(
@@ -3414,8 +3559,15 @@ fn logical_plan_with_dialect_and_options(
         .with_aggregate_function(grouping_udaf())
         .with_window_function(rank_udwf())
         .with_window_function(row_number_udwf())
-        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+}
 
+fn logical_plan_from_state(
+    sql: &str,
+    dialect: &dyn Dialect,
+    options: ParserOptions,
+    state: MockSessionState,
+) -> Result<LogicalPlan> {
     let context = MockContextProvider { state };
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
@@ -3684,6 +3836,39 @@ fn in_subquery_uncorrelated() {
             TableScan: person
         SubqueryAlias: p
           TableScan: person
+    "
+    );
+}
+
+#[test]
+fn subquery_order_by_is_eliminated_by_default() {
+    let sql = "SELECT x.* FROM (SELECT id FROM person ORDER BY id) x";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan.display_indent_schema().to_string(),
+        @r"
+    Projection: x.id [id:UInt32]
+      SubqueryAlias: x [id:UInt32]
+        Projection: person.id [id:UInt32]
+          TableScan: person [id:UInt32, first_name:Utf8, last_name:Utf8, age:Int32, state:Utf8, salary:Float64, birth_date:Timestamp(ns), 😀:Int32]
+    "
+    );
+}
+
+#[test]
+fn subquery_order_by_can_be_preserved() {
+    let sql = "SELECT x.* FROM (SELECT id FROM person ORDER BY id) x";
+    let mut config_options = datafusion_common::config::ConfigOptions::new();
+    config_options.sql_parser.enable_subquery_sort_elimination = false;
+    let plan = logical_plan_with_config(sql, config_options).unwrap();
+    assert_snapshot!(
+        plan.display_indent_schema().to_string(),
+        @r"
+    Projection: x.id [id:UInt32]
+      SubqueryAlias: x [id:UInt32]
+        Sort: person.id ASC NULLS LAST [id:UInt32]
+          Projection: person.id [id:UInt32]
+            TableScan: person [id:UInt32, first_name:Utf8, last_name:Utf8, age:Int32, state:Utf8, salary:Float64, birth_date:Timestamp(ns), 😀:Int32]
     "
     );
 }
@@ -5002,6 +5187,71 @@ fn test_using_join_wildcard_schema() {
             "t3.d".to_string()
         ]
     );
+}
+
+#[test]
+fn test_using_join_wildcard_schema_semi_anti() {
+    let s_columns = &["s.x1", "s.x2", "s.x3"];
+    let t_columns = &["t.x1", "t.x2", "t.x3"];
+
+    let sql = "WITH 
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s LEFT SEMI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t RIGHT SEMI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s LEFT ANTI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t RIGHT ANTI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    // Same as above, but with swapped s and t sides.
+    // Tests the issue fixed with #20990.
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t LEFT SEMI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s RIGHT SEMI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t LEFT ANTI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s RIGHT ANTI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
 }
 
 #[test]

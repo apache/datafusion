@@ -91,3 +91,34 @@ ORDER BY g;
 ----
 1 [10]
 2 [20]
+
+# collect_set with GROUP BY: group where all values are NULL returns empty list
+query I?
+SELECT g, array_sort(collect_set(a))
+FROM (VALUES (1::INT, 10::INT), (1::INT, 20::INT), (2::INT, NULL::INT), (2::INT, NULL::INT)) AS t(g, a)
+GROUP BY g
+ORDER BY g;
+----
+1 [10, 20]
+2 []
+
+# collect_set with GROUP BY: string values with duplicates
+query T?
+SELECT g, array_sort(collect_set(v))
+FROM (VALUES ('a'::TEXT, 'x'::TEXT), ('a'::TEXT, 'y'::TEXT), ('a'::TEXT, 'x'::TEXT), ('b'::TEXT, 'z'::TEXT), ('b'::TEXT, 'z'::TEXT)) AS t(g, v)
+GROUP BY g
+ORDER BY g;
+----
+a [x, y]
+b [z]
+
+# collect_set with GROUP BY: multiple groups with mixed NULLs and duplicates
+query I?
+SELECT g, array_sort(collect_set(a))
+FROM (VALUES (1::INT, 5::INT), (1::INT, 5::INT), (1::INT, NULL::INT), (2::INT, 10::INT), (2::INT, 20::INT), (2::INT, 10::INT), (3::INT, NULL::INT), (3::INT, NULL::INT)) AS t(g, a)
+GROUP BY g
+ORDER BY g;
+----
+1 [5]
+2 [10, 20]
+3 []

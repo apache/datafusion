@@ -104,7 +104,7 @@ impl ExecutionPlanVisitor for ParquetExecVisitor {
     /// or `post_visit` (visit each node after its children/inputs)
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         // If needed match on a specific `ExecutionPlan` node type
-        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
             && let Some((file_config, _)) =
                 data_source_exec.downcast_to_file_source::<ParquetSource>()
         {
