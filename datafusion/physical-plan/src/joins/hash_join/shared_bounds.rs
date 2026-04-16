@@ -266,7 +266,7 @@ enum AccumulatedBuildData {
         completed_partitions: usize,
     },
     CollectLeft {
-        data: Option<PartitionData>,
+        data: PartitionStatus,
         reported_count: usize,
         expected_reports: usize,
     },
@@ -293,7 +293,7 @@ enum PartitionStatus {
 #[derive(Clone)]
 enum FinalizeInput {
     Partitioned(Vec<PartitionStatus>),
-    CollectLeft(Option<PartitionData>),
+    CollectLeft(PartitionStatus),
 }
 
 impl SharedBuildAccumulator {
@@ -356,7 +356,7 @@ impl SharedBuildAccumulator {
                 completed_partitions: 0,
             },
             PartitionMode::CollectLeft => AccumulatedBuildData::CollectLeft {
-                data: None,
+                data: PartitionStatus::Pending,
                 reported_count: 0,
                 expected_reports: expected_calls,
             },
@@ -447,8 +447,8 @@ impl SharedBuildAccumulator {
                     ..
                 },
             ) => {
-                if data.is_none() {
-                    *data = Some(PartitionData { pushdown, bounds });
+                if matches!(data, PartitionStatus::Pending) {
+                    *data = PartitionStatus::Reported(PartitionData { pushdown, bounds });
                 }
                 *reported_count += 1;
             }
@@ -538,8 +538,8 @@ impl SharedBuildAccumulator {
 
     fn build_filter(&self, finalize_input: FinalizeInput) -> Result<()> {
         match finalize_input {
-            FinalizeInput::CollectLeft(data) => {
-                if let Some(partition_data) = data {
+            FinalizeInput::CollectLeft(partition) => match partition {
+                PartitionStatus::Reported(partition_data) => {
                     let membership_expr = create_membership_predicate(
                         &self.on_right,
                         partition_data.pushdown.clone(),
@@ -561,7 +561,17 @@ impl SharedBuildAccumulator {
                         self.dynamic_filter.update(filter_expr)?;
                     }
                 }
-            }
+                PartitionStatus::Pending => {
+                    return datafusion_common::internal_err!(
+                        "attempted to finalize collect-left dynamic filter without reported build data"
+                    );
+                }
+                PartitionStatus::CanceledUnknown => {
+                    return datafusion_common::internal_err!(
+                        "collect-left dynamic filter cannot finalize with canceled build data"
+                    );
+                }
+            },
             FinalizeInput::Partitioned(partitions) => {
                 let num_partitions = partitions.len();
                 let routing_hash_expr = Arc::new(HashExpr::new(
