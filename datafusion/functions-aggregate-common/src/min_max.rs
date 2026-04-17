@@ -141,7 +141,9 @@ macro_rules! min_max_generic {
     }};
 }
 
-// min/max of two scalar values of the same type
+// min/max of two logically compatible scalar values.
+// Dictionary scalars are unwrapped to their inner values for comparison,
+// then rewrapped with the dictionary key type when both inputs are dictionaries.
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
         Ok(match ($VALUE, $DELTA) {
@@ -431,7 +433,7 @@ macro_rules! min_max {
 
             e => {
                 return internal_err!(
-                    "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
+                    "MIN/MAX is not expected to receive logically incompatible scalar values {:?}",
                     e
                 )
             }
