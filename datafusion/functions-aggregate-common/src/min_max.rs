@@ -480,7 +480,9 @@ fn dictionary_scalar_parts(value: &ScalarValue) -> (&ScalarValue, Option<&DataTy
     }
 }
 
-fn is_row_wise_batch_type(data_type: &DataType) -> bool {
+// Primitive, string, and binary types use specialized Arrow min/max kernels.
+// These remaining types fall back to scalar row-by-row logical comparison.
+fn requires_logical_row_scan(data_type: &DataType) -> bool {
     matches!(
         data_type,
         DataType::Struct(_)
@@ -828,7 +830,7 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
-        data_type if is_row_wise_batch_type(data_type) => {
+        data_type if requires_logical_row_scan(data_type) => {
             scalar_row_extreme(values, Ordering::Greater)?
         }
         _ => min_max_batch!(values, min),
@@ -880,7 +882,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
             let value = value.map(|e| e.to_vec());
             ScalarValue::FixedSizeBinary(*size, value)
         }
-        data_type if is_row_wise_batch_type(data_type) => {
+        data_type if requires_logical_row_scan(data_type) => {
             scalar_row_extreme(values, Ordering::Less)?
         }
         _ => min_max_batch!(values, max),
