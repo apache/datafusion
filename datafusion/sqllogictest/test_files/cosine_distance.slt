@@ -56,8 +56,14 @@ select cosine_distance([0.0, 0.0], [1.0, 2.0]);
 NULL
 
 # Mismatched lengths error
-query error Both arrays must have the same length
+query error cosine_distance requires both list inputs to have the same length
 select cosine_distance([1.0, 2.0], [1.0]);
+
+# NULL element inside a list returns NULL for that row
+query R
+select cosine_distance([1.0, 2.0, NULL], [1.0, 2.0, 3.0]);
+----
+NULL
 
 # LargeList support
 query R

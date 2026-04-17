@@ -69,7 +69,6 @@ pub mod set_ops;
 pub mod sort;
 pub mod string;
 pub mod utils;
-pub mod vector_math;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
