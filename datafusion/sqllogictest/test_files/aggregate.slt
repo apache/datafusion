@@ -8972,6 +8972,25 @@ FROM (
 ----
 0 0
 
+# Single-column, single-occurrence monotonic expressions: MIN/MAX should fold
+# from parquet statistics via the aggregate-statistics optimizer and return
+# the same values as computing MIN/MAX on the raw column and then applying
+# the transformation. Covers negation, arithmetic with a literal, and CAST.
+query II
+SELECT MIN(-"UserID"), MAX(-"UserID") FROM hits_raw;
+----
+-7418527520126366595 2461439046089301801
+
+query II
+SELECT MIN("UserID" + 1), MAX("UserID" + 1) FROM hits_raw;
+----
+-2461439046089301800 7418527520126366596
+
+query II
+SELECT MIN(CAST("EventDate" AS BIGINT)), MAX(CAST("EventDate" AS BIGINT)) FROM hits_raw;
+----
+15901 15901
+
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
