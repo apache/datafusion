@@ -683,28 +683,37 @@ impl Unparser<'_> {
 
                 let join_filters = if table_scan_filters.is_empty() {
                     join.filter.clone()
+                } else if join.join_type == JoinType::Inner {
+                    // For inner joins, ON and WHERE are semantically equivalent. Place table_scan_filters in WHERE because they may contain
+                    // subquery expressions, which break dialects that reject subqueries in JOIN ON (e.g. BigQuery).
+                    for filter in table_scan_filters {
+                        let filter_expr = self.expr_to_sql(&filter)?;
+                        select.selection(Some(filter_expr));
+                    }
+                    join.filter.clone()
                 } else {
                     // Combine `table_scan_filters` into a single filter using `AND`
-                    let Some(combined_filters) =
+                    let combined_filters =
                         table_scan_filters.into_iter().reduce(|acc, filter| {
                             Expr::BinaryExpr(BinaryExpr {
                                 left: Box::new(acc),
                                 op: Operator::And,
                                 right: Box::new(filter),
                             })
-                        })
-                    else {
-                        return internal_err!("Failed to combine TableScan filters");
-                    };
+                        });
 
                     // Combine `join.filter` with `combined_filters` using `AND`
-                    match &join.filter {
-                        Some(filter) => Some(Expr::BinaryExpr(BinaryExpr {
-                            left: Box::new(filter.clone()),
-                            op: Operator::And,
-                            right: Box::new(combined_filters),
-                        })),
-                        None => Some(combined_filters),
+                    match (&join.filter, combined_filters) {
+                        (Some(filter), Some(combined)) => {
+                            Some(Expr::BinaryExpr(BinaryExpr {
+                                left: Box::new(filter.clone()),
+                                op: Operator::And,
+                                right: Box::new(combined),
+                            }))
+                        }
+                        (Some(filter), None) => Some(filter.clone()),
+                        (None, Some(combined)) => Some(combined),
+                        (None, None) => None,
                     }
                 };
 
