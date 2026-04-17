@@ -8935,3 +8935,45 @@ GROUP BY id ORDER BY id;
 
 statement ok
 DROP TABLE first_last_value_str_tests;
+
+# Regression test for incorrect MIN/MAX folding from projected expression
+# statistics. Interval arithmetic over multi-column expressions combines the
+# independent min/max of each column, which may come from different rows, so
+# the resulting interval is not a valid min/max of the expression over the
+# data. This query must execute against the actual rows rather than the
+# per-column Parquet envelopes.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION '../core/tests/data/clickbench_hits_10.parquet';
+
+query II
+SELECT MIN(delta), MAX(delta)
+FROM (
+  SELECT "UserID" - CAST("ClientIP" AS BIGINT) AS delta
+  FROM hits_raw
+);
+----
+-2461439044872611287 7418527518698834918
+
+# Same class of bug with a single column referenced more than once. Interval
+# arithmetic treats the two occurrences of `UserID` as independent values, so
+# it would report `min(UserID) - max(UserID)` / `max(UserID) - min(UserID)`
+# instead of the correct 0 / 0.
+query II
+SELECT MIN(zero), MAX(zero)
+FROM (
+  SELECT "UserID" - "UserID" AS zero
+  FROM hits_raw
+);
+----
+0 0
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE hits_raw;

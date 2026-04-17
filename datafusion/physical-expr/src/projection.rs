@@ -28,7 +28,9 @@ use crate::utils::collect_columns;
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     Result, ScalarValue, Statistics, assert_or_internal_err, internal_datafusion_err,
     plan_err,
@@ -717,10 +719,7 @@ impl ProjectionExprs {
             } else {
                 // Propagate statistics through expressions (CAST, arithmetic, etc.)
                 // using the interval arithmetic system (evaluate_bounds).
-                project_column_statistics_through_expr(
-                    expr.as_ref(),
-                    &stats.column_statistics,
-                )
+                project_column_statistics_through_expr(expr, &stats.column_statistics)
             };
             column_statistics.push(col_stats);
         }
@@ -733,14 +732,32 @@ impl ProjectionExprs {
 /// Propagate min/max statistics through an expression using
 /// [`PhysicalExpr::evaluate_bounds`]. Works for any expression that
 /// implements `evaluate_bounds` (CAST, negation, arithmetic with literals, etc.).
+///
+/// Only applied when the expression references a single column at most once in
+/// the expression tree. Interval arithmetic treats each column reference as an
+/// independent value, so an expression like `a - b` or `col * col` would
+/// combine mins/maxes from possibly different rows (or the same column with
+/// itself as an independent variable), producing an interval that is not a
+/// valid min/max of the expression across the actual data.
 fn project_column_statistics_through_expr(
-    expr: &dyn PhysicalExpr,
+    expr: &Arc<dyn PhysicalExpr>,
     column_stats: &[ColumnStatistics],
 ) -> ColumnStatistics {
-    match compute_bounds_and_exactness(expr, column_stats) {
-        Some((interval, all_exact)) => ColumnStatistics {
-            min_value: to_precision(interval.lower().clone(), all_exact),
-            max_value: to_precision(interval.upper().clone(), all_exact),
+    let Some(single_column) = single_column_reference(expr) else {
+        return ColumnStatistics::new_unknown();
+    };
+    // With at most one column reference (and literals — always known — as the
+    // only other leaves), the exactness of the propagated interval reduces to
+    // the exactness of that column's stats.
+    let exact = single_column.is_none_or(|col| {
+        let stats = &column_stats[col.index()];
+        stats.min_value.is_exact().unwrap_or(false)
+            && stats.max_value.is_exact().unwrap_or(false)
+    });
+    match compute_bounds(expr.as_ref(), column_stats) {
+        Some(interval) => ColumnStatistics {
+            min_value: to_precision(interval.lower().clone(), exact),
+            max_value: to_precision(interval.upper().clone(), exact),
             null_count: Precision::Absent,
             distinct_count: Precision::Absent,
             sum_value: Precision::Absent,
@@ -748,6 +765,26 @@ fn project_column_statistics_through_expr(
         },
         None => ColumnStatistics::new_unknown(),
     }
+}
+
+/// Returns `Some(Some(col))` if `expr` references exactly one [`Column`] (a
+/// single occurrence), `Some(None)` if it references no columns, and `None` if
+/// it contains two or more [`Column`] nodes (same column or different).
+fn single_column_reference(expr: &Arc<dyn PhysicalExpr>) -> Option<Option<Column>> {
+    let mut found: Option<Column> = None;
+    let mut multiple = false;
+    expr.apply(|e| {
+        if let Some(col) = e.downcast_ref::<Column>() {
+            if found.is_some() {
+                multiple = true;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            found = Some(col.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("closure never returns Err");
+    if multiple { None } else { Some(found) }
 }
 
 /// Convert a bound value to the appropriate [`Precision`] level.
@@ -761,37 +798,29 @@ fn to_precision(value: ScalarValue, exact: bool) -> Precision<ScalarValue> {
     }
 }
 
-/// Recursively compute the output [`Interval`] and whether all leaf
-/// statistics are exact, in a single traversal of the expression tree.
-fn compute_bounds_and_exactness(
+/// Recursively compute the output [`Interval`] for an expression by feeding
+/// column statistics and literals into [`PhysicalExpr::evaluate_bounds`].
+fn compute_bounds(
     expr: &dyn PhysicalExpr,
     column_stats: &[ColumnStatistics],
-) -> Option<(Interval, bool)> {
+) -> Option<Interval> {
     if let Some(col) = expr.downcast_ref::<Column>() {
         let stats = &column_stats[col.index()];
-        let min = stats.min_value.get_value()?;
-        let max = stats.max_value.get_value()?;
-        let exact = stats.min_value.is_exact().unwrap_or(false)
-            && stats.max_value.is_exact().unwrap_or(false);
-        return Some((Interval::try_new(min.clone(), max.clone()).ok()?, exact));
+        let min = stats.min_value.get_value()?.clone();
+        let max = stats.max_value.get_value()?.clone();
+        return Interval::try_new(min, max).ok();
     }
-
     if let Some(lit) = expr.downcast_ref::<Literal>() {
-        let val = lit.value();
-        return Some((Interval::try_new(val.clone(), val.clone()).ok()?, true));
+        let val = lit.value().clone();
+        return Interval::try_new(val.clone(), val).ok();
     }
-
     let children = expr.children();
-    let mut child_intervals = Vec::with_capacity(children.len());
-    let mut all_exact = true;
-    for child in &children {
-        let (interval, exact) =
-            compute_bounds_and_exactness(child.as_ref(), column_stats)?;
-        child_intervals.push(interval);
-        all_exact &= exact;
-    }
+    let child_intervals = children
+        .iter()
+        .map(|child| compute_bounds(child.as_ref(), column_stats))
+        .collect::<Option<Vec<_>>>()?;
     let child_refs: Vec<&Interval> = child_intervals.iter().collect();
-    Some((expr.evaluate_bounds(&child_refs).ok()?, all_exact))
+    expr.evaluate_bounds(&child_refs).ok()
 }
 
 impl<'a> IntoIterator for &'a ProjectionExprs {
@@ -1324,7 +1353,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::equivalence::{EquivalenceProperties, convert_to_orderings};
-    use crate::expressions::{BinaryExpr, col};
+    use crate::expressions::{BinaryExpr, CastExpr, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExprRef, ScalarFunctionExpr};
 
@@ -2858,6 +2887,46 @@ pub(crate) mod tests {
         assert_eq!(
             output_stats.column_statistics[1].distinct_count,
             Precision::Exact(1)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_multi_column_expr_returns_unknown() -> Result<()> {
+        // Multi-column expressions cannot produce valid min/max via interval
+        // arithmetic because each column's min/max may come from a different
+        // row, so the combined interval is wider than the actual range of the
+        // expression over the data.
+        let input_stats = get_stats();
+        let input_schema = get_schema();
+
+        // SELECT col0 - CAST(col2 AS Int64) AS delta
+        let projection = ProjectionExprs::new(vec![ProjectionExpr {
+            expr: Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("col0", 0)),
+                Operator::Minus,
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("col2", 2)),
+                    DataType::Int64,
+                    None,
+                )),
+            )),
+            alias: "delta".to_string(),
+        }]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        assert_eq!(
+            output_stats.column_statistics[0].min_value,
+            Precision::Absent
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].max_value,
+            Precision::Absent
         );
 
         Ok(())
