@@ -98,11 +98,11 @@ Dec
 NULL
 
 # Error: wrong argument type (string without cast)
-statement error No function matches the given name and argument types 'monthname\(Utf8\)'
+statement error Failed to coerce arguments to satisfy a call to 'monthname' function
 SELECT monthname('not-a-date');
 
 # Error: wrong argument type (integer)
-statement error No function matches the given name and argument types 'monthname\(Int64\)'
+statement error Failed to coerce arguments to satisfy a call to 'monthname' function
 SELECT monthname(123);
 
 # Error: no arguments

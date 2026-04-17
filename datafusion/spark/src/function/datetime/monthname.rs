@@ -105,4 +105,3 @@ impl ScalarUDFImpl for SparkMonthName {
         }
     }
 }
-
