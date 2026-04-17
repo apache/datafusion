@@ -77,7 +77,7 @@ pub struct FileStreamMetrics {
     /// Wall clock time elapsed for data decompression + decoding
     ///
     /// Time spent waiting for the FileStream's input.
-    pub time_processing: StartableTime,
+    pub time_processing: Time,
     /// Count of errors opening file.
     ///
     /// If using `OnError::Skip` this will provide a count of the number of files
@@ -126,11 +126,8 @@ impl FileStreamMetrics {
             start: None,
         };
 
-        let time_processing = StartableTime {
-            metrics: MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_processing", partition),
-            start: None,
-        };
+        let time_processing =
+            MetricBuilder::new(metrics).subset_time("time_elapsed_processing", partition);
 
         let file_open_errors = MetricBuilder::new(metrics)
             .with_category(MetricCategory::Rows)

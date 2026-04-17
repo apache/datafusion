@@ -167,7 +167,7 @@ mod tests {
     impl PhysicalExprAdapter for TestPhysicalExprAdapter {
         fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
             expr.transform(|e| {
-                if let Some(column) = e.as_any().downcast_ref::<Column>() {
+                if let Some(column) = e.downcast_ref::<Column>() {
                     // If column is "extra_column" and missing from physical schema, inject "foo"
                     if column.name() == "extra_column"
                         && self.physical_file_schema.index_of("extra_column").is_err()

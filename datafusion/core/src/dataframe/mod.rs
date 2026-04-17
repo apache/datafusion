@@ -41,7 +41,6 @@ use crate::physical_plan::{
     execute_stream, execute_stream_partitioned,
 };
 use crate::prelude::SessionContext;
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -2648,10 +2647,6 @@ struct DataFrameTableProvider {
 
 #[async_trait]
 impl TableProvider for DataFrameTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.plan))
     }

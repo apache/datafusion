@@ -106,11 +106,7 @@ mod test {
             .await
             .unwrap();
         let table = ctx.table_provider(table_name.as_str()).await.unwrap();
-        let listing_table = table
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap()
-            .clone();
+        let listing_table = table.downcast_ref::<ListingTable>().unwrap().clone();
         listing_table
             .scan(&ctx.state(), None, &[], None)
             .await

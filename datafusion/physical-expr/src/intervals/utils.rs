@@ -36,26 +36,25 @@ use datafusion_expr::interval_arithmetic::Interval;
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
 /// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
 pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
-    let expr_any = expr.as_any();
-    if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>() {
+    if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
         is_operator_supported(binary_expr.op())
             && check_support(binary_expr.left(), schema)
             && check_support(binary_expr.right(), schema)
-    } else if let Some(column) = expr_any.downcast_ref::<Column>() {
+    } else if let Some(column) = expr.downcast_ref::<Column>() {
         if let Ok(field) = schema.field_with_name(column.name()) {
             is_datatype_supported(field.data_type())
         } else {
             false
         }
-    } else if let Some(literal) = expr_any.downcast_ref::<Literal>() {
+    } else if let Some(literal) = expr.downcast_ref::<Literal>() {
         if let Ok(dt) = literal.data_type(schema) {
             is_datatype_supported(&dt)
         } else {
             false
         }
-    } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
+    } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
         check_support(cast.expr(), schema)
-    } else if let Some(negative) = expr_any.downcast_ref::<NegativeExpr>() {
+    } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
         check_support(negative.arg(), schema)
     } else {
         false

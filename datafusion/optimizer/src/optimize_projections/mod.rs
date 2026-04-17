@@ -390,8 +390,9 @@ fn optimize_projections(
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
+            let right_len = join.right.schema().fields().len();
             let (left_req_indices, right_req_indices) =
-                split_join_requirements(left_len, indices, &join.join_type);
+                split_join_requirements(left_len, right_len, indices, &join.join_type);
             let left_indices =
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
             let right_indices =
@@ -751,6 +752,7 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// # Parameters
 ///
 /// * `left_len` - The length of the left child.
+/// * `right_len` - The length of the right child.
 /// * `indices` - A slice of requirement indices.
 /// * `join_type` - The type of join (e.g. `INNER`, `LEFT`, `RIGHT`).
 ///
@@ -762,20 +764,28 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// adjusted based on the join type.
 fn split_join_requirements(
     left_len: usize,
+    right_len: usize,
     indices: RequiredIndices,
     join_type: &JoinType,
 ) -> (RequiredIndices, RequiredIndices) {
     match join_type {
         // In these cases requirements are split between left/right children:
-        JoinType::Inner
-        | JoinType::Left
-        | JoinType::Right
-        | JoinType::Full
-        | JoinType::LeftMark
-        | JoinType::RightMark => {
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)
+        }
+        JoinType::LeftMark => {
+            // LeftMark output: [left_cols(0..left_len), mark]
+            // The mark column is synthetic (produced by the join itself),
+            // so discard it and route only to the left child.
+            let (left_indices, _mark) = indices.split_off(left_len);
+            (left_indices, RequiredIndices::new())
+        }
+        JoinType::RightMark => {
+            // Same as LeftMark, but for the right child.
+            let (right_indices, _mark) = indices.split_off(right_len);
+            (RequiredIndices::new(), right_indices)
         }
         // All requirements can be re-routed to left child directly.
         JoinType::LeftAnti | JoinType::LeftSemi => (indices, RequiredIndices::new()),
@@ -2386,6 +2396,68 @@ mod tests {
             Projection: test.b, max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
               WindowAggr: windowExpr=[[max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
                 TableScan: test projection=[a, b]
+        "
+        )
+    }
+
+    // Regression test for https://github.com/apache/datafusion/issues/20083
+    // Optimizer must not fail when LeftMark joins from EXISTS OR EXISTS
+    // feed into a Left join.
+    #[test]
+    fn optimize_projections_exists_or_exists_with_outer_join() -> Result<()> {
+        use datafusion_expr::utils::disjunction;
+        use datafusion_expr::{exists, out_ref_col};
+
+        let table_a = test_table_scan_with_name("a")?;
+        let table_b = test_table_scan_with_name("b")?;
+
+        let sq_a = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_a")?)
+                .filter(col("sq_a.a").eq(out_ref_col(DataType::UInt32, "a.a")))?
+                .project(vec![lit(1)])?
+                .build()?,
+        );
+
+        let sq_b = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_b")?)
+                .filter(col("sq_b.b").eq(out_ref_col(DataType::UInt32, "a.b")))?
+                .project(vec![lit(1)])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(table_a)
+            .filter(disjunction(vec![exists(sq_a), exists(sq_b)]).unwrap())?
+            .join(table_b, JoinType::Left, (vec!["a"], vec!["a"]), None)?
+            .build()?;
+
+        let optimizer = Optimizer::new();
+        let config = OptimizerContext::new();
+        optimizer.optimize(plan, &config, observe)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_projections_left_mark_join_with_projection() -> Result<()> {
+        let table_a = test_table_scan_with_name("a")?;
+        let table_b = test_table_scan_with_name("b")?;
+        let table_c = test_table_scan_with_name("c")?;
+
+        let plan = LogicalPlanBuilder::from(table_a)
+            .join(table_b, JoinType::LeftMark, (vec!["a"], vec!["a"]), None)?
+            .project(vec![col("a.a"), col("a.b"), col("a.c")])?
+            .join(table_c, JoinType::Left, (vec!["a"], vec!["a"]), None)?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: a.a = c.a
+          Projection: a.a, a.b, a.c
+            LeftMark Join: a.a = b.a
+              TableScan: a projection=[a, b, c]
+              TableScan: b projection=[a]
+          TableScan: c projection=[a, b, c]
         "
         )
     }

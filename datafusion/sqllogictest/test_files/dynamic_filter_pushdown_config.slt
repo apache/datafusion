@@ -316,6 +316,56 @@ WHERE r.id IN (SELECT l.id FROM left_parquet l);
 3 right3
 5 right5
 
+# LEFT SEMI JOIN with ORDER BY: the join preserves probe-side ordering, so the
+# sort is pushed below the join. The join-generated dynamic filter should then
+# be pushed through the SortExec into the parquet scan predicate.
+query TT
+EXPLAIN SELECT l.*
+FROM left_parquet l
+WHERE l.id IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.data DESC;
+----
+logical_plan
+01)Sort: l.data DESC NULLS FIRST
+02)--LeftSemi Join: l.id = __correlated_sq_1.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: __correlated_sq_1
+06)------SubqueryAlias: r
+07)--------TableScan: right_parquet projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
+03)--SortExec: expr=[data@1 DESC], preserve_partitioning=[false]
+04)----FilterExec: DynamicFilter [ empty ]
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+statement count 0
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query TT
+EXPLAIN SELECT l.*
+FROM left_parquet l
+WHERE l.id IN (SELECT r.id FROM right_parquet r)
+ORDER BY l.data DESC;
+----
+logical_plan
+01)Sort: l.data DESC NULLS FIRST
+02)--LeftSemi Join: l.id = __correlated_sq_1.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: __correlated_sq_1
+06)------SubqueryAlias: r
+07)--------TableScan: right_parquet projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
+03)--SortExec: expr=[data@1 DESC], preserve_partitioning=[false]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+statement count 0
+RESET datafusion.execution.parquet.pushdown_filters;
+
 # LEFT ANTI JOIN: both self generated and parent filters can push to the
 # preserved (left/build) side.
 query TT
