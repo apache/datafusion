@@ -1003,8 +1003,8 @@ fn sliced_list_values<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> ArrayRe
     let offsets = list.offsets();
 
     if let (Some(first), Some(last)) = (offsets.first(), offsets.last()) {
-        let first = first.to_usize().unwrap();
-        let last = last.to_usize().unwrap();
+        let first = first.as_usize();
+        let last = last.as_usize();
 
         if first != 0 || last != values.len() {
             return values.slice(first, last - first);
@@ -1022,7 +1022,7 @@ pub fn adjust_offsets_for_slice<O: OffsetSizeTrait>(
     let offsets = list.offsets();
 
     if let (Some(first), Some(last)) = (offsets.first(), offsets.last())
-        && (!first.is_zero() || last.to_usize().unwrap() != list.values().len())
+        && (!first.is_zero() || last.as_usize() != list.values().len())
     {
         let offsets = offsets.iter().map(|offset| *offset - *first).collect();
 
