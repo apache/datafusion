@@ -312,7 +312,7 @@ pub fn serialize_physical_expr_with_converter(
         let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![expr.right()];
         let mut current_expr: &BinaryExpr = expr;
         loop {
-            match current_expr.left().as_any().downcast_ref::<BinaryExpr>() {
+            match current_expr.left().downcast_ref::<BinaryExpr>() {
                 Some(bin) if bin.op() == op => {
                     operand_refs.push(bin.right());
                     current_expr = bin;
