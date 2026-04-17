@@ -44,8 +44,6 @@ use bytes::Bytes;
 #[cfg(target_os = "linux")]
 use futures::StreamExt;
 use futures::stream::BoxStream;
-#[cfg(target_os = "linux")]
-use object_store::ObjectStoreExt;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 #[cfg(target_os = "linux")]
@@ -67,7 +65,7 @@ use object_store::{
 /// use datafusion_object_store_iouring::IoUringObjectStore;
 /// use object_store::ObjectStore;
 ///
-/// let store = IoUringObjectStore::new();
+/// let store = IoUringObjectStore::new().unwrap();
 /// ```
 pub struct IoUringObjectStore {
     inner: Arc<LocalFileSystem>,
@@ -78,16 +76,30 @@ pub struct IoUringObjectStore {
 
 impl IoUringObjectStore {
     /// Create a new `IoUringObjectStore` with root at `/`.
-    pub fn new() -> Self {
+    ///
+    /// Returns an error if the io_uring worker thread cannot be spawned on
+    /// Linux.
+    #[expect(
+        clippy::result_large_err,
+        reason = "matches object_store::Result signature"
+    )]
+    pub fn new() -> Result<Self> {
         Self::new_with_root(PathBuf::from("/"))
     }
 
     /// Create a new `IoUringObjectStore` with the given root directory.
-    pub fn new_with_root(root: PathBuf) -> Self {
+    ///
+    /// Returns an error if `root` is not a usable `LocalFileSystem` prefix,
+    /// or if the io_uring worker thread cannot be spawned.
+    #[expect(
+        clippy::result_large_err,
+        reason = "matches object_store::Result signature"
+    )]
+    pub fn new_with_root(root: PathBuf) -> Result<Self> {
         let inner = if root == std::path::Path::new("/") {
             Arc::new(LocalFileSystem::new())
         } else {
-            Arc::new(LocalFileSystem::new_with_prefix(&root).expect("valid root path"))
+            Arc::new(LocalFileSystem::new_with_prefix(&root)?)
         };
 
         #[cfg(target_os = "linux")]
@@ -96,31 +108,34 @@ impl IoUringObjectStore {
             std::thread::Builder::new()
                 .name("io-uring-worker".to_string())
                 .spawn(move || uring::run_uring_loop(rx))
-                .expect("failed to spawn io-uring thread");
+                .map_err(|e| object_store::Error::Generic {
+                    store: "IoUringObjectStore",
+                    source: Box::new(e),
+                })?;
 
-            Self {
+            Ok(Self {
                 inner,
                 root,
                 uring_sender: tx,
-            }
+            })
         }
 
         #[cfg(not(target_os = "linux"))]
         {
-            Self { inner, root }
+            Ok(Self { inner, root })
         }
     }
 
-    /// Resolve an object_store Path to an absolute filesystem path.
+    /// Resolve an [`object_store::path::Path`] to an absolute filesystem path
+    /// using the same rules as the inner [`LocalFileSystem`] (prefix joining,
+    /// percent decoding of segments, rejection of `..` and control chars).
     #[cfg(target_os = "linux")]
-    fn resolve_path(&self, location: &Path) -> PathBuf {
-        self.root.join(location.as_ref())
-    }
-}
-
-impl Default for IoUringObjectStore {
-    fn default() -> Self {
-        Self::new()
+    #[expect(
+        clippy::result_large_err,
+        reason = "matches object_store::Result signature"
+    )]
+    fn resolve_path(&self, location: &Path) -> Result<PathBuf> {
+        self.inner.path_to_filesystem(location)
     }
 }
 
@@ -149,8 +164,16 @@ impl IoUringObjectStore {
         location: &Path,
         options: GetOptions,
     ) -> Result<GetResult> {
-        // Get file metadata via the inner store
-        let meta = self.inner.head(location).await?;
+        // Fetch metadata *and* enforce any conditional options (if_match,
+        // if_none_match, if_modified_since, if_unmodified_since, version)
+        // by delegating to the inner store with `head = true`. This returns
+        // an error if any precondition fails.
+        let head_opts = GetOptions {
+            head: true,
+            range: None,
+            ..options.clone()
+        };
+        let meta = self.inner.get_opts(location, head_opts).await?.meta;
         let file_size = meta.size;
 
         // Resolve the requested byte range
@@ -176,7 +199,7 @@ impl IoUringObjectStore {
             });
         }
 
-        let fs_path = self.resolve_path(location);
+        let fs_path = self.resolve_path(location)?;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.uring_sender
@@ -215,7 +238,20 @@ impl IoUringObjectStore {
             return Ok(vec![]);
         }
 
-        let fs_path = self.resolve_path(location);
+        // Defensive: reject ranges with start > end (producers should never
+        // hand these in, but the io_uring path would compute a bogus buffer
+        // length via unsigned wrap-around and potentially OOM).
+        for r in ranges {
+            if r.start > r.end {
+                return Err(object_store::Error::Generic {
+                    store: "IoUringObjectStore",
+                    source: format!("invalid range: start {} > end {}", r.start, r.end)
+                        .into(),
+                });
+            }
+        }
+
+        let fs_path = self.resolve_path(location)?;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.uring_sender
@@ -322,10 +358,33 @@ mod tests {
     use super::*;
     use object_store::ObjectStoreExt;
 
+    /// Probe whether `io_uring_setup(2)` succeeds in the current sandbox.
+    /// Tests that actually drive the io_uring read path are skipped when
+    /// the syscall is blocked (seccomp profiles on many CI runners) — this
+    /// is test infrastructure, not a runtime fallback.
+    #[cfg(target_os = "linux")]
+    fn io_uring_available() -> bool {
+        io_uring::IoUring::new(2).is_ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    fn io_uring_available() -> bool {
+        true
+    }
+
+    macro_rules! require_io_uring {
+        () => {
+            if !io_uring_available() {
+                eprintln!("skipping: io_uring_setup is blocked in this environment");
+                return;
+            }
+        };
+    }
+
     #[tokio::test]
     async fn test_put_and_get() {
+        require_io_uring!();
         let dir = tempfile::tempdir().unwrap();
-        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf());
+        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf()).unwrap();
 
         let path = Path::from("test/data.txt");
         let payload = PutPayload::from_static(b"hello io_uring");
@@ -338,8 +397,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_range() {
+        require_io_uring!();
         let dir = tempfile::tempdir().unwrap();
-        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf());
+        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf()).unwrap();
 
         let path = Path::from("test/range.txt");
         let payload = PutPayload::from_static(b"0123456789");
@@ -351,8 +411,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_ranges() {
+        require_io_uring!();
         let dir = tempfile::tempdir().unwrap();
-        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf());
+        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf()).unwrap();
 
         let path = Path::from("test/ranges.txt");
         let payload = PutPayload::from_static(b"0123456789");
@@ -366,9 +427,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_head() {
+    async fn path_with_special_characters_round_trips() {
+        // Regression test for the path-resolution mismatch: the previous
+        // `self.root.join(location.as_ref())` concatenated the percent-encoded
+        // path, which didn't match the file that `LocalFileSystem` actually
+        // wrote.
+        require_io_uring!();
         let dir = tempfile::tempdir().unwrap();
-        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf());
+        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf()).unwrap();
+
+        let path = Path::from("a b/c d/file.txt");
+        store
+            .put(&path, PutPayload::from_static(b"ok"))
+            .await
+            .unwrap();
+
+        let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), b"ok");
+    }
+
+    #[test]
+    fn invalid_prefix_returns_error_without_panicking() {
+        let err =
+            IoUringObjectStore::new_with_root("/definitely/does/not/exist/abcxyz".into());
+        assert!(err.is_err(), "expected error for missing prefix");
+    }
+
+    #[tokio::test]
+    async fn test_head() {
+        require_io_uring!();
+        let dir = tempfile::tempdir().unwrap();
+        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf()).unwrap();
 
         let path = Path::from("test/head.txt");
         let payload = PutPayload::from_static(b"hello");
@@ -382,8 +471,9 @@ mod tests {
     async fn test_list() {
         use futures::TryStreamExt;
 
+        require_io_uring!();
         let dir = tempfile::tempdir().unwrap();
-        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf());
+        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf()).unwrap();
 
         let path1 = Path::from("prefix/a.txt");
         let path2 = Path::from("prefix/b.txt");
@@ -403,8 +493,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_ranges() {
+        require_io_uring!();
         let dir = tempfile::tempdir().unwrap();
-        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf());
+        let store = IoUringObjectStore::new_with_root(dir.path().to_path_buf()).unwrap();
 
         let path = Path::from("test/empty.txt");
         let payload = PutPayload::from_static(b"data");

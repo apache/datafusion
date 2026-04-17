@@ -205,28 +205,30 @@ impl Default for DefaultObjectStoreRegistry {
 }
 
 impl DefaultObjectStoreRegistry {
-    /// This will register a local filesystem object store to handle `file://` paths.
+    /// Registers a local filesystem object store to handle `file://` paths.
     ///
-    /// When the `io-uring` feature is enabled (Linux only), registers an
-    /// `IoUringObjectStore` instead, which uses io_uring for batched local
-    /// file reads (falling back to `LocalFileSystem` if io_uring is unavailable).
+    /// When the `io-uring` feature is enabled, registers an
+    /// `IoUringObjectStore`, which uses io_uring for batched local
+    /// file reads.
+    ///
+    /// Panics if the `io-uring` feature is enabled but the io_uring worker
+    /// thread cannot be created — this typically indicates a misconfigured
+    /// sandbox / seccomp profile and is a deployment bug rather than
+    /// something to silently paper over.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
 
         #[cfg(feature = "io-uring")]
-        {
-            object_stores.insert(
-                "file://".to_string(),
-                Arc::new(datafusion_object_store_iouring::IoUringObjectStore::new()),
-            );
-        }
+        let local: Arc<dyn ObjectStore> = Arc::new(
+            datafusion_object_store_iouring::IoUringObjectStore::new()
+                .expect("failed to initialize IoUringObjectStore"),
+        );
 
         #[cfg(not(feature = "io-uring"))]
-        {
-            object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
-        }
+        let local: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
 
+        object_stores.insert("file://".to_string(), local);
         Self { object_stores }
     }
 

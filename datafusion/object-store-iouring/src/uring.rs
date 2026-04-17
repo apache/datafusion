@@ -17,9 +17,9 @@
 
 //! Dedicated io_uring worker thread.
 //!
-//! Receives [`IoCommand`] requests via an unbounded channel, submits
-//! batched read SQEs to the kernel, collects CQEs, and sends results
-//! back via oneshot channels.
+//! Receives [`IoCommand`] requests via a channel, submits batched read
+//! SQEs to the kernel, collects CQEs, and sends results back via oneshot
+//! channels.
 
 use std::ops::Range;
 use std::os::unix::io::AsRawFd;
@@ -89,8 +89,11 @@ pub(crate) fn run_uring_loop(mut rx: mpsc::UnboundedReceiver<IoCommand>) {
 /// Execute a batch of byte-range reads using io_uring.
 ///
 /// Opens the file, submits all read SQEs (chunked by ring capacity),
-/// waits for CQEs, and returns the results in order.
-#[allow(clippy::result_large_err)] // object_store::Error is large by design
+/// waits for CQEs, retries short reads, and returns the results in order.
+#[expect(
+    clippy::result_large_err,
+    reason = "matches object_store::Result signature"
+)]
 fn execute_read_ranges(
     ring: &mut IoUring,
     path: &std::path::Path,
@@ -112,68 +115,147 @@ fn execute_read_ranges(
 
     let fd = file.as_raw_fd();
 
-    // Allocate buffers for all ranges up front
+    // Allocate buffers for all ranges up front. `usize` cast is safe on 64-bit
+    // platforms; on 32-bit, very large ranges would overflow — reject them.
     let mut buffers: Vec<Vec<u8>> = ranges
         .iter()
-        .map(|r| vec![0u8; (r.end - r.start) as usize])
-        .collect();
+        .map(|r| {
+            let len = usize::try_from(r.end - r.start).map_err(|_| {
+                object_store::Error::Generic {
+                    store: "IoUringObjectStore",
+                    source: format!("range length {} exceeds usize", r.end - r.start)
+                        .into(),
+                }
+            })?;
+            Ok::<_, object_store::Error>(vec![0u8; len])
+        })
+        .collect::<std::result::Result<_, _>>()?;
+
+    // Track per-range completion progress so we can retry short reads (valid
+    // per the `read(2)` contract: fewer bytes than requested may come back
+    // without being an error, e.g. when straddling EOF on pipes). For regular
+    // files we still expect full reads, but we loop defensively.
+    let mut filled: Vec<usize> = vec![0; ranges.len()];
 
     let sq_capacity = ring.params().sq_entries() as usize;
 
-    // Process ranges in chunks that fit the submission queue
+    // Process ranges in chunks that fit the submission queue.
     for chunk_start in (0..ranges.len()).step_by(sq_capacity) {
         let chunk_end = (chunk_start + sq_capacity).min(ranges.len());
-        let chunk_len = chunk_end - chunk_start;
+        let chunk_range = chunk_start..chunk_end;
 
-        // Submit read SQEs for this chunk
-        // SAFETY: buffers[i] is valid, properly sized, and lives until
-        // we collect the corresponding CQE below.
-        unsafe {
-            let mut sq = ring.submission();
-            for i in chunk_start..chunk_end {
-                let entry = opcode::Read::new(
-                    types::Fd(fd),
-                    buffers[i].as_mut_ptr(),
-                    buffers[i].len() as u32,
-                )
-                .offset(ranges[i].start)
-                .build()
-                .user_data(i as u64);
+        loop {
+            // Collect indices that still need more bytes.
+            let pending: Vec<usize> = chunk_range
+                .clone()
+                .filter(|i| filled[*i] < buffers[*i].len())
+                .collect();
 
-                // If the SQ is full (shouldn't happen since we chunk),
-                // drop the queue, submit, and retry.
-                if sq.push(&entry).is_err() {
-                    drop(sq);
-                    ring.submit().map_err(io_err)?;
-                    sq = ring.submission();
-                    sq.push(&entry).expect("SQ should have space after submit");
-                }
+            if pending.is_empty() {
+                break;
             }
-            sq.sync();
-        }
 
-        // Submit and wait for all reads in this chunk to complete
-        ring.submit_and_wait(chunk_len).map_err(io_err)?;
+            submit_reads(ring, fd, ranges, &mut buffers, &filled, &pending)?;
 
-        // Collect completions
-        let mut completed = 0;
-        while completed < chunk_len {
-            let cq = ring.completion();
-            for cqe in cq {
-                let idx = cqe.user_data() as usize;
-                let ret = cqe.result();
-                if ret < 0 {
-                    return Err(io_err(std::io::Error::from_raw_os_error(-ret)));
+            let mut completed = 0;
+            while completed < pending.len() {
+                // `submit_and_wait(n)` guarantees at least `n` completions are
+                // available before returning. Without that re-wait on short
+                // drain, the drain loop could spin.
+                if completed == 0 {
+                    ring.submit_and_wait(pending.len()).map_err(io_err)?;
+                } else {
+                    let remaining = pending.len() - completed;
+                    ring.submit_and_wait(remaining).map_err(io_err)?;
                 }
-                let bytes_read = ret as usize;
-                buffers[idx].truncate(bytes_read);
-                completed += 1;
+
+                let cq = ring.completion();
+                for cqe in cq {
+                    let idx = cqe.user_data() as usize;
+                    // Bounds-check user_data before indexing buffers.
+                    if idx >= buffers.len() {
+                        return Err(object_store::Error::Generic {
+                            store: "IoUringObjectStore",
+                            source: format!(
+                                "io_uring returned cqe with invalid user_data {idx}"
+                            )
+                            .into(),
+                        });
+                    }
+
+                    let ret = cqe.result();
+                    if ret < 0 {
+                        return Err(io_err(std::io::Error::from_raw_os_error(-ret)));
+                    }
+
+                    let bytes_read = ret as usize;
+                    if bytes_read == 0 {
+                        // Unexpected EOF before filling the range. The source
+                        // range is outside the file (caller bug / truncation).
+                        return Err(object_store::Error::Generic {
+                            store: "IoUringObjectStore",
+                            source: format!(
+                                "unexpected EOF reading {}..{} from fd",
+                                ranges[idx].start, ranges[idx].end
+                            )
+                            .into(),
+                        });
+                    }
+                    filled[idx] += bytes_read;
+                    completed += 1;
+                }
             }
         }
     }
 
-    // Convert buffers to Bytes
+    // Convert buffers to Bytes. Every buffer is either fully filled or the
+    // loop above returned an error, so no truncation is required.
     Ok(buffers.into_iter().map(Bytes::from).collect())
+}
+
+/// Push one read SQE per pending range onto the submission queue.
+///
+/// Each SQE reads the still-missing tail of its range (`offset + filled[i]`
+/// onward) into the corresponding buffer slot.
+#[expect(
+    clippy::result_large_err,
+    reason = "matches object_store::Result signature"
+)]
+fn submit_reads(
+    ring: &mut IoUring,
+    fd: i32,
+    ranges: &[Range<u64>],
+    buffers: &mut [Vec<u8>],
+    filled: &[usize],
+    pending: &[usize],
+) -> Result<()> {
+    // SAFETY: each `buffers[i]` is valid, `pending` references only valid
+    // indices, and the buffers outlive the SQEs — we wait for all completions
+    // in the caller before returning.
+    unsafe {
+        let mut sq = ring.submission();
+        for &i in pending {
+            let remaining = buffers[i].len() - filled[i];
+            let ptr = buffers[i].as_mut_ptr().add(filled[i]);
+            let entry = opcode::Read::new(types::Fd(fd), ptr, remaining as u32)
+                .offset(ranges[i].start + filled[i] as u64)
+                .build()
+                .user_data(i as u64);
+
+            if sq.push(&entry).is_err() {
+                // SQ unexpectedly full — submit what we have and retry.
+                drop(sq);
+                ring.submit().map_err(io_err)?;
+                sq = ring.submission();
+                sq.push(&entry).map_err(|_| object_store::Error::Generic {
+                    store: "IoUringObjectStore",
+                    source: "io_uring submission queue still full after submit".into(),
+                })?;
+            }
+        }
+        sq.sync();
+    }
+    Ok(())
 }
 
 fn io_err(e: std::io::Error) -> object_store::Error {
