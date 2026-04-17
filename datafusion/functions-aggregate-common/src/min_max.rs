@@ -143,7 +143,8 @@ macro_rules! min_max_generic {
 
 // min/max of two logically compatible scalar values.
 // Dictionary scalars are unwrapped to their inner values for comparison,
-// then rewrapped with the dictionary key type when both inputs are dictionaries.
+// then rewrapped with the dictionary key type when both inputs are dictionaries
+// after validating that their key types match.
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
         Ok(match ($VALUE, $DELTA) {
@@ -424,8 +425,19 @@ macro_rules! min_max {
                 let result = min_max_generic!(lhs, rhs, $OP);
 
                 match lhs_key_type.zip(rhs_key_type) {
-                    Some((key_type, _)) => {
-                        ScalarValue::Dictionary(Box::new(key_type.clone()), Box::new(result))
+                    Some((lhs_key_type, rhs_key_type)) => {
+                        if lhs_key_type != rhs_key_type {
+                            return internal_err!(
+                                "MIN/MAX is not expected to receive dictionary scalars with different key types ({:?} vs {:?})",
+                                lhs_key_type,
+                                rhs_key_type
+                            );
+                        }
+
+                        ScalarValue::Dictionary(
+                            Box::new(lhs_key_type.clone()),
+                            Box::new(result),
+                        )
                     }
                     None => result,
                 }
