@@ -62,7 +62,7 @@ pub fn suggest_valid_function(
         let mut funcs = Vec::new();
 
         funcs.extend(ctx.udf_names());
-        funcs.extend(ctx.udhof_names());
+        funcs.extend(ctx.higher_order_function_names());
         funcs.extend(ctx.udaf_names());
 
         funcs

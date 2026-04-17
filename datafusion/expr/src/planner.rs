@@ -135,7 +135,7 @@ pub trait ContextProvider {
     fn udf_names(&self) -> Vec<String>;
 
     /// Return all higher order function names
-    fn udhof_names(&self) -> Vec<String>;
+    fn higher_order_function_names(&self) -> Vec<String>;
 
     /// Return all aggregate function names
     fn udaf_names(&self) -> Vec<String>;

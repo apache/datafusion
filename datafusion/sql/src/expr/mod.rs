@@ -1378,7 +1378,7 @@ mod tests {
             Vec::new()
         }
 
-        fn udhof_names(&self) -> Vec<String> {
+        fn higher_order_function_names(&self) -> Vec<String> {
             Vec::new()
         }
 

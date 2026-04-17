@@ -304,7 +304,7 @@ impl ContextProvider for MockContextProvider {
         self.state.scalar_functions.keys().cloned().collect()
     }
 
-    fn udhof_names(&self) -> Vec<String> {
+    fn higher_order_function_names(&self) -> Vec<String> {
         self.state.higher_order_functions.keys().cloned().collect()
     }
 
