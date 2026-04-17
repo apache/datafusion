@@ -24,9 +24,6 @@ use substrait::proto::{Plan, PlanRel, Rel, RelRoot, plan_rel};
 use substrait::version;
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
-// Silence deprecation warnings for `extension_uris` during the uri -> urn migration
-// See: https://github.com/substrait-io/substrait/issues/856
-#[expect(deprecated)]
 pub fn to_substrait_plan(
     plan: &LogicalPlan,
     state: &SessionState,
@@ -47,7 +44,6 @@ pub fn to_substrait_plan(
     let extensions = producer.get_extensions();
     Ok(Box::new(Plan {
         version: Some(version::version_with_producer("datafusion")),
-        extension_uris: vec![],
         extension_urns: vec![],
         extensions: extensions.into(),
         relations: plan_rels,

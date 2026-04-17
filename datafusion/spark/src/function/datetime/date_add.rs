@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -61,10 +60,6 @@ impl SparkDateAdd {
 }
 
 impl ScalarUDFImpl for SparkDateAdd {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "date_add"
     }
@@ -136,7 +131,6 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
 
     #[test]
     fn test_date_add_non_nullable_inputs() {

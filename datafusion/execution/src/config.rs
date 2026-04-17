@@ -431,6 +431,15 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables elimination of `ORDER BY` clauses in subqueries
+    /// when they are not required by order-sensitive operators.
+    pub fn with_enable_subquery_sort_elimination(mut self, enabled: bool) -> Self {
+        self.options_mut()
+            .sql_parser
+            .enable_subquery_sort_elimination = enabled;
+        self
+    }
+
     /// Set the size of [`sort_spill_reservation_bytes`] to control
     /// memory pre-reservation
     ///
@@ -478,6 +487,12 @@ impl SessionConfig {
     /// Returns true if the joins will be enforced to output batches of the configured size
     pub fn enforce_batch_size_in_joins(&self) -> bool {
         self.options.execution.enforce_batch_size_in_joins
+    }
+
+    /// Toggle SQL ANSI mode for expressions, casting, and error handling
+    pub fn with_enable_ansi_mode(mut self, enable_ansi_mode: bool) -> Self {
+        self.options_mut().execution.enable_ansi_mode = enable_ansi_mode;
+        self
     }
 
     /// Convert configuration options to name-value pairs with values

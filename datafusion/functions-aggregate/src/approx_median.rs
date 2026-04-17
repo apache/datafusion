@@ -21,7 +21,6 @@ use arrow::datatypes::DataType::{Float64, UInt64};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::NativeType;
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -92,10 +91,6 @@ impl ApproxMedian {
 }
 
 impl AggregateUDFImpl for ApproxMedian {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.input_fields[0].data_type().is_null() {
             Ok(vec![
@@ -110,7 +105,7 @@ impl AggregateUDFImpl for ApproxMedian {
             Ok(vec![
                 Field::new(format_state_name(args.name, "max_size"), UInt64, false),
                 Field::new(format_state_name(args.name, "sum"), Float64, false),
-                Field::new(format_state_name(args.name, "count"), UInt64, false),
+                Field::new(format_state_name(args.name, "count"), Float64, false),
                 Field::new(format_state_name(args.name, "max"), Float64, false),
                 Field::new(format_state_name(args.name, "min"), Float64, false),
                 Field::new_list(

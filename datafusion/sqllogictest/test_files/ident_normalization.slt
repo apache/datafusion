@@ -137,6 +137,10 @@ HelloWorld
 statement ok
 set datafusion.sql_parser.enable_ident_normalization = true;
 
+# Config reset
+statement ok
+RESET datafusion.catalog.information_schema;
+
 ##########
 ## Constraint Column Name Normalization
 ##########

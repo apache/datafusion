@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -20,13 +20,15 @@
 
 set -e
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SOURCE_DIR}/../" && pwd
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "${ROOT_DIR}"
+
+# Load centralized tool versions
+source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
 TARGET_FILE="docs/source/user-guide/configs.md"
 PRINT_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_config_docs"
 PRINT_RUNTIME_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_runtime_config_docs"
-
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -99,8 +101,23 @@ EOF
 echo "Running CLI and inserting config docs table"
 $PRINT_CONFIG_DOCS_COMMAND >> "$TARGET_FILE"
 
-echo "Inserting runtime config header"
+echo "Inserting reset command details and runtime config header"
 cat <<'EOF' >> "$TARGET_FILE"
+
+You can also reset configuration options to default settings via SQL using the `RESET` command. For
+example, to set and reset `datafusion.execution.batch_size`:
+
+```sql
+SET datafusion.execution.batch_size = '10000';
+
+SHOW datafusion.execution.batch_size;
+datafusion.execution.batch_size 10000
+
+RESET datafusion.execution.batch_size;
+
+SHOW datafusion.execution.batch_size;
+datafusion.execution.batch_size 8192
+```
 
 # Runtime Configuration Settings
 
@@ -238,7 +255,7 @@ Enables the experimental Piecewise Merge Join algorithm.
 EOF
 
 
-echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+echo "Running prettier ${PRETTIER_VERSION}"
+npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"

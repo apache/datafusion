@@ -21,7 +21,8 @@ use crate::logical_plan::{
     self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use crate::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+    DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalProtoConverterExtension,
 };
 use crate::protobuf;
 use datafusion_common::{Result, plan_datafusion_err};
@@ -276,16 +277,18 @@ pub fn logical_plan_from_json_with_extension_codec(
 /// Serialize a PhysicalPlan as bytes
 pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    physical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    physical_plan_to_bytes_with_proto_converter(plan, &extension_codec, &proto_converter)
 }
 
 /// Serialize a PhysicalPlan as JSON
 #[cfg(feature = "json")]
 pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    let protobuf =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, &extension_codec)
-            .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let protobuf = proto_converter
+        .execution_plan_to_proto(&plan, &extension_codec)
+        .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     serde_json::to_string(&protobuf)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))
 }
@@ -295,8 +298,18 @@ pub fn physical_plan_to_bytes_with_extension_codec(
     plan: Arc<dyn ExecutionPlan>,
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Bytes> {
-    let protobuf =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, extension_codec)?;
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    physical_plan_to_bytes_with_proto_converter(plan, extension_codec, &proto_converter)
+}
+
+/// Serialize a PhysicalPlan as bytes, using the provided extension codec
+/// and protobuf converter.
+pub fn physical_plan_to_bytes_with_proto_converter(
+    plan: Arc<dyn ExecutionPlan>,
+    extension_codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<Bytes> {
+    let protobuf = proto_converter.execution_plan_to_proto(&plan, extension_codec)?;
     let mut buffer = BytesMut::new();
     protobuf
         .encode(&mut buffer)
@@ -313,7 +326,8 @@ pub fn physical_plan_from_json(
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    back.try_into_physical_plan(ctx, &extension_codec)
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    proto_converter.proto_to_execution_plan(ctx, &extension_codec, &back)
 }
 
 /// Deserialize a PhysicalPlan from bytes
@@ -322,7 +336,13 @@ pub fn physical_plan_from_bytes(
     ctx: &TaskContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    physical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    physical_plan_from_bytes_with_proto_converter(
+        bytes,
+        ctx,
+        &extension_codec,
+        &proto_converter,
+    )
 }
 
 /// Deserialize a PhysicalPlan from bytes
@@ -331,7 +351,23 @@ pub fn physical_plan_from_bytes_with_extension_codec(
     ctx: &TaskContext,
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    physical_plan_from_bytes_with_proto_converter(
+        bytes,
+        ctx,
+        extension_codec,
+        &proto_converter,
+    )
+}
+
+/// Deserialize a PhysicalPlan from bytes
+pub fn physical_plan_from_bytes_with_proto_converter(
+    bytes: &[u8],
+    ctx: &TaskContext,
+    extension_codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-    protobuf.try_into_physical_plan(ctx, extension_codec)
+    proto_converter.proto_to_execution_plan(ctx, extension_codec, &protobuf)
 }

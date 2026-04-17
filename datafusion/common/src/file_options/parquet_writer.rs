@@ -95,7 +95,7 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             global,
             column_specific_options,
             key_value_metadata,
-            crypto: _,
+            ..
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
@@ -191,6 +191,7 @@ impl ParquetOptions {
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
+            use_content_defined_chunking,
 
             // not in WriterProperties
             enable_page_index: _,
@@ -222,7 +223,7 @@ impl ParquetOptions {
                     .and_then(|s| parse_statistics_string(s).ok())
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
-            .set_max_row_group_size(*max_row_group_size)
+            .set_max_row_group_row_count(Some(*max_row_group_size))
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_statistics_truncate_length(*statistics_truncate_length)
@@ -246,6 +247,26 @@ impl ParquetOptions {
         }
         if let Some(encoding) = encoding {
             builder = builder.set_encoding(parse_encoding_string(encoding)?);
+        }
+        if let Some(cdc) = use_content_defined_chunking {
+            if cdc.min_chunk_size == 0 {
+                return Err(DataFusionError::Configuration(
+                    "CDC min_chunk_size must be greater than 0".to_string(),
+                ));
+            }
+            if cdc.max_chunk_size <= cdc.min_chunk_size {
+                return Err(DataFusionError::Configuration(format!(
+                    "CDC max_chunk_size ({}) must be greater than min_chunk_size ({})",
+                    cdc.max_chunk_size, cdc.min_chunk_size
+                )));
+            }
+            builder = builder.set_content_defined_chunking(Some(
+                parquet::file::properties::CdcOptions {
+                    min_chunk_size: cdc.min_chunk_size,
+                    max_chunk_size: cdc.max_chunk_size,
+                    norm_level: cdc.norm_level,
+                },
+            ));
         }
 
         Ok(builder)
@@ -388,12 +409,14 @@ mod tests {
     use super::*;
     #[cfg(feature = "parquet_encryption")]
     use crate::config::ConfigFileEncryptionProperties;
-    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
+    use crate::config::{
+        CdcOptions, ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions,
+    };
     use crate::parquet_config::DFParquetWriterVersion;
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
-        EnabledStatistics,
+        DEFAULT_MAX_ROW_GROUP_ROW_COUNT, EnabledStatistics,
     };
     use std::collections::HashMap;
 
@@ -460,6 +483,7 @@ mod tests {
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
+            use_content_defined_chunking: defaults.use_content_defined_chunking.clone(),
         }
     }
 
@@ -536,7 +560,9 @@ mod tests {
                 write_batch_size: props.write_batch_size(),
                 writer_version: props.writer_version().into(),
                 dictionary_page_size_limit: props.dictionary_page_size_limit(),
-                max_row_group_size: props.max_row_group_size(),
+                max_row_group_size: props
+                    .max_row_group_row_count()
+                    .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT),
                 created_by: props.created_by().to_string(),
                 column_index_truncate_length: props.column_index_truncate_length(),
                 statistics_truncate_length: props.statistics_truncate_length(),
@@ -574,6 +600,13 @@ mod tests {
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
+                use_content_defined_chunking: props.content_defined_chunking().map(|c| {
+                    CdcOptions {
+                        min_chunk_size: c.min_chunk_size,
+                        max_chunk_size: c.max_chunk_size,
+                        norm_level: c.norm_level,
+                    }
+                }),
             },
             column_specific_options,
             key_value_metadata,
@@ -782,6 +815,74 @@ mod tests {
             }),
             "should have only the fpp set, and the ndv at default",
         );
+    }
+
+    #[test]
+    fn test_cdc_enabled_with_custom_options() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.use_content_defined_chunking = Some(CdcOptions {
+            min_chunk_size: 128 * 1024,
+            max_chunk_size: 512 * 1024,
+            norm_level: 2,
+        });
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+
+        let props = WriterPropertiesBuilder::try_from(&opts).unwrap().build();
+        let cdc = props.content_defined_chunking().expect("CDC should be set");
+        assert_eq!(cdc.min_chunk_size, 128 * 1024);
+        assert_eq!(cdc.max_chunk_size, 512 * 1024);
+        assert_eq!(cdc.norm_level, 2);
+    }
+
+    #[test]
+    fn test_cdc_disabled_by_default() {
+        let mut opts = TableParquetOptions::default();
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+
+        let props = WriterPropertiesBuilder::try_from(&opts).unwrap().build();
+        assert!(props.content_defined_chunking().is_none());
+    }
+
+    #[test]
+    fn test_cdc_round_trip_through_writer_props() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.use_content_defined_chunking = Some(CdcOptions {
+            min_chunk_size: 64 * 1024,
+            max_chunk_size: 2 * 1024 * 1024,
+            norm_level: -1,
+        });
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+
+        let props = WriterPropertiesBuilder::try_from(&opts).unwrap().build();
+        let recovered = session_config_from_writer_props(&props);
+
+        let cdc = recovered.global.use_content_defined_chunking.unwrap();
+        assert_eq!(cdc.min_chunk_size, 64 * 1024);
+        assert_eq!(cdc.max_chunk_size, 2 * 1024 * 1024);
+        assert_eq!(cdc.norm_level, -1);
+    }
+
+    #[test]
+    fn test_cdc_validation_zero_min_chunk_size() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.use_content_defined_chunking = Some(CdcOptions {
+            min_chunk_size: 0,
+            ..CdcOptions::default()
+        });
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+        assert!(WriterPropertiesBuilder::try_from(&opts).is_err());
+    }
+
+    #[test]
+    fn test_cdc_validation_max_not_greater_than_min() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.use_content_defined_chunking = Some(CdcOptions {
+            min_chunk_size: 512 * 1024,
+            max_chunk_size: 256 * 1024,
+            ..CdcOptions::default()
+        });
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+        assert!(WriterPropertiesBuilder::try_from(&opts).is_err());
     }
 
     #[test]

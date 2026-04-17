@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -66,10 +65,6 @@ impl SparkBitGet {
 }
 
 impl ScalarUDFImpl for SparkBitGet {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bit_get"
     }
@@ -128,7 +123,6 @@ fn spark_bit_get(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
 
     #[test]
     fn test_bit_get_nullability_non_nullable_inputs() {

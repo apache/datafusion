@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -50,7 +49,7 @@ pub fn output_schema(
         let data_type = source.data_type(input_schema)?;
         let nullable = source.nullable(input_schema)?;
         for (target, _) in targets.iter() {
-            let Some(column) = target.as_any().downcast_ref::<Column>() else {
+            let Some(column) = target.downcast_ref::<Column>() else {
                 return plan_err!("Expects to have column");
             };
             fields.push(Field::new(column.name(), data_type.clone(), nullable));
@@ -283,7 +282,7 @@ fn get_representative_arr(
     schema: SchemaRef,
 ) -> Option<ArrayRef> {
     for expr in eq_group.iter() {
-        let col = expr.as_any().downcast_ref::<Column>().unwrap();
+        let col = expr.downcast_ref::<Column>().unwrap();
         let (idx, _field) = schema.column_with_name(col.name()).unwrap();
         if let Some(res) = &existing_vec[idx] {
             return Some(Arc::clone(res));
@@ -371,7 +370,7 @@ pub fn generate_table_for_eq_properties(
 
     // Fill constant columns
     for constant in eq_properties.constants() {
-        let col = constant.expr.as_any().downcast_ref::<Column>().unwrap();
+        let col = constant.expr.downcast_ref::<Column>().unwrap();
         let (idx, _field) = schema.column_with_name(col.name()).unwrap();
         let arr =
             Arc::new(Float64Array::from_iter_values(vec![0 as f64; n_elem])) as ArrayRef;
@@ -383,7 +382,7 @@ pub fn generate_table_for_eq_properties(
         let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
             .iter()
             .map(|PhysicalSortExpr { expr, options }| {
-                let col = expr.as_any().downcast_ref::<Column>().unwrap();
+                let col = expr.downcast_ref::<Column>().unwrap();
                 let (idx, _field) = schema.column_with_name(col.name()).unwrap();
                 let arr = generate_random_array(n_elem, n_distinct);
                 (
@@ -409,7 +408,7 @@ pub fn generate_table_for_eq_properties(
                 .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
 
         for expr in eq_group.iter() {
-            let col = expr.as_any().downcast_ref::<Column>().unwrap();
+            let col = expr.downcast_ref::<Column>().unwrap();
             let (idx, _field) = schema.column_with_name(col.name()).unwrap();
             schema_vec[idx] = Some(Arc::clone(&representative_array));
         }
@@ -531,9 +530,6 @@ impl TestScalarUDF {
 }
 
 impl ScalarUDFImpl for TestScalarUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "test-scalar-udf"
     }

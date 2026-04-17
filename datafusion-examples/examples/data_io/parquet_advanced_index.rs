@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::ops::Range;
@@ -43,7 +42,7 @@ use datafusion::parquet::arrow::arrow_reader::{
     ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
 };
 use datafusion::parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-use datafusion::parquet::file::metadata::ParquetMetaData;
+use datafusion::parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
 use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use datafusion::parquet::schema::types::ColumnPath;
 use datafusion::physical_expr::PhysicalExpr;
@@ -410,7 +409,7 @@ impl IndexedFile {
         let options = ArrowReaderOptions::new()
             // Load the page index when reading metadata to cache
             // so it is available to interpret row selections
-            .with_page_index(true);
+            .with_page_index_policy(PageIndexPolicy::Required);
         let reader =
             ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)?;
         let metadata = reader.metadata().clone();
@@ -451,10 +450,6 @@ impl IndexedFile {
 /// so that we can query it as a table.
 #[async_trait]
 impl TableProvider for IndexTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.indexed_file.schema)
     }
@@ -567,7 +562,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             .object_meta
             .location
             .parts()
-            .last()
+            .next_back()
             .expect("No path in location")
             .as_ref()
             .to_string();
@@ -659,7 +654,7 @@ fn make_demo_file(path: impl AsRef<Path>, value_range: Range<i32>) -> Result<()>
     // enable page statistics for the tag column,
     // for everything else.
     let props = WriterProperties::builder()
-        .set_max_row_group_size(100)
+        .set_max_row_group_row_count(Some(100))
         // compute column chunk (per row group) statistics by default
         .set_statistics_enabled(EnabledStatistics::Chunk)
         // compute column page statistics for the tag column

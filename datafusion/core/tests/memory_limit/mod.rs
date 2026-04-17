@@ -17,13 +17,13 @@
 
 //! This module contains tests for limiting memory at runtime in DataFusion
 
-use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
 mod repartition_mem_limit;
+mod union_nullable_spill;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
@@ -212,6 +212,7 @@ async fn sort_merge_join_spill() {
         .with_config(config)
         .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
+        .with_expected_success()
         .run()
         .await
 }
@@ -602,11 +603,16 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
         .await
         .unwrap();
 
-    let err = df.collect().await.unwrap_err();
-    assert_contains!(
-        err.to_string(),
-        "The used disk space during the spilling process has exceeded the allowable limit"
-    );
+    let error_message = df.collect().await.unwrap_err().to_string();
+    for expected in [
+        "The used disk space during the spilling process has exceeded the allowable limit",
+        "datafusion.runtime.max_temp_directory_size",
+    ] {
+        assert!(
+            error_message.contains(expected),
+            "'{expected}' is not contained by '{error_message}'"
+        );
+    }
 
     Ok(())
 }
@@ -1138,10 +1144,6 @@ impl SortedTableProvider {
 
 #[async_trait]
 impl TableProvider for SortedTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

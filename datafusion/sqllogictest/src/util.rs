@@ -44,7 +44,7 @@ pub fn setup_scratch_dir(name: &Path) -> Result<()> {
 /// Trailing whitespace from lines in SLT will typically be removed, but do not fail if it is not
 /// If particular test wants to cover trailing whitespace on a value,
 /// it should project additional non-whitespace column on the right.
-#[allow(clippy::ptr_arg)]
+#[expect(clippy::ptr_arg)]
 pub fn value_normalizer(s: &String) -> String {
     s.trim_end().to_string()
 }

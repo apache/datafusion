@@ -63,7 +63,8 @@ use datafusion_session::Session;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use object_store::{
-    GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore, path::Path,
+    GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt,
+    path::Path,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -554,9 +555,10 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::registry::ExtensionTypeRegistryRef;
     use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
+    use object_store::{chunked::ChunkedStore, memory::InMemory};
 
     struct MockSession {
         config: SessionConfig,
@@ -606,6 +608,10 @@ mod tests {
         }
 
         fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
             unimplemented!()
         }
 

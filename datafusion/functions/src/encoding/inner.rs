@@ -40,7 +40,6 @@ use datafusion_expr::{
     TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -50,6 +49,12 @@ const BASE64_ENGINE: GeneralPurpose = GeneralPurpose::new(
     GeneralPurposeConfig::new()
         .with_encode_padding(false)
         .with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
+
+// Generate padding characters when encoding
+const BASE64_ENGINE_PADDED: GeneralPurpose = GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    GeneralPurposeConfig::new().with_encode_padding(true),
 );
 
 #[user_doc(
@@ -62,7 +67,7 @@ const BASE64_ENGINE: GeneralPurpose = GeneralPurpose::new(
     ),
     argument(
         name = "format",
-        description = "Supported formats are: `base64`, `hex`"
+        description = "Supported formats are: `base64`, `base64pad`, `hex`"
     ),
     related_udf(name = "decode")
 )]
@@ -96,10 +101,6 @@ impl EncodeFunc {
 }
 
 impl ScalarUDFImpl for EncodeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "encode"
     }
@@ -173,10 +174,6 @@ impl DecodeFunc {
 }
 
 impl ScalarUDFImpl for DecodeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "decode"
     }
@@ -319,12 +316,18 @@ fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
 #[derive(Debug, Copy, Clone)]
 enum Encoding {
     Base64,
+    Base64Padded,
     Hex,
 }
 
 impl fmt::Display for Encoding {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", format!("{self:?}").to_lowercase())
+        let name = match self {
+            Self::Base64 => "base64",
+            Self::Base64Padded => "base64pad",
+            Self::Hex => "hex",
+        };
+        write!(f, "{name}")
     }
 }
 
@@ -345,9 +348,10 @@ impl TryFrom<&ColumnarValue> for Encoding {
         };
         match encoding {
             "base64" => Ok(Self::Base64),
+            "base64pad" => Ok(Self::Base64Padded),
             "hex" => Ok(Self::Hex),
             _ => {
-                let options = [Self::Base64, Self::Hex]
+                let options = [Self::Base64, Self::Base64Padded, Self::Hex]
                     .iter()
                     .map(|i| i.to_string())
                     .collect::<Vec<_>>()
@@ -364,15 +368,18 @@ impl Encoding {
     fn encode_bytes(self, value: &[u8]) -> String {
         match self {
             Self::Base64 => BASE64_ENGINE.encode(value),
+            Self::Base64Padded => BASE64_ENGINE_PADDED.encode(value),
             Self::Hex => hex::encode(value),
         }
     }
 
     fn decode_bytes(self, value: &[u8]) -> Result<Vec<u8>> {
         match self {
-            Self::Base64 => BASE64_ENGINE.decode(value).map_err(|e| {
-                exec_datafusion_err!("Failed to decode value using base64: {e}")
-            }),
+            Self::Base64 | Self::Base64Padded => {
+                BASE64_ENGINE.decode(value).map_err(|e| {
+                    exec_datafusion_err!("Failed to decode value using {self}: {e}")
+                })
+            }
             Self::Hex => hex::decode(value).map_err(|e| {
                 exec_datafusion_err!("Failed to decode value using hex: {e}")
             }),
@@ -393,6 +400,13 @@ impl Encoding {
                 let array: GenericStringArray<OutputOffset> = array
                     .iter()
                     .map(|x| x.map(|x| BASE64_ENGINE.encode(x)))
+                    .collect();
+                Ok(Arc::new(array))
+            }
+            Self::Base64Padded => {
+                let array: GenericStringArray<OutputOffset> = array
+                    .iter()
+                    .map(|x| x.map(|x| BASE64_ENGINE_PADDED.encode(x)))
                     .collect();
                 Ok(Arc::new(array))
             }
@@ -430,7 +444,7 @@ impl Encoding {
         }
 
         match self {
-            Self::Base64 => {
+            Self::Base64 | Self::Base64Padded => {
                 let upper_bound = base64::decoded_len_estimate(approx_data_size);
                 delegated_decode::<_, _, OutputOffset>(base64_decode, value, upper_bound)
             }

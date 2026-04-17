@@ -15,11 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod json_tuple;
+
 use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+make_udf_function!(json_tuple::JsonTuple, json_tuple);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((
+        json_tuple,
+        "Extracts top-level fields from a JSON string and returns them as a struct.",
+        args,
+    ));
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![]
+    vec![json_tuple()]
 }
