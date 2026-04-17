@@ -15,6 +15,28 @@
 # specific language governing permissions and limitations
 # under the License.
 
+statement ok
+CREATE TABLE test_is_valid_utf8(value STRING) AS VALUES
+  (arrow_cast('Hello, world!', 'Utf8')),
+  (arrow_cast('Spark', 'Utf8')),
+  (arrow_cast('DataFusion', 'Utf8')),
+  (arrow_cast('ASCII only 123 !@#', 'Utf8')),
+  (arrow_cast(NULL, 'Utf8'));
+
+query B
+SELECT is_valid_utf8(value) FROM test_is_valid_utf8;
+----
+true
+true
+true
+true
+NULL
+
+query B
+SELECT is_valid_utf8(NULL::string);
+----
+NULL
+
 query B
 SELECT is_valid_utf8('Hello, world!'::string);
 ----
