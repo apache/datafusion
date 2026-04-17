@@ -355,7 +355,7 @@ impl ParquetAccessPlan {
     }
 
     /// Like [`prepare`](Self::prepare), but also applies an
-    /// [`AccessPlanOptimizer`] to reorder/reverse row groups after
+    /// `AccessPlanOptimizer` to reorder/reverse row groups after
     /// preparing the plan.
     pub(crate) fn prepare_with_optimizer(
         self,
