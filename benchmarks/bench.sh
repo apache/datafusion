@@ -109,6 +109,9 @@ clickbench_extended:    ClickBench \"inspired\" queries against a single parquet
 # Sort Pushdown Benchmarks
 sort_pushdown:          Sort pushdown baseline (no WITH ORDER) on TPC-H data (SF=1)
 sort_pushdown_sorted:   Sort pushdown with WITH ORDER — tests sort elimination on non-overlapping files
+sort_pushdown_inexact:  Sort pushdown Inexact path (--sorted DESC) — tests reverse scan + RG reorder
+sort_pushdown_inexact_unsorted: Sort pushdown Inexact path (no WITH ORDER) — tests Unsupported path + RG reorder
+sort_pushdown_inexact_overlap: Sort pushdown Inexact path — partially overlapping RGs (streaming data scenario)
 
 # Sorted Data Benchmarks (ORDER BY Optimization)
 clickbench_sorted:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
@@ -316,6 +319,9 @@ main() {
                 sort_pushdown|sort_pushdown_sorted)
                     data_sort_pushdown
                     ;;
+                sort_pushdown_inexact|sort_pushdown_inexact_unsorted|sort_pushdown_inexact_overlap)
+                    data_sort_pushdown_inexact
+                    ;;
                 sort_tpch)
                     # same data as for tpch
                     data_tpch "1" "parquet"
@@ -521,6 +527,15 @@ main() {
                     ;;
                 sort_pushdown_sorted)
                     run_sort_pushdown_sorted
+                    ;;
+                sort_pushdown_inexact)
+                    run_sort_pushdown_inexact
+                    ;;
+                sort_pushdown_inexact_unsorted)
+                    run_sort_pushdown_inexact_unsorted
+                    ;;
+                sort_pushdown_inexact_overlap)
+                    run_sort_pushdown_inexact_overlap
                     ;;
                 sort_tpch)
                     run_sort_tpch "1"
@@ -1135,6 +1150,121 @@ run_sort_pushdown_sorted() {
     RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_sorted.json"
     echo "Running sort pushdown benchmark (with WITH ORDER)..."
     debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Generates data for sort pushdown Inexact benchmark.
+#
+# Produces a single large lineitem parquet file where row groups have
+# NON-OVERLAPPING but OUT-OF-ORDER l_orderkey ranges (each RG internally
+# sorted, RGs shuffled). This simulates append-heavy workloads where data
+# is written in batches at different times.
+data_sort_pushdown_inexact() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact/lineitem"
+    if [ -d "${INEXACT_DIR}" ] && [ "$(ls -A ${INEXACT_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown Inexact data already exists at ${INEXACT_DIR}"
+        return
+    fi
+
+    echo "Generating sort pushdown Inexact benchmark data (single file, shuffled RGs)..."
+
+    # Re-use the sort_pushdown data as the source (generate if missing)
+    data_sort_pushdown
+
+    mkdir -p "${INEXACT_DIR}"
+    SRC_DIR="${DATA_DIR}/sort_pushdown/lineitem"
+
+    # Use datafusion-cli to bucket rows into 64 groups by a deterministic
+    # scrambler, then sort within each bucket by orderkey. This produces
+    # ~64 RG-sized segments where each has a tight orderkey range but the
+    # segments appear in scrambled (non-sorted) order in the file.
+    (cd "${SCRIPT_DIR}/.." && cargo run --release -p datafusion-cli -- -c "
+        CREATE EXTERNAL TABLE src
+        STORED AS PARQUET
+        LOCATION '${SRC_DIR}';
+
+        COPY (
+            SELECT * FROM src
+            ORDER BY
+                (l_orderkey * 1664525 + 1013904223) % 64,
+                l_orderkey
+        )
+        TO '${INEXACT_DIR}/shuffled.parquet'
+        STORED AS PARQUET
+        OPTIONS ('format.max_row_group_size' '100000');
+    ")
+
+    echo "Sort pushdown Inexact shuffled data generated at ${INEXACT_DIR}"
+    ls -la "${INEXACT_DIR}"
+
+    # Also generate a file with partially overlapping row groups.
+    # Simulates streaming data with network delays: each chunk is mostly
+    # in order but has a small overlap with the next chunk (±5% of the
+    # chunk range). This is the pattern described by @adriangb — data
+    # arriving with timestamps that are generally increasing but with
+    # network-induced jitter causing small overlaps between row groups.
+    OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap/lineitem"
+    if [ -d "${OVERLAP_DIR}" ] && [ "$(ls -A ${OVERLAP_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown Inexact overlap data already exists at ${OVERLAP_DIR}"
+        return
+    fi
+
+    echo "Generating sort pushdown Inexact overlap data (partially overlapping RGs)..."
+    mkdir -p "${OVERLAP_DIR}"
+
+    (cd "${SCRIPT_DIR}/.." && cargo run --release -p datafusion-cli -- -c "
+        CREATE EXTERNAL TABLE src
+        STORED AS PARQUET
+        LOCATION '${SRC_DIR}';
+
+        -- Add jitter to l_orderkey: shift each row by a random-ish offset
+        -- proportional to its position. This creates overlap between adjacent
+        -- row groups while preserving the general ascending trend.
+        -- Formula: l_orderkey + (l_orderkey * 7 % 5000) - 2500
+        -- This adds ±2500 jitter, creating ~5K overlap between adjacent 100K-row RGs.
+        COPY (
+            SELECT * FROM src
+            ORDER BY l_orderkey + (l_orderkey * 7 % 5000) - 2500
+        )
+        TO '${OVERLAP_DIR}/overlapping.parquet'
+        STORED AS PARQUET
+        OPTIONS ('format.max_row_group_size' '100000');
+    ")
+
+    echo "Sort pushdown Inexact overlap data generated at ${OVERLAP_DIR}"
+    ls -la "${OVERLAP_DIR}"
+}
+
+# Runs the sort pushdown Inexact benchmark (tests RG reorder by statistics).
+# Enables pushdown_filters so TopK's dynamic filter is pushed to the parquet
+# reader for late materialization (only needed for Inexact path).
+run_sort_pushdown_inexact() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact.json"
+    echo "Running sort pushdown Inexact benchmark (--sorted, DESC, reverse scan path)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${INEXACT_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown Inexact benchmark WITHOUT declared ordering.
+# Tests the Unsupported path in try_pushdown_sort where RG reorder by
+# statistics can still help TopK queries without any file ordering guarantee.
+run_sort_pushdown_inexact_unsorted() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact_unsorted.json"
+    echo "Running sort pushdown Inexact benchmark (no WITH ORDER, Unsupported path)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --iterations 5 --path "${INEXACT_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact_unsorted" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown benchmark with partially overlapping RGs.
+# Simulates streaming data with network jitter — RGs are mostly in order
+# but have small overlaps (±2500 orderkey jitter between adjacent RGs).
+run_sort_pushdown_inexact_overlap() {
+    OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact_overlap.json"
+    echo "Running sort pushdown Inexact benchmark (overlapping RGs, streaming data pattern)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${OVERLAP_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact_overlap" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the sort integration benchmark
