@@ -215,7 +215,15 @@ pub(super) struct JoinLeftData {
     /// This is shared across all probe partitions to provide global knowledge
     pub(super) probe_side_non_empty: AtomicBool,
     /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
+    /// Only used for single-column NAAJ. Multi-column NAAJ uses `left_unknown_bitmap` instead.
     pub(super) probe_side_has_null: AtomicBool,
+    /// For multi-column null-aware anti join: shared bitmap tracking build-side rows
+    /// that have an UNKNOWN comparison result with some probe-side row.
+    /// These rows must NOT be emitted in the anti-join output.
+    pub(super) left_unknown_bitmap: SharedBitmapBuilder,
+    /// For multi-column null-aware anti join: indices of build-side rows that have
+    /// NULL in at least one join key column. Pre-computed during build phase.
+    pub(super) left_null_row_indices: Vec<usize>,
 }
 
 impl JoinLeftData {
@@ -242,6 +250,16 @@ impl JoinLeftData {
     /// returns a reference to the InList values for filter pushdown
     pub(super) fn membership(&self) -> &PushdownStrategy {
         &self.membership
+    }
+
+    /// returns a reference to the unknown bitmap for multi-column NAAJ
+    pub(super) fn left_unknown_bitmap(&self) -> &SharedBitmapBuilder {
+        &self.left_unknown_bitmap
+    }
+
+    /// returns a reference to the indices of left rows with NULL keys
+    pub(super) fn left_null_row_indices(&self) -> &[usize] {
+        &self.left_null_row_indices
     }
 
     /// Decrements the counter of running threads, and returns `true`
@@ -2103,6 +2121,32 @@ async fn collect_left_input(
         bounds = None;
     }
 
+    // For multi-column null-aware anti join: pre-compute which build-side rows
+    // have NULL in at least one join key column. These need special handling.
+    let left_null_row_indices: Vec<usize> = if left_values.len() > 1 {
+        let num_rows = if left_values.is_empty() {
+            0
+        } else {
+            left_values[0].len()
+        };
+        (0..num_rows)
+            .filter(|&i| left_values.iter().any(|col| col.is_null(i)))
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let num_rows = if left_values.is_empty() {
+        0
+    } else {
+        left_values[0].len()
+    };
+    let left_unknown_bitmap = {
+        let mut builder = BooleanBufferBuilder::new(num_rows);
+        builder.resize(num_rows);
+        builder
+    };
+
     let data = JoinLeftData {
         map,
         batch,
@@ -2114,6 +2158,8 @@ async fn collect_left_input(
         membership,
         probe_side_non_empty: AtomicBool::new(false),
         probe_side_has_null: AtomicBool::new(false),
+        left_unknown_bitmap: Mutex::new(left_unknown_bitmap),
+        left_null_row_indices,
     };
 
     Ok(data)
@@ -6560,18 +6606,27 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        // Expected: empty result (probe side has NULL in y column, so no rows should be output)
+        // Expected: (3, 4, 30) and (5, 6, 50)
+        // For multi-column NAAJ, a NULL in one probe column doesn't make ALL comparisons UNKNOWN.
+        // (1,2) matches (1,2) → excluded
+        // (3,4) vs (7,NULL): 3≠7 → FALSE → NOT IN = TRUE → included
+        // (5,6) vs (7,NULL): 5≠7 → FALSE → NOT IN = TRUE → included
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
-            ++
-            ++
+            +---+---+-------+
+            | a | b | dummy |
+            +---+---+-------+
+            | 3 | 4 | 30    |
+            | 5 | 6 | 50    |
+            +---+---+-------+
             ");
         }
         Ok(())
     }
 
     /// Test null-aware anti join with multi-column when probe side has no NULLs
-    /// Expected: rows that don't match should be output, but rows with NULL keys should be filtered
+    /// Expected: rows that don't match should be output, including rows with NULL keys
+    /// where the non-NULL column definitively doesn't match any probe row
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_anti_join_multi_column_no_null(
@@ -6616,14 +6671,16 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        // Expected: (3, 4, 30) and (5, 6, 50)
+        // Expected: (3, 4, 30), (5, 6, 50), and (NULL, 8, 0)
         // Row (1, 2, 10) matches right side, so filtered out
-        // Row (NULL, 8, 0) has NULL in a column, so filtered out
+        // Row (NULL, 8, 0): (NULL,8) vs (1,2) → NULL=1 UNKNOWN AND 8=2 FALSE → FALSE → NOT IN = TRUE
+        // The row IS returned because 8≠2 definitively excludes the match
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
             +---+---+-------+
             | a | b | dummy |
             +---+---+-------+
+            |   | 8 | 0     |
             | 3 | 4 | 30    |
             | 5 | 6 | 50    |
             +---+---+-------+
@@ -6683,11 +6740,18 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        // Expected: empty result (probe side has NULL in z column)
+        // Expected: (4, 5, 6) and (7, 8, 9)
+        // (1,2,3) vs (1,2,NULL): 1=1 TRUE, 2=2 TRUE, 3=NULL UNKNOWN → UNKNOWN → excluded
+        // (4,5,6) vs (1,2,NULL): 4≠1 FALSE → FALSE → NOT IN = TRUE → included
+        // (7,8,9) vs (1,2,NULL): 7≠1 FALSE → FALSE → NOT IN = TRUE → included
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
-            ++
-            ++
+            +---+---+---+
+            | a | b | c |
+            +---+---+---+
+            | 4 | 5 | 6 |
+            | 7 | 8 | 9 |
+            +---+---+---+
             ");
         }
         Ok(())

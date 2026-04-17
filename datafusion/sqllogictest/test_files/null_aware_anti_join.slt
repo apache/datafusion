@@ -410,11 +410,18 @@ CREATE TABLE multi_col_inner_with_null(x INT, y INT) AS VALUES
 (1, 2),
 (NULL, 4);
 
-# Should return empty because subquery has NULL
+# With multi-column NOT IN, a NULL in one column doesn't make the whole comparison UNKNOWN
+# if another column definitively doesn't match.
+# (1,2): matches (1,2) → excluded
+# (3,4): vs (NULL,4) → 3=NULL UNKNOWN AND 4=4 TRUE → UNKNOWN → excluded
+# (5,6): vs (1,2) → FALSE; vs (NULL,4) → 5=NULL UNKNOWN AND 6=4 FALSE → FALSE → included
+# (NULL,8): vs (1,2) → FALSE; vs (NULL,4) → NULL=NULL UNKNOWN AND 8=4 FALSE → FALSE → included
 query IIT rowsort
 SELECT * FROM multi_col_outer
 WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_with_null);
 ----
+5 6 z
+NULL 8 w
 
 #############
 ## Test 20: Multi-column NOT IN without NULL
@@ -424,14 +431,15 @@ statement ok
 CREATE TABLE multi_col_inner_no_null(x INT, y INT) AS VALUES
 (1, 2);
 
-# Should return (3, 4, 'y'), (5, 6, 'z')
-# The row (NULL, 8, 'w') is not returned because NULL is not comparable
+# (NULL, 8) vs (1, 2): NULL=1 UNKNOWN AND 8=2 FALSE → FALSE → NOT IN = TRUE
+# So (NULL, 8, 'w') IS returned because 8≠2 definitively excludes the match
 query IIT rowsort
 SELECT * FROM multi_col_outer
 WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_no_null);
 ----
 3 4 y
 5 6 z
+NULL 8 w
 
 #############
 ## Test 21: Multi-column with NULL in both left and build side columns
@@ -448,14 +456,16 @@ statement ok
 CREATE TABLE multi_right_no_null(x INT, y INT) AS VALUES
 (1, 2);
 
-# Should return (5, 6) only
-# (3, NULL) filtered because b is NULL
-# (NULL, 4) filtered because a is NULL
+# (3, NULL) vs (1, 2): 3=1 FALSE → comparison is FALSE → NOT IN = TRUE → included
+# (NULL, 4) vs (1, 2): NULL=1 UNKNOWN AND 4=2 FALSE → FALSE → NOT IN = TRUE → included
+# Both are included because the non-NULL column definitively doesn't match
 query II rowsort
 SELECT * FROM multi_left_null
 WHERE (a, b) NOT IN (SELECT x, y FROM multi_right_no_null);
 ----
+3 NULL
 5 6
+NULL 4
 
 #############
 ## Test 22: Three-column NOT IN
@@ -488,11 +498,14 @@ CREATE TABLE three_col_inner_null(x INT, y INT, z INT) AS VALUES
 (1, 2, 3),
 (4, NULL, 6);
 
-# Should return empty because subquery has NULL
+# (4,5,6) vs (4,NULL,6): 4=4 TRUE, 5=NULL UNKNOWN, 6=6 TRUE → UNKNOWN → excluded
+# (7,8,9) vs (4,NULL,6): 7=4 FALSE → FALSE → NOT IN = TRUE → included
+# (7,8,9) vs (1,2,3): FALSE → included
 query III rowsort
 SELECT * FROM three_col_outer
 WHERE (a, b, c) NOT IN (SELECT x, y, z FROM three_col_inner_null);
 ----
+7 8 9
 
 #############
 ## Test 24: Correlated multi-column NOT IN (from issue #10583)
