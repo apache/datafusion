@@ -93,6 +93,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
             match scalar_function.func.signature().volatility {
                 Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
                 // TODO: Stable functions could be `applicable`, but that would require access to the context
+                // https://github.com/apache/datafusion/issues/21690
                 Volatility::Stable | Volatility::Volatile => {
                     is_applicable = false;
                     Ok(TreeNodeRecursion::Stop)
@@ -103,6 +104,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
             match hof.func.signature().volatility {
                 Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
                 // TODO: Stable functions could be `applicable`, but that would require access to the context
+                // https://github.com/apache/datafusion/issues/21690
                 Volatility::Stable | Volatility::Volatile => {
                     is_applicable = false;
                     Ok(TreeNodeRecursion::Stop)
@@ -114,6 +116,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
         // - Can `Wildcard` be considered as a `Literal`?
         // - ScalarVariable could be `applicable`, but that would require access to the context
+        //   https://github.com/apache/datafusion/issues/21690
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction { .. }
