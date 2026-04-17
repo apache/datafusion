@@ -34,11 +34,6 @@ use crate::concat::array_concat_udf;
 /// [`FunctionRewrite`] that turns `concat(array, ...)` into
 /// `array_concat(array, ...)` at the analyzer phase.
 ///
-/// The string `concat` UDF only handles string and binary inputs. When it
-/// receives array arguments it falls through to a debug-only code path and
-/// produces surprising output. Rewriting at the analyzer phase means every
-/// logical plan gets the corrected behavior.
-///
 /// `concat` calls with only non-array arguments are left unchanged.
 /// Mixed array and non-array arguments are rejected with a plan error.
 #[derive(Debug, Default)]
