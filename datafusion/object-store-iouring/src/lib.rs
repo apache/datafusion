@@ -71,7 +71,7 @@ pub struct IoUringObjectStore {
     inner: Arc<LocalFileSystem>,
     root: PathBuf,
     #[cfg(target_os = "linux")]
-    uring_sender: tokio::sync::mpsc::UnboundedSender<uring::IoCommand>,
+    uring_sender: tokio::sync::mpsc::Sender<uring::IoCommand>,
 }
 
 impl IoUringObjectStore {
@@ -104,7 +104,7 @@ impl IoUringObjectStore {
 
         #[cfg(target_os = "linux")]
         {
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, rx) = tokio::sync::mpsc::channel(uring::COMMAND_CHANNEL_CAPACITY);
             std::thread::Builder::new()
                 .name("io-uring-worker".to_string())
                 .spawn(move || uring::run_uring_loop(rx))
@@ -208,6 +208,7 @@ impl IoUringObjectStore {
                 ranges: vec![range.clone()],
                 response: tx,
             })
+            .await
             .map_err(|_| object_store::Error::Generic {
                 store: "IoUringObjectStore",
                 source: "io-uring worker thread is gone".into(),
@@ -260,6 +261,7 @@ impl IoUringObjectStore {
                 ranges: ranges.to_vec(),
                 response: tx,
             })
+            .await
             .map_err(|_| object_store::Error::Generic {
                 store: "IoUringObjectStore",
                 source: "io-uring worker thread is gone".into(),
@@ -444,6 +446,48 @@ mod tests {
 
         let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes.as_ref(), b"ok");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn many_concurrent_requests_are_pipelined() {
+        // Verifies that multiple `get_ranges` calls in flight simultaneously
+        // don't deadlock and all return the expected data — the previous
+        // single-request-at-a-time worker used to serialize them.
+        require_io_uring!();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            IoUringObjectStore::new_with_root(dir.path().to_path_buf()).unwrap(),
+        );
+
+        let n_files: usize = 16;
+        let payload_len: usize = 64 * 1024; // 64 KiB per file
+        for i in 0..n_files {
+            let path = Path::from(format!("f{i}.bin"));
+            let buf = vec![i as u8; payload_len];
+            store.put(&path, PutPayload::from(buf)).await.unwrap();
+        }
+
+        let mut tasks = futures::stream::FuturesUnordered::new();
+        for i in 0..n_files {
+            let store = Arc::clone(&store);
+            tasks.push(async move {
+                let path = Path::from(format!("f{i}.bin"));
+                let ranges = (0..8)
+                    .map(|k| {
+                        let start = (k * 1024) as u64;
+                        start..start + 512
+                    })
+                    .collect::<Vec<_>>();
+                let got = store.get_ranges(&path, &ranges).await.unwrap();
+                assert_eq!(got.len(), 8);
+                for g in got {
+                    assert_eq!(g.len(), 512);
+                    assert!(g.iter().all(|b| *b == i as u8));
+                }
+            });
+        }
+        use futures::StreamExt as _;
+        while tasks.next().await.is_some() {}
     }
 
     #[test]
