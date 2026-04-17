@@ -126,3 +126,7 @@ name = "array_sort"
 [[bench]]
 harness = false
 name = "string_to_array"
+
+[[bench]]
+harness = false
+name = "array_resize"

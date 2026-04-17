@@ -73,6 +73,10 @@ name = "in_list"
 
 [[bench]]
 harness = false
+name = "in_list_strategy"
+
+[[bench]]
+harness = false
 name = "case_when"
 
 [[bench]]
