@@ -55,7 +55,7 @@ pub mod expr_fn {
     use datafusion_functions::export_functions;
 
     export_functions!((abs, "Returns abs(expr)", arg1));
-    export_functions!((ceil, "Returns the ceiling of expr.", arg1));
+    export_functions!((ceil, "Returns the ceiling of expr.", arg1 arg2));
     export_functions!((expm1, "Returns exp(expr) - 1 as a Float64.", arg1));
     export_functions!((
         factorial,
