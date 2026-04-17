@@ -314,12 +314,17 @@ impl MemoryConsumer {
     /// Returns a clone of this [`MemoryConsumer`] with a new unique id,
     /// which can be registered with a [`MemoryPool`],
     /// This new consumer is separate from the original.
+    ///
+    /// The cloned consumer intentionally does not inherit any registered
+    /// [`MemoryReclaimer`]. Reclaimers are expected to be tied to the original
+    /// spillable operator state, and carrying them across a new consumer id can
+    /// cause externally-triggered reclaim to target the wrong owner.
     pub fn clone_with_new_id(&self) -> Self {
         Self {
             name: self.name.clone(),
             can_spill: self.can_spill,
             id: Self::new_unique_id(),
-            reclaimer: self.reclaimer.clone(),
+            reclaimer: None,
         }
     }
 
@@ -335,8 +340,11 @@ impl MemoryConsumer {
 
     /// Configure a callback that can reclaim memory from this consumer when another consumer in
     /// the same pool is under pressure.
+    ///
+    /// A consumer with a reclaimer is considered spill-capable by default.
     pub fn with_reclaimer(self, reclaimer: Arc<dyn MemoryReclaimer>) -> Self {
         Self {
+            can_spill: true,
             reclaimer: Some(reclaimer),
             ..self
         }
@@ -373,6 +381,13 @@ impl MemoryConsumer {
 
 /// Callback implemented by spillable operators that can synchronously reclaim existing
 /// reservations when another consumer in the same pool is under pressure.
+///
+/// Implementations should:
+///
+/// - only report bytes actually released from pool-tracked reservations
+/// - return at most `target_bytes`
+/// - avoid holding strong reference cycles back to [`MemoryReservation`]s,
+///   [`MemoryConsumer`]s, or other state that keeps those objects alive
 pub trait MemoryReclaimer: Send + Sync {
     fn reclaim(&self, target_bytes: usize) -> Result<usize>;
 }
@@ -549,6 +564,16 @@ impl Drop for MemoryReservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct NoopReclaimer;
+
+    impl MemoryReclaimer for NoopReclaimer {
+        fn reclaim(&self, _target_bytes: usize) -> Result<usize> {
+            Ok(0)
+        }
+    }
 
     #[test]
     fn test_id_uniqueness() {
@@ -674,5 +699,28 @@ mod tests {
         assert_eq!(new_size, 0);
         assert_eq!(r1.size(), 0);
         assert_eq!(pool.reserved(), 80);
+    }
+
+    #[test]
+    fn test_clone_with_new_id_drops_reclaimer() {
+        let consumer =
+            MemoryConsumer::new("spillable").with_reclaimer(Arc::new(NoopReclaimer));
+
+        let clone = consumer.clone_with_new_id();
+
+        assert!(consumer.reclaimer().is_some());
+        assert!(consumer.can_spill());
+        assert!(clone.reclaimer().is_none());
+        assert!(clone.can_spill());
+        assert_ne!(consumer.id(), clone.id());
+    }
+
+    #[test]
+    fn test_with_reclaimer_marks_consumer_spillable() {
+        let consumer =
+            MemoryConsumer::new("spillable").with_reclaimer(Arc::new(NoopReclaimer));
+
+        assert!(consumer.can_spill());
+        assert!(consumer.reclaimer().is_some());
     }
 }

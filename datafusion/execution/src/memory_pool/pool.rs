@@ -544,7 +544,14 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             }
             reclaimed += reclaimer.reclaim(target_bytes - reclaimed)?;
         }
-        Ok(reclaimed)
+        if reclaimed >= target_bytes {
+            return Ok(reclaimed);
+        }
+
+        Ok(reclaimed
+            + self
+                .inner
+                .reclaim(target_bytes - reclaimed, exclude_consumer_id)?)
     }
 
     fn reserved(&self) -> usize {
@@ -570,16 +577,16 @@ fn provide_top_memory_consumers_to_error_msg(
 mod tests {
     use super::*;
     use insta::{Settings, allow_duplicates, assert_snapshot};
-    use std::sync::Arc;
+    use std::sync::{Arc, Weak};
 
     #[derive(Debug)]
     struct TestReclaimer {
-        reservation: Arc<Mutex<Option<Arc<MemoryReservation>>>>,
+        reservation: Arc<Mutex<Weak<MemoryReservation>>>,
     }
 
     impl MemoryReclaimer for TestReclaimer {
         fn reclaim(&self, target_bytes: usize) -> Result<usize> {
-            let Some(reservation) = self.reservation.lock().clone() else {
+            let Some(reservation) = self.reservation.lock().upgrade() else {
                 return Ok(0);
             };
             let reclaimed = reservation.size().min(target_bytes);
@@ -896,7 +903,7 @@ mod tests {
             NonZeroUsize::new(3).unwrap(),
         )) as Arc<dyn MemoryPool>;
 
-        let first_reservation_handle = Arc::new(Mutex::new(None));
+        let first_reservation_handle = Arc::new(Mutex::new(Weak::new()));
         let first = Arc::new(
             MemoryConsumer::new("spillable-1")
                 .with_can_spill(true)
@@ -905,10 +912,10 @@ mod tests {
                 }))
                 .register(&pool),
         );
-        *first_reservation_handle.lock() = Some(Arc::clone(&first));
+        *first_reservation_handle.lock() = Arc::downgrade(&first);
         first.grow(100);
 
-        let second_reservation_handle = Arc::new(Mutex::new(None));
+        let second_reservation_handle = Arc::new(Mutex::new(Weak::new()));
         let second = Arc::new(
             MemoryConsumer::new("spillable-2")
                 .with_can_spill(true)
@@ -917,7 +924,7 @@ mod tests {
                 }))
                 .register(&pool),
         );
-        *second_reservation_handle.lock() = Some(Arc::clone(&second));
+        *second_reservation_handle.lock() = Arc::downgrade(&second);
         second.grow(60);
 
         let reclaimed = pool.reclaim(80, None).unwrap();
@@ -934,7 +941,7 @@ mod tests {
             NonZeroUsize::new(3).unwrap(),
         )) as Arc<dyn MemoryPool>;
 
-        let first_reservation_handle = Arc::new(Mutex::new(None));
+        let first_reservation_handle = Arc::new(Mutex::new(Weak::new()));
         let first = Arc::new(
             MemoryConsumer::new("spillable-1")
                 .with_can_spill(true)
@@ -943,10 +950,10 @@ mod tests {
                 }))
                 .register(&pool),
         );
-        *first_reservation_handle.lock() = Some(Arc::clone(&first));
+        *first_reservation_handle.lock() = Arc::downgrade(&first);
         first.grow(100);
 
-        let second_reservation_handle = Arc::new(Mutex::new(None));
+        let second_reservation_handle = Arc::new(Mutex::new(Weak::new()));
         let second = Arc::new(
             MemoryConsumer::new("spillable-2")
                 .with_can_spill(true)
@@ -955,7 +962,7 @@ mod tests {
                 }))
                 .register(&pool),
         );
-        *second_reservation_handle.lock() = Some(Arc::clone(&second));
+        *second_reservation_handle.lock() = Arc::downgrade(&second);
         second.grow(60);
 
         let reclaimed = pool.reclaim(80, Some(first.consumer().id())).unwrap();
@@ -963,5 +970,50 @@ mod tests {
         assert_eq!(reclaimed, 60);
         assert_eq!(first.size(), 100);
         assert_eq!(second.size(), 0);
+    }
+
+    #[derive(Debug, Default)]
+    struct InnerReclaimOnlyPool {
+        reclaimed: AtomicUsize,
+    }
+
+    impl MemoryPool for InnerReclaimOnlyPool {
+        fn grow(&self, _reservation: &MemoryReservation, _additional: usize) {}
+
+        fn shrink(&self, _reservation: &MemoryReservation, _shrink: usize) {}
+
+        fn try_grow(
+            &self,
+            _reservation: &MemoryReservation,
+            _additional: usize,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn reclaim(
+            &self,
+            target_bytes: usize,
+            _exclude_consumer_id: Option<usize>,
+        ) -> Result<usize> {
+            self.reclaimed.fetch_add(target_bytes, Ordering::Relaxed);
+            Ok(target_bytes)
+        }
+
+        fn reserved(&self) -> usize {
+            0
+        }
+    }
+
+    #[test]
+    fn test_tracked_consumers_pool_reclaim_falls_back_to_inner_pool() {
+        let pool = TrackConsumersPool::new(
+            InnerReclaimOnlyPool::default(),
+            NonZeroUsize::new(3).unwrap(),
+        );
+
+        let reclaimed = pool.reclaim(64, None).unwrap();
+
+        assert_eq!(reclaimed, 64);
+        assert_eq!(pool.inner.reclaimed.load(Ordering::Relaxed), 64);
     }
 }
