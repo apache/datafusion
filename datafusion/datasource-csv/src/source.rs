@@ -19,7 +19,6 @@
 
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_plan::projection::ProjectionExprs;
-use std::any::Any;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -261,10 +260,6 @@ impl FileSource for CsvSource {
             self.table_schema.file_schema(),
         )?;
         Ok(opener)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn table_schema(&self) -> &TableSchema {

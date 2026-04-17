@@ -273,25 +273,59 @@ pub fn parse_physical_expr_with_converter(
         }
         ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
-        ExprType::BinaryExpr(binary_expr) => Arc::new(BinaryExpr::new(
-            parse_required_physical_expr(
-                binary_expr.l.as_deref(),
-                ctx,
-                "left",
-                input_schema,
-                codec,
-                proto_converter,
-            )?,
-            logical_plan::from_proto::from_proto_binary_op(&binary_expr.op)?,
-            parse_required_physical_expr(
-                binary_expr.r.as_deref(),
-                ctx,
-                "right",
-                input_schema,
-                codec,
-                proto_converter,
-            )?,
-        )),
+        ExprType::BinaryExpr(binary_expr) => {
+            let op = logical_plan::from_proto::from_proto_binary_op(&binary_expr.op)?;
+            if !binary_expr.operands.is_empty() {
+                // New linearized format: reduce the flat operands list back into
+                // a nested binary expression tree.
+                let operands: Vec<Arc<dyn PhysicalExpr>> = binary_expr
+                    .operands
+                    .iter()
+                    .map(|e| {
+                        proto_converter.proto_to_physical_expr(
+                            e,
+                            ctx,
+                            input_schema,
+                            codec,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                if operands.len() < 2 {
+                    return Err(proto_error(
+                        "A binary expression must always have at least 2 operands",
+                    ));
+                }
+
+                operands
+                    .into_iter()
+                    .reduce(|left, right| Arc::new(BinaryExpr::new(left, op, right)))
+                    .expect(
+                        "Binary expression could not be reduced to a single expression.",
+                    )
+            } else {
+                // Legacy format with l/r fields
+                Arc::new(BinaryExpr::new(
+                    parse_required_physical_expr(
+                        binary_expr.l.as_deref(),
+                        ctx,
+                        "left",
+                        input_schema,
+                        codec,
+                        proto_converter,
+                    )?,
+                    op,
+                    parse_required_physical_expr(
+                        binary_expr.r.as_deref(),
+                        ctx,
+                        "right",
+                        input_schema,
+                        codec,
+                        proto_converter,
+                    )?,
+                ))
+            }
+        }
         ExprType::AggregateExpr(_) => {
             return not_impl_err!(
                 "Cannot convert aggregate expr node to physical expression"

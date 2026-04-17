@@ -198,10 +198,7 @@ async fn list_files_with_session_level_cache() {
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
     let data_source_exec = exec1.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
-    let parquet1 = data_source
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-        .unwrap();
+    let parquet1 = data_source.downcast_ref::<FileScanConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet1.file_groups;
@@ -214,10 +211,7 @@ async fn list_files_with_session_level_cache() {
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
     let data_source_exec = exec2.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
-    let parquet2 = data_source
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-        .unwrap();
+    let parquet2 = data_source.downcast_ref::<FileScanConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state2), 1);
     let fg2 = &parquet2.file_groups;
@@ -230,10 +224,7 @@ async fn list_files_with_session_level_cache() {
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
     let data_source_exec = exec3.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
-    let parquet3 = data_source
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-        .unwrap();
+    let parquet3 = data_source.downcast_ref::<FileScanConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet3.file_groups;

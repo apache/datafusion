@@ -329,10 +329,6 @@ impl EmptyTable {
 }
 
 impl TableSource for EmptyTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
     }

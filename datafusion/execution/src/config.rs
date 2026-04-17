@@ -431,6 +431,15 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables elimination of `ORDER BY` clauses in subqueries
+    /// when they are not required by order-sensitive operators.
+    pub fn with_enable_subquery_sort_elimination(mut self, enabled: bool) -> Self {
+        self.options_mut()
+            .sql_parser
+            .enable_subquery_sort_elimination = enabled;
+        self
+    }
+
     /// Set the size of [`sort_spill_reservation_bytes`] to control
     /// memory pre-reservation
     ///

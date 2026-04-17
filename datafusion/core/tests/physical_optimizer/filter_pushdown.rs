@@ -3046,3 +3046,331 @@ async fn test_discover_dynamic_filters_via_expressions_api() {
         "After optimization, should discover exactly 2 dynamic filters (1 in HashJoinExec, 1 in DataSourceExec), found {count_after}"
     );
 }
+
+// ==== Filter pushdown through SortExec tests ====
+
+/// FilterExec above a plain SortExec (no fetch) should be pushed below it.
+/// The scan supports pushdown, so the filter lands in the DataSourceExec.
+#[test]
+fn test_filter_pushdown_through_sort_into_scan() {
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let sort = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(
+            col("a", &schema()).unwrap(),
+        )])
+        .unwrap(),
+        scan,
+    ));
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, sort).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+/// FilterExec above a plain SortExec (no fetch) when the scan does NOT
+/// support pushdown. The filter should still move below the sort, landing
+/// as a new FilterExec between SortExec and DataSourceExec.
+#[test]
+fn test_filter_pushdown_through_sort_no_scan_support() {
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let sort = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(
+            col("a", &schema()).unwrap(),
+        )])
+        .unwrap(),
+        scan,
+    ));
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, sort).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+/// Multiple conjunctive filters above a plain SortExec should all be
+/// pushed below the sort as a single FilterExec.
+#[test]
+fn test_multiple_filters_pushdown_through_sort() {
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let sort = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(
+            col("a", &schema()).unwrap(),
+        )])
+        .unwrap(),
+        scan,
+    ));
+    // WHERE a = 'foo' AND b = 'bar'
+    let predicate = Arc::new(BinaryExpr::new(
+        col_lit_predicate("a", "foo", &schema()),
+        Operator::And,
+        col_lit_predicate("b", "bar", &schema()),
+    )) as Arc<dyn PhysicalExpr>;
+    let plan = Arc::new(FilterExec::try_new(predicate, sort).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo AND b@1 = bar
+        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -   FilterExec: a@0 = foo AND b@1 = bar
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+/// FilterExec above a SortExec with fetch (TopK) must NOT be pushed below,
+/// because limiting happens after filtering — changing the order would alter
+/// the result set.
+#[test]
+fn test_filter_not_pushed_through_sort_with_fetch() {
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let sort = Arc::new(
+        SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr::new_default(
+                col("a", &schema()).unwrap(),
+            )])
+            .unwrap(),
+            scan,
+        )
+        .with_fetch(Some(10)),
+    );
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, sort).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - FilterExec: a@0 = foo
+          -   SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+/// FilterExec above a SortExec with fetch (TopK) must NOT be pushed below,
+/// because limiting happens after filtering — changing the order would alter
+/// the result set.
+#[test]
+fn test_filter_pushed_through_sort_with_fetch() {
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let sort = Arc::new(
+        SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr::new_default(
+                col("a", &schema()).unwrap(),
+            )])
+            .unwrap(),
+            scan,
+        )
+        .with_fetch(Some(10)),
+    );
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, sort).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: a@0 = foo
+          -   SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    "
+    );
+}
+
+/// FilterExec with a projection above SortExec. The filter should be pushed
+/// below the sort, and the projection should be preserved as a
+/// ProjectionExec on top.
+#[test]
+fn test_filter_with_projection_pushdown_through_sort() {
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let sort = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(
+            col("a", &schema()).unwrap(),
+        )])
+        .unwrap(),
+        scan,
+    ));
+    // FilterExec: b = 'bar', projection=[a] (only output column a)
+    let predicate = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, sort)
+            .apply_projection(Some(vec![0]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar, projection=[a@0]
+        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - ProjectionExec: expr=[a@0 as a]
+          -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -     FilterExec: b@1 = bar
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+/// SortExec with preserve_partitioning=true should keep that setting after
+/// filters are pushed below it.
+#[test]
+fn test_filter_pushdown_through_sort_preserves_partitioning() {
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let sort = Arc::new(
+        SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr::new_default(
+                col("a", &schema()).unwrap(),
+            )])
+            .unwrap(),
+            scan,
+        )
+        .with_preserve_partitioning(true),
+    );
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, sort).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+/// FilterExec **with a fetch limit** above a plain SortExec. When the filter
+/// is pushed below the sort the fetch should be propagated to the SortExec
+/// (turning it into a TopK).
+#[test]
+fn test_filter_with_fetch_pushdown_through_sort() {
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let sort = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(
+            col("a", &schema()).unwrap(),
+        )])
+        .unwrap(),
+        scan,
+    ));
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, sort)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=10
+        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
+          -   FilterExec: a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_pushdown_through_sort_with_projection() {
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let sort = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &schema()).unwrap(),
+            SortOptions::new(true, false), // descending, nulls_last
+        )])
+        .unwrap(),
+        scan,
+    ));
+    // FilterExec: b = 'bar', projection=[a] (only output column a)
+    let predicate = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, sort)
+            .apply_projection(Some(vec![0]))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar, projection=[a@0]
+        -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - ProjectionExec: expr=[a@0 as a]
+          -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -     FilterExec: b@1 = bar
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
