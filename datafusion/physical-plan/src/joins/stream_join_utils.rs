@@ -377,7 +377,7 @@ fn convert_filter_columns(
     column_map: &HashMap<Column, Column>,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Attempt to downcast the input expression to a Column type.
-    Ok(if let Some(col) = input.as_any().downcast_ref::<Column>() {
+    Ok(if let Some(col) = input.downcast_ref::<Column>() {
         // If the downcast is successful, retrieve the corresponding filter column.
         column_map.get(col).map(|c| Arc::new(c.clone()) as _)
     } else {

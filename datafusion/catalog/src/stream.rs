@@ -17,7 +17,6 @@
 
 //! TableProvider for stream sources, such as FIFO files
 
-use std::any::Any;
 use std::fmt::Formatter;
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
@@ -303,10 +302,6 @@ impl StreamTable {
 
 #[async_trait]
 impl TableProvider for StreamTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(self.0.source.schema())
     }
@@ -405,10 +400,6 @@ impl DisplayAs for StreamWrite {
 
 #[async_trait]
 impl DataSink for StreamWrite {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.0.source.schema()
     }

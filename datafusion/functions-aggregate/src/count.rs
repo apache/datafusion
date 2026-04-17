@@ -21,16 +21,16 @@ use arrow::{
     compute,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-        Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+        FieldRef, Float16Type, Float32Type, Float64Type, Int32Type, Int64Type,
+        Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
         Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+        UInt32Type, UInt64Type,
     },
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::{
-    HashMap, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
+    HashMap, Result, ScalarValue, downcast_value, exec_err, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
@@ -42,6 +42,10 @@ use datafusion_expr::{
     utils::format_state_name,
 };
 use datafusion_functions_aggregate_common::aggregate::{
+    count_distinct::Bitmap65536DistinctCountAccumulator,
+    count_distinct::Bitmap65536DistinctCountAccumulatorI16,
+    count_distinct::BoolArray256DistinctCountAccumulator,
+    count_distinct::BoolArray256DistinctCountAccumulatorI8,
     count_distinct::BytesDistinctCountAccumulator,
     count_distinct::BytesViewDistinctCountAccumulator,
     count_distinct::DictionaryCountAccumulator,
@@ -170,31 +174,23 @@ impl Count {
 }
 fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
     match data_type {
-        // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
-        DataType::Int8 => Box::new(PrimitiveDistinctCountAccumulator::<Int8Type>::new(
-            data_type,
-        )),
-        DataType::Int16 => Box::new(PrimitiveDistinctCountAccumulator::<Int16Type>::new(
-            data_type,
-        )),
+        // HashSet-based accumulator for larger integer types
         DataType::Int32 => Box::new(PrimitiveDistinctCountAccumulator::<Int32Type>::new(
             data_type,
         )),
         DataType::Int64 => Box::new(PrimitiveDistinctCountAccumulator::<Int64Type>::new(
             data_type,
         )),
-        DataType::UInt8 => Box::new(PrimitiveDistinctCountAccumulator::<UInt8Type>::new(
-            data_type,
-        )),
-        DataType::UInt16 => Box::new(
-            PrimitiveDistinctCountAccumulator::<UInt16Type>::new(data_type),
-        ),
         DataType::UInt32 => Box::new(
             PrimitiveDistinctCountAccumulator::<UInt32Type>::new(data_type),
         ),
         DataType::UInt64 => Box::new(
             PrimitiveDistinctCountAccumulator::<UInt64Type>::new(data_type),
         ),
+        // Small int types - cold path
+        DataType::UInt8 | DataType::Int8 | DataType::UInt16 | DataType::Int16 => {
+            get_small_int_accumulator(data_type).unwrap()
+        }
         DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
             Decimal128Type,
         >::new(data_type)),
@@ -267,6 +263,18 @@ fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
             values: HashSet::default(),
             state_data_type: data_type.clone(),
         }),
+    }
+}
+
+/// Uses optimized bitmap accumulators but separated to keep hot path small
+#[cold]
+fn get_small_int_accumulator(data_type: &DataType) -> Result<Box<dyn Accumulator>> {
+    match data_type {
+        DataType::UInt8 => Ok(Box::new(BoolArray256DistinctCountAccumulator::new())),
+        DataType::Int8 => Ok(Box::new(BoolArray256DistinctCountAccumulatorI8::new())),
+        DataType::UInt16 => Ok(Box::new(Bitmap65536DistinctCountAccumulator::new())),
+        DataType::Int16 => Ok(Box::new(Bitmap65536DistinctCountAccumulatorI16::new())),
+        _ => exec_err!("unsupported accumulator for datatype: {}", data_type),
     }
 }
 
@@ -369,7 +377,7 @@ impl AggregateUDFImpl for Count {
         if statistics_args.is_distinct {
             // Only column references can be resolved from statistics;
             // expressions like casts or literals are not supported.
-            let col_expr = expr.as_any().downcast_ref::<expressions::Column>()?;
+            let col_expr = expr.downcast_ref::<expressions::Column>()?;
             if let Precision::Exact(dc) = col_stats[col_expr.index()].distinct_count {
                 let dc = i64::try_from(dc).ok()?;
                 return Some(ScalarValue::Int64(Some(dc)));
@@ -382,13 +390,12 @@ impl AggregateUDFImpl for Count {
         };
 
         // TODO optimize with exprs other than Column
-        if let Some(col_expr) = expr.as_any().downcast_ref::<expressions::Column>() {
+        if let Some(col_expr) = expr.downcast_ref::<expressions::Column>() {
             if let Precision::Exact(val) = col_stats[col_expr.index()].null_count {
                 let count = i64::try_from(num_rows - val).ok()?;
                 return Some(ScalarValue::Int64(Some(count)));
             }
-        } else if let Some(lit_expr) =
-            expr.as_any().downcast_ref::<expressions::Literal>()
+        } else if let Some(lit_expr) = expr.downcast_ref::<expressions::Literal>()
             && lit_expr.value() == &COUNT_STAR_EXPANSION
         {
             let num_rows = i64::try_from(num_rows).ok()?;

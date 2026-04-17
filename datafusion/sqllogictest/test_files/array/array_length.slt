@@ -1,0 +1,491 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+## trim_array (deprecated)
+
+## array_length (aliases: `list_length`)
+
+# array_length scalar function #1
+query III
+select array_length(make_array(1, 2, 3, 4, 5)), array_length(make_array(1, 2, 3)), array_length(make_array([1, 2], [3, 4], [5, 6]));
+----
+5 3 3
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')), array_length(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'LargeList(List(Int64))'));
+----
+5 3 3
+
+# array_length scalar function #2
+query III
+select array_length(make_array(1, 2, 3, 4, 5), 1), array_length(make_array(1, 2, 3), 1), array_length(make_array([1, 2], [3, 4], [5, 6]), 1);
+----
+5 3 3
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 1), array_length(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 1), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'LargeList(List(Int64))'), 1);
+----
+5 3 3
+
+# array_length scalar function #3
+query III
+select array_length(make_array(1, 2, 3, 4, 5), 2), array_length(make_array(1, 2, 3), 2), array_length(make_array([1, 2], [3, 4], [5, 6]), 2);
+----
+NULL NULL 2
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2), array_length(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 2), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'LargeList(List(Int64))'), 2);
+----
+NULL NULL 2
+
+# array_length scalar function #4
+query II
+select array_length(array_repeat(array_repeat(array_repeat(3, 5), 2), 3), 1), array_length(array_repeat(array_repeat(array_repeat(3, 5), 2), 3), 2);
+----
+3 2
+
+query II
+select array_length(arrow_cast(array_repeat(array_repeat(array_repeat(3, 5), 2), 3), 'LargeList(List(List(Int64)))'), 1), array_length(arrow_cast(array_repeat(array_repeat(array_repeat(3, 5), 2), 3), 'LargeList(List(List(Int64)))'), 2);
+----
+3 2
+
+# array_length scalar function #5
+query III
+select array_length(make_array()), array_length(make_array(), 1), array_length(make_array(), 2)
+----
+0 0 NULL
+
+# array_length scalar function #6 nested array
+query III
+select array_length([[1, 2, 3, 4], [5, 6, 7, 8]]), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 1), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 2);
+----
+2 2 4
+
+# list_length scalar function #7 (function alias `array_length`)
+query IIII
+select list_length(make_array(1, 2, 3, 4, 5)), list_length(make_array(1, 2, 3)), list_length(make_array([1, 2], [3, 4], [5, 6])), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 3);
+----
+5 3 3 NULL
+
+query III
+select list_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')), list_length(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), list_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'LargeList(List(Int64))'));
+----
+5 3 3
+
+# array_length with columns
+query I
+select array_length(column1, column3) from arrays_values;
+----
+10
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query I
+select array_length(arrow_cast(column1, 'LargeList(Int64)'), column3) from arrays_values;
+----
+10
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# array_length with columns and scalars
+query II
+select array_length(array[array[1, 2], array[3, 4]], column3), array_length(column1, 1) from arrays_values;
+----
+2 10
+2 10
+NULL 10
+NULL 10
+NULL NULL
+NULL 10
+NULL 10
+NULL 10
+
+query II
+select array_length(arrow_cast(array[array[1, 2], array[3, 4]], 'LargeList(List(Int64))'), column3), array_length(arrow_cast(column1, 'LargeList(Int64)'), 1) from arrays_values;
+----
+2 10
+2 10
+NULL 10
+NULL 10
+NULL NULL
+NULL 10
+NULL 10
+NULL 10
+
+# array_length for fixed sized list
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)')), array_length(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'FixedSizeList(3, List(Int64))'));
+----
+5 3 3
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 1), array_length(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 1), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'FixedSizeList(3, List(Int64))'), 1);
+----
+5 3 3
+
+
+query RRR
+select array_distance([2], [3]), list_distance([1], [2]), list_distance([1], [-2]);
+----
+1 1 3
+
+query error
+select list_distance([1], [1, 2]);
+
+query R
+select array_distance([[1, 1]], [1, 2]);
+----
+1
+
+query R
+select array_distance([[1, 1]], [[1, 2]]);
+----
+1
+
+query R
+select array_distance([[1, 1]], [[1, 2]]);
+----
+1
+
+query RR
+select array_distance([1, 1, 0, 0], [2, 2, 1, 1]), list_distance([1, 2, 3], [1, 2, 3]);
+----
+2 0
+
+query RR
+select array_distance([1.0, 1, 0, 0], [2, 2.0, 1, 1]), list_distance([1, 2.0, 3], [1, 2, 3]);
+----
+2 0
+
+query R
+select list_distance([1, 1, NULL, 0], [2, 2, NULL, NULL]);
+----
+NULL
+
+query R
+select list_distance([NULL, NULL], [NULL, NULL]);
+----
+NULL
+
+query R
+select list_distance([1.0, 2.0, 3.0], [1.0, 2.0, 3.5]) AS distance;
+----
+0.5
+
+query R
+select list_distance([1, 2, 3], [1, 2, 3]) AS distance;
+----
+0
+
+# array_distance with columns
+query RRR
+select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from arrays_distance_table;
+----
+0 0.374165738677 NULL
+5.196152422707 6.063827174318 NULL
+10.392304845413 11.778794505381 NULL
+15.58845726812 15.935494971917 NULL
+
+query RRR
+select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from large_arrays_distance_table;
+----
+0 0.374165738677 NULL
+5.196152422707 6.063827174318 NULL
+10.392304845413 11.778794505381 NULL
+15.58845726812 15.935494971917 NULL
+
+query RRR
+select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from fixed_size_arrays_distance_table;
+----
+0 0.374165738677 NULL
+5.196152422707 6.063827174318 NULL
+10.392304845413 11.778794505381 NULL
+15.58845726812 15.935494971917 NULL
+
+
+## array_dims (aliases: `list_dims`)
+
+# array dims error
+query error
+select array_dims(1);
+
+# array_dims scalar function
+query ???
+select array_dims(make_array(1, 2, 3)), array_dims(make_array([1, 2], [3, 4])), array_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+query ???
+select array_dims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array_dims(arrow_cast(make_array([1, 2], [3, 4]), 'LargeList(List(Int64))')), array_dims(arrow_cast(make_array([[[[1], [2]]]]), 'LargeList(List(List(List(List(Int64)))))'));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+query ???
+select array_dims(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_dims(arrow_cast(make_array([1, 2], [3, 4]), 'FixedSizeList(2, List(Int64))')), array_dims(arrow_cast(make_array([[[[1], [2]]]]), 'FixedSizeList(1, List(List(List(List(Int64)))))'));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+# array_dims scalar function #2
+query ??
+select array_dims(array_repeat(array_repeat(array_repeat(2, 3), 2), 1)), array_dims(array_repeat(array_repeat(array_repeat(3, 4), 5), 2));
+----
+[1, 2, 3] [2, 5, 4]
+
+query ??
+select array_dims(arrow_cast(array_repeat(array_repeat(array_repeat(2, 3), 2), 1), 'LargeList(List(List(Int64)))')), array_dims(arrow_cast(array_repeat(array_repeat(array_repeat(3, 4), 5), 2), 'LargeList(List(List(Int64)))'));
+----
+[1, 2, 3] [2, 5, 4]
+
+query ??
+select array_dims(arrow_cast(array_repeat(array_repeat(array_repeat(2, 3), 2), 1), 'FixedSizeList(1, List(List(Int64)))')), array_dims(arrow_cast(array_repeat(array_repeat(array_repeat(3, 4), 5), 2), 'FixedSizeList(2, List(List(Int64)))'));
+----
+[1, 2, 3] [2, 5, 4]
+
+# array_dims scalar function #3
+query ??
+select array_dims(make_array()), array_dims(make_array(make_array()))
+----
+NULL [1, 0]
+
+query ??
+select array_dims(arrow_cast(make_array(), 'LargeList(Int64)')), array_dims(arrow_cast(make_array(make_array()), 'LargeList(List(Int64))'))
+----
+NULL [1, 0]
+
+# list_dims scalar function #4 (function alias `array_dims`)
+query ???
+select list_dims(make_array(1, 2, 3)), list_dims(make_array([1, 2], [3, 4])), list_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+query ???
+select list_dims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), list_dims(arrow_cast(make_array([1, 2], [3, 4]), 'LargeList(List(Int64))')), list_dims(arrow_cast(make_array([[[[1], [2]]]]), 'LargeList(List(List(List(List(Int64)))))'));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+query ???
+select list_dims(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), list_dims(arrow_cast(make_array([1, 2], [3, 4]), 'FixedSizeList(2, List(Int64))')), list_dims(arrow_cast(make_array([[[[1], [2]]]]), 'FixedSizeList(1, List(List(List(List(Int64)))))'));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+# array_dims with columns
+query ???
+select array_dims(column1), array_dims(column2), array_dims(column3) from arrays;
+----
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [3]
+NULL [3] [4]
+[2, 2] NULL [1]
+[2, 2] [3] NULL
+
+query ???
+select array_dims(column1), array_dims(column2), array_dims(column3) from large_arrays;
+----
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [3]
+NULL [3] [4]
+[2, 2] NULL [1]
+[2, 2] [3] NULL
+
+query ???
+select array_dims(column1), array_dims(column2), array_dims(column3) from fixed_size_arrays;
+----
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+NULL [3] [5]
+[2, 2] NULL [5]
+[2, 2] [3] NULL
+
+
+## array_ndims (aliases: `list_ndims`)
+
+# array_ndims scalar function #1
+
+#follow PostgreSQL
+query I
+select
+  array_ndims(null);
+----
+NULL
+
+query I
+select
+  array_ndims([2, 3]);
+----
+1
+
+statement ok
+CREATE TABLE array_ndims_table
+AS VALUES
+  ([1], [1, 2, 3], [[7]], [[[[[10]]]]]),
+  ([2], [4, 5], [[8]], [[[[[10]]]]]),
+  (NUll, [6, 7], [[9]], [[[[[10]]]]]),
+  ([3], [6], [[9]], [[[[[10]]]]])
+;
+
+statement ok
+CREATE TABLE large_array_ndims_table
+AS SELECT
+  column1,
+  arrow_cast(column2, 'LargeList(Int64)') as column2,
+  arrow_cast(column3, 'LargeList(List(Int64))') as column3,
+  arrow_cast(column4, 'LargeList(List(List(List(List(Int64)))))') as column4
+FROM array_ndims_table;
+
+statement ok
+CREATE TABLE fixed_array_ndims_table
+AS VALUES
+  (arrow_cast([1], 'FixedSizeList(1, Int64)'), arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)'), arrow_cast([[7]], 'FixedSizeList(1, List(Int64))'), arrow_cast([[[[[10]]]]], 'FixedSizeList(1, List(List(List(List(Int64)))))')),
+  (arrow_cast([2], 'FixedSizeList(1, Int64)'), arrow_cast([4, 5, 6], 'FixedSizeList(3, Int64)'), arrow_cast([[8]], 'FixedSizeList(1, List(Int64))'), arrow_cast([[[[[10]]]]], 'FixedSizeList(1, List(List(List(List(Int64)))))')),
+  (null, arrow_cast([6, 7, 8], 'FixedSizeList(3, Int64)'), arrow_cast([[9]], 'FixedSizeList(1, List(Int64))'), arrow_cast([[[[[10]]]]], 'FixedSizeList(1, List(List(List(List(Int64)))))')),
+  (arrow_cast([3], 'FixedSizeList(1, Int64)'), arrow_cast([6, 7, 8], 'FixedSizeList(3, Int64)'), arrow_cast([[9]], 'FixedSizeList(1, List(Int64))'), arrow_cast([[[[[10]]]]], 'FixedSizeList(1, List(List(List(List(Int64)))))'))
+;
+
+query IIII
+select
+  array_ndims(column1),
+  array_ndims(column2),
+  array_ndims(column3),
+  array_ndims(column4)
+from array_ndims_table;
+----
+1 1 2 5
+1 1 2 5
+NULL 1 2 5
+1 1 2 5
+
+query IIII
+select
+  array_ndims(column1),
+  array_ndims(column2),
+  array_ndims(column3),
+  array_ndims(column4)
+from large_array_ndims_table;
+----
+1 1 2 5
+1 1 2 5
+NULL 1 2 5
+1 1 2 5
+
+query IIII
+select
+  array_ndims(column1),
+  array_ndims(column2),
+  array_ndims(column3),
+  array_ndims(column4)
+from fixed_array_ndims_table;
+----
+1 1 2 5
+1 1 2 5
+NULL 1 2 5
+1 1 2 5
+
+
+
+statement ok
+drop table array_ndims_table;
+
+statement ok
+drop table large_array_ndims_table
+
+query I
+select array_ndims(arrow_cast([null], 'List(List(List(Int64)))'));
+----
+3
+
+# array_ndims scalar function #2
+query II
+select array_ndims(array_repeat(array_repeat(array_repeat(1, 3), 2), 1)), array_ndims([[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]);
+----
+3 21
+
+# array_ndims scalar function #3
+query II
+select array_ndims(make_array()), array_ndims(make_array(make_array()))
+----
+1 2
+
+query II
+select array_ndims(arrow_cast(make_array(), 'LargeList(Int64)')), array_ndims(arrow_cast(make_array(make_array()), 'LargeList(List(Int64))'))
+----
+1 2
+
+# list_ndims scalar function #4 (function alias `array_ndims`)
+query III
+select list_ndims(make_array(1, 2, 3)), list_ndims(make_array([1, 2], [3, 4])), list_ndims(make_array([[[[1], [2]]]]));
+----
+1 2 5
+
+query III
+select list_ndims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), list_ndims(arrow_cast(make_array([1, 2], [3, 4]), 'LargeList(List(Int64))')), list_ndims(arrow_cast(make_array([[[[1], [2]]]]), 'LargeList(List(List(List(List(Int64)))))'));
+----
+1 2 5
+
+query II
+select list_ndims(make_array()), list_ndims(make_array(make_array()))
+----
+1 2
+
+query II
+select list_ndims(arrow_cast(make_array(), 'LargeList(Int64)')), list_ndims(arrow_cast(make_array(make_array()), 'LargeList(List(Int64))'))
+----
+1 2
+
+# array_ndims with columns
+query III
+select array_ndims(column1), array_ndims(column2), array_ndims(column3) from arrays;
+----
+2 1 1
+2 1 1
+2 1 1
+2 1 1
+NULL 1 1
+2 NULL 1
+2 1 NULL
+
+query III
+select array_ndims(column1), array_ndims(column2), array_ndims(column3) from large_arrays;
+----
+2 1 1
+2 1 1
+2 1 1
+2 1 1
+NULL 1 1
+2 NULL 1
+2 1 NULL
+
+
+include ./cleanup.slt.part

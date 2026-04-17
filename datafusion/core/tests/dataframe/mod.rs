@@ -6851,3 +6851,50 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
 
     Ok(())
 }
+
+/// Regression test for https://github.com/apache/datafusion/issues/21411
+/// grouping() should work when wrapped in an alias via the DataFrame API.
+///
+/// This bug only manifests through the DataFrame API because `.alias()` wraps
+/// the `grouping()` call in an `Expr::Alias` node at the aggregate expression
+/// level. The SQL planner handles aliasing separately (via projection), so the
+/// `ResolveGroupingFunction` analyzer rule never sees an `Expr::Alias` wrapper
+/// around the aggregate function in SQL queries — making SQL-based tests
+/// insufficient to cover this case.
+#[tokio::test]
+async fn test_grouping_with_alias() -> Result<()> {
+    use datafusion_functions_aggregate::expr_fn::grouping;
+
+    let df = create_test_table("test")
+        .await?
+        .aggregate(vec![col("a")], vec![grouping(col("a")).alias("g")])?
+        .sort(vec![Sort::new(col("a"), true, false)])?;
+
+    let results = df.collect().await?;
+
+    let expected = [
+        "+-----------+---+",
+        "| a         | g |",
+        "+-----------+---+",
+        "| 123AbcDef | 0 |",
+        "| CBAdef    | 0 |",
+        "| abc123    | 0 |",
+        "| abcDEF    | 0 |",
+        "+-----------+---+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Also verify that nested aliases (e.g. .alias("x").alias("g")) work correctly
+    let df = create_test_table("test")
+        .await?
+        .aggregate(
+            vec![col("a")],
+            vec![grouping(col("a")).alias("x").alias("g")],
+        )?
+        .sort(vec![Sort::new(col("a"), true, false)])?;
+
+    let results = df.collect().await?;
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}

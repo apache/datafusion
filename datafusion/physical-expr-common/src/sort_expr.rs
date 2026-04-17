@@ -53,7 +53,6 @@ use indexmap::IndexSet;
 /// # #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// # struct MyPhysicalExpr;
 /// # impl PhysicalExpr for MyPhysicalExpr {
-/// #  fn as_any(&self) -> &dyn Any {todo!() }
 /// #  fn data_type(&self, input_schema: &Schema) -> Result<DataType> {todo!()}
 /// #  fn nullable(&self, input_schema: &Schema) -> Result<bool> {todo!() }
 /// #  fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {todo!() }

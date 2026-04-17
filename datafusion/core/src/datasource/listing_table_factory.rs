@@ -264,10 +264,7 @@ mod tests {
         .with_options(HashMap::from([("format.has_header".into(), "true".into())]))
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
     }
@@ -297,13 +294,10 @@ mod tests {
         .with_options(options)
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let format = listing_table.options().format.clone();
-        let csv_format = format.as_any().downcast_ref::<CsvFormat>().unwrap();
+        let csv_format = format.downcast_ref::<CsvFormat>().unwrap();
         let csv_options = csv_format.options().clone();
         assert_eq!(csv_options.schema_infer_max_rec, Some(1000));
         let listing_options = listing_table.options();
@@ -334,14 +328,11 @@ mod tests {
         .with_options(options)
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         // Verify compression is used
         let format = listing_table.options().format.clone();
-        let csv_format = format.as_any().downcast_ref::<CsvFormat>().unwrap();
+        let csv_format = format.downcast_ref::<CsvFormat>().unwrap();
         let csv_options = csv_format.options().clone();
         assert_eq!(csv_options.compression, CompressionTypeVariant::GZIP);
 
@@ -378,10 +369,7 @@ mod tests {
         .with_options(options)
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
         assert_eq!("", listing_options.file_extension);
@@ -413,10 +401,7 @@ mod tests {
         )
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
         assert_eq!("", listing_options.file_extension);
@@ -444,10 +429,7 @@ mod tests {
         )
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
         let dtype =
@@ -476,10 +458,7 @@ mod tests {
         )
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
         assert!(listing_options.table_partition_cols.is_empty());

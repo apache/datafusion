@@ -1,0 +1,146 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# arrow_field on integer literal
+query ?
+SELECT arrow_field(1)
+----
+{name: lit, data_type: Int64, nullable: false, metadata: {}}
+
+# arrow_field on null literal
+query ?
+SELECT arrow_field(null)
+----
+{name: lit, data_type: Null, nullable: true, metadata: {}}
+
+# arrow_field on boolean literal
+query ?
+SELECT arrow_field(true)
+----
+{name: lit, data_type: Boolean, nullable: false, metadata: {}}
+
+# arrow_field on string literal
+query ?
+SELECT arrow_field('foo')
+----
+{name: lit, data_type: Utf8, nullable: false, metadata: {}}
+
+# arrow_field on float literal
+query ?
+SELECT arrow_field(1.0)
+----
+{name: lit, data_type: Float64, nullable: false, metadata: {}}
+
+# arrow_field on list
+query ?
+SELECT arrow_field(ARRAY[1,2,3])
+----
+{name: lit, data_type: List(Int64), nullable: false, metadata: {}}
+
+# arrow_field on map
+query ?
+SELECT arrow_field(MAP {'a': 1, 'b': 2})
+----
+{name: lit, data_type: Map("entries": non-null Struct("key": non-null Utf8, "value": Int64), unsorted), nullable: false, metadata: {}}
+
+# arrow_field on struct
+query ?
+SELECT arrow_field({a: 1, b: 'foo'})
+----
+{name: lit, data_type: Struct("a": Int64, "b": Utf8), nullable: false, metadata: {}}
+
+# arrow_field on dictionary
+query ?
+SELECT arrow_field(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
+----
+{name: lit, data_type: Dictionary(Int32, Utf8), nullable: false, metadata: {}}
+
+# arrow_field struct field access - data_type
+query T
+SELECT arrow_field(1)['data_type']
+----
+Int64
+
+# arrow_field struct field access - nullable
+query B
+SELECT arrow_field(1)['nullable']
+----
+false
+
+# arrow_field struct field access - name
+query T
+SELECT arrow_field(1)['name']
+----
+lit
+
+# arrow_field with table columns
+statement ok
+CREATE TABLE arrow_field_test(x INT NOT NULL, y TEXT) AS VALUES (1, 'a');
+
+query ?
+SELECT arrow_field(x) FROM arrow_field_test
+----
+{name: x, data_type: Int32, nullable: false, metadata: {}}
+
+query ?
+SELECT arrow_field(y) FROM arrow_field_test
+----
+{name: y, data_type: Utf8View, nullable: true, metadata: {}}
+
+# arrow_field column access - name reflects column name
+query T
+SELECT arrow_field(x)['name'] FROM arrow_field_test
+----
+x
+
+# arrow_field column access - nullability
+query B
+SELECT arrow_field(x)['nullable'] FROM arrow_field_test
+----
+false
+
+query B
+SELECT arrow_field(y)['nullable'] FROM arrow_field_test
+----
+true
+
+statement ok
+DROP TABLE arrow_field_test;
+
+# arrow_field on a column that carries field metadata
+# (table_with_metadata is registered by the Rust test harness)
+query ?
+SELECT arrow_field(id) FROM table_with_metadata LIMIT 1
+----
+{name: id, data_type: Int32, nullable: true, metadata: {metadata_key: the id field}}
+
+# arrow_field metadata field access
+query ?
+SELECT arrow_field(id)['metadata'] FROM table_with_metadata LIMIT 1
+----
+{metadata_key: the id field}
+
+# arrow_field nullability field access
+query I
+SELECT count(*) FROM table_with_metadata WHERE NOT arrow_field(id)['nullable']
+----
+0
+
+query I
+SELECT count(*) FROM table_with_metadata WHERE arrow_field(id)['nullable']
+----
+3
