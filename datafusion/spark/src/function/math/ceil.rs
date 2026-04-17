@@ -443,4 +443,95 @@ mod tests {
         };
         assert_eq!(result, ScalarValue::Int64(Some(48)));
     }
+
+    #[test]
+    fn test_ceil_float64_scalar_with_positive_scale() {
+        // ceil(3.1411, 2) → 3.15
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(3.1411))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
+        ];
+        let result = match spark_ceil(&args).unwrap() {
+            ColumnarValue::Scalar(v) => v,
+            _ => panic!("Expected scalar"),
+        };
+        assert_eq!(result, ScalarValue::Float64(Some(3.15)));
+    }
+
+    #[test]
+    fn test_ceil_float64_scalar_with_negative_scale() {
+        // ceil(3345.1, -2) → 3400.0
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(3345.1))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(-2))),
+        ];
+        let result = match spark_ceil(&args).unwrap() {
+            ColumnarValue::Scalar(v) => v,
+            _ => panic!("Expected scalar"),
+        };
+        assert_eq!(result, ScalarValue::Float64(Some(3400.0)));
+    }
+
+    #[test]
+    fn test_ceil_float64_scalar_with_zero_scale() {
+        // ceil(3.5, 0) → 4 as Int64 (same as 1-arg behavior)
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(3.5))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(0))),
+        ];
+        let result = match spark_ceil(&args).unwrap() {
+            ColumnarValue::Scalar(v) => v,
+            _ => panic!("Expected scalar"),
+        };
+        assert_eq!(result, ScalarValue::Int64(Some(4)));
+    }
+
+    #[test]
+    fn test_ceil_float32_scalar_with_scale() {
+        // ceil(3.1f32, 1) → 3.1 (already exact)
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(3.1f32))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
+        ];
+        let result = match spark_ceil(&args).unwrap() {
+            ColumnarValue::Scalar(v) => v,
+            _ => panic!("Expected scalar"),
+        };
+        // 3.1f32 ceiling at 1 decimal place stays 3.1
+        assert_eq!(result, ScalarValue::Float32(Some(3.1f32)));
+    }
+
+    #[test]
+    fn test_ceil_float64_array_with_scale() {
+        // ceil([3.1411, -1.001, 0.0, NULL], 2) → [3.15, -1.0, 0.0, NULL]
+        let input = Float64Array::from(vec![Some(3.1411), Some(-1.001), Some(0.0), None]);
+        let args = vec![
+            ColumnarValue::Array(Arc::new(input)),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
+        ];
+        let result = spark_ceil(&args).unwrap();
+        let result = match result {
+            ColumnarValue::Array(arr) => arr,
+            _ => panic!("Expected array"),
+        };
+        let result = result.as_primitive::<Float64Type>();
+        assert_eq!(
+            result,
+            &Float64Array::from(vec![Some(3.15), Some(-1.0), Some(0.0), None])
+        );
+    }
+
+    #[test]
+    fn test_ceil_null_scale() {
+        // ceil(3.5, NULL) → NULL
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(3.5))),
+            ColumnarValue::Scalar(ScalarValue::Int32(None)),
+        ];
+        let result = match spark_ceil(&args).unwrap() {
+            ColumnarValue::Scalar(v) => v,
+            _ => panic!("Expected scalar"),
+        };
+        assert!(result.is_null());
+    }
 }
