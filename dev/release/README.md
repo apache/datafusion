@@ -183,6 +183,7 @@ git commit -a -m 'Update changelog'
 ```
 
 ### 6. Sync Changelog to main
+
 To sync changelog create another PR against `main``:
 
 ```shell
@@ -226,7 +227,7 @@ git tag 50.3.0-rc1 apache/branch-50
 git push apache 50.3.0-rc1
 ```
 
-Please make sure the format is correct, tools like Homebrew listens for tags and in case of malformed tags users would be notified for non-existent version 
+Please make sure the format is correct, tools like Homebrew listens for tags and in case of malformed tags users would be notified for non-existent version
 
 #### Create, Sign, and Upload Artifacts
 
@@ -267,7 +268,6 @@ review the release candidate.
 #### If Changes Are Requested
 
 If the release is not approved or urgent backports requested, please start over from [here](#4-backporting-urgent-changes)
-
 
 #### If the Vote Passes: Announce the Result
 
@@ -365,6 +365,20 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/substrait && cargo publish)
 (cd datafusion/ffi && cargo publish)
 (cd datafusion/sqllogictest && cargo publish)
+```
+
+Crates.io publishing depends on crates dependency tree, this list might contain wrong order.
+If it happens crates.io fails with wrong dependency message like below, just rerun all publishing commands.
+
+```shell
+error: failed to prepare local package for uploading
+
+Caused by:
+  failed to select a version for the requirement `datafusion-proto = "^53.1.0"`
+  candidate versions found which didn't match: 53.0.0, 52.5.0, 52.4.0, ...
+  location searched: crates.io index
+  required by package `datafusion-ffi v53.1.0 (/private/tmp/apache-datafusion-53.1.0/datafusion/ffi)`
+MacBook-Pro-135:apache-datafusion-53.1.0 ovoievodin$ (cd datafusion/proto && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew
