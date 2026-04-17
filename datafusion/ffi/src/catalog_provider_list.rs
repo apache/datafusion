@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -75,12 +74,12 @@ unsafe impl Send for FFI_CatalogProviderList {}
 unsafe impl Sync for FFI_CatalogProviderList {}
 
 struct ProviderPrivateData {
-    provider: Arc<dyn CatalogProviderList + Send>,
+    provider: Arc<dyn CatalogProviderList>,
     runtime: Option<Handle>,
 }
 
 impl FFI_CatalogProviderList {
-    unsafe fn inner(&self) -> &Arc<dyn CatalogProviderList + Send> {
+    unsafe fn inner(&self) -> &Arc<dyn CatalogProviderList> {
         unsafe {
             let private_data = self.private_data as *const ProviderPrivateData;
             &(*private_data).provider
@@ -112,7 +111,7 @@ unsafe extern "C" fn register_catalog_fn_wrapper(
     unsafe {
         let runtime = provider.runtime();
         let inner_provider = provider.inner();
-        let catalog: Arc<dyn CatalogProvider + Send> = catalog.into();
+        let catalog: Arc<dyn CatalogProvider> = catalog.into();
 
         inner_provider
             .register_catalog(name.into(), catalog)
@@ -192,7 +191,7 @@ impl Drop for FFI_CatalogProviderList {
 impl FFI_CatalogProviderList {
     /// Creates a new [`FFI_CatalogProviderList`].
     pub fn new(
-        provider: Arc<dyn CatalogProviderList + Send>,
+        provider: Arc<dyn CatalogProviderList>,
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
         logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
@@ -208,14 +207,11 @@ impl FFI_CatalogProviderList {
         Self::new_with_ffi_codec(provider, runtime, logical_codec)
     }
     pub fn new_with_ffi_codec(
-        provider: Arc<dyn CatalogProviderList + Send>,
+        provider: Arc<dyn CatalogProviderList>,
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
-        if let Some(provider) = provider
-            .as_any()
-            .downcast_ref::<ForeignCatalogProviderList>()
-        {
+        if let Some(provider) = provider.downcast_ref::<ForeignCatalogProviderList>() {
             return provider.0.clone();
         }
 
@@ -245,14 +241,14 @@ pub struct ForeignCatalogProviderList(FFI_CatalogProviderList);
 unsafe impl Send for ForeignCatalogProviderList {}
 unsafe impl Sync for ForeignCatalogProviderList {}
 
-impl From<&FFI_CatalogProviderList> for Arc<dyn CatalogProviderList + Send> {
+impl From<&FFI_CatalogProviderList> for Arc<dyn CatalogProviderList> {
     fn from(provider: &FFI_CatalogProviderList) -> Self {
         if (provider.library_marker_id)() == crate::get_library_marker_id() {
             return Arc::clone(unsafe { provider.inner() });
         }
 
         Arc::new(ForeignCatalogProviderList(provider.clone()))
-            as Arc<dyn CatalogProviderList + Send>
+            as Arc<dyn CatalogProviderList>
     }
 }
 
@@ -263,18 +259,13 @@ impl Clone for FFI_CatalogProviderList {
 }
 
 impl CatalogProviderList for ForeignCatalogProviderList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         unsafe {
-            let catalog = match catalog.as_any().downcast_ref::<ForeignCatalogProvider>()
-            {
+            let catalog = match catalog.downcast_ref::<ForeignCatalogProvider>() {
                 Some(s) => &s.0,
                 None => &FFI_CatalogProvider::new_with_ffi_codec(
                     catalog,
@@ -332,7 +323,7 @@ mod tests {
             FFI_CatalogProviderList::new(catalog_list, None, task_ctx_provider, None);
         ffi_catalog_list.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
+        let foreign_catalog_list: Arc<dyn CatalogProviderList> =
             (&ffi_catalog_list).into();
 
         let prior_catalog_names = foreign_catalog_list.catalog_names();
@@ -373,22 +364,20 @@ mod tests {
             FFI_CatalogProviderList::new(catalog_list, None, task_ctx_provider, None);
 
         // Verify local libraries can be downcast to their original
-        let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
+        let foreign_catalog_list: Arc<dyn CatalogProviderList> =
             (&ffi_catalog_list).into();
         assert!(
             foreign_catalog_list
-                .as_any()
                 .downcast_ref::<MemoryCatalogProviderList>()
                 .is_some()
         );
 
         // Verify different library markers generate foreign providers
         ffi_catalog_list.library_marker_id = crate::mock_foreign_marker_id;
-        let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
+        let foreign_catalog_list: Arc<dyn CatalogProviderList> =
             (&ffi_catalog_list).into();
         assert!(
             foreign_catalog_list
-                .as_any()
                 .downcast_ref::<ForeignCatalogProviderList>()
                 .is_some()
         );

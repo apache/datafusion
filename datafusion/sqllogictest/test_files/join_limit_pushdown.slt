@@ -74,10 +74,9 @@ logical_plan
 04)----Limit: skip=0, fetch=3
 05)------TableScan: t2 projection=[x], fetch=3
 physical_plan
-01)ProjectionExec: expr=[a@1 as a, x@0 as x]
-02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(x@0, a@0)], fetch=3
-03)----DataSourceExec: partitions=1, partition_sizes=[1], fetch=3
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(x@0, a@0)], projection=[a@1, x@0], fetch=3
+02)--DataSourceExec: partitions=1, partition_sizes=[1], fetch=3
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.a, t2.x FROM t1 RIGHT JOIN t2 ON t1.a = t2.x LIMIT 3;
@@ -221,12 +220,11 @@ logical_plan
 05)------TableScan: t2 projection=[x]
 06)----TableScan: t3 projection=[p]
 physical_plan
-01)ProjectionExec: expr=[a@1 as a, x@2 as x, p@0 as p]
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(p@0, x@1)], fetch=2
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, x@0)]
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(p@0, x@1)], projection=[a@1, x@2, p@0], fetch=2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, x@0)]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 SELECT t1.a, t2.x, t3.p 

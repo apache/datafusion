@@ -259,8 +259,7 @@ pub fn serialize_physical_expr_with_converter(
 ) -> Result<protobuf::PhysicalExprNode> {
     // Snapshot the expr in case it has dynamic predicate state so
     // it can be serialized
-    let value = snapshot_physical_expr(Arc::clone(value))?;
-    let expr = value.as_any();
+    let expr = snapshot_physical_expr(Arc::clone(value))?;
 
     // HashTableLookupExpr is used for dynamic filter pushdown in hash joins.
     // It contains an Arc<dyn JoinHashMapType> (the build-side hash table) which
@@ -506,7 +505,7 @@ pub fn serialize_physical_expr_with_converter(
         })
     } else {
         let mut buf: Vec<u8> = vec![];
-        match codec.try_encode_expr(&value, &mut buf) {
+        match codec.try_encode_expr(value, &mut buf) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalExprNode> = value
                     .children()
