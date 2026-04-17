@@ -26,6 +26,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, ToDFSchema, exec_err, internal_datafusion_err,
@@ -461,6 +462,7 @@ pub fn create_physical_expr(
             )?))
         }
         Expr::Lambda(Lambda { params, body }) => {
+            // tracked at https://github.com/apache/datafusion/issues/21172
             if body.any_column_refs() {
                 return plan_err!("lambda doesn't support column capture");
             }
@@ -481,14 +483,16 @@ pub fn create_physical_expr(
             // LambdaVariable.field will be made optional as in Expr::Placeholder
             // and only LambdaVariable.name used, and field.name ignored,
             // so they're not enforced to match for logical expressions
-            if field.data_type() != schema_field.data_type()
-                || field.is_nullable() != schema_field.is_nullable()
-                || field.metadata() != schema_field.metadata()
-                || field.dict_is_ordered() != schema_field.dict_is_ordered()
-            {
+            // Rename the field to match the schema one and use it's PartialEq impl instead
+            // of checking property by property and fail if new properties get's added to it.
+            // While not necessary, the sql planner does create lambda vars with matching names,
+            // so this shouldn't allocate with a lambda var from it
+            let renamed_field = Arc::clone(field).renamed(name);
+
+            if &renamed_field != schema_field {
                 return plan_err!(
-                    "LambdaVariable field and schema field mismatch (names ignored) {} != {}",
-                    field,
+                    "LambdaVariable field and schema field mismatch {} != {}",
+                    renamed_field,
                     schema_field
                 );
             }
