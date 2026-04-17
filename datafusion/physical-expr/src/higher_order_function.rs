@@ -109,10 +109,14 @@ impl HigherOrderFunctionExpr {
         config_options: Arc<ConfigOptions>,
     ) -> Result<Self> {
         let name = fun.name().to_string();
+        let mut lambda_positions = vec![];
         let arg_fields = args
             .iter()
-            .map(|e| match e.downcast_ref::<LambdaExpr>() {
+            .enumerate()
+            .map(|(i, e)| match e.downcast_ref::<LambdaExpr>() {
                 Some(lambda) => {
+                    lambda_positions.push(i);
+
                     Ok(ValueOrLambda::Lambda(lambda.body().return_field(schema)?))
                 }
                 None => Ok(ValueOrLambda::Value(e.return_field(schema)?)),
@@ -133,17 +137,6 @@ impl HigherOrderFunctionExpr {
         };
 
         let return_field = fun.return_field_from_args(ret_args)?;
-        let lambda_positions = args
-            .iter()
-            .enumerate()
-            .filter_map(|(i, arg)| {
-                if arg.is::<LambdaExpr>() {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
 
         Ok(Self {
             fun,
