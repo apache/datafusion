@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
@@ -322,54 +323,63 @@ impl FilterExec {
     ) -> Result<Statistics> {
         let (eq_columns, is_infeasible) = collect_equality_columns(predicate);
 
-        let num_rows = input_stats.num_rows;
-        let total_byte_size = input_stats.total_byte_size;
+        let input_num_rows = input_stats.num_rows;
+        let input_total_byte_size = input_stats.total_byte_size;
 
-        let (selectivity, mut column_statistics) = if is_infeasible {
-            (0.0, input_stats.to_inexact().column_statistics)
+        let (selectivity, num_rows, column_statistics) = if is_infeasible {
+            // Contradictory predicate: zero rows, and null/min/max are
+            // undefined on an empty column.
+            let mut cs = input_stats.to_inexact().column_statistics;
+            for col_stat in &mut cs {
+                col_stat.distinct_count = Precision::Exact(0);
+                col_stat.null_count = Precision::Exact(0);
+                col_stat.min_value = Precision::Absent;
+                col_stat.max_value = Precision::Absent;
+                col_stat.sum_value = Precision::Absent;
+                col_stat.byte_size = Precision::Exact(0);
+            }
+            (0.0, Precision::Exact(0), cs)
         } else if !check_support(predicate, schema) {
+            // Interval analysis is not applicable; fall back to the default
+            // selectivity but still pin NDV=1 for every `col = literal` column.
+            let selectivity = default_selectivity as f64 / 100.0;
+            let mut cs = input_stats.to_inexact().column_statistics;
+            for &idx in &eq_columns {
+                if idx < cs.len() && cs[idx].distinct_count != Precision::Exact(0) {
+                    cs[idx].distinct_count = Precision::Exact(1);
+                }
+            }
             (
-                default_selectivity as f64 / 100.0,
-                input_stats.to_inexact().column_statistics,
+                selectivity,
+                input_num_rows.with_estimated_selectivity(selectivity),
+                cs,
             )
         } else {
+            // Interval-analysis path. `collect_new_statistics` already sets
+            // distinct_count = Exact(1) when an interval collapses to a single
+            // value, so no post-fix is needed here.
             let input_analysis_ctx = AnalysisContext::try_from_statistics(
                 schema,
                 &input_stats.column_statistics,
             )?;
             let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
             let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-            let filtered_num_rows = num_rows.with_estimated_selectivity(selectivity);
-            (
-                selectivity,
-                collect_new_statistics(
-                    schema,
-                    &input_stats.column_statistics,
-                    analysis_ctx.boundaries,
-                    match &filtered_num_rows {
-                        Precision::Absent => None,
-                        p => Some(*p),
-                    },
-                ),
-            )
+            let filtered_num_rows =
+                input_num_rows.with_estimated_selectivity(selectivity);
+            let cs = collect_new_statistics(
+                schema,
+                &input_stats.column_statistics,
+                analysis_ctx.boundaries,
+                match &filtered_num_rows {
+                    Precision::Absent => None,
+                    p => Some(*p),
+                },
+            );
+            (selectivity, filtered_num_rows, cs)
         };
 
-        let num_rows = num_rows.with_estimated_selectivity(selectivity);
-        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
-
-        if is_infeasible {
-            for col_stat in &mut column_statistics {
-                col_stat.distinct_count = Precision::Exact(0);
-            }
-        } else {
-            for idx in eq_columns.keys() {
-                if *idx < column_statistics.len()
-                    && column_statistics[*idx].distinct_count != Precision::Exact(0)
-                {
-                    column_statistics[*idx].distinct_count = Precision::Exact(1);
-                }
-            }
-        }
+        let total_byte_size =
+            input_total_byte_size.with_estimated_selectivity(selectivity);
 
         Ok(Statistics {
             num_rows,
@@ -791,17 +801,15 @@ impl EmbeddedProjection for FilterExec {
 /// conjunction.
 ///
 /// Returns `(eq_columns, is_infeasible)`:
-/// - `eq_columns`: column indices constrained to a single value.
+/// - `eq_columns`: set of column indices constrained to a single literal value.
 /// - `is_infeasible`: `true` when the same column is equated to two different
 ///   non-null literals (e.g. `name = 'alice' AND name = 'bob'`), which is
 ///   always unsatisfiable.
 ///
 /// Only AND conjunctions are traversed; OR is intentionally skipped
 /// since `a = 1 OR a = 2` does not pin NDV to 1.
-fn collect_equality_columns(
-    predicate: &Arc<dyn PhysicalExpr>,
-) -> (HashMap<usize, ScalarValue>, bool) {
-    let mut eq_columns: HashMap<usize, ScalarValue> = HashMap::new();
+fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> (HashSet<usize>, bool) {
+    let mut eq_values: HashMap<usize, ScalarValue> = HashMap::new();
     let mut infeasible = false;
 
     for expr in split_conjunction(predicate) {
@@ -828,17 +836,21 @@ fn collect_equality_columns(
         };
 
         if let Some((idx, value)) = pair {
-            if let Some(prev) = eq_columns.get(&idx) {
-                if *prev != value {
-                    infeasible = true;
+            match eq_values.entry(idx) {
+                Entry::Occupied(prev) => {
+                    if *prev.get() != value {
+                        infeasible = true;
+                        break;
+                    }
                 }
-            } else {
-                eq_columns.insert(idx, value);
+                Entry::Vacant(slot) => {
+                    slot.insert(value);
+                }
             }
         }
     }
 
-    (eq_columns, infeasible)
+    (eq_values.into_keys().collect(), infeasible)
 }
 
 /// Converts an interval bound to a [`Precision`] value. NULL bounds (which
@@ -2566,6 +2578,45 @@ mod tests {
                 )),
                 vec![Precision::Exact(0)],
             ),
+            (
+                "redundant same-value equality combined with another column",
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Int32, false),
+                ],
+                vec![
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(80),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(40),
+                        ..Default::default()
+                    },
+                ],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(BinaryExpr::new(
+                            Arc::new(Column::new("a", 0)),
+                            Operator::Eq,
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                        )),
+                        Operator::And,
+                        Arc::new(BinaryExpr::new(
+                            Arc::new(Column::new("a", 0)),
+                            Operator::Eq,
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                        )),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("b", 1)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+                    )),
+                )),
+                vec![Precision::Exact(1), Precision::Exact(1)],
+            ),
         ];
 
         for (desc, fields, col_stats, predicate, expected_ndvs) in cases {
@@ -3033,13 +3084,16 @@ mod tests {
 
         for (desc, expr, expected_cols, expected_infeasible) in cases {
             let (result, infeasible) = collect_equality_columns(&expr);
-            let result_keys: HashSet<usize> = result.keys().copied().collect();
             let expected: HashSet<usize> = expected_cols.into_iter().collect();
-            assert_eq!(result_keys, expected, "case '{desc}': columns mismatch");
-            assert_eq!(
-                infeasible, expected_infeasible,
-                "case '{desc}': infeasible mismatch"
-            );
+            if expected_infeasible {
+                // When infeasible, the scan is short-circuited, so we only
+                // assert the infeasibility flag — the partial column set
+                // contents are an implementation detail.
+                assert!(infeasible, "case '{desc}': expected infeasible");
+            } else {
+                assert_eq!(result, expected, "case '{desc}': columns mismatch");
+                assert!(!infeasible, "case '{desc}': expected feasible");
+            }
         }
     }
 
