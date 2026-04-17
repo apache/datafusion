@@ -439,7 +439,12 @@ macro_rules! min_max {
     }};
 }
 
-fn scalar_batch_extreme(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
+/// Finds the min/max by scanning logical rows via `ScalarValue::try_from_array`.
+///
+/// This path is required for dictionary arrays because comparing
+/// `dictionary.values()` is not semantically correct: it can include
+/// unreferenced values and ignore null key positions.
+fn scalar_row_extreme(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
     let mut index = 0;
     let mut extreme = loop {
         if index == values.len() {
@@ -824,7 +829,7 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
             )
         }
         data_type if is_row_wise_batch_type(data_type) => {
-            scalar_batch_extreme(values, Ordering::Greater)?
+            scalar_row_extreme(values, Ordering::Greater)?
         }
         _ => min_max_batch!(values, min),
     })
@@ -876,7 +881,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
             ScalarValue::FixedSizeBinary(*size, value)
         }
         data_type if is_row_wise_batch_type(data_type) => {
-            scalar_batch_extreme(values, Ordering::Less)?
+            scalar_row_extreme(values, Ordering::Less)?
         }
         _ => min_max_batch!(values, max),
     })
