@@ -1743,3 +1743,125 @@ bbf3f11cb5b43e700273a78d12de55e4a7eab741ed2abf13787a4d2dc832b8ec
 d2e2adf7177b7a8afddbc12d1634cf23ea1a71020f6a1308070a16400fb68fde
 NULL
 NULL
+
+# --------------------------------------
+# Test left() and right()
+# --------------------------------------
+
+# left with positive n on ASCII column
+query T
+SELECT left(ascii_1, 3) FROM test_basic_operator
+----
+And
+Xia
+Rap
+und
+per
+(empty)
+(empty)
+%
+_
+NULL
+NULL
+
+# left with positive n on unicode column
+query T
+SELECT left(unicode_1, 12) FROM test_basic_operator
+----
+datafusion📊🔥
+datafusion数据
+datafusionДа
+un iść core
+pan Tadeusz
+(empty)
+(empty)
+(empty)
+(empty)
+NULL
+NULL
+
+# left with negative n
+query T
+SELECT left(ascii_1, -3) FROM test_basic_operator
+----
+And
+Xiangp
+Raph
+under_sc
+perc
+(empty)
+(empty)
+(empty)
+(empty)
+NULL
+NULL
+
+# right with positive n on ASCII column
+query T
+SELECT right(ascii_1, 3) FROM test_basic_operator
+----
+rew
+eng
+ael
+ore
+ent
+(empty)
+(empty)
+%
+_
+NULL
+NULL
+
+# right with positive n on unicode column
+query T
+SELECT right(unicode_1, 3) FROM test_basic_operator
+----
+n📊🔥
+据融合
+ион
+ore
+kąt
+(empty)
+(empty)
+(empty)
+(empty)
+NULL
+NULL
+
+# right with negative n
+query T
+SELECT right(ascii_1, -3) FROM test_basic_operator
+----
+rew
+ngpeng
+hael
+er_score
+cent
+(empty)
+(empty)
+(empty)
+(empty)
+NULL
+NULL
+
+# left and right with n=0
+query TT
+SELECT left(ascii_1, 0), right(ascii_1, 0) FROM test_basic_operator
+----
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+NULL NULL
+NULL NULL
+
+# left and right return Utf8View
+query TT
+SELECT arrow_typeof(left(ascii_1, 3)), arrow_typeof(right(ascii_1, 3)) FROM test_basic_operator LIMIT 1
+----
+Utf8View Utf8View

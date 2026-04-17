@@ -649,13 +649,15 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // 1. Disk manager supports temp files (needed for right-side spilling)
         // 2. Join type does not require tracking right-side matched state
         //    across multiple left chunks (RIGHT/FULL joins not yet supported)
-        let can_fallback = context.runtime_env().disk_manager.tmp_files_enabled()
-            && !need_produce_right_in_final(self.join_type);
-
-        let (left_plan, task_context) = if can_fallback {
-            (Some(Arc::clone(&self.left)), Some(Arc::clone(&context)))
+        let spill_state = if context.runtime_env().disk_manager.tmp_files_enabled()
+            && !need_produce_right_in_final(self.join_type)
+        {
+            SpillState::Pending {
+                left_plan: Arc::clone(&self.left),
+                task_context: Arc::clone(&context),
+            }
         } else {
-            (None, None)
+            SpillState::Disabled
         };
 
         Ok(Box::pin(NestedLoopJoinStream::new(
@@ -667,8 +669,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             column_indices_after_projection,
             metrics,
             batch_size,
-            left_plan,
-            task_context,
+            spill_state,
         )))
     }
 
@@ -862,6 +863,55 @@ enum NLJState {
     EmitLeftUnmatched,
     Done,
 }
+/// Tracks the state of the memory-limited spill fallback for NLJ.
+///
+/// The NLJ always starts with the standard OnceFut path. If the in-memory
+/// load fails with OOM and conditions allow, the operator falls back to a
+/// multi-pass strategy where left data is loaded in chunks and the right
+/// side is spilled to disk.
+pub(crate) enum SpillState {
+    /// Fallback is not possible (e.g., join type requires global right bitmap,
+    /// or disk manager is disabled). OOM errors will propagate as-is.
+    Disabled,
+
+    /// Fallback is possible but not yet triggered. The operator is still
+    /// attempting the standard OnceFut path. Holds the context needed to
+    /// initiate fallback if OOM occurs.
+    Pending {
+        /// Left child plan for re-execution
+        left_plan: Arc<dyn ExecutionPlan>,
+        /// TaskContext for re-execution and SpillManager creation
+        task_context: Arc<TaskContext>,
+    },
+
+    /// Fallback has been triggered. Left data is being loaded in chunks
+    /// and the right side is spilled to disk for re-scanning.
+    Active(Box<SpillStateActive>),
+}
+
+/// State for active memory-limited spill execution.
+/// Boxed inside [`SpillState::Active`] to reduce enum size.
+pub(crate) struct SpillStateActive {
+    /// Left input stream for incremental buffering
+    left_stream: SendableRecordBatchStream,
+    /// Memory reservation for left-side buffering
+    reservation: MemoryReservation,
+    /// Accumulated left batches for the current chunk
+    pending_batches: Vec<RecordBatch>,
+    /// Left-side schema (for concat_batches)
+    left_schema: SchemaRef,
+    /// SpillManager for right-side spilling
+    spill_manager: SpillManager,
+    /// In-progress spill file for writing right batches during first pass
+    right_spill_in_progress: Option<InProgressSpillFile>,
+    /// Completed right-side spill file (available after first pass)
+    right_spill_file: Option<RefCountedTempFile>,
+    /// Max right batch memory size (for read_spill_as_stream)
+    right_max_batch_memory: usize,
+    /// Whether this is the first right-side pass (need to spill while reading)
+    is_first_right_pass: bool,
+}
+
 pub(crate) struct NestedLoopJoinStream {
     // ========================================================================
     // PROPERTIES:
@@ -938,42 +988,8 @@ pub(crate) struct NestedLoopJoinStream {
     // Constructed when fetching each new incoming right batch in `FetchingRight` state.
     current_right_batch_matched: Option<BooleanArray>,
 
-    // ========================================================================
-    // MEMORY-LIMITED EXECUTION FIELDS:
-    // Used when left-side data exceeds the memory budget. In this mode,
-    // left data is loaded in chunks, and the right side is spilled to disk
-    // so it can be re-scanned for each left chunk.
-    // ========================================================================
-    /// Left input stream for incremental buffering (memory-limited mode only).
-    /// None when using the standard OnceFut path.
-    left_stream: Option<SendableRecordBatchStream>,
-    /// Memory reservation for left-side buffering in memory-limited mode
-    left_reservation: Option<MemoryReservation>,
-    /// Accumulated left batches for the current chunk (memory-limited mode)
-    left_pending_batches: Vec<RecordBatch>,
-    /// Left-side schema (for concat_batches in memory-limited mode)
-    left_schema: Option<SchemaRef>,
-
-    /// SpillManager for right-side spilling
-    spill_manager: Option<SpillManager>,
-    /// In-progress spill file for writing right batches during first pass
-    right_spill_in_progress: Option<InProgressSpillFile>,
-    /// Completed right-side spill file (available after first pass)
-    right_spill_file: Option<RefCountedTempFile>,
-    /// Max right batch memory size (for read_spill_as_stream)
-    right_max_batch_memory: usize,
-    /// Whether this is the first right-side pass (need to spill while reading)
-    is_first_right_pass: bool,
-
-    // ========================================================================
-    // FALLBACK CONTEXT:
-    // Stored at execute() time so that handle_buffering_left can initiate
-    // a fallback to memory-limited mode if OnceFut fails with OOM.
-    // ========================================================================
-    /// Left child plan for re-execution on OOM fallback
-    left_plan: Option<Arc<dyn ExecutionPlan>>,
-    /// TaskContext for re-execution and SpillManager creation
-    task_context: Option<Arc<TaskContext>>,
+    /// Memory-limited spill fallback state. See [`SpillState`] for details.
+    spill_state: SpillState,
 }
 
 pub(crate) struct NestedLoopJoinMetrics {
@@ -1205,8 +1221,7 @@ impl NestedLoopJoinStream {
         column_indices: Vec<ColumnIndex>,
         metrics: NestedLoopJoinMetrics,
         batch_size: usize,
-        left_plan: Option<Arc<dyn ExecutionPlan>>,
-        task_context: Option<Arc<TaskContext>>,
+        spill_state: SpillState,
     ) -> Self {
         Self {
             output_schema: Arc::clone(&schema),
@@ -1228,32 +1243,18 @@ impl NestedLoopJoinStream {
             left_buffered_in_one_pass: true,
             handled_empty_output: false,
             should_track_unmatched_right: need_produce_right_in_final(join_type),
-            // Memory-limited fields (inactive until OOM fallback)
-            left_stream: None,
-            left_reservation: None,
-            left_pending_batches: Vec::new(),
-            left_schema: None,
-            spill_manager: None,
-            right_spill_in_progress: None,
-            right_spill_file: None,
-            right_max_batch_memory: 0,
-            is_first_right_pass: true,
-            // Fallback context
-            left_plan,
-            task_context,
+            spill_state,
         }
     }
 
     /// Returns true if this stream is operating in memory-limited mode
     fn is_memory_limited(&self) -> bool {
-        self.left_stream.is_some() || self.left_reservation.is_some()
+        matches!(self.spill_state, SpillState::Active(_))
     }
 
     /// Check if we can fall back to memory-limited mode on this error.
     fn can_fallback_to_spill(&self, error: &datafusion_common::DataFusionError) -> bool {
-        self.left_plan.is_some()
-            && self.task_context.is_some()
-            && !self.is_memory_limited() // avoid infinite loop
+        matches!(self.spill_state, SpillState::Pending { .. })
             && matches!(
                 error.find_root(),
                 datafusion_common::DataFusionError::ResourcesExhausted(_)
@@ -1263,21 +1264,27 @@ impl NestedLoopJoinStream {
     /// Switch from the standard OnceFut path to memory-limited mode.
     ///
     /// Re-executes the left child to get a fresh stream, creates a
-    /// SpillManager for right-side spilling, and sets up all the
-    /// memory-limited fields. The next call to `handle_buffering_left`
-    /// will dispatch to `handle_buffering_left_memory_limited`.
+    /// SpillManager for right-side spilling, and transitions the spill
+    /// state from `Pending` to `Active`. The next call to
+    /// `handle_buffering_left` will dispatch to
+    /// `handle_buffering_left_memory_limited`.
     fn initiate_fallback(&mut self) -> Result<()> {
-        let left_plan = self
-            .left_plan
-            .as_ref()
-            .expect("left_plan must be set for fallback");
-        let context = self
-            .task_context
-            .as_ref()
-            .expect("task_context must be set for fallback");
+        // Take ownership of Pending state
+        let (left_plan, context) =
+            match std::mem::replace(&mut self.spill_state, SpillState::Disabled) {
+                SpillState::Pending {
+                    left_plan,
+                    task_context,
+                } => (left_plan, task_context),
+                _ => {
+                    return internal_err!(
+                        "initiate_fallback called in non-Pending spill state"
+                    );
+                }
+            };
 
         // Re-execute left child to get a fresh stream
-        let left_stream = left_plan.execute(0, Arc::clone(context))?;
+        let left_stream = left_plan.execute(0, Arc::clone(&context))?;
         let left_schema = left_stream.schema();
 
         // Create reservation with can_spill for fair memory allocation
@@ -1294,16 +1301,17 @@ impl NestedLoopJoinStream {
         )
         .with_compression_type(context.session_config().spill_compression());
 
-        // Populate memory-limited fields
-        self.left_stream = Some(left_stream);
-        self.left_schema = Some(left_schema);
-        self.left_reservation = Some(reservation);
-        self.left_pending_batches = Vec::new();
-        self.spill_manager = Some(spill_manager);
-        self.right_spill_in_progress = None;
-        self.right_spill_file = None;
-        self.right_max_batch_memory = 0;
-        self.is_first_right_pass = true;
+        self.spill_state = SpillState::Active(Box::new(SpillStateActive {
+            left_stream,
+            reservation,
+            pending_batches: Vec::new(),
+            left_schema,
+            spill_manager,
+            right_spill_in_progress: None,
+            right_spill_file: None,
+            right_max_batch_memory: 0,
+            is_first_right_pass: true,
+        }));
 
         // State stays BufferingLeft — next poll will enter
         // handle_buffering_left_memory_limited via is_memory_limited() check
@@ -1364,47 +1372,43 @@ impl NestedLoopJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        let reservation = self
-            .left_reservation
-            .as_ref()
-            .expect("left_reservation must be set in memory-limited mode");
+        let SpillState::Active(active) = &mut self.spill_state else {
+            unreachable!(
+                "handle_buffering_left_memory_limited called without Active spill state"
+            );
+        };
 
         // Poll left stream for more batches.
-        // Note: left_pending_batches may already contain a batch from the
+        // Note: pending_batches may already contain a batch from the
         // previous chunk iteration (the batch that triggered the memory limit).
         loop {
-            let left_stream = self
-                .left_stream
-                .as_mut()
-                .expect("left_stream must be set in memory-limited mode");
-
-            match left_stream.poll_next_unpin(cx) {
+            match active.left_stream.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(batch))) => {
                     if batch.num_rows() == 0 {
                         continue;
                     }
                     let batch_rows = batch.num_rows();
                     let batch_size = batch.get_array_memory_size();
-                    let can_grow = reservation.try_grow(batch_size).is_ok();
+                    let can_grow = active.reservation.try_grow(batch_size).is_ok();
 
-                    if !can_grow && !self.left_pending_batches.is_empty() {
+                    if !can_grow && !active.pending_batches.is_empty() {
                         // Memory limit reached and we already have data.
                         // Push this batch into pending (it's already in memory)
                         // and stop buffering for this chunk.
-                        self.left_pending_batches.push(batch);
+                        active.pending_batches.push(batch);
                         self.left_exhausted = false;
                         self.left_buffered_in_one_pass = false;
                         break;
                     } else if !can_grow {
                         // No pending batches yet — we must accept this batch
                         // to make progress, even if it exceeds the budget.
-                        reservation.grow(batch_size);
+                        active.reservation.grow(batch_size);
                     }
 
                     self.metrics.join_metrics.build_mem_used.add(batch_size);
                     self.metrics.join_metrics.build_input_batches.add(1);
                     self.metrics.join_metrics.build_input_rows.add(batch_rows);
-                    self.left_pending_batches.push(batch);
+                    active.pending_batches.push(batch);
                 }
                 Poll::Ready(Some(Err(e))) => {
                     return ControlFlow::Break(Poll::Ready(Some(Err(e))));
@@ -1412,41 +1416,29 @@ impl NestedLoopJoinStream {
                 Poll::Ready(None) => {
                     // Left stream exhausted
                     self.left_exhausted = true;
-                    self.left_stream = None;
                     break;
                 }
                 Poll::Pending => {
-                    if self.left_pending_batches.is_empty() {
-                        return ControlFlow::Break(Poll::Pending);
-                    }
-                    // We have some batches, proceed with what we have.
-                    // The stashed approach will handle the rest.
-                    // Actually we should wait for more data.
                     return ControlFlow::Break(Poll::Pending);
                 }
             }
         }
 
-        // Build JoinLeftData from the accumulated batches
-        let schema = self
-            .left_schema
-            .as_ref()
-            .expect("left_schema must be set in memory-limited mode");
-
-        if self.left_pending_batches.is_empty() {
+        if active.pending_batches.is_empty() {
             // No data at all — go directly to Done
             self.left_exhausted = true;
             self.state = NLJState::Done;
             return ControlFlow::Continue(());
         }
 
-        let merged_batch = match concat_batches(schema, &self.left_pending_batches) {
-            Ok(batch) => batch,
-            Err(e) => {
-                return ControlFlow::Break(Poll::Ready(Some(Err(e.into()))));
-            }
-        };
-        self.left_pending_batches.clear();
+        let merged_batch =
+            match concat_batches(&active.left_schema, &active.pending_batches) {
+                Ok(batch) => batch,
+                Err(e) => {
+                    return ControlFlow::Break(Poll::Ready(Some(Err(e.into()))));
+                }
+            };
+        active.pending_batches.clear();
 
         // Build visited bitmap if needed for this join type
         let with_visited = need_produce_result_in_final(self.join_type);
@@ -1454,7 +1446,7 @@ impl NestedLoopJoinStream {
         let visited_left_side = if with_visited {
             let buffer_size = n_rows.div_ceil(8);
             // Use infallible grow for bitmap — it's small
-            reservation.grow(buffer_size);
+            active.reservation.grow(buffer_size);
             self.metrics.join_metrics.build_mem_used.add(buffer_size);
             let mut buffer = BooleanBufferBuilder::new(n_rows);
             buffer.append_n(n_rows, false);
@@ -1464,8 +1456,8 @@ impl NestedLoopJoinStream {
         };
 
         // Create an empty reservation for JoinLeftData's RAII field.
-        // The actual memory tracking is managed by self.left_reservation.
-        let dummy_reservation = reservation.new_empty();
+        // The actual memory tracking is managed by the Active state's reservation.
+        let dummy_reservation = active.reservation.new_empty();
 
         let left_data = JoinLeftData::new(
             merged_batch,
@@ -1477,16 +1469,12 @@ impl NestedLoopJoinStream {
 
         self.buffered_left_data = Some(Arc::new(left_data));
 
-        // If not the first pass, re-open the right spill file as a new stream
-        if !self.is_first_right_pass {
-            if let Some(spill_file) = &self.right_spill_file {
-                let spill_manager = self
-                    .spill_manager
-                    .as_ref()
-                    .expect("spill_manager must be set in memory-limited mode");
-                match spill_manager.read_spill_as_stream(
-                    spill_file.clone(),
-                    Some(self.right_max_batch_memory),
+        // Set up right-side stream for this pass
+        if !active.is_first_right_pass {
+            if let Some(file) = active.right_spill_file.as_ref() {
+                match active.spill_manager.read_spill_as_stream(
+                    file.clone(),
+                    Some(active.right_max_batch_memory),
                 ) {
                     Ok(stream) => {
                         self.right_data = stream;
@@ -1498,13 +1486,12 @@ impl NestedLoopJoinStream {
             }
         } else {
             // First pass: create InProgressSpillFile for right side
-            let spill_manager = self
+            match active
                 .spill_manager
-                .as_ref()
-                .expect("spill_manager must be set in memory-limited mode");
-            match spill_manager.create_in_progress_file("NestedLoopJoin right spill") {
-                Ok(spill_file) => {
-                    self.right_spill_in_progress = Some(spill_file);
+                .create_in_progress_file("NestedLoopJoin right spill")
+            {
+                Ok(file) => {
+                    active.right_spill_in_progress = Some(file);
                 }
                 Err(e) => {
                     return ControlFlow::Break(Poll::Ready(Some(Err(e))));
@@ -1538,14 +1525,14 @@ impl NestedLoopJoinStream {
                     }
 
                     // In memory-limited mode, spill right batch to disk on first pass
-                    if self.is_first_right_pass
-                        && let Some(spill_file) = self.right_spill_in_progress.as_mut()
+                    if let SpillState::Active(ref mut active) = self.spill_state
+                        && active.is_first_right_pass
+                        && let Some(ref mut spill_file) = active.right_spill_in_progress
                     {
                         if let Err(e) = spill_file.append_batch(&right_batch) {
                             return ControlFlow::Break(Poll::Ready(Some(Err(e))));
                         }
-                        // Track max batch memory for read_spill_as_stream
-                        self.right_max_batch_memory = self
+                        active.right_max_batch_memory = active
                             .right_max_batch_memory
                             .max(right_batch.get_array_memory_size());
                     }
@@ -1567,13 +1554,15 @@ impl NestedLoopJoinStream {
                 None => {
                     // Right stream exhausted.
                     // In memory-limited mode, finalize the spill file after first pass.
-                    if self.is_first_right_pass {
+                    if let SpillState::Active(ref mut active) = self.spill_state
+                        && active.is_first_right_pass
+                    {
                         if let Some(mut spill_in_progress) =
-                            self.right_spill_in_progress.take()
+                            active.right_spill_in_progress.take()
                         {
                             match spill_in_progress.finish() {
                                 Ok(Some(file)) => {
-                                    self.right_spill_file = Some(file);
+                                    active.right_spill_file = Some(file);
                                 }
                                 Ok(None) => {
                                     // No data was spilled (right side was empty)
@@ -1583,7 +1572,7 @@ impl NestedLoopJoinStream {
                                 }
                             }
                         }
-                        self.is_first_right_pass = false;
+                        active.is_first_right_pass = false;
                     }
 
                     self.state = NLJState::EmitLeftUnmatched;
@@ -1711,8 +1700,8 @@ impl NestedLoopJoinStream {
                     if !self.left_exhausted && self.is_memory_limited() {
                         // More left data to process — free current chunk and
                         // go back to BufferingLeft for the next chunk
-                        if let Some(reservation) = self.left_reservation.as_ref() {
-                            reservation.resize(0);
+                        if let SpillState::Active(ref active) = self.spill_state {
+                            active.reservation.resize(0);
                         }
                         self.buffered_left_data = None;
                         self.left_probe_idx = 0;
