@@ -109,7 +109,7 @@ git commit -a -m 'Update version'
 To protect a release candidate branch from accidental merges, create PR against `main`:
 
 ```shell
-git fetch upstream && git checkout -b protect_branch_50
+git fetch apache && git checkout -b protect_branch_50
 ./dev/release/add-branch-protection.sh 50
 ```
 
@@ -136,7 +136,7 @@ Backports are important and sometimes unexpected, so please proceed to next rele
 
 ### 5. Prepare PR to Update Changelog
 
-Update the [changelog] in `dev/changelog/`. Each release has its
+Update the changelog in `dev/changelog/`. Each release has its
 own file, such as `dev/changelog/50.0.0.md`, which should include all changes
 since the previous release.
 
@@ -184,7 +184,7 @@ git commit -a -m 'Update changelog'
 
 ### 6. Prepare Release Candidate Artifacts
 
-After the changelog updates merged to `main`, you are ready to create release artifacts based off the
+After the changelog updates merged to `branch-N`, you are ready to create release artifacts based off the
 merged commit.
 
 - You must be a committer to run these scripts because they upload to the
@@ -222,7 +222,7 @@ Run the `create-tarball.sh` script with the `<version>` tag and `<rc>` number yo
 For example, to create the `50.3.0-rc1` artifacts:
 
 ```shell
-GH_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 50.3.0 1
+GITHUB_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 50.3.0 1
 ```
 
 The `create-tarball.sh` script
@@ -234,7 +234,7 @@ The `create-tarball.sh` script
 2. Provides you an email template to
    send to `dev@datafusion.apache.org` for release voting.
 
-### 8. Vote on Release Candidate Artifacts
+### 7. Vote on Release Candidate Artifacts
 
 Send the email output from the script to `dev@datafusion.apache.org`.
 
@@ -257,7 +257,7 @@ If the release is not approved or urgent backports requested, please start over 
 
 #### If the Vote Passes: Announce the Result
 
-Call the vote on the Arrow dev list by replying to the RC voting thread. The
+Call the vote on the Apache Datafusion dev list by replying to the RC voting thread. The
 reply should have a new subject constructed by adding the `[RESULT]` prefix to the
 old subject line.
 
@@ -268,7 +268,7 @@ The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
 with the release verification.
 ```
 
-### 7. Finalize the Release
+### 8. Finalize the Release
 
 NOTE: steps in this section can only be done by PMC members after release is approved.
 
@@ -282,7 +282,7 @@ the `release-tarball.sh` script:
 
 Congratulations! The release is now official!
 
-### 8. Create Release git tags
+### 9. Create Release git tags
 
 Tag the same release candidate commit with the final release tag
 
@@ -292,7 +292,7 @@ git tag 50.3.0
 git push apache 50.3.0
 ```
 
-### 9. Publish on Crates.io
+### 10. Publish on Crates.io
 
 Only approved releases of the tarball should be published to
 crates.io, in order to conform to Apache Software Foundation
@@ -372,12 +372,12 @@ MacBook-Pro-135:apache-datafusion-53.1.0 ovoievodin$ (cd datafusion/proto && car
 Note: [`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
 so no action is needed.
 
-### 10. Sync Changelog and Version to main
+### 11. Sync Changelog and Version to main
 
 To sync changelog version and create PR against `main`:
 
 ```shell
-git fetch upstream && git checkout -b sync_change_log_version
+git fetch apache && git checkout -b sync_change_log_version
 ```
 
 - Cherry-pick or patch the version updates from step 2
@@ -387,7 +387,7 @@ git fetch upstream && git checkout -b sync_change_log_version
 - Create a PR against `main`.
 - Merge to `main`.
 
-### 10: Add the release to Apache Reporter
+### 12. Add the release to Apache Reporter
 
 When you have published the release, please help the project by adding the release to
 [Apache Reporter](https://reporter.apache.org/). The reporter system should
@@ -398,7 +398,7 @@ the examples from previous releases.
 The release information is used to generate a template for a board report (see example from Apache Arrow project
 [here](https://github.com/apache/arrow/pull/14357)).
 
-### 11: Delete Old RCs and Releases
+### 13. Delete Old RCs and Releases
 
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
