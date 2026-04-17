@@ -16,6 +16,7 @@
 // under the License.
 
 use std::hint::black_box;
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
@@ -23,33 +24,32 @@ use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::{left, right};
 
+const BATCH_SIZE: usize = 8192;
+
 fn create_args(
-    size: usize,
     str_len: usize,
-    use_negative: bool,
+    n_range: Range<i64>,
     is_string_view: bool,
 ) -> Vec<ColumnarValue> {
     let string_arg = if is_string_view {
         ColumnarValue::Array(Arc::new(create_string_view_array_with_len(
-            size, 0.1, str_len, true,
+            BATCH_SIZE, 0.1, str_len, true,
         )))
     } else {
         ColumnarValue::Array(Arc::new(create_string_array_with_len::<i32>(
-            size, 0.1, str_len,
+            BATCH_SIZE, 0.1, str_len,
         )))
     };
 
-    // For negative n, we want to trigger the double-iteration code path
-    let n_values: Vec<i64> = if use_negative {
-        (0..size).map(|i| -((i % 10 + 1) as i64)).collect()
-    } else {
-        (0..size).map(|i| (i % 10 + 1) as i64).collect()
-    };
+    let n_span = (n_range.end - n_range.start) as usize;
+    let n_values: Vec<i64> = (0..BATCH_SIZE)
+        .map(|i| n_range.start + (i % n_span) as i64)
+        .collect();
     let n_array = Arc::new(Int64Array::from(n_values));
 
     vec![
@@ -59,68 +59,55 @@ fn create_args(
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let left_function = left();
-    let right_function = right();
+    // Short results (1-10 chars) produce inline StringView entries (≤12 bytes).
+    // Long results (20-29 chars) produce out-of-line entries.
+    let cases = [
+        ("short_result", 32, 1..11_i64),
+        ("long_result", 32, 20..30_i64),
+    ];
 
-    for function in [left_function, right_function] {
+    for function in [left(), right()] {
+        let mut group = c.benchmark_group(function.name().to_string());
+
         for is_string_view in [false, true] {
-            for is_negative in [false, true] {
-                for size in [1024, 4096] {
-                    let function_name = function.name();
-                    let mut group =
-                        c.benchmark_group(format!("{function_name} size={size}"));
+            let array_type = if is_string_view {
+                "string_view"
+            } else {
+                "string"
+            };
 
-                    let bench_name = format!(
-                        "{} {} n",
-                        if is_string_view {
-                            "string_view_array"
-                        } else {
-                            "string_array"
-                        },
-                        if is_negative { "negative" } else { "positive" },
-                    );
-                    let return_type = if is_string_view {
-                        DataType::Utf8View
-                    } else {
-                        DataType::Utf8
-                    };
+            for (case_name, str_len, n_range) in &cases {
+                let bench_name = format!("{array_type} {case_name}");
+                let args = create_args(*str_len, n_range.clone(), is_string_view);
+                let arg_fields: Vec<_> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, arg)| {
+                        Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+                    })
+                    .collect();
+                let config_options = Arc::new(ConfigOptions::default());
+                let return_field = Field::new("f", DataType::Utf8View, true).into();
 
-                    let args = create_args(size, 32, is_negative, is_string_view);
-                    group.bench_function(BenchmarkId::new(bench_name, size), |b| {
-                        let arg_fields = args
-                            .iter()
-                            .enumerate()
-                            .map(|(idx, arg)| {
-                                Field::new(format!("arg_{idx}"), arg.data_type(), true)
-                                    .into()
-                            })
-                            .collect::<Vec<_>>();
-                        let config_options = Arc::new(ConfigOptions::default());
-
-                        b.iter(|| {
-                            black_box(
-                                function
-                                    .invoke_with_args(ScalarFunctionArgs {
-                                        args: args.clone(),
-                                        arg_fields: arg_fields.clone(),
-                                        number_rows: size,
-                                        return_field: Field::new(
-                                            "f",
-                                            return_type.clone(),
-                                            true,
-                                        )
-                                        .into(),
-                                        config_options: Arc::clone(&config_options),
-                                    })
-                                    .expect("should work"),
-                            )
-                        })
-                    });
-
-                    group.finish();
-                }
+                group.bench_function(&bench_name, |b| {
+                    b.iter(|| {
+                        black_box(
+                            function
+                                .invoke_with_args(ScalarFunctionArgs {
+                                    args: args.clone(),
+                                    arg_fields: arg_fields.clone(),
+                                    number_rows: BATCH_SIZE,
+                                    return_field: Arc::clone(&return_field),
+                                    config_options: Arc::clone(&config_options),
+                                })
+                                .expect("should work"),
+                        )
+                    })
+                });
             }
         }
+
+        group.finish();
     }
 }
 

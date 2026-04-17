@@ -311,6 +311,15 @@ config_namespace! {
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
         pub default_null_ordering: String, default = "nulls_max".to_string()
+
+        /// When set to true, DataFusion may remove `ORDER BY` clauses from
+        /// subqueries or CTEs during SQL planning when their ordering cannot
+        /// affect the result, such as when no `LIMIT` or other
+        /// order-sensitive operator depends on them.
+        ///
+        /// Disable this option to preserve explicit subquery ordering in the
+        /// planned query.
+        pub enable_subquery_sort_elimination: bool, default = true
     }
 }
 
