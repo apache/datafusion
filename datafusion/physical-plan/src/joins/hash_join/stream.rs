@@ -424,6 +424,49 @@ impl HashJoinStream {
         }
     }
 
+    /// Transitions state after build-side data has been collected, automatically
+    /// reporting build data to the accumulator when one is present.
+    ///
+    /// If a `build_accumulator` is configured, this method constructs the
+    /// appropriate [`PartitionBuildData`], schedules the reporting future, and
+    /// returns [`HashJoinStreamState::WaitPartitionBoundsReport`]. Otherwise it
+    /// delegates to [`Self::state_after_build_ready`].
+    fn transition_after_build_collected(
+        &mut self,
+        left_data: &Arc<JoinLeftData>,
+    ) -> HashJoinStreamState {
+        let Some(build_accumulator) = self.build_accumulator.as_ref() else {
+            return Self::state_after_build_ready(self.join_type, left_data.as_ref());
+        };
+
+        let pushdown = left_data.membership().clone();
+        let bounds = left_data
+            .bounds
+            .clone()
+            .unwrap_or_else(|| PartitionBounds::new(vec![]));
+
+        let build_data = match self.mode {
+            PartitionMode::Partitioned => PartitionBuildData::Partitioned {
+                partition_id: self.partition,
+                pushdown,
+                bounds,
+            },
+            PartitionMode::CollectLeft => {
+                PartitionBuildData::CollectLeft { pushdown, bounds }
+            }
+            PartitionMode::Auto => unreachable!(
+                "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
+            ),
+        };
+
+        let acc = Arc::clone(build_accumulator);
+        self.build_waiter = Some(OnceFut::new(async move {
+            acc.report_build_data(build_data).await
+        }));
+        self.build_reported = true;
+        HashJoinStreamState::WaitPartitionBoundsReport
+    }
+
     /// Separate implementation function that unpins the [`HashJoinStream`] so
     /// that partial borrows work correctly
     fn poll_next_impl(
@@ -514,56 +557,7 @@ impl HashJoinStream {
         // not the build side (left). The probe-side NULL check happens during process_probe_batch.
         // The probe_side_has_null flag will be set there if any probe batch contains NULL.
 
-        // Handle dynamic filter build-side information accumulation
-        //
-        // Dynamic filter coordination between partitions:
-        // Report hash maps (Partitioned mode) or bounds (CollectLeft mode) to the accumulator
-        // which will handle synchronization and filter updates
-        if let Some(ref build_accumulator) = self.build_accumulator {
-            let build_accumulator = Arc::clone(build_accumulator);
-
-            let left_side_partition_id = match self.mode {
-                PartitionMode::Partitioned => self.partition,
-                PartitionMode::CollectLeft => 0,
-                PartitionMode::Auto => unreachable!(
-                    "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
-                ),
-            };
-
-            // Determine pushdown strategy based on availability of InList values
-            let pushdown = left_data.membership().clone();
-
-            // Construct the appropriate build data enum variant based on partition mode
-            let build_data = match self.mode {
-                PartitionMode::Partitioned => PartitionBuildData::Partitioned {
-                    partition_id: left_side_partition_id,
-                    pushdown,
-                    bounds: left_data
-                        .bounds
-                        .clone()
-                        .unwrap_or_else(|| PartitionBounds::new(vec![])),
-                },
-                PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
-                    pushdown,
-                    bounds: left_data
-                        .bounds
-                        .clone()
-                        .unwrap_or_else(|| PartitionBounds::new(vec![])),
-                },
-                PartitionMode::Auto => unreachable!(
-                    "PartitionMode::Auto should not be present at execution time"
-                ),
-            };
-
-            self.build_waiter = Some(OnceFut::new(async move {
-                build_accumulator.report_build_data(build_data).await
-            }));
-            self.build_reported = true;
-            self.state = HashJoinStreamState::WaitPartitionBoundsReport;
-        } else {
-            self.state =
-                Self::state_after_build_ready(self.join_type, left_data.as_ref());
-        }
+        self.state = self.transition_after_build_collected(&left_data);
 
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
         Poll::Ready(Ok(StatefulStreamResult::Continue))
