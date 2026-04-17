@@ -259,8 +259,7 @@ pub fn serialize_physical_expr_with_converter(
 ) -> Result<protobuf::PhysicalExprNode> {
     // Snapshot the expr in case it has dynamic predicate state so
     // it can be serialized
-    let value = snapshot_physical_expr(Arc::clone(value))?;
-    let expr = value.as_any();
+    let expr = snapshot_physical_expr(Arc::clone(value))?;
 
     // HashTableLookupExpr is used for dynamic filter pushdown in hash joins.
     // It contains an Arc<dyn JoinHashMapType> (the build-side hash table) which
@@ -307,14 +306,37 @@ pub fn serialize_physical_expr_with_converter(
             )),
         })
     } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
+        // Linearize a nested binary expression tree of the same operator
+        // into a flat vector of operands to avoid deep recursion in proto.
+        let op = expr.op();
+        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![expr.right()];
+        let mut current_expr: &BinaryExpr = expr;
+        loop {
+            match current_expr.left().downcast_ref::<BinaryExpr>() {
+                Some(bin) if bin.op() == op => {
+                    operand_refs.push(bin.right());
+                    current_expr = bin;
+                }
+                _ => {
+                    operand_refs.push(current_expr.left());
+                    break;
+                }
+            }
+        }
+
+        // Reverse so operands are ordered from left innermost to right outermost
+        operand_refs.reverse();
+
+        let operands = operand_refs
+            .iter()
+            .map(|e| proto_converter.physical_expr_to_proto(e, codec))
+            .collect::<Result<Vec<_>>>()?;
+
         let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
-            l: Some(Box::new(
-                proto_converter.physical_expr_to_proto(expr.left(), codec)?,
-            )),
-            r: Some(Box::new(
-                proto_converter.physical_expr_to_proto(expr.right(), codec)?,
-            )),
-            op: format!("{:?}", expr.op()),
+            l: None,
+            r: None,
+            op: format!("{:?}", op),
+            operands,
         });
 
         Ok(protobuf::PhysicalExprNode {
@@ -506,7 +528,7 @@ pub fn serialize_physical_expr_with_converter(
         })
     } else {
         let mut buf: Vec<u8> = vec![];
-        match codec.try_encode_expr(&value, &mut buf) {
+        match codec.try_encode_expr(value, &mut buf) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalExprNode> = value
                     .children()

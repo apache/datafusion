@@ -81,6 +81,10 @@ name = "array_expression"
 
 [[bench]]
 harness = false
+name = "arrays_zip"
+
+[[bench]]
+harness = false
 name = "array_has"
 
 [[bench]]
@@ -122,3 +126,7 @@ name = "array_sort"
 [[bench]]
 harness = false
 name = "string_to_array"
+
+[[bench]]
+harness = false
+name = "array_resize"

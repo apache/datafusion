@@ -2773,7 +2773,7 @@ impl DefaultPhysicalPlanner {
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
-                .optimize(new_plan, session_state.config_options())
+                .optimize_with_context(new_plan, session_state)
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
@@ -4469,10 +4469,6 @@ digraph {
 
     #[async_trait]
     impl TableProvider for MockSchemaTableProvider {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn schema(&self) -> SchemaRef {
             Arc::clone(&self.logical_schema)
         }

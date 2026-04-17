@@ -378,6 +378,16 @@ fn math_decimal_coercion(
             let (lhs_type, value_type) = math_decimal_coercion(lhs_type, value_type)?;
             Some((lhs_type, value_type))
         }
+        (RunEndEncoded(_, field), _) => {
+            let (value_type, rhs_type) =
+                math_decimal_coercion(field.data_type(), rhs_type)?;
+            Some((value_type, rhs_type))
+        }
+        (_, RunEndEncoded(_, field)) => {
+            let (lhs_type, value_type) =
+                math_decimal_coercion(lhs_type, field.data_type())?;
+            Some((lhs_type, value_type))
+        }
         (
             Null,
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
@@ -1414,6 +1424,15 @@ fn mathematics_numerical_coercion(
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(lhs_type, value_type)
         }
+        (RunEndEncoded(_, lhs_field), RunEndEncoded(_, rhs_field)) => {
+            mathematics_numerical_coercion(lhs_field.data_type(), rhs_field.data_type())
+        }
+        (RunEndEncoded(_, field), _) => {
+            mathematics_numerical_coercion(field.data_type(), rhs_type)
+        }
+        (_, RunEndEncoded(_, field)) => {
+            mathematics_numerical_coercion(lhs_type, field.data_type())
+        }
         _ => numerical_coercion(lhs_type, rhs_type),
     }
 }
@@ -1492,6 +1511,15 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
         }
         (_, Dictionary(_, value_type)) => {
             lhs_type.is_numeric() && value_type.is_numeric()
+        }
+        (RunEndEncoded(_, lhs_field), RunEndEncoded(_, rhs_field)) => {
+            lhs_field.data_type().is_numeric() && rhs_field.data_type().is_numeric()
+        }
+        (RunEndEncoded(_, field), _) => {
+            field.data_type().is_numeric() && rhs_type.is_numeric()
+        }
+        (_, RunEndEncoded(_, field)) => {
+            lhs_type.is_numeric() && field.data_type().is_numeric()
         }
         _ => lhs_type.is_numeric() && rhs_type.is_numeric(),
     }

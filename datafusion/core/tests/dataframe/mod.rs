@@ -2458,9 +2458,8 @@ async fn cache_producer_test() -> Result<()> {
         @r"
     CacheNode
       Projection: aggregate_test_100.c2, aggregate_test_100.c3, CAST(CAST(aggregate_test_100.c2 AS Int64) + CAST(aggregate_test_100.c3 AS Int64) AS Int64) AS sum
-        Projection: aggregate_test_100.c2, aggregate_test_100.c3
-          Limit: skip=0, fetch=1
-            TableScan: aggregate_test_100, fetch=1
+        Limit: skip=0, fetch=1
+          TableScan: aggregate_test_100 projection=[c2, c3], fetch=1
     "
     );
     Ok(())
@@ -6849,6 +6848,53 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
         partial_agg_exec_schema.is_ok(),
         "Expected get AggregateExec schema to succeed with duplicate state fields"
     );
+
+    Ok(())
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/21411
+/// grouping() should work when wrapped in an alias via the DataFrame API.
+///
+/// This bug only manifests through the DataFrame API because `.alias()` wraps
+/// the `grouping()` call in an `Expr::Alias` node at the aggregate expression
+/// level. The SQL planner handles aliasing separately (via projection), so the
+/// `ResolveGroupingFunction` analyzer rule never sees an `Expr::Alias` wrapper
+/// around the aggregate function in SQL queries — making SQL-based tests
+/// insufficient to cover this case.
+#[tokio::test]
+async fn test_grouping_with_alias() -> Result<()> {
+    use datafusion_functions_aggregate::expr_fn::grouping;
+
+    let df = create_test_table("test")
+        .await?
+        .aggregate(vec![col("a")], vec![grouping(col("a")).alias("g")])?
+        .sort(vec![Sort::new(col("a"), true, false)])?;
+
+    let results = df.collect().await?;
+
+    let expected = [
+        "+-----------+---+",
+        "| a         | g |",
+        "+-----------+---+",
+        "| 123AbcDef | 0 |",
+        "| CBAdef    | 0 |",
+        "| abc123    | 0 |",
+        "| abcDEF    | 0 |",
+        "+-----------+---+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Also verify that nested aliases (e.g. .alias("x").alias("g")) work correctly
+    let df = create_test_table("test")
+        .await?
+        .aggregate(
+            vec![col("a")],
+            vec![grouping(col("a")).alias("x").alias("g")],
+        )?
+        .sort(vec![Sort::new(col("a"), true, false)])?;
+
+    let results = df.collect().await?;
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }

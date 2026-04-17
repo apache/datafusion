@@ -17,7 +17,6 @@
 
 //! UnKnownColumn expression
 
-use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -56,11 +55,6 @@ impl std::fmt::Display for UnKnownColumn {
 }
 
 impl PhysicalExpr for UnKnownColumn {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// Get the data type of this expression, given the schema of the input
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(DataType::Null)
