@@ -453,6 +453,15 @@ select concat(NULL::integer[], NULL::integer[]);
 ----
 NULL
 
+# Mixed list variants are coerced by array_concat's own coerce_types
+# rules (same result as calling array_concat directly).
+query ?T
+select
+  concat(arrow_cast([1, 2], 'FixedSizeList(2, Int64)'), make_array(3, 4)) as v,
+  arrow_typeof(concat(arrow_cast([1, 2], 'FixedSizeList(2, Int64)'), make_array(3, 4))) as t;
+----
+[1, 2, 3, 4] List(Int64)
+
 # Mixed array + non-array arguments are rejected at plan time.
 statement error Cannot mix array and non-array arguments in concat function
 select concat(make_array(1), 'x');

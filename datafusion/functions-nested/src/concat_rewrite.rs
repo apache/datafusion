@@ -29,7 +29,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_functions::string::concat::ConcatFunc;
 
-use crate::concat::array_concat_udf;
+use crate::concat::array_concat;
 
 /// [`FunctionRewrite`] that turns `concat(array, ...)` into
 /// `array_concat(array, ...)` at the analyzer phase.
@@ -81,8 +81,6 @@ impl FunctionRewrite for ConcatArrayRewrite {
         let Expr::ScalarFunction(ScalarFunction { args, .. }) = expr else {
             unreachable!("already matched above")
         };
-        Ok(Transformed::yes(Expr::ScalarFunction(
-            ScalarFunction::new_udf(array_concat_udf(), args),
-        )))
+        Ok(Transformed::yes(array_concat(args)))
     }
 }
