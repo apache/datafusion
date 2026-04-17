@@ -112,11 +112,10 @@ impl Ord for TestFile {
 /// 3.    3.336s  imdb.slt
 /// 4.    3.085s  push_down_filter_regression.slt
 /// 5.    2.926s  aggregate_skip_partial.slt
-/// 6.    2.453s  array.slt
-/// 7.    2.399s  window.slt
-/// 8.    2.198s  group_by.slt
-/// 9.    1.281s  clickbench.slt
-/// 10.    1.058s  datetime/timestamps.slt
+/// 6.    2.399s  window.slt
+/// 7.    2.198s  group_by.slt
+/// 8.    1.281s  clickbench.slt
+/// 9.    1.058s  datetime/timestamps.slt
 /// ```
 const TEST_PRIORITY_ENTRIES: &[&str] = &[
     "aggregate.slt", //  longest-running files go first
@@ -124,7 +123,6 @@ const TEST_PRIORITY_ENTRIES: &[&str] = &[
     "imdb.slt",
     "push_down_filter_regression.slt",
     "aggregate_skip_partial.slt",
-    "array.slt",
     "window.slt",
     "group_by.slt",
     "clickbench.slt",

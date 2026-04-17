@@ -1223,6 +1223,22 @@ ORDER BY tags, timestamp;
 4 tag2 90 75 80 95
 5 tag2 100 80 80 100
 
+# Test median on a sliding RANGE window with repeated values.
+query RR
+SELECT
+    x,
+    median(x) OVER (
+        ORDER BY x
+        RANGE BETWEEN 1 PRECEDING AND CURRENT ROW
+    ) AS median_val
+FROM (VALUES (1.0), (1.0), (2.0), (5.0)) AS t(x)
+ORDER BY x;
+----
+1 1
+1 1
+2 1
+5 5
+
 ###########
 # Issue #19612: Test that percentile_cont produces correct results
 # in window frame queries. Previously percentile_cont consumed its internal state
