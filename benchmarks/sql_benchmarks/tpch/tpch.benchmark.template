@@ -1,0 +1,18 @@
+name Q${QUERY_NUMBER_PADDED}
+group tpch
+subgroup sf${BENCH_SIZE:-1}
+
+init sql_benchmarks/tpch/init/set_config.sql
+
+echo Loading tpch sf${BENCH_SIZE:-1} ${TPCH_FILE_TYPE:-parquet} data
+
+load sql_benchmarks/tpch/init/load_${TPCH_FILE_TYPE:-parquet}.sql
+
+assert I
+SELECT COUNT(*) > 0 from lineitem;
+----
+true
+
+run sql_benchmarks/tpch/queries/q${QUERY_NUMBER_PADDED}.sql
+
+result sql_benchmarks/tpch/results/sf${BENCH_SIZE:-1}/q${QUERY_NUMBER_PADDED}.csv

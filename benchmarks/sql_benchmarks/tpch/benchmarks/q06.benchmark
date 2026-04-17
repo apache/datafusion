@@ -1,0 +1,4 @@
+
+template sql_benchmarks/tpch/tpch.benchmark.template
+QUERY_NUMBER=6
+QUERY_NUMBER_PADDED=06
