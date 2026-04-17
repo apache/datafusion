@@ -929,7 +929,12 @@ impl Interval {
     ///   when the calculated cardinality does not fit in an `u64`.
     pub fn cardinality(&self) -> Option<u64> {
         let data_type = self.data_type();
-        if data_type.is_integer() || data_type.is_temporal() {
+        if data_type.is_integer()
+            || matches!(
+                data_type,
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+            )
+        {
             self.upper.distance(&self.lower).map(|diff| diff as u64)
         } else if data_type.is_floating() {
             // Negative numbers are sorted in the reverse order. To

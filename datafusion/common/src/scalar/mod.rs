@@ -2528,6 +2528,8 @@ impl ScalarValue {
             }
             (Self::Date32(Some(l)), Self::Date32(Some(r))) => Some(l.abs_diff(*r) as _),
             (Self::Date64(Some(l)), Self::Date64(Some(r))) => Some(l.abs_diff(*r) as _),
+            // Timestamp values are stored as epoch ticks regardless of timezone
+            // annotation, so the distance is tz-independent (tz is display metadata).
             (Self::TimestampSecond(Some(l), _), Self::TimestampSecond(Some(r), _)) => {
                 Some(l.abs_diff(*r) as _)
             }
