@@ -63,9 +63,14 @@ serde_json = { workspace = true }
 sqlparser = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 ctor = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
 # Makes sure `test_display_pg_json` behaves in a consistent way regardless of
 # feature unification with dependencies
 serde_json = { workspace = true, features = ["preserve_order"] }
+
+[[bench]]
+name = "map_expressions"
+harness = false
