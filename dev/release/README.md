@@ -98,18 +98,18 @@ running:
 cargo check -p datafusion
 ```
 
-Then commit the changes and create a PR targeting the release branch.
+Then commit the changes and create a PR targeting the release branch `branch-N`.
 
 ```shell
 git commit -a -m 'Update version'
 ```
 
-### 3. Sync Update Release Version to Main and Branch Protection
+### 3. Protect Release Branch
 
-To protect a release candidate branch from accidental merges, create another PR against `main``:
+To protect a release candidate branch from accidental merges, create PR against `main`:
 
 ```shell
-git fetch upstream && git checkout -b sync_branch
+git fetch upstream && git checkout -b protect_branch_50
 ./dev/release/add-branch-protection.sh 50
 ```
 
@@ -121,15 +121,15 @@ branch-50:
     required_approving_review_count: 1
 ```
 
-- Cherry-pick the update version changes from step 2
 - Commit changes
-- Push to `origin/sync_branch`
+- Push to `origin/protect_branch_50`
 - Create a PR against `main`.
 - Merge to `main`.
+- Notify community in Discord/Slack that release branch is created
 
 ### 4. Backporting urgent changes
 
-After release branch `branch-N` created, got its version updated and protected, please check if there are any backports expected from the community.
+After release branch `branch-N` created, protected and got its version updated, please check if there are any backports expected from the community.
 Please refer to [Backport Flow](../../docs/source/contributor-guide/release_management.md#backport-workflow) for more details.
 
 Backports are important and sometimes unexpected, so please proceed to next release steps once all expected backports are applied.
@@ -182,21 +182,7 @@ Then commit the changes and create a PR targeting the release branch.
 git commit -a -m 'Update changelog'
 ```
 
-### 6. Sync Changelog to main
-
-To sync changelog create another PR against `main``:
-
-```shell
-git fetch upstream && git checkout -b sync_change_log
-```
-
-- Cherry-pick the changelog updates from step 5
-- Commit changes
-- Push to `origin/sync_change_log`
-- Create a PR against `main`.
-- Merge to `main`.
-
-### 7. Prepare Release Candidate Artifacts
+### 6. Prepare Release Candidate Artifacts
 
 After the changelog updates merged to `main`, you are ready to create release artifacts based off the
 merged commit.
@@ -282,7 +268,7 @@ The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
 with the release verification.
 ```
 
-### 6. Finalize the Release
+### 7. Finalize the Release
 
 NOTE: steps in this section can only be done by PMC members after release is approved.
 
@@ -296,7 +282,7 @@ the `release-tarball.sh` script:
 
 Congratulations! The release is now official!
 
-### 7. Create Release git tags
+### 8. Create Release git tags
 
 Tag the same release candidate commit with the final release tag
 
@@ -306,7 +292,7 @@ git tag 50.3.0
 git push apache 50.3.0
 ```
 
-### 8. Publish on Crates.io
+### 9. Publish on Crates.io
 
 Only approved releases of the tarball should be published to
 crates.io, in order to conform to Apache Software Foundation
@@ -386,7 +372,22 @@ MacBook-Pro-135:apache-datafusion-53.1.0 ovoievodin$ (cd datafusion/proto && car
 Note: [`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
 so no action is needed.
 
-### 9: Add the release to Apache Reporter
+### 10. Sync Changelog and Version to main
+
+To sync changelog version and create PR against `main`:
+
+```shell
+git fetch upstream && git checkout -b sync_change_log_version
+```
+
+- Cherry-pick or patch the version updates from step 2
+- Cherry-pick or patch the changelog updates from step 5
+- Commit changes, `git commit -a -m 'Sync changelog and version to main'`
+- Push to `origin/sync_change_log_version`
+- Create a PR against `main`.
+- Merge to `main`.
+
+### 10: Add the release to Apache Reporter
 
 When you have published the release, please help the project by adding the release to
 [Apache Reporter](https://reporter.apache.org/). The reporter system should
@@ -397,7 +398,7 @@ the examples from previous releases.
 The release information is used to generate a template for a board report (see example from Apache Arrow project
 [here](https://github.com/apache/arrow/pull/14357)).
 
-### 10: Delete Old RCs and Releases
+### 11: Delete Old RCs and Releases
 
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
