@@ -2341,14 +2341,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
         }
-        let prepare_param_data_types: Vec<Option<FieldRef>> =
-            if let Some(&max_idx) = prepare_param_data_types.keys().last() {
-                (0..=max_idx)
-                    .map(|i| prepare_param_data_types.remove(&i))
-                    .collect()
-            } else {
-                vec![]
-            };
+        let prepare_param_data_types = {
+            let len = prepare_param_data_types.keys().last().map_or(0, |&k| k + 1);
+            (0..len)
+                .map(|i| prepare_param_data_types.remove(&i))
+                .collect()
+        };
 
         // Projection
         let mut planner_context =
