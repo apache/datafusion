@@ -70,6 +70,19 @@ pub struct CommonOpt {
     /// Adds random latency in the range 20-200ms to each object store operation.
     #[arg(long = "simulate-latency")]
     pub simulate_latency: bool,
+
+    /// Number of dedicated `tokio-uring` worker threads. Each worker
+    /// owns its own `tokio_uring::start` runtime (a current-thread Tokio
+    /// reactor with an `io_uring` driver) and executes a partition of
+    /// the plan, while the custom `TokioUringObjectStore` dispatches
+    /// reads across the same pool — a thread-per-core model with
+    /// native `io_uring`.
+    ///
+    /// If unset, defaults to `std::thread::available_parallelism()` on
+    /// Linux and is disabled elsewhere. Pass `0` to force the legacy
+    /// tokio multi-thread path.
+    #[arg(long = "tokio-uring-workers")]
+    pub tokio_uring_workers: Option<usize>,
 }
 
 impl CommonOpt {
@@ -145,7 +158,40 @@ impl CommonOpt {
                 "Simulating S3-like object store latency (get: 25-200ms, list: 40-400ms)"
             );
         }
+
         Ok(rt)
+    }
+
+    /// Build a [`TokioUringPool`](super::tokio_uring_pool::TokioUringPool)
+    /// if the benchmark should use the thread-per-core `tokio-uring` path.
+    ///
+    /// Defaults:
+    /// * On Linux, if `--tokio-uring-workers` is unset, spawn one worker
+    ///   per available CPU (thread-per-core).
+    /// * `--tokio-uring-workers 0` forces the legacy tokio MT path.
+    /// * Non-Linux platforms always return `Ok(None)`.
+    #[cfg(target_os = "linux")]
+    pub fn tokio_uring_pool(
+        &self,
+    ) -> Result<Option<Arc<super::tokio_uring_pool::TokioUringPool>>> {
+        let workers = match self.tokio_uring_workers {
+            Some(0) => return Ok(None),
+            Some(n) => n,
+            None => std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
+        };
+        let pool = super::tokio_uring_pool::TokioUringPool::new(workers)?;
+        println!("Spawned tokio-uring pool with {workers} worker runtime(s)");
+        Ok(Some(pool))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn tokio_uring_pool(&self) -> Result<Option<()>> {
+        if matches!(self.tokio_uring_workers, Some(n) if n > 0) {
+            println!("--tokio-uring-workers is Linux-only; ignoring on this platform");
+        }
+        Ok(None)
     }
 }
 
@@ -190,6 +236,7 @@ mod tests {
             sort_spill_reservation_bytes: None,
             debug: false,
             simulate_latency: false,
+            tokio_uring_workers: None,
         };
 
         // With env var set, builder should succeed and have a memory pool

@@ -20,6 +20,10 @@ pub mod latency_object_store;
 mod memory;
 mod options;
 mod run;
+#[cfg(target_os = "linux")]
+pub mod tokio_uring_pool;
+#[cfg(target_os = "linux")]
+pub mod tokio_uring_store;
 
 pub use memory::print_memory_stats;
 pub use options::CommonOpt;

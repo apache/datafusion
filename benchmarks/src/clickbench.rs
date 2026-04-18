@@ -18,9 +18,13 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 use clap::Args;
+#[cfg(target_os = "linux")]
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{
     error::{DataFusionError, Result},
@@ -28,6 +32,8 @@ use datafusion::{
 };
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::instant::Instant;
+#[cfg(target_os = "linux")]
+use futures::StreamExt;
 
 /// SQL to create the hits view with proper EventDate casting.
 ///
@@ -208,6 +214,25 @@ impl RunOpt {
         }
 
         let rt = self.common.build_runtime()?;
+
+        // If `--tokio-uring-workers` was set, spawn the pool and
+        // register a TokioUringObjectStore for file:// so every read
+        // travels through one of the pool's io_uring runtimes.
+        #[cfg(target_os = "linux")]
+        let uring_pool = {
+            let pool = self.common.tokio_uring_pool()?;
+            if let Some(pool) = pool.as_ref() {
+                use crate::util::tokio_uring_store::TokioUringObjectStore;
+                let store: Arc<dyn object_store::ObjectStore> =
+                    Arc::new(TokioUringObjectStore::new(Arc::clone(pool)));
+                let url = ObjectStoreUrl::parse("file:///")?;
+                rt.register_object_store(url.as_ref(), store);
+            }
+            pool
+        };
+        #[cfg(not(target_os = "linux"))]
+        let uring_pool: Option<()> = self.common.tokio_uring_pool()?;
+
         let ctx = SessionContext::new_with_config_rt(config, rt);
 
         self.register_hits(&ctx).await?;
@@ -225,7 +250,17 @@ impl RunOpt {
                 break;
             };
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let query_run = self.benchmark_query(&sql, query_id, &ctx).await;
+            #[cfg(target_os = "linux")]
+            let query_run = if let Some(pool) = uring_pool.as_ref() {
+                self.benchmark_query_uring(&sql, query_id, &ctx, pool).await
+            } else {
+                self.benchmark_query(&sql, query_id, &ctx).await
+            };
+            #[cfg(not(target_os = "linux"))]
+            let query_run = {
+                let _ = &uring_pool;
+                self.benchmark_query(&sql, query_id, &ctx).await
+            };
             match query_run {
                 Ok(query_results) => {
                     for iter in query_results {
@@ -241,6 +276,144 @@ impl RunOpt {
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
         benchmark_run.maybe_print_failures();
         Ok(())
+    }
+
+    /// Execute the query with each fan-out partition dispatched to a
+    /// `tokio-uring` worker, so plan execution itself happens on the
+    /// pool's io_uring runtimes in parallel.
+    ///
+    /// If the root is a [`CoalescePartitionsExec`] or
+    /// [`SortPreservingMergeExec`] the root is stripped and its
+    /// children's `N` partitions are fanned out instead; the final
+    /// merge then runs as a single follow-up task on the pool.
+    #[cfg(target_os = "linux")]
+    async fn benchmark_query_uring(
+        &self,
+        sql: &str,
+        query_id: usize,
+        ctx: &SessionContext,
+        pool: &Arc<crate::util::tokio_uring_pool::TokioUringPool>,
+    ) -> Result<Vec<QueryResult>> {
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+        use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+
+        println!("Q{query_id}: {sql}");
+
+        let mut millis = Vec::with_capacity(self.iterations());
+        let mut query_results = vec![];
+        for i in 0..self.iterations() {
+            let start = Instant::now();
+
+            // Planning runs on the main Tokio runtime — it's CPU-bound
+            // and produces a Send, 'static physical plan we can hand off.
+            let df = ctx.sql(sql).await?;
+            let full_plan = df.create_physical_plan().await?;
+            let task_ctx = ctx.task_ctx();
+
+            // If the root collapses N partitions into 1 (Coalesce / SPM),
+            // strip it so we can fan the children out across the pool —
+            // otherwise only one worker would do any real work.
+            enum FinalMerge {
+                None,
+                Concat,
+                SortPreserving(datafusion::physical_expr::LexOrdering, Option<usize>),
+            }
+
+            let (child_plan, final_merge): (Arc<dyn ExecutionPlan>, FinalMerge) =
+                if let Some(spm) = full_plan.downcast_ref::<SortPreservingMergeExec>() {
+                    (
+                        Arc::clone(spm.input()),
+                        FinalMerge::SortPreserving(spm.expr().clone(), spm.fetch()),
+                    )
+                } else if let Some(c) = full_plan.downcast_ref::<CoalescePartitionsExec>()
+                {
+                    (Arc::clone(c.input()), FinalMerge::Concat)
+                } else {
+                    (Arc::clone(&full_plan), FinalMerge::None)
+                };
+
+            let n_partitions = child_plan
+                .properties()
+                .output_partitioning()
+                .partition_count();
+
+            // Each child partition runs on its own pool worker.
+            let mut handles = Vec::with_capacity(n_partitions);
+            for p in 0..n_partitions {
+                let plan = Arc::clone(&child_plan);
+                let task_ctx = Arc::clone(&task_ctx);
+                handles.push(pool.spawn(move || async move {
+                    let mut stream = plan.execute(p, task_ctx)?;
+                    let mut batches = Vec::new();
+                    while let Some(batch) = stream.next().await {
+                        batches.push(batch?);
+                    }
+                    Ok::<_, DataFusionError>(batches)
+                }));
+            }
+
+            let mut partitions: Vec<Vec<arrow::record_batch::RecordBatch>> =
+                Vec::with_capacity(n_partitions);
+            for h in handles {
+                partitions.push(h.await??);
+            }
+
+            // Reassemble according to the root we stripped.
+            let row_count = match final_merge {
+                FinalMerge::None | FinalMerge::Concat => partitions
+                    .iter()
+                    .flat_map(|p| p.iter())
+                    .map(|b| b.num_rows())
+                    .sum::<usize>(),
+                FinalMerge::SortPreserving(expr, fetch) => {
+                    let schema = child_plan.schema();
+                    let mem =
+                        MemorySourceConfig::try_new_exec(&partitions, schema, None)?;
+                    let mut merge = SortPreservingMergeExec::new(expr, mem);
+                    if let Some(f) = fetch {
+                        merge = merge.with_fetch(Some(f));
+                    }
+                    let merge: Arc<dyn ExecutionPlan> = Arc::new(merge);
+                    let task_ctx = Arc::clone(&task_ctx);
+                    let batches = pool
+                        .spawn(move || async move {
+                            let mut stream = merge.execute(0, task_ctx)?;
+                            let mut batches = Vec::new();
+                            while let Some(b) = stream.next().await {
+                                batches.push(b?);
+                            }
+                            Ok::<_, DataFusionError>(batches)
+                        })
+                        .await??;
+                    batches.iter().map(|b| b.num_rows()).sum::<usize>()
+                }
+            };
+
+            let elapsed = start.elapsed();
+            let ms = elapsed.as_secs_f64() * 1000.0;
+            millis.push(ms);
+            println!(
+                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows ({n_partitions} partitions)"
+            );
+            query_results.push(QueryResult { elapsed, row_count });
+        }
+
+        if self.common.debug {
+            ctx.sql(sql)
+                .await?
+                .explain_with_options(
+                    ExplainOption::default().with_format(ExplainFormat::Tree),
+                )?
+                .show()
+                .await?;
+        }
+        let avg = millis.iter().sum::<f64>() / millis.len() as f64;
+        println!("Query {query_id} avg time: {avg:.2} ms (tokio-uring pool)");
+        print_memory_stats();
+
+        Ok(query_results)
     }
 
     async fn benchmark_query(
