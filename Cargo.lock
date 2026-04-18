@@ -1810,6 +1810,7 @@ dependencies = [
  "clap",
  "datafusion",
  "datafusion-common",
+ "datafusion-morsel-scheduler",
  "datafusion-proto",
  "env_logger",
  "futures",
@@ -2366,6 +2367,20 @@ dependencies = [
  "datafusion-doc",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "datafusion-morsel-scheduler"
+version = "53.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-physical-expr",
+ "datafusion-physical-plan",
+ "futures",
+ "log",
+ "tokio",
 ]
 
 [[package]]

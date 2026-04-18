@@ -28,6 +28,7 @@ use datafusion::{
     prelude::SessionConfig,
 };
 use datafusion_common::{DataFusionError, Result};
+use datafusion_morsel_scheduler::WorkerPool;
 use object_store::local::LocalFileSystem;
 
 use super::latency_object_store::LatencyObjectStore;
@@ -70,6 +71,18 @@ pub struct CommonOpt {
     /// Adds random latency in the range 20-200ms to each object store operation.
     #[arg(long = "simulate-latency")]
     pub simulate_latency: bool,
+
+    /// Disable the experimental morsel-driven scheduler that defaults to
+    /// one `current_thread` Tokio runtime per core. When disabled the
+    /// benchmark executes plans on the ambient multi-threaded runtime.
+    #[arg(long = "no-morsel-scheduler")]
+    pub no_morsel_scheduler: bool,
+
+    /// Number of worker threads in the morsel scheduler's pool. When
+    /// unset, defaults to `std::thread::available_parallelism()`. Ignored
+    /// if `--no-morsel-scheduler` is passed.
+    #[arg(long = "morsel-workers")]
+    pub morsel_workers: Option<usize>,
 }
 
 impl CommonOpt {
@@ -147,6 +160,22 @@ impl CommonOpt {
         }
         Ok(rt)
     }
+
+    /// Build a [`WorkerPool`] for the morsel-driven scheduler, unless
+    /// the user opted out with `--no-morsel-scheduler`.
+    pub fn morsel_worker_pool(&self) -> Result<Option<Arc<WorkerPool>>> {
+        if self.no_morsel_scheduler {
+            return Ok(None);
+        }
+        let workers = self.morsel_workers.unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+        });
+        let pool = WorkerPool::new(workers)?;
+        println!("Morsel scheduler pool: {workers} worker runtime(s)");
+        Ok(Some(pool))
+    }
 }
 
 /// Parse capacity limit from string to number of bytes by allowing units: K, M and G.
@@ -190,6 +219,8 @@ mod tests {
             sort_spill_reservation_bytes: None,
             debug: false,
             simulate_latency: false,
+            no_morsel_scheduler: false,
+            morsel_workers: None,
         };
 
         // With env var set, builder should succeed and have a memory pool

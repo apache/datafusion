@@ -18,6 +18,7 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 use clap::Args;
@@ -28,6 +29,8 @@ use datafusion::{
 };
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::instant::Instant;
+use datafusion_morsel_scheduler::{WorkerPool, execute as morsel_execute};
+use futures::StreamExt;
 
 /// SQL to create the hits view with proper EventDate casting.
 ///
@@ -212,6 +215,11 @@ impl RunOpt {
 
         self.register_hits(&ctx).await?;
 
+        // Build a morsel-scheduler worker pool unless the user opted
+        // out. When present, every benchmark iteration executes through
+        // the pool instead of the ambient multi-threaded runtime.
+        let pool = self.common.morsel_worker_pool()?;
+
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {
             let query_path = get_query_path(&self.queries_path, query_id);
@@ -225,7 +233,13 @@ impl RunOpt {
                 break;
             };
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let query_run = self.benchmark_query(&sql, query_id, &ctx).await;
+            let query_run = match pool.as_ref() {
+                Some(pool) => {
+                    self.benchmark_query_morsel(&sql, query_id, &ctx, pool)
+                        .await
+                }
+                None => self.benchmark_query(&sql, query_id, &ctx).await,
+            };
             match query_run {
                 Ok(query_results) => {
                     for iter in query_results {
@@ -241,6 +255,58 @@ impl RunOpt {
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
         benchmark_run.maybe_print_failures();
         Ok(())
+    }
+
+    /// Run `sql` through the morsel-driven scheduler. Planning still
+    /// happens on the ambient runtime (it's CPU-bound and produces a
+    /// `Send + 'static` physical plan); the physical plan is then
+    /// dispatched onto the per-core `WorkerPool`.
+    async fn benchmark_query_morsel(
+        &self,
+        sql: &str,
+        query_id: usize,
+        ctx: &SessionContext,
+        pool: &Arc<WorkerPool>,
+    ) -> Result<Vec<QueryResult>> {
+        println!("Q{query_id}: {sql}");
+
+        let mut millis = Vec::with_capacity(self.iterations());
+        let mut query_results = vec![];
+        for i in 0..self.iterations() {
+            let start = Instant::now();
+
+            let df = ctx.sql(sql).await?;
+            let plan = df.create_physical_plan().await?;
+            let task_ctx = ctx.task_ctx();
+
+            let mut stream = morsel_execute(&plan, &task_ctx, pool)?;
+            let mut row_count = 0usize;
+            while let Some(batch) = stream.next().await {
+                row_count += batch?.num_rows();
+            }
+
+            let elapsed = start.elapsed();
+            let ms = elapsed.as_secs_f64() * 1000.0;
+            millis.push(ms);
+            println!(
+                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
+            );
+            query_results.push(QueryResult { elapsed, row_count });
+        }
+        if self.common.debug {
+            ctx.sql(sql)
+                .await?
+                .explain_with_options(
+                    ExplainOption::default().with_format(ExplainFormat::Tree),
+                )?
+                .show()
+                .await?;
+        }
+        let avg = millis.iter().sum::<f64>() / millis.len() as f64;
+        println!("Query {query_id} avg time: {avg:.2} ms (morsel scheduler)");
+        print_memory_stats();
+
+        Ok(query_results)
     }
 
     async fn benchmark_query(

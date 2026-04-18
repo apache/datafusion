@@ -45,6 +45,7 @@ members = [
     "datafusion/physical-expr-common",
     "datafusion/physical-optimizer",
     "datafusion/pruning",
+    "datafusion/morsel-scheduler",
     "datafusion/physical-plan",
     "datafusion/proto",
     "datafusion/proto/gen",
@@ -140,6 +141,7 @@ datafusion-functions-table = { path = "datafusion/functions-table", version = "5
 datafusion-functions-window = { path = "datafusion/functions-window", version = "53.0.0" }
 datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "53.0.0" }
 datafusion-macros = { path = "datafusion/macros", version = "53.0.0" }
+datafusion-morsel-scheduler = { path = "datafusion/morsel-scheduler", version = "53.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "53.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "53.0.0", default-features = false }
 datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "53.0.0", default-features = false }
