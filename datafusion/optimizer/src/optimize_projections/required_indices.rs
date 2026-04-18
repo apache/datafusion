@@ -104,11 +104,6 @@ impl RequiredIndices {
     /// Adds the indices of the fields referred to by the given expression
     /// `expr` within the given schema (`input_schema`).
     ///
-    /// Walks the expression tree once, pushing the index of every referenced
-    /// column directly into `self.indices`. Subquery expressions are leaves
-    /// for the default traversal, so their outer-referenced columns are
-    /// collected by an explicit recursive descent.
-    ///
     /// Self is NOT compacted (duplicate indices are removed by a subsequent
     /// [`Self::compact`] call), and thus this method is not pub.
     ///
@@ -117,6 +112,8 @@ impl RequiredIndices {
     /// * `input_schema`: The input schema to analyze for index requirements.
     /// * `expr`: An expression for which we want to find necessary field indices.
     fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) {
+        // `apply` does not descend into subqueries, so recurse manually to
+        // handle those cases.
         expr.apply(|e| {
             match e {
                 Expr::Column(c) | Expr::OuterReferenceColumn(_, c) => {
