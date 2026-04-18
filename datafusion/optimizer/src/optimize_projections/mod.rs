@@ -21,7 +21,6 @@ mod required_indices;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
@@ -147,26 +146,39 @@ fn optimize_projections(
             // `aggregate.aggr_expr`:
             let (group_by_reqs, aggregate_reqs) = indices.split_off(n_group_exprs);
 
-            // Get absolutely necessary GROUP BY fields:
-            let group_by_expr_existing = aggregate
-                .group_expr
-                .iter()
-                .map(|group_by_expr| group_by_expr.schema_name().to_string())
-                .collect::<Vec<_>>();
-
-            let new_group_bys = if let Some(simplest_groupby_indices) =
-                get_required_group_by_exprs_indices(
-                    aggregate.input.schema(),
-                    &group_by_expr_existing,
-                ) {
-                // Some of the fields in the GROUP BY may be required by the
-                // parent even if these fields are unnecessary in terms of
-                // functional dependency.
-                group_by_reqs
-                    .append(&simplest_groupby_indices)
-                    .get_at_indices(&aggregate.group_expr)
-            } else {
+            // Get absolutely necessary GROUP BY fields.
+            //
+            // When the input has no functional dependencies, we can
+            // short-circuit this analysis.
+            let new_group_bys = if aggregate
+                .input
+                .schema()
+                .functional_dependencies()
+                .is_empty()
+            {
                 aggregate.group_expr
+            } else {
+                let group_by_expr_existing = aggregate
+                    .group_expr
+                    .iter()
+                    .map(|group_by_expr| group_by_expr.schema_name().to_string())
+                    .collect::<Vec<_>>();
+
+                if let Some(simplest_groupby_indices) =
+                    get_required_group_by_exprs_indices(
+                        aggregate.input.schema(),
+                        &group_by_expr_existing,
+                    )
+                {
+                    // Some of the fields in the GROUP BY may be required by
+                    // the parent even if these fields are unnecessary in
+                    // terms of functional dependency.
+                    group_by_reqs
+                        .append(&simplest_groupby_indices)
+                        .get_at_indices(&aggregate.group_expr)
+                } else {
+                    aggregate.group_expr
+                }
             };
 
             // Only use the absolutely necessary aggregate expressions required
@@ -680,56 +692,6 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
             _ => Ok(Transformed::no(expr)),
         }
     })
-}
-
-/// Accumulates outer-referenced columns by the
-/// given expression, `expr`.
-///
-/// # Parameters
-///
-/// * `expr` - The expression to analyze for outer-referenced columns.
-/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
-///   columns are collected.
-fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
-    // inspect_expr_pre doesn't handle subquery references, so find them explicitly
-    expr.apply(|expr| {
-        match expr {
-            Expr::OuterReferenceColumn(_, col) => {
-                columns.insert(col);
-            }
-            Expr::ScalarSubquery(subquery) => {
-                outer_columns_helper_multi(&subquery.outer_ref_columns, columns);
-            }
-            Expr::Exists(exists) => {
-                outer_columns_helper_multi(&exists.subquery.outer_ref_columns, columns);
-            }
-            Expr::InSubquery(insubquery) => {
-                outer_columns_helper_multi(
-                    &insubquery.subquery.outer_ref_columns,
-                    columns,
-                );
-            }
-            _ => {}
-        };
-        Ok(TreeNodeRecursion::Continue)
-    })
-    // unwrap: closure above never returns Err, so can not be Err here
-    .unwrap();
-}
-
-/// A recursive subroutine that accumulates outer-referenced columns by the
-/// given expressions (`exprs`).
-///
-/// # Parameters
-///
-/// * `exprs` - The expressions to analyze for outer-referenced columns.
-/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
-///   columns are collected.
-fn outer_columns_helper_multi<'a, 'b>(
-    exprs: impl IntoIterator<Item = &'a Expr>,
-    columns: &'b mut HashSet<&'a Column>,
-) {
-    exprs.into_iter().for_each(|e| outer_columns(e, columns));
 }
 
 /// Splits requirement indices for a join into left and right children based on
