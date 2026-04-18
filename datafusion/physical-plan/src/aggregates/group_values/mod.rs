@@ -208,40 +208,22 @@ pub fn new_group_values(
                 downcast_helper!(Decimal128Type, d, track_group_ids);
             }
             DataType::Utf8 => {
-                return Ok(Box::new(GroupValuesBytes::<i32>::new(
-                    OutputType::Utf8,
-                    track_group_ids,
-                )));
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Utf8)));
             }
             DataType::LargeUtf8 => {
-                return Ok(Box::new(GroupValuesBytes::<i64>::new(
-                    OutputType::Utf8,
-                    track_group_ids,
-                )));
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Utf8)));
             }
             DataType::Utf8View => {
-                return Ok(Box::new(GroupValuesBytesView::new(
-                    OutputType::Utf8View,
-                    track_group_ids,
-                )));
+                return Ok(Box::new(GroupValuesBytesView::new(OutputType::Utf8View)));
             }
             DataType::Binary => {
-                return Ok(Box::new(GroupValuesBytes::<i32>::new(
-                    OutputType::Binary,
-                    track_group_ids,
-                )));
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Binary)));
             }
             DataType::LargeBinary => {
-                return Ok(Box::new(GroupValuesBytes::<i64>::new(
-                    OutputType::Binary,
-                    track_group_ids,
-                )));
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Binary)));
             }
             DataType::BinaryView => {
-                return Ok(Box::new(GroupValuesBytesView::new(
-                    OutputType::BinaryView,
-                    track_group_ids,
-                )));
+                return Ok(Box::new(GroupValuesBytesView::new(OutputType::BinaryView)));
             }
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new()));
