@@ -4379,7 +4379,7 @@ array_to_string(array, delimiter[, null_string])
 
 ### `array_transform`
 
-transforms the values of a array
+transforms the values of an array
 
 ```sql
 array_transform(array, x -> x*2)
