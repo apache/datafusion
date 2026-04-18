@@ -102,9 +102,16 @@ impl PhysicalExpr for LambdaExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        let [body] = children.as_slice() else {
+            return internal_err!(
+                "LambdaExpr expects exactly 1 child, got {}",
+                children.len()
+            );
+        };
+
         Ok(Arc::new(Self::new(
             self.params.clone(),
-            Arc::clone(&children[0]),
+            Arc::clone(body),
         )))
     }
 
