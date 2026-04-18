@@ -1,0 +1,111 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for built-in mapping of SQL types to Arrow canonical extension types.
+# See: https://arrow.apache.org/docs/format/CanonicalExtensions.html
+
+#######
+# UUID Extension Type
+#######
+
+# CAST to UUID preserves extension metadata
+query ?T
+SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID),
+       arrow_metadata(CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID), 'ARROW:extension:name');
+----
+00010203040506070809000102030506 arrow.uuid
+
+# CREATE TABLE with UUID column preserves extension metadata through VALUES
+statement ok
+CREATE TABLE test_uuid (
+    value UUID
+) AS VALUES
+    (NULL);
+
+query TTT
+DESCRIBE test_uuid;
+----
+value FixedSizeBinary(16) YES
+
+query T
+SELECT arrow_metadata(value, 'ARROW:extension:name') FROM test_uuid;
+----
+arrow.uuid
+
+statement ok
+DROP TABLE test_uuid;
+
+# UUID column with non-null binary value
+statement ok
+CREATE TABLE test_uuid2 (
+    id UUID
+) AS VALUES
+    (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID));
+
+query T
+SELECT arrow_metadata(id, 'ARROW:extension:name') FROM test_uuid2;
+----
+arrow.uuid
+
+statement ok
+DROP TABLE test_uuid2;
+
+#######
+# JSON Extension Type
+#######
+
+# CAST to JSON preserves extension metadata
+query TT
+SELECT CAST('{"a": 1}' AS JSON),
+       arrow_metadata(CAST('{"a": 1}' AS JSON), 'ARROW:extension:name');
+----
+{"a": 1} arrow.json
+
+# CREATE TABLE with JSON column preserves extension metadata
+statement ok
+CREATE TABLE test_json (
+    data JSON
+) AS VALUES
+    (NULL);
+
+query TTT
+DESCRIBE test_json;
+----
+data Utf8 YES
+
+query T
+SELECT arrow_metadata(data, 'ARROW:extension:name') FROM test_json;
+----
+arrow.json
+
+statement ok
+DROP TABLE test_json;
+
+# JSON column with non-null value
+statement ok
+CREATE TABLE test_json2 (
+    data JSON
+) AS VALUES
+    (CAST('{"hello": "world"}' AS JSON));
+
+query T
+SELECT arrow_metadata(data, 'ARROW:extension:name') FROM test_json2;
+----
+arrow.json
+
+statement ok
+DROP TABLE test_json2;

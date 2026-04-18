@@ -23,6 +23,9 @@ use std::vec;
 
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
+use arrow_schema::extension::{
+    EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType, Json, Uuid,
+};
 use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
@@ -658,6 +661,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // If no type_planner can handle this type, use the default conversion
         match sql_type {
+            // Canonical Arrow extension types
+            SQLDataType::Uuid => Ok(Arc::new(
+                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
+                    HashMap::from([(
+                        EXTENSION_TYPE_NAME_KEY.to_string(),
+                        Uuid::NAME.to_string(),
+                    )]),
+                ),
+            )),
+            SQLDataType::JSON => Ok(Arc::new(
+                Field::new("", DataType::Utf8, true).with_metadata(HashMap::from([
+                    (EXTENSION_TYPE_NAME_KEY.to_string(), Json::NAME.to_string()),
+                    (EXTENSION_TYPE_METADATA_KEY.to_string(), "".to_string()),
+                ])),
+            )),
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 Ok(self.convert_data_type_to_field(inner_sql_type)?.into_list())
