@@ -43,6 +43,7 @@
 //! prefer `worker_id` but may be picked up by an idle peer. If strict
 //! affinity is ever needed, add a non-stealable variant.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -70,12 +71,27 @@ struct WorkerState {
 
 /// State shared by the pool handle and every worker thread.
 struct Shared {
+    /// Unique pool id, used by [`WorkerPool::current_worker`] to reject
+    /// matches when multiple pools coexist in the same process.
+    id: usize,
     workers: Vec<Arc<WorkerState>>,
     /// Wakes some sleeping worker when *any* deque grows — used to pull
     /// idle workers into stealing mode.
     global_notify: Notify,
     /// Round-robin cursor for [`WorkerPool::spawn_any`].
     next: AtomicUsize,
+}
+
+/// Source of fresh pool ids.
+static NEXT_POOL_ID: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// `Some((pool_id, worker_id))` on threads that host a pool
+    /// worker's reactor; `None` elsewhere. Set once by
+    /// [`run_worker`] before entering its scheduling loop, so any
+    /// code running on the worker thread — including spawned tasks —
+    /// can identify its host pool and worker.
+    static CURRENT_WORKER: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
 }
 
 /// Pool of thread-per-core `current_thread` Tokio runtimes with
@@ -108,6 +124,7 @@ impl WorkerPool {
             .collect();
 
         let shared = Arc::new(Shared {
+            id: NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
             workers: states,
             global_notify: Notify::new(),
             next: AtomicUsize::new(0),
@@ -154,6 +171,21 @@ impl WorkerPool {
     /// whether the caller actually uses it.
     pub fn next_worker(&self) -> usize {
         self.shared.next.fetch_add(1, Ordering::Relaxed) % self.shared.workers.len()
+    }
+
+    /// If the current OS thread is running inside **this** pool's
+    /// worker loop, returns that worker's id; otherwise returns `None`.
+    ///
+    /// Used by wrappers such as `WorkerDispatchExec` to skip their
+    /// bridge channel when the caller is already on the target
+    /// worker — every batch then flows through zero inter-thread
+    /// hops on the hot path.
+    pub fn current_worker(&self) -> Option<usize> {
+        let pool_id = self.shared.id;
+        CURRENT_WORKER.with(|cell| {
+            cell.get()
+                .and_then(|(pid, wid)| (pid == pool_id).then_some(wid))
+        })
     }
 
     /// Submit a job with affinity to `worker_id`.
@@ -224,6 +256,11 @@ async fn run_worker(
     mut sd_rx: mpsc::UnboundedReceiver<()>,
     local: &LocalSet,
 ) {
+    // Mark this OS thread as a worker of `shared.id`. This stays set
+    // for the life of the thread, so every task spawned onto `local`
+    // sees it.
+    CURRENT_WORKER.with(|cell| cell.set(Some((shared.id, my_id))));
+
     let me = Arc::clone(&shared.workers[my_id]);
     loop {
         // 1) Own deque (LIFO — hottest cache).
@@ -310,6 +347,51 @@ mod tests {
                 let v = pool.spawn_any(|| async { 7u32 }).await.unwrap();
                 assert_eq!(v, 7);
             }
+        });
+    }
+
+    #[test]
+    fn current_worker_reports_self_on_a_worker_thread() {
+        let pool = WorkerPool::new(3).unwrap();
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+
+        rt.block_on(async {
+            // Outside any worker thread, we should see None even
+            // though this pool exists.
+            assert_eq!(pool.current_worker(), None);
+
+            // Inside a job on worker 1, the thread-local should
+            // resolve back to this pool's worker id. Stealing can
+            // change the id — just assert it's a valid worker.
+            let observed = pool
+                .spawn_on(1, {
+                    let pool = Arc::clone(&pool);
+                    move || async move { pool.current_worker() }
+                })
+                .await
+                .unwrap();
+            let id = observed.expect("expected to run on a worker of this pool");
+            assert!(id < pool.worker_count());
+        });
+    }
+
+    #[test]
+    fn current_worker_returns_none_for_a_different_pool() {
+        let pool_a = WorkerPool::new(2).unwrap();
+        let pool_b = WorkerPool::new(2).unwrap();
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+
+        rt.block_on(async {
+            // Run on pool_a but ask pool_b — should get None since
+            // this thread isn't one of pool_b's workers.
+            let out = pool_a
+                .spawn_on(0, {
+                    let pool_b = Arc::clone(&pool_b);
+                    move || async move { pool_b.current_worker() }
+                })
+                .await
+                .unwrap();
+            assert_eq!(out, None);
         });
     }
 

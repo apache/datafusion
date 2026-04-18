@@ -153,20 +153,35 @@ impl ExecutionPlan for WorkerDispatchExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let worker_count = self.pool.worker_count();
+        let target = match self.assignment {
+            PartitionAssignment::Modulo => partition % worker_count,
+            PartitionAssignment::RoundRobin => self.pool.next_worker(),
+        };
+
+        // Fast path: the caller is already running on the target
+        // worker (e.g. a pipeline partition scheduled onto worker
+        // `partition % N` that then polls a leaf dispatched to the
+        // same worker). Skip the bridge channel entirely — every
+        // batch flows through the inner stream directly, zero
+        // inter-thread hops on the hot path.
+        if self.pool.current_worker() == Some(target) {
+            return self.inner.execute(partition, context);
+        }
+
+        // Slow path: dispatch to `target` via a bounded channel so
+        // the inner stream runs on that worker and batches are
+        // ferried back.
         let inner = Arc::clone(&self.inner);
         let pool = Arc::clone(&self.pool);
         let schema = self.inner.schema();
-        let worker_id = match self.assignment {
-            PartitionAssignment::Modulo => partition,
-            PartitionAssignment::RoundRobin => pool.next_worker(),
-        };
 
         let mut builder =
             RecordBatchReceiverStreamBuilder::new(schema, DISPATCH_CHANNEL_CAPACITY);
         let tx = builder.tx();
 
         builder.spawn(async move {
-            let job = pool.spawn_on(worker_id, move || async move {
+            let job = pool.spawn_on(target, move || async move {
                 let mut stream = match inner.execute(partition, context) {
                     Ok(s) => s,
                     Err(e) => {
