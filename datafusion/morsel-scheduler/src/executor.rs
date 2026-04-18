@@ -39,7 +39,7 @@ use tokio::sync::mpsc::Sender as MpscSender;
 
 use crate::dispatch::wrap_leaves;
 use crate::inbox::{DEFAULT_INBOX_CAPACITY, InboxSender};
-use crate::planner::plan_to_pipelines_with_capacity;
+use crate::planner::plan_to_pipelines_with_config;
 use crate::runtime::WorkerPool;
 
 /// Options that control how [`execute`] schedules a plan.
@@ -79,7 +79,12 @@ pub fn execute_with_options(
     pool: &Arc<WorkerPool>,
     options: &ExecuteOptions,
 ) -> Result<SendableRecordBatchStream> {
-    let graph = plan_to_pipelines_with_capacity(plan, options.inbox_capacity)?;
+    let worker_count = pool.worker_count();
+    // Pad shared-inbox consumers (i.e. RepartitionExec fetchers) up to
+    // the pool size so every worker gets one, even when the upstream
+    // only produced a small number of partitions.
+    let graph =
+        plan_to_pipelines_with_config(plan, options.inbox_capacity, worker_count)?;
     let final_idx = graph.final_pipeline;
     let output_schema = graph.pipelines[final_idx].plan.schema();
     let output_partitions = graph.pipelines[final_idx].partition_count();
@@ -90,8 +95,6 @@ pub fn execute_with_options(
     let mut caller_builder =
         RecordBatchReceiverStreamBuilder::new(output_schema, channel_cap);
     let caller_tx = caller_builder.tx();
-
-    let worker_count = pool.worker_count();
 
     for (idx, pipeline) in graph.pipelines.into_iter().enumerate() {
         let is_final = idx == final_idx;
@@ -192,7 +195,9 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
+    use datafusion_physical_plan::Partitioning;
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::test::TestMemoryExec;
 
     fn schema() -> SchemaRef {
@@ -205,6 +210,39 @@ mod tests {
             vec![Arc::new(Int32Array::from(vals.to_vec())) as _],
         )
         .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn repartition_fans_consumers_across_workers() {
+        // 2 upstream partitions feeding a RepartitionExec into 3 output
+        // partitions on a pool of 8 workers. With the fan-out fix the
+        // shared-inbox stub below RepartitionExec exposes 8 consumer
+        // partitions, so 8 fetcher tasks (one per worker) drain the
+        // shared queue in parallel. This test verifies correctness —
+        // that padding the consumer count doesn't drop or duplicate
+        // morsels.
+        let s = schema();
+        let partitions = vec![
+            vec![batch(&s, &[1, 2, 3]), batch(&s, &[4, 5])],
+            vec![batch(&s, &[10, 20, 30])],
+        ];
+        let mem: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&partitions, Arc::clone(&s), None).unwrap();
+        let repart: Arc<dyn ExecutionPlan> = Arc::new(
+            RepartitionExec::try_new(mem, Partitioning::RoundRobinBatch(3)).unwrap(),
+        );
+        // Coalesce so we see all rows from the caller side.
+        let root: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(repart));
+
+        let pool = WorkerPool::new(8).unwrap();
+        let task_ctx = Arc::new(TaskContext::default());
+        let mut stream = execute(&root, &task_ctx, &pool).unwrap();
+
+        let mut rows = 0;
+        while let Some(batch) = stream.next().await {
+            rows += batch.unwrap().num_rows();
+        }
+        assert_eq!(rows, 8);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
