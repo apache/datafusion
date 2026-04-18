@@ -47,16 +47,21 @@
 //!   pipeline. The top pipeline's output is bridged back to the caller
 //!   as a normal `SendableRecordBatchStream`.
 //!
-//! # Scope of v1
+//! # Scope
 //!
-//! * Cuts at `CoalescePartitionsExec` and `SortPreservingMergeExec`.
-//! * `RepartitionExec` is currently left intact inside a pipeline;
-//!   its lazy-spawned input fetchers are redistributed by wrapping
-//!   plan leaves with [`WorkerDispatchExec`](dispatch::WorkerDispatchExec)
-//!   so each partition scan runs on a different worker.
-//! * `SortExec` / `HashJoinExec` build-side / `NestedLoopJoinExec` are
-//!   not yet treated as explicit cut points — they remain internal to
-//!   a pipeline.
+//! * Cuts at `CoalescePartitionsExec`, `SortPreservingMergeExec`,
+//!   `RepartitionExec`, and `SortExec`. For `RepartitionExec` the
+//!   input partitions become their own upstream pipeline and the
+//!   repartition shuffle reads from inboxes — so scans and filters
+//!   pipeline fully in parallel while only the (cheap) hashing /
+//!   round-robin logic runs inside the repartition's fetcher task.
+//! * [`WorkerDispatchExec`](dispatch::WorkerDispatchExec) wraps each
+//!   pipeline's leaves so that any remaining `RepartitionExec` (or
+//!   other fan-in operator) inside a pipeline also sees its partition
+//!   scans distributed across workers.
+//! * `HashJoinExec` build-side and `NestedLoopJoinExec` are not yet
+//!   treated as explicit cut points — they remain internal to a
+//!   pipeline.
 //!
 //! # Entry point
 //!
