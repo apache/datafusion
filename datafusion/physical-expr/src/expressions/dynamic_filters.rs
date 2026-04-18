@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::compute::SortOptions;
 use parking_lot::RwLock;
 use std::{fmt::Display, hash::Hash, sync::Arc};
 use tokio::sync::watch;
@@ -74,6 +75,11 @@ pub struct DynamicFilterPhysicalExpr {
     /// But this can have overhead in production, so it's only included in our tests.
     data_type: Arc<RwLock<Option<DataType>>>,
     nullable: Arc<RwLock<Option<bool>>>,
+    /// Optional sort options for each child expression.
+    /// When set (e.g., by SortExec for TopK), downstream consumers like the
+    /// parquet reader can use these to initialize the filter threshold from
+    /// column statistics before reading any data.
+    sort_options: Option<Vec<SortOptions>>,
 }
 
 #[derive(Debug)]
@@ -177,7 +183,28 @@ impl DynamicFilterPhysicalExpr {
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
+            sort_options: None,
         }
+    }
+
+    /// Create a new [`DynamicFilterPhysicalExpr`] with sort options.
+    ///
+    /// Sort options indicate the sort direction for each child expression,
+    /// enabling downstream consumers (e.g., parquet readers) to initialize
+    /// the filter threshold from column statistics before reading data.
+    pub fn new_with_sort_options(
+        children: Vec<Arc<dyn PhysicalExpr>>,
+        inner: Arc<dyn PhysicalExpr>,
+        sort_options: Vec<SortOptions>,
+    ) -> Self {
+        let mut this = Self::new(children, inner);
+        this.sort_options = Some(sort_options);
+        this
+    }
+
+    /// Returns the sort options for each child expression, if available.
+    pub fn sort_options(&self) -> Option<&[SortOptions]> {
+        self.sort_options.as_deref()
     }
 
     fn remap_children(
@@ -368,6 +395,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
+            sort_options: self.sort_options.clone(),
         }))
     }
 

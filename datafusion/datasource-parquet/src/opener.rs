@@ -1083,14 +1083,12 @@ impl RowGroupsPrunedParquetOpen {
         // Initialize TopK dynamic filter from row group statistics.
         // This sets an initial threshold before any data is read, so that
         // subsequent row filtering can benefit immediately.
-        // Uses reverse_row_groups to infer sort direction:
-        //   true  => DESC (file declared ASC, reversed for DESC queries)
-        //   false => ASC
+        // Sort direction is read from the DynamicFilterPhysicalExpr's
+        // sort_options (set by SortExec for TopK queries).
         if let (Some(predicate), Some(limit)) = (&prepared.predicate, prepared.limit)
             && let Err(e) = try_init_topk_threshold(
                 predicate,
                 limit,
-                prepared.reverse_row_groups,
                 rg_metadata,
                 &prepared.physical_file_schema,
                 reader_metadata.parquet_schema(),
@@ -1265,7 +1263,6 @@ impl RowGroupsPrunedParquetOpen {
 fn try_init_topk_threshold(
     predicate: &Arc<dyn PhysicalExpr>,
     limit: usize,
-    reverse_row_groups: bool,
     rg_metadata: &[parquet::file::metadata::RowGroupMetaData],
     arrow_schema: &Schema,
     parquet_schema: &parquet::schema::types::SchemaDescriptor,
@@ -1276,17 +1273,25 @@ fn try_init_topk_threshold(
         None => return Ok(()), // No dynamic filter found, nothing to do
     };
 
+    // Read sort options from the dynamic filter (set by SortExec for TopK).
+    let sort_options = match dynamic_filter.sort_options() {
+        Some(opts) => opts,
+        None => return Ok(()), // No sort options, cannot determine direction
+    };
+
     // Only handle single-column sort for now.
-    let children = dynamic_filter.children();
-    if children.len() != 1 {
+    if sort_options.len() != 1 {
         debug!(
             "Skipping TopK threshold initialization: expected 1 sort column, found {}",
-            children.len()
+            sort_options.len()
         );
         return Ok(());
     }
 
+    let is_descending = sort_options[0].descending;
+
     // The child must be a Column expression so we can look up statistics.
+    let children = dynamic_filter.children();
     let col_expr: Arc<dyn PhysicalExpr> = Arc::clone(children[0]);
     let col_any: &dyn std::any::Any = col_expr.as_ref();
     let column = col_any.downcast_ref::<Column>().ok_or_else(|| {
@@ -1300,11 +1305,6 @@ fn try_init_topk_threshold(
     // Build a statistics converter for the sort column.
     let converter = StatisticsConverter::try_new(col_name, arrow_schema, parquet_schema)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-    // Determine sort direction from reverse_row_groups:
-    //   reverse_row_groups = true  => DESC sort (file is ASC, we reverse)
-    //   reverse_row_groups = false => ASC sort
-    let is_descending = reverse_row_groups;
 
     // Compute the threshold.
     let threshold = if is_descending {
@@ -3164,16 +3164,20 @@ mod test {
             make_parquet_metadata_with_stats(&[rg0_values, rg1_values]);
 
         let col_expr = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        let desc_opts = arrow::compute::SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new_with_sort_options(
             vec![Arc::clone(&col_expr)],
             super::lit(true),
+            vec![desc_opts],
         ));
         let predicate: Arc<dyn PhysicalExpr> = dynamic_filter.clone();
 
         try_init_topk_threshold(
             &predicate,
             10,
-            true, // DESC => reverse_row_groups=true
             &rg_metadata,
             &arrow_schema,
             &parquet_schema,
@@ -3206,16 +3210,20 @@ mod test {
             make_parquet_metadata_with_stats(&[rg0_values, rg1_values]);
 
         let col_expr = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        let asc_opts = arrow::compute::SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new_with_sort_options(
             vec![Arc::clone(&col_expr)],
             super::lit(true),
+            vec![asc_opts],
         ));
         let predicate: Arc<dyn PhysicalExpr> = dynamic_filter.clone();
 
         try_init_topk_threshold(
             &predicate,
             10,
-            false, // ASC => reverse_row_groups=false
             &rg_metadata,
             &arrow_schema,
             &parquet_schema,
@@ -3246,7 +3254,6 @@ mod test {
         let result = try_init_topk_threshold(
             &predicate,
             10,
-            true,
             &rg_metadata,
             &arrow_schema,
             &parquet_schema,
@@ -3255,16 +3262,15 @@ mod test {
     }
 
     #[test]
-    fn test_try_init_topk_threshold_multi_column_skipped() {
+    fn test_try_init_topk_threshold_no_sort_options() {
         let rg0_values: Vec<i64> = (1..=200).collect();
         let (rg_metadata, arrow_schema, parquet_schema) =
             make_parquet_metadata_with_stats(&[rg0_values]);
 
-        // DynamicFilterPhysicalExpr with 2 children => should be skipped
-        let col1 = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
-        let col2 = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+        // DynamicFilterPhysicalExpr WITHOUT sort_options => should be skipped
+        let col_expr = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
-            vec![col1, col2],
+            vec![col_expr],
             super::lit(true),
         ));
         let predicate: Arc<dyn PhysicalExpr> = dynamic_filter.clone();
@@ -3272,7 +3278,43 @@ mod test {
         let result = try_init_topk_threshold(
             &predicate,
             10,
-            true,
+            &rg_metadata,
+            &arrow_schema,
+            &parquet_schema,
+        );
+        assert!(
+            result.is_ok(),
+            "no sort_options should be skipped gracefully"
+        );
+
+        let current = dynamic_filter.current().unwrap();
+        let display = format!("{current}");
+        assert_eq!(display, "true", "filter should remain unchanged: {display}");
+    }
+
+    #[test]
+    fn test_try_init_topk_threshold_multi_column_skipped() {
+        let rg0_values: Vec<i64> = (1..=200).collect();
+        let (rg_metadata, arrow_schema, parquet_schema) =
+            make_parquet_metadata_with_stats(&[rg0_values]);
+
+        // DynamicFilterPhysicalExpr with 2 sort columns => should be skipped
+        let col1 = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+        let col2 = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+        let opts = arrow::compute::SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new_with_sort_options(
+            vec![col1, col2],
+            super::lit(true),
+            vec![opts, opts],
+        ));
+        let predicate: Arc<dyn PhysicalExpr> = dynamic_filter.clone();
+
+        let result = try_init_topk_threshold(
+            &predicate,
+            10,
             &rg_metadata,
             &arrow_schema,
             &parquet_schema,
