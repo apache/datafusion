@@ -1355,7 +1355,7 @@ pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String 
         }) => (catalog.as_ref(), schema.as_ref(), table.as_ref()),
     };
 
-    // Reserve capacity for at most 3 separators; this might slighty over-allocate.
+    // Reserve capacity for at most 3 separators; this might slightly over-allocate.
     let mut s = String::with_capacity(a.len() + b.len() + c.len() + 3 + name.len());
     s.push_str(a);
     if !b.is_empty() {
