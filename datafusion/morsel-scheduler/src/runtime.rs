@@ -15,40 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Thread-per-core [`WorkerPool`] with work-stealing.
+//! Thread-per-core [`WorkerPool`] with crossbeam-deque work-stealing.
 //!
-//! Each worker owns one OS thread that hosts a dedicated
-//! `current_thread` Tokio runtime and a [`tokio::task::LocalSet`]. Work
-//! is submitted as a `Send` closure which is enqueued onto the target
-//! worker's deque; when it runs, the closure constructs the real
+//! Each worker owns one OS thread hosting a dedicated `current_thread`
+//! Tokio runtime and a [`tokio::task::LocalSet`]. Work is submitted as
+//! a `Send` closure; when it runs, the closure constructs the
 //! (possibly `!Send`) future **on the worker thread**, which is then
 //! `spawn_local`-ed onto the worker's `LocalSet`. The future never
-//! migrates after that point (Tokio's `LocalSet` guarantees this).
+//! migrates after that point.
 //!
-//! # Work-stealing
+//! # Scheduling
 //!
-//! Submitted closures live in per-worker deques and are **stealable**
-//! until a worker picks them up. An idle worker checks its own deque
-//! first (LIFO for cache locality), then walks the other workers'
-//! deques in round-robin order and steals the oldest pending job
-//! (FIFO) from a busy peer.
+//! Queues are the Tokio / Chase-Lev layout:
 //!
-//! Stealing is safe because the `BoxedJob` is `Send`. It is the
-//! **future built by the job** that is `!Send`; by the time that
-//! future exists, it has already been `spawn_local`-ed onto the
-//! thief's own `LocalSet` and is pinned there for the rest of its
-//! life.
+//! * A **shared [`Injector`]** receives all external submissions
+//!   (wait-free MPSC push).
+//! * Each worker owns a local **[`Worker<BoxedJob>`]** (Chase-Lev
+//!   deque; owner push/pop are wait-free) plus a **[`Stealer`]** that
+//!   peer workers can use to pull batches.
 //!
-//! This means [`WorkerPool::spawn_on`] is a *hint*: the job will
-//! prefer `worker_id` but may be picked up by an idle peer. If strict
-//! affinity is ever needed, add a non-stealable variant.
-
+//! An idle worker's scan order is: own deque → shared injector →
+//! peer stealers → park on [`Notify`]. `spawn_on(worker_id, …)` is a
+//! **hint**: the submission lands on the injector but the target's
+//! notify is nudged first, so a free target tends to pick up its own
+//! job. A saturated target doesn't starve peers: any idle worker can
+//! steal from the injector.
 use std::cell::Cell;
-use std::collections::VecDeque;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
+use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use datafusion_common::error::{DataFusionError, Result};
 use tokio::runtime::Builder;
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -59,23 +56,21 @@ use tokio::task::LocalSet;
 /// the worker's `LocalSet`.
 type BoxedJob = Box<dyn FnOnce(&LocalSet) + Send + 'static>;
 
-/// Per-worker state shared with the pool for submission and stealing.
-struct WorkerState {
-    /// Owner pushes/pops the **back** (LIFO, warm cache). Thieves pop
-    /// the **front** (FIFO, oldest first) so owner and thief touch
-    /// opposite ends, reducing contention.
-    deque: Mutex<VecDeque<BoxedJob>>,
-    /// Wakes the worker when someone submits to *this* deque.
-    notify: Notify,
-}
-
 /// State shared by the pool handle and every worker thread.
 struct Shared {
     /// Unique pool id, used by [`WorkerPool::current_worker`] to reject
     /// matches when multiple pools coexist in the same process.
     id: usize,
-    workers: Vec<Arc<WorkerState>>,
-    /// Wakes some sleeping worker when *any* deque grows — used to pull
+    /// Global submission queue — any thread may push, any worker may
+    /// steal a batch. Wait-free.
+    injector: Injector<BoxedJob>,
+    /// One stealer per worker, used by peers when their own deque is
+    /// empty.
+    stealers: Vec<Stealer<BoxedJob>>,
+    /// Per-worker wake-up (nudged by submissions whose `worker_id`
+    /// hint targets this worker).
+    notifies: Vec<Notify>,
+    /// Wakes some sleeping worker whenever *any* queue grows — pulls
     /// idle workers into stealing mode.
     global_notify: Notify,
     /// Round-robin cursor for [`WorkerPool::spawn_any`].
@@ -88,19 +83,16 @@ static NEXT_POOL_ID: AtomicUsize = AtomicUsize::new(0);
 thread_local! {
     /// `Some((pool_id, worker_id))` on threads that host a pool
     /// worker's reactor; `None` elsewhere. Set once by
-    /// [`run_worker`] before entering its scheduling loop, so any
-    /// code running on the worker thread — including spawned tasks —
-    /// can identify its host pool and worker.
+    /// [`run_worker`] before entering its scheduling loop.
     static CURRENT_WORKER: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
 }
 
 /// Pool of thread-per-core `current_thread` Tokio runtimes with
-/// work-stealing between workers.
+/// crossbeam-deque work-stealing.
 pub struct WorkerPool {
     shared: Arc<Shared>,
-    /// One sender per worker. When the last [`WorkerPool`] handle
-    /// drops, these drop with it; each worker's receiver then sees
-    /// `None` and exits its loop.
+    /// One sender per worker. Dropping the pool drops these; each
+    /// worker's receiver then sees `None` in its `select!` and exits.
     _shutdown: Vec<mpsc::UnboundedSender<()>>,
 }
 
@@ -114,26 +106,32 @@ impl WorkerPool {
             ));
         }
 
-        let states: Vec<Arc<WorkerState>> = (0..workers)
-            .map(|_| {
-                Arc::new(WorkerState {
-                    deque: Mutex::new(VecDeque::new()),
-                    notify: Notify::new(),
-                })
-            })
-            .collect();
+        // Build each worker's local deque up front so we can hand the
+        // stealers to `Shared` before the worker threads start.
+        let mut locals: Vec<Option<Worker<BoxedJob>>> = Vec::with_capacity(workers);
+        let mut stealers = Vec::with_capacity(workers);
+        let mut notifies = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            let w = Worker::<BoxedJob>::new_fifo();
+            stealers.push(w.stealer());
+            locals.push(Some(w));
+            notifies.push(Notify::new());
+        }
 
         let shared = Arc::new(Shared {
             id: NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
-            workers: states,
+            injector: Injector::new(),
+            stealers,
+            notifies,
             global_notify: Notify::new(),
             next: AtomicUsize::new(0),
         });
 
         let mut shutdown = Vec::with_capacity(workers);
-        for i in 0..workers {
+        for (i, slot) in locals.iter_mut().enumerate() {
             let (sd_tx, sd_rx) = mpsc::unbounded_channel::<()>();
             let shared = Arc::clone(&shared);
+            let local = slot.take().expect("local worker deque missing");
             std::thread::Builder::new()
                 .name(format!("morsel-worker-{i}"))
                 .spawn(move || {
@@ -144,8 +142,10 @@ impl WorkerPool {
                             return;
                         }
                     };
-                    let local = LocalSet::new();
-                    rt.block_on(local.run_until(run_worker(i, shared, sd_rx, &local)));
+                    let lset = LocalSet::new();
+                    rt.block_on(
+                        lset.run_until(run_worker(i, shared, local, sd_rx, &lset)),
+                    );
                 })
                 .map_err(|e| {
                     DataFusionError::External(
@@ -163,23 +163,18 @@ impl WorkerPool {
 
     /// Number of worker runtimes in the pool.
     pub fn worker_count(&self) -> usize {
-        self.shared.workers.len()
+        self.shared.stealers.len()
     }
 
     /// Round-robin pick of the next worker id. The returned id is not
     /// reserved — subsequent calls will keep rotating regardless of
     /// whether the caller actually uses it.
     pub fn next_worker(&self) -> usize {
-        self.shared.next.fetch_add(1, Ordering::Relaxed) % self.shared.workers.len()
+        self.shared.next.fetch_add(1, Ordering::Relaxed) % self.worker_count()
     }
 
     /// If the current OS thread is running inside **this** pool's
     /// worker loop, returns that worker's id; otherwise returns `None`.
-    ///
-    /// Used by wrappers such as `WorkerDispatchExec` to skip their
-    /// bridge channel when the caller is already on the target
-    /// worker — every batch then flows through zero inter-thread
-    /// hops on the hot path.
     pub fn current_worker(&self) -> Option<usize> {
         let pool_id = self.shared.id;
         CURRENT_WORKER.with(|cell| {
@@ -190,11 +185,9 @@ impl WorkerPool {
 
     /// Submit a job with affinity to `worker_id`.
     ///
-    /// The job is pushed onto that worker's deque. If the target is
-    /// busy and another worker is idle, the idle worker may steal it
-    /// before the target picks it up. The caller passes a
-    /// `Send + 'static` **closure** that builds the future on the
-    /// running worker; the resulting future may be `!Send`.
+    /// The job lands on the shared injector; the target's notify is
+    /// pinged first so an idle target tends to pick up its own work,
+    /// while a saturated target doesn't starve peers.
     pub fn spawn_on<R, F, O>(
         self: &Arc<Self>,
         worker_id: usize,
@@ -206,7 +199,7 @@ impl WorkerPool {
         O: Send + 'static,
     {
         let (tx, rx) = oneshot::channel::<O>();
-        let idx = worker_id % self.shared.workers.len();
+        let idx = worker_id % self.worker_count();
         let job: BoxedJob = Box::new(move |local: &LocalSet| {
             local.spawn_local(async move {
                 let out = make_future().await;
@@ -214,14 +207,9 @@ impl WorkerPool {
             });
         });
 
-        {
-            let w = &self.shared.workers[idx];
-            w.deque.lock().expect("deque poisoned").push_back(job);
-            // Prefer waking the target; also nudge one sleeping thief so
-            // a saturated target doesn't starve idle peers.
-            w.notify.notify_one();
-            self.shared.global_notify.notify_one();
-        }
+        self.shared.injector.push(job);
+        self.shared.notifies[idx].notify_one();
+        self.shared.global_notify.notify_one();
 
         async move {
             rx.await.map_err(|_| {
@@ -232,8 +220,8 @@ impl WorkerPool {
         }
     }
 
-    /// Submit a job with no affinity; the round-robin target is a
-    /// starting hint and any idle worker may steal it.
+    /// Submit a job with no affinity; equivalent to
+    /// [`Self::spawn_on`] with a round-robin hint.
     pub fn spawn_any<R, F, O>(
         self: &Arc<Self>,
         make_future: R,
@@ -248,60 +236,61 @@ impl WorkerPool {
     }
 }
 
-/// Main loop for a worker: run own jobs, steal from peers when idle,
-/// sleep when no work is available.
+/// Main loop for a worker.
 async fn run_worker(
     my_id: usize,
     shared: Arc<Shared>,
+    local: Worker<BoxedJob>,
     mut sd_rx: mpsc::UnboundedReceiver<()>,
-    local: &LocalSet,
+    lset: &LocalSet,
 ) {
-    // Mark this OS thread as a worker of `shared.id`. This stays set
-    // for the life of the thread, so every task spawned onto `local`
-    // sees it.
+    // Identify this OS thread so any task on `lset` can see its host.
     CURRENT_WORKER.with(|cell| cell.set(Some((shared.id, my_id))));
 
-    let me = Arc::clone(&shared.workers[my_id]);
     loop {
-        // 1) Own deque (LIFO — hottest cache).
-        if let Some(job) = pop_own(&me) {
-            job(local);
+        if let Some(job) = find_job(&local, &shared, my_id) {
+            job(lset);
             continue;
         }
-        // 2) Steal from a peer (FIFO — their oldest).
-        if let Some(job) = steal(&shared, my_id) {
-            job(local);
-            continue;
-        }
-        // 3) No work. Sleep until woken by a submission, a cross-worker
-        //    nudge, or pool shutdown.
+
+        // No work anywhere. Sleep until a submission, a cross-worker
+        // nudge, or pool shutdown.
         tokio::select! {
             biased;
             _ = sd_rx.recv() => return,
-            _ = me.notify.notified() => {}
+            _ = shared.notifies[my_id].notified() => {}
             _ = shared.global_notify.notified() => {}
         }
     }
 }
 
+/// Owner pops own first, then steals a batch from the global injector,
+/// then from peer workers. Returns `None` if every queue is empty.
 #[inline]
-fn pop_own(me: &WorkerState) -> Option<BoxedJob> {
-    me.deque.lock().expect("deque poisoned").pop_back()
-}
-
-/// Walk peers in round-robin order and steal the oldest job from the
-/// first one that has any. Returns `None` if every peer deque is empty.
-fn steal(shared: &Shared, my_id: usize) -> Option<BoxedJob> {
-    let n = shared.workers.len();
+fn find_job(local: &Worker<BoxedJob>, shared: &Shared, my_id: usize) -> Option<BoxedJob> {
+    // Fast path: own deque.
+    if let Some(job) = local.pop() {
+        return Some(job);
+    }
+    // Try the global injector, grabbing a batch so subsequent pops are
+    // cheap.
+    loop {
+        match shared.injector.steal_batch_and_pop(local) {
+            Steal::Success(job) => return Some(job),
+            Steal::Empty => break,
+            Steal::Retry => continue,
+        }
+    }
+    // Try peer workers' deques.
+    let n = shared.stealers.len();
     for offset in 1..n {
         let victim = (my_id + offset) % n;
-        if let Some(job) = shared.workers[victim]
-            .deque
-            .lock()
-            .expect("deque poisoned")
-            .pop_front()
-        {
-            return Some(job);
+        loop {
+            match shared.stealers[victim].steal_batch_and_pop(local) {
+                Steal::Success(job) => return Some(job),
+                Steal::Empty => break,
+                Steal::Retry => continue,
+            }
         }
     }
     None
@@ -356,13 +345,8 @@ mod tests {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
 
         rt.block_on(async {
-            // Outside any worker thread, we should see None even
-            // though this pool exists.
             assert_eq!(pool.current_worker(), None);
 
-            // Inside a job on worker 1, the thread-local should
-            // resolve back to this pool's worker id. Stealing can
-            // change the id — just assert it's a valid worker.
             let observed = pool
                 .spawn_on(1, {
                     let pool = Arc::clone(&pool);
@@ -382,8 +366,6 @@ mod tests {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
 
         rt.block_on(async {
-            // Run on pool_a but ask pool_b — should get None since
-            // this thread isn't one of pool_b's workers.
             let out = pool_a
                 .spawn_on(0, {
                     let pool_b = Arc::clone(&pool_b);

@@ -52,7 +52,9 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
-use crate::inbox::{DEFAULT_INBOX_CAPACITY, InboxSender, InboxSourceExec, inbox};
+use crate::inbox::{
+    DEFAULT_INBOX_CAPACITY, InboxSender, InboxSourceExec, inbox, shared_inbox,
+};
 use crate::pipeline::{Pipeline, PipelineGraph};
 
 /// `true` if `plan` should be treated as a pipeline breaker (cut
@@ -111,20 +113,48 @@ fn cut(
     capacity: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if is_breaker(plan.as_ref()) {
+        // Pick the inbox layout based on the breaker's semantics:
+        //
+        // * `RepartitionExec` treats its input partitions as a pool
+        //   of batches (hash / round-robin decides the *output*
+        //   partition per batch) — input identity is irrelevant, so
+        //   we use a single shared queue and let every fetcher steal
+        //   morsels from it.
+        // * Every other breaker we recognise relies on per-partition
+        //   order (`SortPreservingMergeExec`) or simply has one
+        //   consumer (`CoalescePartitionsExec`, non-preserving
+        //   `SortExec`) where stealing wouldn't help — stay with
+        //   independent inboxes.
+        let use_shared = plan.is::<RepartitionExec>();
+
         let mut stub_children = Vec::with_capacity(plan.children().len());
         for child in plan.children() {
             let child = Arc::clone(child);
             let n = child.properties().partitioning.partition_count();
             let schema = child.schema();
-            let mut senders = Vec::with_capacity(n);
-            let mut receivers = Vec::with_capacity(n);
-            for _ in 0..n {
-                let (s, r) = inbox(capacity);
-                senders.push(s);
-                receivers.push(r);
-            }
-            let stub: Arc<dyn ExecutionPlan> =
-                Arc::new(InboxSourceExec::new(schema, receivers));
+
+            let (senders, stub): (Vec<InboxSender>, Arc<dyn ExecutionPlan>) =
+                if use_shared {
+                    // One queue sized so the aggregate buffer matches the
+                    // independent-mode memory budget (`capacity` batches
+                    // per upstream partition).
+                    let (senders, shared) =
+                        shared_inbox(capacity.saturating_mul(n).max(1), n);
+                    (
+                        senders,
+                        Arc::new(InboxSourceExec::new_shared(schema, shared, n)),
+                    )
+                } else {
+                    let mut senders = Vec::with_capacity(n);
+                    let mut receivers = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        let (s, r) = inbox(capacity);
+                        senders.push(s);
+                        receivers.push(r);
+                    }
+                    (senders, Arc::new(InboxSourceExec::new(schema, receivers)))
+                };
+
             let rewritten_child = cut(child, pending, capacity)?;
             pending.push(PendingUpstream {
                 plan: rewritten_child,
@@ -201,7 +231,9 @@ mod tests {
         // RepartitionExec with 4-partition input, hash-repartitioned to
         // 2 outputs. The cut should detach the input (4 partitions)
         // into an upstream pipeline and keep the RepartitionExec as
-        // the root of the downstream pipeline.
+        // the root of the downstream pipeline — and because the
+        // RepartitionExec doesn't care about input-partition
+        // identity, the inbox should be shared-morsel.
         let s = schema();
         let child: Arc<dyn ExecutionPlan> =
             Arc::new(EmptyExec::new(Arc::clone(&s)).with_partitions(4));
@@ -217,12 +249,32 @@ mod tests {
         assert_eq!(final_p.partition_count(), 2);
         let children = final_p.plan.children();
         assert_eq!(children.len(), 1);
-        assert!(children[0].as_ref().is::<InboxSourceExec>());
+        let source = children[0].downcast_ref::<InboxSourceExec>().unwrap();
+        assert!(
+            source.is_shared(),
+            "RepartitionExec breaker should use shared-morsel inbox"
+        );
+        assert_eq!(source.partitions(), 4);
 
         let upstream = &graph.pipelines[1];
         let senders = upstream.output_senders.as_ref().unwrap();
         assert_eq!(senders.len(), 4);
         assert_eq!(upstream.partition_count(), 4);
+    }
+
+    #[test]
+    fn coalesce_uses_independent_inbox() {
+        // CoalescePartitionsExec preserves per-partition semantics at
+        // the cut (only one consumer anyway), so no shared-morsel.
+        let child: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(schema()).with_partitions(4));
+        let root: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(child));
+
+        let graph = plan_to_pipelines(&root).unwrap();
+        let source = graph.pipelines[graph.final_pipeline].plan.children()[0]
+            .downcast_ref::<InboxSourceExec>()
+            .unwrap();
+        assert!(!source.is_shared());
     }
 
     #[test]

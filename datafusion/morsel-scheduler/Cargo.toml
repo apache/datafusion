@@ -35,6 +35,7 @@ name = "datafusion_morsel_scheduler"
 
 [dependencies]
 arrow = { workspace = true }
+crossbeam-deque = "0.8"
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
