@@ -179,7 +179,7 @@ impl CaseBody {
                             ))));
                         }
                     } else if let Some(lambda_variable) =
-                        expr.downcast_ref::<LambdaVariable>()
+                        e.downcast_ref::<LambdaVariable>()
                     {
                         let original = lambda_variable.index();
                         let projected = *column_index_map.get(&original).unwrap();
@@ -189,7 +189,7 @@ impl CaseBody {
                                 Arc::clone(lambda_variable.field()),
                             ))));
                         }
-                    } else if expr.is::<LambdaExpr>() {
+                    } else if e.is::<LambdaExpr>() {
                         //todo: remove this branch when lambda supports column capture
                         return Ok(Transformed::new(e, false, TreeNodeRecursion::Jump));
                     }
