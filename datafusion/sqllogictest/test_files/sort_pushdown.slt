@@ -2271,6 +2271,145 @@ DROP TABLE tg_src_high;
 statement ok
 DROP TABLE tg_buffer;
 
+# ============================================================================
+# Test H: TopK threshold initialization from row group statistics
+# ============================================================================
+# When TopK's dynamic filter is pushed to parquet, we can initialize
+# its threshold from row group statistics before reading any data.
+# This test verifies correctness with scrambled multi-file data.
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 5;
+
+# Create 3 files with non-overlapping but scrambled id ranges:
+#   file_a.parquet: ids 7-10 (highest range, alphabetically first)
+#   file_b.parquet: ids 1-3  (lowest range)
+#   file_c.parquet: ids 4-6  (middle range)
+# Alphabetical order: a(7-10), b(1-3), c(4-6) — NOT sorted by id.
+# TopK DESC should read file_a first (highest min) after reorder.
+
+statement ok
+CREATE TABLE th_high(id INT, value INT) AS VALUES
+(7, 700), (8, 800), (9, 900), (10, 1000);
+
+statement ok
+CREATE TABLE th_low(id INT, value INT) AS VALUES
+(1, 100), (2, 200), (3, 300);
+
+statement ok
+CREATE TABLE th_mid(id INT, value INT) AS VALUES
+(4, 400), (5, 500), (6, 600);
+
+query I
+COPY (SELECT * FROM th_high ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/topk_stats/file_a.parquet';
+----
+4
+
+query I
+COPY (SELECT * FROM th_low ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/topk_stats/file_b.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM th_mid ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/topk_stats/file_c.parquet';
+----
+3
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE th_scrambled(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/topk_stats/'
+WITH ORDER (id ASC);
+
+# Test H.1: DESC LIMIT should return correct results despite scrambled file order
+query II
+SELECT * FROM th_scrambled ORDER BY id DESC LIMIT 3;
+----
+10 1000
+9 900
+8 800
+
+# Test H.2: ASC LIMIT should also work correctly
+query II
+SELECT * FROM th_scrambled ORDER BY id ASC LIMIT 3;
+----
+1 100
+2 200
+3 300
+
+# Test H.3: Larger LIMIT spanning multiple files
+query II
+SELECT * FROM th_scrambled ORDER BY id DESC LIMIT 7;
+----
+10 1000
+9 900
+8 800
+7 700
+6 600
+5 500
+4 400
+
+# Test H.4: DESC with EXPLAIN to verify dynamic filter is pushed down
+query TT
+EXPLAIN SELECT * FROM th_scrambled ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: th_scrambled.id DESC NULLS FIRST, fetch=3
+02)--TableScan: th_scrambled projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/topk_stats/file_a.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/topk_stats/file_c.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/topk_stats/file_b.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Test H.5: With multiple partitions — TopK filter is shared across partitions
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query II
+SELECT * FROM th_scrambled ORDER BY id DESC LIMIT 5;
+----
+10 1000
+9 900
+8 800
+7 700
+6 600
+
+query II
+SELECT * FROM th_scrambled ORDER BY id ASC LIMIT 5;
+----
+1 100
+2 200
+3 300
+4 400
+5 500
+
+# Cleanup Test H
+statement ok
+DROP TABLE th_high;
+
+statement ok
+DROP TABLE th_low;
+
+statement ok
+DROP TABLE th_mid;
+
+statement ok
+DROP TABLE th_scrambled;
+
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok
 SET datafusion.execution.target_partitions = 4;
@@ -2280,3 +2419,6 @@ SET datafusion.execution.collect_statistics = true;
 
 statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = false;
