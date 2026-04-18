@@ -334,14 +334,15 @@ impl RunOpt {
                     (Arc::clone(&full_plan), FinalMerge::None)
                 };
 
-            // Wrap every data-source leaf with `PoolDispatchExec` so
-            // that `RepartitionExec`'s lazily-spawned input fetchers
-            // pull from streams running on different pool workers —
-            // distributing Parquet I/O and decode across the pool
-            // rather than piling on whichever worker happened to
-            // trigger the lazy spawn.
+            // Wrap the child of every `RepartitionExec` with
+            // `PoolDispatchExec` so each input subtree (partial
+            // aggregation + scan) runs on its own round-robin pool
+            // worker. Otherwise all `N` input-fetcher tasks spawn on
+            // the current-thread runtime of whichever worker first
+            // polls the repartition, serializing the CPU-heavy partial
+            // aggregation on one core.
             let child_plan =
-                crate::util::tokio_uring_dispatch::wrap_leaves_with_pool_dispatch(
+                crate::util::tokio_uring_dispatch::wrap_repartition_inputs_with_pool_dispatch(
                     child_plan, pool,
                 )?;
 

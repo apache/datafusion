@@ -45,6 +45,7 @@ use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -163,24 +164,42 @@ impl ExecutionPlan for PoolDispatchExec {
     }
 }
 
-/// Walk `plan` bottom-up and wrap every leaf node (no children) with a
-/// [`PoolDispatchExec`]. Leaves are typically data sources (Parquet,
-/// CSV, etc.) — wrapping them distributes all per-partition scans
-/// across the pool, bypassing `RepartitionExec`'s current-runtime
-/// lazy-spawn bottleneck.
-pub fn wrap_leaves_with_pool_dispatch(
+/// Walk `plan` bottom-up and wrap the **child** of every
+/// [`RepartitionExec`] with a [`PoolDispatchExec`].
+///
+/// `RepartitionExec` lazily spawns one input-fetcher task per input
+/// partition on the *current* runtime the first time any output
+/// partition is polled. On a thread-per-core pool that means all `N`
+/// fetchers land on whichever worker won the race — and every input
+/// subtree (partial aggregation, filter, scan) runs serially on that
+/// one core. Wrapping each fetcher's root with `PoolDispatchExec`
+/// redirects the actual work to round-robin pool workers, so the `N`
+/// input pipelines run in parallel.
+///
+/// This also covers leaf I/O: the scan sits *inside* each
+/// dispatched subtree, so its decode runs on the same pool worker as
+/// its partial aggregation (one cross-thread hop per batch into the
+/// repartition channel, instead of two).
+pub fn wrap_repartition_inputs_with_pool_dispatch(
     plan: Arc<dyn ExecutionPlan>,
     pool: &Arc<TokioUringPool>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform_up(|node| {
-        if node.children().is_empty() {
-            Ok(Transformed::yes(
-                Arc::new(PoolDispatchExec::new(node, Arc::clone(pool)))
-                    as Arc<dyn ExecutionPlan>,
-            ))
-        } else {
-            Ok(Transformed::no(node))
+        if node.downcast_ref::<RepartitionExec>().is_none() {
+            return Ok(Transformed::no(node));
         }
+        let children = node.children();
+        if children.len() != 1 {
+            return Ok(Transformed::no(node));
+        }
+        let child: Arc<dyn ExecutionPlan> = Arc::clone(children[0]);
+        if child.downcast_ref::<PoolDispatchExec>().is_some() {
+            return Ok(Transformed::no(node));
+        }
+        let wrapped: Arc<dyn ExecutionPlan> =
+            Arc::new(PoolDispatchExec::new(child, Arc::clone(pool)));
+        let new_node = node.with_new_children(vec![wrapped])?;
+        Ok(Transformed::yes(new_node))
     })
     .map(|t| t.data)
 }
