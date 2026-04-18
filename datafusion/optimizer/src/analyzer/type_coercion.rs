@@ -781,9 +781,9 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_args = std::iter::zip(args, new_fields)
                     .map(|(arg, new_field)| match (&arg, new_field) {
                         (Expr::Lambda(_lambda), ValueOrLambda::Lambda(_)) => Ok(arg),
-                        (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => plan_err!("value_fields_with_higher_order_udf return a value for a lambda argument"),
+                        (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => internal_err!("value_fields_with_higher_order_udf returned a value for a lambda argument"),
                         (_, ValueOrLambda::Value(new_field)) => arg.cast_to(new_field.data_type(), self.schema),
-                        (_, ValueOrLambda::Lambda(_)) => plan_err!("value_fields_with_higher_order_udf return a lambda for a value argument"),
+                        (_, ValueOrLambda::Lambda(_)) => internal_err!("value_fields_with_higher_order_udf returned a lambda for a value argument"),
                     })
                     .collect::<Result<_>>()?;
 
