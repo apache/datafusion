@@ -34,6 +34,7 @@
 
 #![cfg(target_os = "linux")]
 
+use std::cell::Cell;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -128,7 +129,21 @@ impl TokioUringPool {
     }
 }
 
+thread_local! {
+    /// `true` while the current thread is running a pool worker's
+    /// [`tokio_uring::start`] reactor. Consumers (e.g. the object
+    /// store) use this to stay **local** — spawning on the current
+    /// ring instead of hopping to a round-robin pool worker.
+    static IN_WORKER: Cell<bool> = const { Cell::new(false) };
+}
+
+/// `true` if the current thread is inside a pool worker's reactor.
+pub fn in_worker() -> bool {
+    IN_WORKER.with(|flag| flag.get())
+}
+
 async fn run_worker(mut rx: mpsc::UnboundedReceiver<BoxedJob>) {
+    IN_WORKER.with(|flag| flag.set(true));
     while let Some(job) = rx.recv().await {
         job();
     }

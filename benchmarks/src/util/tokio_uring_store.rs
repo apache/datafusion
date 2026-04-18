@@ -38,7 +38,9 @@ use object_store::{
     PutPayload, PutResult, Result,
 };
 
-use super::tokio_uring_pool::TokioUringPool;
+use tokio::sync::oneshot;
+
+use super::tokio_uring_pool::{TokioUringPool, in_worker};
 
 pub struct TokioUringObjectStore {
     inner: Arc<LocalFileSystem>,
@@ -58,8 +60,25 @@ impl TokioUringObjectStore {
         path: PathBuf,
         ranges: Vec<Range<u64>>,
     ) -> Result<Vec<Bytes>> {
-        // The future contains a `!Send` `tokio_uring::fs::File`; we build
-        // it inside the worker by shipping a closure across.
+        // Fast path: the caller is already on one of the pool's
+        // `tokio-uring` reactors (e.g. plan execution dispatched by
+        // ClickBench). Spawn the read on the *current* ring so the
+        // bytes land on the same core that will consume them — no
+        // mpsc/oneshot hop to another worker.
+        if in_worker() {
+            let (tx, rx) = oneshot::channel::<Result<Vec<Bytes>>>();
+            tokio_uring::spawn(async move {
+                let _ = tx.send(read_ranges_inner(&path, &ranges).await);
+            });
+            return rx.await.map_err(|_| object_store::Error::Generic {
+                store: "TokioUringObjectStore",
+                source: "tokio-uring local task was cancelled".into(),
+            })?;
+        }
+
+        // Slow path: the caller is on a non-uring runtime (e.g. the
+        // main tokio MT runtime used during planning). Ship the work
+        // to a pool worker via round-robin.
         let job = self
             .pool
             .spawn(move || async move { read_ranges_inner(&path, &ranges).await });
