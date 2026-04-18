@@ -1338,11 +1338,37 @@ impl SchemaExt for Schema {
     }
 }
 
+/// Build a fully-qualified field name string. This is equivalent to
+/// `format!("{q}.{name}")` when `qualifier` is `Some`, or just `name` when
+/// `None`. We avoid going through the `fmt` machinery for performance reasons.
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
-    match qualifier {
-        Some(q) => format!("{q}.{name}"),
-        None => name.to_string(),
+    let (a, b, c) = match qualifier {
+        None => return name.to_string(),
+        Some(TableReference::Bare { table }) => (table.as_ref(), "", ""),
+        Some(TableReference::Partial { schema, table }) => {
+            (schema.as_ref(), table.as_ref(), "")
+        }
+        Some(TableReference::Full {
+            catalog,
+            schema,
+            table,
+        }) => (catalog.as_ref(), schema.as_ref(), table.as_ref()),
+    };
+
+    // Reserve capacity for at most 3 separators; this might slighty over-allocate.
+    let mut s = String::with_capacity(a.len() + b.len() + c.len() + 3 + name.len());
+    s.push_str(a);
+    if !b.is_empty() {
+        s.push('.');
+        s.push_str(b);
     }
+    if !c.is_empty() {
+        s.push('.');
+        s.push_str(c);
+    }
+    s.push('.');
+    s.push_str(name);
+    s
 }
 
 #[cfg(test)]
@@ -1350,6 +1376,27 @@ mod tests {
     use crate::assert_contains;
 
     use super::*;
+
+    /// `qualified_name` doesn't use `TableReference::Display` for performance
+    /// reasons, but check that the output is consistent.
+    #[test]
+    fn qualified_name_agrees_with_display() {
+        let cases: &[(Option<TableReference>, &str)] = &[
+            (None, "col"),
+            (Some(TableReference::bare("t")), "c0"),
+            (Some(TableReference::partial("s", "t")), "c0"),
+            (Some(TableReference::full("c", "s", "t")), "c0"),
+            (Some(TableReference::bare("mytable")), "some_column_name"),
+        ];
+        for (qualifier, name) in cases {
+            let actual = qualified_name(qualifier.as_ref(), name);
+            let expected = match qualifier {
+                Some(q) => format!("{q}.{name}"),
+                None => name.to_string(),
+            };
+            assert_eq!(actual, expected, "qualifier={qualifier:?} name={name}");
+        }
+    }
 
     #[test]
     fn qualifier_in_name() -> Result<()> {
