@@ -465,8 +465,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             );
                         }
 
-                        let params =
-                            lambda.params.iter().map(|p| crate::utils::normalize_ident(p.clone())).collect();
+                        let params = lambda
+                            .params
+                            .iter()
+                            .map(|p| crate::utils::normalize_ident(p.clone()))
+                            .collect();
 
                         let lambda_parameters = lambda_params
                             .into_iter()
