@@ -1303,7 +1303,7 @@ fn plan_any_op(
     }
 }
 
-/// Plans `left_expr <compare_op> ALL(right_expr)` with proper SQL NULL semantics.
+/// Plans `needle <compare_op> ALL(haystack)` with proper SQL NULL semantics.
 ///
 /// CASE/WHEN structure:
 ///   WHEN arr IS NULL        → NULL
