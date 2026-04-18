@@ -1313,8 +1313,8 @@ fn plan_any_op(
 ///   WHEN has_nulls          → NULL
 ///   ELSE                    → TRUE
 fn plan_all_op(
-    left_expr: &Expr,
-    right_expr: &Expr,
+    needle: &Expr,
+    haystack: &Expr,
     compare_op: &BinaryOperator,
 ) -> Result<Expr> {
     let null_arr_check = right_expr.clone().is_null();
