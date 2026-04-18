@@ -779,6 +779,7 @@ pub(crate) fn create_group_accumulator(
 /// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr::GroupsAccumulator::supports_blocked_groups
 ///
 // TODO: support blocked optimization in streaming, spilling, and maybe empty accumulators case?
+#[expect(clippy::borrowed_box)]
 fn can_enable_blocked_groups(
     group_ordering: &GroupOrdering,
     oom_mode: &OutOfMemoryMode,
@@ -1465,21 +1466,21 @@ impl GroupedHashAggregateStream {
     ///
     /// Returns `Some(ExecutionState)` if the state should be changed, None otherwise.
     fn switch_to_skip_aggregation(&mut self) -> Result<Option<ExecutionState>> {
-        if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            if probe.should_skip() {
-                if !self.enable_blocked_groups {
-                    if let Some(batch) = self.emit(EmitTo::All, false)? {
-                        return Ok(Some(ExecutionState::ProducingOutput(batch)));
-                    };
-                } else {
-                    assert!(can_enable_blocked_groups(
-                        &self.group_ordering,
-                        &self.oom_mode,
-                        &self.group_values,
-                        &self.accumulators
-                    ));
-                    return Ok(Some(ExecutionState::ProducingBlocks));
-                }
+        if let Some(probe) = self.skip_aggregation_probe.as_mut()
+            && probe.should_skip()
+        {
+            if !self.enable_blocked_groups {
+                if let Some(batch) = self.emit(EmitTo::All, false)? {
+                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
+                };
+            } else {
+                assert!(can_enable_blocked_groups(
+                    &self.group_ordering,
+                    &self.oom_mode,
+                    &self.group_values,
+                    &self.accumulators
+                ));
+                return Ok(Some(ExecutionState::ProducingBlocks));
             }
         }
 
