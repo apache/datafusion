@@ -692,6 +692,16 @@ config_namespace! {
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
 
+        /// Duplicate-key policy used by Spark-compatible map construction functions
+        /// (e.g. `map_from_entries`, `map_from_arrays`).
+        ///
+        /// The flag is experimental and relevant only for DataFusion Spark built-in functions.
+        /// It mirrors Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala).
+        ///
+        /// Accepted values (case-insensitive): `"EXCEPTION"` (default, matches Spark's
+        /// default) and `"LAST_WIN"`. Any other value falls back to `"EXCEPTION"`.
+        pub map_key_dedup_policy: String, default = "EXCEPTION".to_string()
+
         /// How many bytes to buffer in the probe side of hash joins while the build side is
         /// concurrently being built.
         ///
