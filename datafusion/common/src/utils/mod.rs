@@ -486,7 +486,7 @@ impl SingleRowListArrayBuilder {
         let (field, arr) = self.into_field_and_arr();
         let offsets = ScalarBuffer::from(vec![0]);
         let sizes = ScalarBuffer::from(vec![i32::try_from(arr.len()).expect(
-            "Trying to construct a ListVew where element length exceeds i32::MAX",
+            "Trying to construct a ListView where element length exceeds i32::MAX",
         )]);
         ListViewArray::new(field, offsets, sizes, arr, None)
     }
