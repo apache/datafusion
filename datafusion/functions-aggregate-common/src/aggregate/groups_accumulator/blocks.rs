@@ -62,7 +62,7 @@ impl<B: Block> Blocks<B> {
         // For resize, we need to:
         //   1. Ensure the blks are enough first
         //   2. and then ensure slots in blks are enough
-        let (mut cur_blk_idx, exist_slots) = if !self.inner.is_empty() {
+        let (mut cur_blk_idx, exist_slots_num) = if !self.inner.is_empty() {
             let cur_blk_idx = self.inner.len() - 1;
             let exist_slots =
                 (self.inner.len() - 1) * block_size + self.inner.back().unwrap().len();
@@ -73,49 +73,49 @@ impl<B: Block> Blocks<B> {
         };
 
         // No new groups, don't need to expand, just return
-        if exist_slots >= total_num_groups {
+        if exist_slots_num >= total_num_groups {
             return;
         }
 
         // 1. Ensure blks are enough
-        let exist_blks = self.inner.len();
-        let new_blks = total_num_groups.div_ceil(block_size) - exist_blks;
-        if new_blks > 0 {
-            for _ in 0..new_blks {
+        let exist_blks_num = self.inner.len();
+        let new_blks_num = total_num_groups.div_ceil(block_size) - exist_blks_num;
+        if new_blks_num > 0 {
+            for _ in 0..new_blks_num {
                 let block = new_block(self.block_size);
                 self.inner.push_back(block);
             }
         }
 
         // 2. Ensure slots are enough
-        let mut new_slots = total_num_groups - exist_slots;
+        let mut new_slots_num = total_num_groups - exist_slots_num;
 
         // 2.1 Only fill current blk if it may be already enough
-        let cur_blk_rest_slots = block_size - self.inner[cur_blk_idx].len();
-        if cur_blk_rest_slots >= new_slots {
-            self.inner[cur_blk_idx].fill_default_value(new_slots, default_value.clone());
+        let cur_blk_rest_slots_num = block_size - self.inner[cur_blk_idx].len();
+        if cur_blk_rest_slots_num >= new_slots_num {
+            self.inner[cur_blk_idx].fill_default_value(new_slots_num, default_value.clone());
             return;
         }
 
         // 2.2 Fill current blk to full
         self.inner[cur_blk_idx]
-            .fill_default_value(cur_blk_rest_slots, default_value.clone());
-        new_slots -= cur_blk_rest_slots;
+            .fill_default_value(cur_blk_rest_slots_num, default_value.clone());
+        new_slots_num -= cur_blk_rest_slots_num;
 
         // 2.3 Fill complete blks
-        let complete_blks = new_slots / block_size;
-        for _ in 0..complete_blks {
+        let complete_blks_num = new_slots_num / block_size;
+        for _ in 0..complete_blks_num {
             cur_blk_idx += 1;
             self.inner[cur_blk_idx].fill_default_value(block_size, default_value.clone());
         }
 
         // 2.4 Fill last blk if needed
-        let rest_slots = new_slots % block_size;
-        if rest_slots > 0 {
+        let rest_slots_num = new_slots_num % block_size;
+        if rest_slots_num > 0 {
             self.inner
                 .back_mut()
                 .unwrap()
-                .fill_default_value(rest_slots, default_value);
+                .fill_default_value(rest_slots_num, default_value);
         }
     }
 
@@ -177,7 +177,7 @@ pub trait Block: Debug {
 
 /// Usually we use `Vec` to represent `Block`, so we define `Blocks<Vec<T>>`
 /// as the `GeneralBlocks<T>`
-pub type GeneralBlocks<T> = Blocks<Vec<T>>;
+pub type VecBlocks<T> = Blocks<Vec<T>>;
 
 /// As mentioned in [`GeneralBlocks`], we usually use `Vec` to represent `Block`,
 /// so we implement `Block` trait for `Vec`
@@ -193,7 +193,7 @@ impl<Ty: Clone + Debug> Block for Vec<Ty> {
     }
 }
 
-impl<T: Clone + Debug> GeneralBlocks<T> {
+impl<T: Clone + Debug> VecBlocks<T> {
     pub fn emit(&mut self, emit_to: EmitTo) -> Vec<T> {
         if matches!(emit_to, EmitTo::NextBlock) {
             assert!(

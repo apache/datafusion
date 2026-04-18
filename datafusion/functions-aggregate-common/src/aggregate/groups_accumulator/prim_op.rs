@@ -27,7 +27,7 @@ use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::NullStateAdapter;
-use crate::aggregate::groups_accumulator::blocks::{Blocks, GeneralBlocks};
+use crate::aggregate::groups_accumulator::blocks::{Blocks, VecBlocks};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -45,7 +45,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     /// Values per group, stored as the native type
-    values: GeneralBlocks<T::Native>,
+    values: VecBlocks<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -211,9 +211,13 @@ where
     }
 
     fn size(&self) -> usize {
-        let values_cap = self.values.iter().map(|b| b.capacity()).sum::<usize>();
+        if self.values.is_empty() {
+            return 0;
+        }
+        let values_cap = self.values.len() * self.values[0].capacity();
         let values_size = values_cap * size_of::<T::Native>();
-        values_size + self.null_state.size()
+        let nulls_size = self.null_state.size();
+        values_size + nulls_size
     }
 
     fn supports_blocked_groups(&self) -> bool {
