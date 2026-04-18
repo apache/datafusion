@@ -1317,34 +1317,34 @@ fn plan_all_op(
     haystack: &Expr,
     compare_op: &BinaryOperator,
 ) -> Result<Expr> {
-    let null_arr_check = right_expr.clone().is_null();
-    let empty_check = cardinality(right_expr.clone()).eq(lit(0u64));
-    let null_lhs_check = left_expr.clone().is_null();
+    let null_arr_check = haystack.clone().is_null();
+    let empty_check = cardinality(haystack.clone()).eq(lit(0u64));
+    let null_lhs_check = needle.clone().is_null();
     // DataFusion's array_position uses is_null() checks internally (not equality),
     // so it can locate NULL elements even though NULL = NULL is NULL in standard SQL.
-    let has_nulls = array_position(right_expr.clone(), lit(ScalarValue::Null), lit(1i64))
-        .is_not_null();
+    let has_nulls =
+        array_position(haystack.clone(), lit(ScalarValue::Null), lit(1i64)).is_not_null();
 
     let decisive_condition = match compare_op {
-        BinaryOperator::NotEq => array_has(right_expr.clone(), left_expr.clone()),
+        BinaryOperator::NotEq => array_has(haystack.clone(), needle.clone()),
         BinaryOperator::Eq => {
-            let all_equal = array_min(right_expr.clone())
-                .eq(left_expr.clone())
-                .and(array_max(right_expr.clone()).eq(left_expr.clone()));
+            let all_equal = array_min(haystack.clone())
+                .eq(needle.clone())
+                .and(array_max(haystack.clone()).eq(needle.clone()));
             Expr::Not(Box::new(all_equal))
         }
-        BinaryOperator::Gt => Expr::Not(Box::new(
-            left_expr.clone().gt(array_max(right_expr.clone())),
-        )),
-        BinaryOperator::Lt => Expr::Not(Box::new(
-            left_expr.clone().lt(array_min(right_expr.clone())),
-        )),
-        BinaryOperator::GtEq => Expr::Not(Box::new(
-            left_expr.clone().gt_eq(array_max(right_expr.clone())),
-        )),
-        BinaryOperator::LtEq => Expr::Not(Box::new(
-            left_expr.clone().lt_eq(array_min(right_expr.clone())),
-        )),
+        BinaryOperator::Gt => {
+            Expr::Not(Box::new(needle.clone().gt(array_max(haystack.clone()))))
+        }
+        BinaryOperator::Lt => {
+            Expr::Not(Box::new(needle.clone().lt(array_min(haystack.clone()))))
+        }
+        BinaryOperator::GtEq => {
+            Expr::Not(Box::new(needle.clone().gt_eq(array_max(haystack.clone()))))
+        }
+        BinaryOperator::LtEq => {
+            Expr::Not(Box::new(needle.clone().lt_eq(array_min(haystack.clone()))))
+        }
         _ => {
             return plan_err!(
                 "Unsupported AllOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
