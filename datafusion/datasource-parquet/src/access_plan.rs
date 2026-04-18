@@ -353,20 +353,6 @@ impl ParquetAccessPlan {
         let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
         PreparedAccessPlan::new(row_group_indexes, row_selection)
     }
-
-    /// Like [`prepare`](Self::prepare), but also applies an
-    /// `AccessPlanOptimizer` to reorder/reverse row groups after
-    /// preparing the plan.
-    pub(crate) fn prepare_with_optimizer(
-        self,
-        row_group_meta_data: &[RowGroupMetaData],
-        file_metadata: &ParquetMetaData,
-        arrow_schema: &Schema,
-        optimizer: &dyn crate::access_plan_optimizer::AccessPlanOptimizer,
-    ) -> Result<PreparedAccessPlan> {
-        let plan = self.prepare(row_group_meta_data)?;
-        optimizer.optimize(plan, file_metadata, arrow_schema)
-    }
 }
 
 /// Represents a prepared, fully resolved [`ParquetAccessPlan`]
@@ -436,8 +422,6 @@ impl PreparedAccessPlan {
             }
         };
 
-        let descending = first_sort_expr.options.descending;
-
         // Build statistics converter for this column
         let converter = match StatisticsConverter::try_new(
             column.name(),
@@ -451,40 +435,31 @@ impl PreparedAccessPlan {
             }
         };
 
-        // Get the relevant statistics for the selected row groups.
-        // For ASC sort: use min values — we want the RG with the smallest min
-        //   to come first (best candidate for "smallest values").
-        // For DESC sort: use max values — we want the RG with the largest max
-        //   to come first (best candidate for "largest values"). Using min for
-        //   DESC can pick a worse first RG when ranges overlap (e.g., RG0 50-60
-        //   vs RG1 40-100 — RG1 has larger values but smaller min).
+        // Always sort by min values in ASC order to align row groups with
+        // the file's declared output ordering. Direction (DESC) is handled
+        // separately by ReverseRowGroups which is applied AFTER reorder.
+        //
+        // This composable design avoids the problem where reorder(DESC)
+        // followed by reverse would double-flip the order, and ensures
+        // that for already-sorted data, reorder is a no-op and reverse
+        // gives the correct DESC order (including placing small tail RGs first).
         let rg_metadata: Vec<&RowGroupMetaData> = self
             .row_group_indexes
             .iter()
             .map(|&idx| file_metadata.row_group(idx))
             .collect();
 
-        let stat_values = if descending {
-            match converter.row_group_maxes(rg_metadata.iter().copied()) {
-                Ok(vals) => vals,
-                Err(e) => {
-                    debug!("Skipping RG reorder: cannot get max values: {e}");
-                    return Ok(self);
-                }
-            }
-        } else {
-            match converter.row_group_mins(rg_metadata.iter().copied()) {
-                Ok(vals) => vals,
-                Err(e) => {
-                    debug!("Skipping RG reorder: cannot get min values: {e}");
-                    return Ok(self);
-                }
+        let stat_values = match converter.row_group_mins(rg_metadata.iter().copied()) {
+            Ok(vals) => vals,
+            Err(e) => {
+                debug!("Skipping RG reorder: cannot get min values: {e}");
+                return Ok(self);
             }
         };
 
-        // Sort indices by statistic values (min for ASC, max for DESC)
+        // Always sort ASC by min values — direction is handled by reverse
         let sort_options = arrow::compute::SortOptions {
-            descending,
+            descending: false,
             nulls_first: first_sort_expr.options.nulls_first,
         };
         let sorted_indices =
@@ -836,7 +811,11 @@ mod test {
     }
 
     #[test]
-    fn test_reorder_by_statistics_desc() {
+    fn test_reorder_by_statistics_desc_sorts_asc() {
+        // reorder_by_statistics always sorts by min ASC regardless of sort
+        // direction. DESC is handled separately by ReverseRowGroups which
+        // is applied after reorder in the optimizer pipeline.
+        //
         // RGs: [50-99, 200-299, 1-30]
         let metadata = make_metadata_with_stats(&[(50, 99), (200, 299), (1, 30)]);
         let schema = make_arrow_schema();
@@ -847,8 +826,9 @@ mod test {
             .reorder_by_statistics(&sort_order, &metadata, &schema)
             .unwrap();
 
-        // DESC: largest max first: RG1(max=299), RG0(max=99), RG2(max=30)
-        assert_eq!(plan.row_group_indexes, vec![1, 0, 2]);
+        // Always ASC by min: RG2(min=1), RG0(min=50), RG1(min=200)
+        // Reverse is applied separately for DESC queries.
+        assert_eq!(plan.row_group_indexes, vec![2, 0, 1]);
     }
 
     #[test]
@@ -949,17 +929,14 @@ mod test {
     }
 
     #[test]
-    fn test_reorder_by_statistics_desc_uses_max_for_overlapping_rgs() {
-        // Overlapping ranges where min DESC would pick worse RG than max DESC:
-        //   RG0: 50-60 (small range, moderate max)
-        //   RG1: 40-100 (wide range, high max but lower min)
-        //   RG2: 20-30 (low max)
+    fn test_reorder_by_statistics_overlapping_rgs_sorts_asc() {
+        // Overlapping ranges — reorder always uses min ASC:
+        //   RG0: 50-60
+        //   RG1: 40-100 (lower min, wider range)
+        //   RG2: 20-30 (lowest min)
         //
-        // For ORDER BY DESC LIMIT N:
-        //   Using min DESC: [RG0(50), RG1(40), RG2(20)] → reads RG0 first (max=60 only)
-        //   Using max DESC: [RG1(100), RG0(60), RG2(30)] → reads RG1 first (max=100)
-        //
-        // RG1 is the better first choice for DESC because it contains the largest values.
+        // Sorted by min ASC: [RG2(20), RG1(40), RG0(50)]
+        // For DESC queries, ReverseRowGroups is applied after to flip order.
         let metadata = make_metadata_with_stats(&[(50, 60), (40, 100), (20, 30)]);
         let schema = make_arrow_schema();
         let sort_order = make_sort_order_desc();
@@ -969,8 +946,8 @@ mod test {
             .reorder_by_statistics(&sort_order, &metadata, &schema)
             .unwrap();
 
-        // Expected: RG1 (max=100) first, then RG0 (max=60), then RG2 (max=30)
-        assert_eq!(plan.row_group_indexes, vec![1, 0, 2]);
+        // Always ASC by min: RG2(min=20), RG1(min=40), RG0(min=50)
+        assert_eq!(plan.row_group_indexes, vec![2, 1, 0]);
     }
 
     #[test]

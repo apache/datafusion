@@ -1130,35 +1130,53 @@ impl RowGroupsPrunedParquetOpen {
             );
         }
 
-        // Build the access plan optimizer from sort pushdown hints.
-        // ReorderByStatistics is preferred (handles both ASC and DESC via
-        // min/max stats). ReverseRowGroups is a fallback when no statistics
-        // are available on the sort column.
-        let optimizer: Option<
+        // Row group ordering optimization (two composable steps):
+        //
+        // 1. reorder_by_statistics: sort RGs by min values (ASC) to align
+        //    with the file's declared output ordering. This fixes out-of-order
+        //    RGs (e.g., from append-heavy workloads) without changing direction.
+        //    Skipped gracefully when statistics are unavailable.
+        //
+        // 2. reverse: flip the order for DESC queries. Applied AFTER reorder
+        //    so the reversed order is correct whether or not reorder changed
+        //    anything. Also handles row_selection remapping.
+        //
+        // For sorted data: reorder is a no-op, reverse gives perfect DESC.
+        // For unsorted data: reorder fixes the order, reverse flips for DESC.
+        let reorder_optimizer: Option<
             Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
-        > = if let Some(sort_order) = &prepared.sort_order_for_reorder {
-            Some(Box::new(
-                crate::access_plan_optimizer::ReorderByStatistics::new(
-                    sort_order.clone(),
-                ),
-            ))
-        } else if prepared.reverse_row_groups {
+        > = prepared.sort_order_for_reorder.as_ref().map(|sort_order| {
+            Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                sort_order.clone(),
+            )) as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
+        });
+
+        let reverse_optimizer: Option<
+            Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+        > = if prepared.reverse_row_groups {
             Some(Box::new(crate::access_plan_optimizer::ReverseRowGroups))
         } else {
             None
         };
 
-        // Prepare the access plan and apply row group optimizer if configured.
-        let prepared_plan = if let Some(opt) = &optimizer {
-            access_plan.prepare_with_optimizer(
-                rg_metadata,
+        // Prepare the access plan and apply optimizers in order:
+        // 1. reorder (fix out-of-order RGs to match declared ordering)
+        // 2. reverse (flip for DESC queries)
+        let mut prepared_plan = access_plan.prepare(rg_metadata)?;
+        if let Some(opt) = &reorder_optimizer {
+            prepared_plan = opt.optimize(
+                prepared_plan,
                 file_metadata.as_ref(),
                 &prepared.physical_file_schema,
-                opt.as_ref(),
-            )?
-        } else {
-            access_plan.prepare(rg_metadata)?
-        };
+            )?;
+        }
+        if let Some(opt) = &reverse_optimizer {
+            prepared_plan = opt.optimize(
+                prepared_plan,
+                file_metadata.as_ref(),
+                &prepared.physical_file_schema,
+            )?;
+        }
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
         let read_plan = build_projection_read_plan(
