@@ -25,31 +25,6 @@ use arrow::compute::filter;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{Result, ScalarValue, exec_err};
 
-/// Policy for handling duplicate keys when constructing a Spark `MapType`.
-///
-/// Mirrors Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
-/// Spark's default is [`Exception`](Self::Exception).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum MapKeyDedupPolicy {
-    /// Raise a runtime error when a duplicate key is encountered (Spark default).
-    #[default]
-    Exception,
-    /// Keep the last occurrence of each key.
-    LastWin,
-}
-
-impl MapKeyDedupPolicy {
-    /// Parse from a case-insensitive string. Unknown values fall back to
-    /// [`MapKeyDedupPolicy::Exception`] (Spark's default).
-    pub fn from_config_str(value: &str) -> Self {
-        if value.eq_ignore_ascii_case("LAST_WIN") {
-            Self::LastWin
-        } else {
-            Self::Exception
-        }
-    }
-}
-
 /// Helper function to get element [`DataType`]
 /// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
 /// [`Null`](DataType::Null) can be coerced to `ListType`([`Null`](DataType::Null)), so [`Null`](DataType::Null) is returned<br>
@@ -136,8 +111,13 @@ pub fn map_type_from_key_value_types(
 ///    So the inputs can be [`ListArray`](`arrow::array::ListArray`)/[`LargeListArray`](`arrow::array::LargeListArray`)/[`FixedSizeListArray`](`arrow::array::FixedSizeListArray`)<br>
 ///    To preserve the row info, [`offsets`](arrow::array::ListArray::offsets) and [`nulls`](arrow::array::ListArray::nulls) for both keys and values need to be provided<br>
 ///    [`FixedSizeListArray`](`arrow::array::FixedSizeListArray`) has no `offsets`, so they can be generated as a cumulative sum of it's `Size`
-/// 2. Duplicate key handling follows [`MapKeyDedupPolicy`], mirroring Spark's
-///    [spark.sql.mapKeyDedupPolicy](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
+/// 2. Spark provides [spark.sql.mapKeyDedupPolicy](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961)
+///    to handle duplicate keys<br>
+///    For now, configurable functions are not supported by Datafusion<br>
+///    So more permissive `LAST_WIN` option is used in this implementation (instead of `EXCEPTION`)<br>
+///    `EXCEPTION` behaviour can still be achieved externally in cost of performance:<br>
+///    `when(array_length(array_distinct(keys)) == array_length(keys), constructed_map)`<br>
+///    `.otherwise(raise_error("duplicate keys occurred during map construction"))`
 pub fn map_from_keys_values_offsets_nulls(
     flat_keys: &ArrayRef,
     flat_values: &ArrayRef,
@@ -145,7 +125,6 @@ pub fn map_from_keys_values_offsets_nulls(
     values_offsets: &[i32],
     keys_nulls: Option<&NullBuffer>,
     values_nulls: Option<&NullBuffer>,
-    dedup_policy: MapKeyDedupPolicy,
 ) -> Result<ArrayRef> {
     let (keys, values, offsets) = map_deduplicate_keys(
         flat_keys,
@@ -154,7 +133,6 @@ pub fn map_from_keys_values_offsets_nulls(
         values_offsets,
         keys_nulls,
         values_nulls,
-        dedup_policy,
     )?;
     let nulls = NullBuffer::union(keys_nulls, values_nulls);
 
@@ -177,7 +155,6 @@ fn map_deduplicate_keys(
     values_offsets: &[i32],
     keys_nulls: Option<&NullBuffer>,
     values_nulls: Option<&NullBuffer>,
-    dedup_policy: MapKeyDedupPolicy,
 ) -> Result<(ArrayRef, ArrayRef, OffsetBuffer<i32>)> {
     let offsets_len = keys_offsets.len();
     let mut new_offsets = Vec::with_capacity(offsets_len);
@@ -225,28 +202,20 @@ fn map_deduplicate_keys(
                         cur_keys_offset + cur_entry_idx,
                     )?
                     .compacted();
+                    // Enforce Spark's default `spark.sql.mapKeyDedupPolicy=EXCEPTION`.
+                    // Native LAST_WIN support is deferred to a follow-up.
                     if seen_keys.contains(&key) {
-                        match dedup_policy {
-                            MapKeyDedupPolicy::Exception => {
-                                // Message matches Spark's `duplicateMapKeyFoundError`
-                                // (org.apache.spark.sql.errors.QueryExecutionErrors).
-                                return exec_err!(
-                                    "[DUPLICATED_MAP_KEY] Duplicate map key {key} was found, \
-                                     please check the input data. If you want to remove the \
-                                     duplicated keys, you can set spark.sql.mapKeyDedupPolicy \
-                                     to LAST_WIN so that the key inserted at last takes precedence."
-                                );
-                            }
-                            MapKeyDedupPolicy::LastWin => {
-                                // Earlier occurrence is dropped; the later (already-kept) entry wins.
-                            }
-                        }
-                    } else {
-                        keys_mask_one[cur_entry_idx] = true;
-                        values_mask_one[cur_entry_idx] = true;
-                        seen_keys.insert(key);
-                        new_last_offset += 1;
+                        return exec_err!(
+                            "[DUPLICATED_MAP_KEY] Duplicate map key {key} was found, \
+                             please check the input data. If you want to remove the \
+                             duplicated keys, you can set spark.sql.mapKeyDedupPolicy \
+                             to LAST_WIN so that the key inserted at last takes precedence."
+                        );
                     }
+                    keys_mask_one[cur_entry_idx] = true;
+                    values_mask_one[cur_entry_idx] = true;
+                    seen_keys.insert(key);
+                    new_last_offset += 1;
                 }
             }
         } else {

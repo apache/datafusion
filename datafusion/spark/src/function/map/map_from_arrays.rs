@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::function::map::utils::{
-    MapKeyDedupPolicy, get_element_type, get_list_offsets, get_list_values,
+    get_element_type, get_list_offsets, get_list_values,
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
 };
 use arrow::array::{Array, ArrayRef, NullArray};
@@ -105,7 +105,6 @@ fn map_from_arrays_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         &get_list_offsets(values)?,
         keys.nulls(),
         values.nulls(),
-        MapKeyDedupPolicy::Exception,
     )
 }
 

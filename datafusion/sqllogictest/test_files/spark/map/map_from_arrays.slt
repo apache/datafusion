@@ -118,11 +118,9 @@ SELECT
 ----
 {outer_key1: {inner_a: 1, inner_b: 2}, outer_key2: {inner_x: 10, inner_y: 20, inner_z: 30}}
 
-# Test with duplicate keys
-query ?
+# Test with duplicate keys: raises DUPLICATED_MAP_KEY under Spark's default policy
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key true was found
 SELECT map_from_arrays(array(true, false, true), array('a', NULL, 'b'));
-----
-{false: NULL, true: b}
 
 # Tests with different list types
 query ?
