@@ -203,12 +203,14 @@ fn plan_small_schema() -> LogicalPlan {
         .unwrap()
 }
 
+type BenchCase = (&'static str, fn() -> LogicalPlan);
+
 fn bench_optimize_projections(c: &mut Criterion) {
     let rule = OptimizeProjections::new();
     let config = OptimizerContext::new();
     let mut group = c.benchmark_group("optimize_projections");
 
-    let cases: &[(&str, fn() -> LogicalPlan)] = &[
+    let cases: &[BenchCase] = &[
         ("tpch_q3", plan_tpch_q3),
         ("tpch_q5", plan_tpch_q5),
         ("clickbench_groupby", plan_clickbench_groupby),
