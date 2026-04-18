@@ -155,8 +155,7 @@ impl SessionContextGenerator {
             Some(true) => SkipPartialParams::ensure_trigger(),
             Some(false) => SkipPartialParams::ensure_not_trigger(),
             None => {
-                let idx =
-                    rng.random_range(0..self.candidate_skip_partial_params.len());
+                let idx = rng.random_range(0..self.candidate_skip_partial_params.len());
                 self.candidate_skip_partial_params[idx]
             }
         };

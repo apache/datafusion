@@ -26,7 +26,9 @@ use rand::{Rng, rng};
 use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
     check_equality_of_batches,
-    context_generator::{SessionContextGenerator, SessionContextOptions, SessionContextWithParams},
+    context_generator::{
+        SessionContextGenerator, SessionContextOptions, SessionContextWithParams,
+    },
     data_generator::{Dataset, DatasetGenerator, DatasetGeneratorConfig},
     run_sql,
 };
@@ -223,12 +225,11 @@ impl AggregationFuzzer {
         let mut tasks = Vec::with_capacity(query_groups.len() * CTX_GEN_ROUNDS);
         for QueryGroup { dataset, sql } in query_groups {
             let dataset_ref = Arc::new(dataset);
-            let ctx_generator =
-                SessionContextGenerator::new_with_options(
-                    dataset_ref.clone(),
-                    &self.table_name,
-                    self.session_context_options.clone(),
-                );
+            let ctx_generator = SessionContextGenerator::new_with_options(
+                dataset_ref.clone(),
+                &self.table_name,
+                self.session_context_options.clone(),
+            );
 
             // Generate the baseline context, and get the baseline result firstly
             let baseline_ctx_with_params = ctx_generator

@@ -200,7 +200,6 @@ impl QueryBuilder {
     }
 
     /// Add if also test the no grouping aggregation case(default: true)
-    #[expect(dead_code)]
     pub fn with_no_grouping(mut self, no_grouping: bool) -> Self {
         self.no_grouping = no_grouping;
         self
