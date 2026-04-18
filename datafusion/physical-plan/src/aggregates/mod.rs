@@ -4442,12 +4442,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_order_is_retained_when_spilling_flat() -> Result<()> {
-        check_order_is_retained_when_spilling(false, 2000).await
+        check_order_is_retained_when_spilling(false, 600).await
     }
 
     #[tokio::test]
     async fn test_order_is_retained_when_spilling_blocked() -> Result<()> {
-        check_order_is_retained_when_spilling(true, 2000).await
+        // Blocked groups pre-allocates the full block capacity upfront,
+        // requiring a larger pool to proceed before triggering spill.
+        check_order_is_retained_when_spilling(true, 600).await
     }
 
     async fn check_order_is_retained_when_spilling(

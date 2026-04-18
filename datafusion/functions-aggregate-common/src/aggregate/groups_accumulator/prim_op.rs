@@ -94,15 +94,19 @@ where
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        const DEFAULT_BLOCK_CAP: usize = 128;
-
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
         // Expand to ensure values are large enough
         let new_block = |block_size: Option<usize>| {
-            let cap = block_size.unwrap_or(DEFAULT_BLOCK_CAP);
-            Vec::with_capacity(cap)
+            // In blocked mode, pre-allocate the full block capacity.
+            // In flat mode (block_size=None), start with an empty Vec
+            // and let `resize` grow it to exactly `total_num_groups`,
+            // matching the standard Vec growth behavior.
+            match block_size {
+                Some(cap) => Vec::with_capacity(cap),
+                None => Vec::new(),
+            }
         };
         self.values
             .resize(total_num_groups, new_block, self.starting_value);
