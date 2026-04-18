@@ -264,21 +264,16 @@ pub fn new_group_values(
 }
 
 fn supported_single_dictionary_value(t: &DataType) -> bool {
-    matches!(
-        t,
-        DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Binary
-            | DataType::LargeBinary
-            | DataType::Utf8View
-            | DataType::BinaryView
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-    )
+    match t {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => true,
+        DataType::List(field)
+            if matches!(
+                field.data_type(),
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+            ) =>
+        {
+            true
+        }
+        _ => false,
+    }
 }
