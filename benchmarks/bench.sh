@@ -1196,19 +1196,26 @@ data_sort_pushdown_inexact() {
     echo "Sort pushdown Inexact shuffled data generated at ${INEXACT_DIR}"
     ls -la "${INEXACT_DIR}"
 
-    # Also generate a file with partially overlapping row groups.
-    # Simulates streaming data with network delays: each chunk is mostly
-    # in order but has a small overlap with the next chunk (±5% of the
-    # chunk range). This is the pattern described by @adriangb — data
-    # arriving with timestamps that are generally increasing but with
-    # network-induced jitter causing small overlaps between row groups.
+    # Also generate a file with partially overlapping AND out-of-order
+    # row groups. Simulates streaming data with network delays: chunks
+    # arrive out of sequence, and each chunk has small jitter causing
+    # overlap with neighbors. This is the pattern described by
+    # @adriangb — data arriving with timestamps that are generally
+    # increasing but network-induced delays cause chunks to arrive
+    # out of order with small overlaps between row groups.
+    #
+    # Strategy: bucket rows into 60 chunks (~100K rows each), sort
+    # within each chunk (with jitter for overlap), then scramble the
+    # chunk order using a deterministic permutation. This produces
+    # RGs that are individually sorted but appear in scrambled order
+    # in the file — so reorder_by_statistics has real work to do.
     OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap/lineitem"
     if [ -d "${OVERLAP_DIR}" ] && [ "$(ls -A ${OVERLAP_DIR}/*.parquet 2>/dev/null)" ]; then
         echo "Sort pushdown Inexact overlap data already exists at ${OVERLAP_DIR}"
         return
     fi
 
-    echo "Generating sort pushdown Inexact overlap data (partially overlapping RGs)..."
+    echo "Generating sort pushdown Inexact overlap data (scrambled + overlapping RGs)..."
     mkdir -p "${OVERLAP_DIR}"
 
     (cd "${SCRIPT_DIR}/.." && cargo run --release -p datafusion-cli -- -c "
@@ -1216,14 +1223,16 @@ data_sort_pushdown_inexact() {
         STORED AS PARQUET
         LOCATION '${SRC_DIR}';
 
-        -- Add jitter to l_orderkey: shift each row by a random-ish offset
-        -- proportional to its position. This creates overlap between adjacent
-        -- row groups while preserving the general ascending trend.
-        -- Formula: l_orderkey + (l_orderkey * 7 % 5000) - 2500
-        -- This adds ±2500 jitter, creating ~5K overlap between adjacent 100K-row RGs.
+        -- Bucket into 60 chunks (each ~100K rows), sort within each chunk,
+        -- then scramble chunk order. This produces overlapping RGs that are
+        -- individually sorted but appear in scrambled order in the file.
         COPY (
             SELECT * FROM src
-            ORDER BY l_orderkey + (l_orderkey * 7 % 5000) - 2500
+            ORDER BY
+                -- Scramble chunk order: chunk_id -> permuted_chunk_id
+                (CAST(l_orderkey / 100000 AS INT) * 37 + 13) % 60,
+                -- Within each chunk, add small jitter for overlap
+                l_orderkey + (l_orderkey * 7 % 5000) - 2500
         )
         TO '${OVERLAP_DIR}/overlapping.parquet'
         STORED AS PARQUET
@@ -1256,9 +1265,9 @@ run_sort_pushdown_inexact_unsorted() {
     debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --iterations 5 --path "${INEXACT_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact_unsorted" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
-# Runs the sort pushdown benchmark with partially overlapping RGs.
-# Simulates streaming data with network jitter — RGs are mostly in order
-# but have small overlaps (±2500 orderkey jitter between adjacent RGs).
+# Runs the sort pushdown benchmark with scrambled + overlapping RGs.
+# Simulates streaming data with network delays — RGs are out of order
+# AND have small overlaps (jitter). Tests reorder_by_statistics effectiveness.
 run_sort_pushdown_inexact_overlap() {
     OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap"
     RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact_overlap.json"
