@@ -381,7 +381,7 @@ enum OutOfMemoryMode {
 /// And for a really detailed introduction to the design of blocked approach, maybe you can see [#7065].
 ///
 /// The conditions that trigger the blocked groups optimization can be found in
-/// [`maybe_enable_blocked_groups`].
+/// [`can_enable_blocked_groups`].
 ///  
 /// [`group_values`]: Self::group_values
 /// [`accumulators`]: Self::accumulators
