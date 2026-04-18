@@ -17,22 +17,14 @@
 
 //! Dedicated io_uring worker thread.
 //!
-//! The worker drives a single `IoUring` and pipelines **multiple**
-//! [`IoCommand`] requests through it concurrently. New requests are pulled
-//! from a bounded mpsc channel as ring capacity allows; completions are
-//! routed back to the originating `oneshot::Sender`s via a per-request
-//! slot id encoded in the SQE `user_data`.
-//!
-//! Key points:
-//! * SQE `user_data` = `(slot_id as u64) << 32 | (range_idx as u64)` so each
-//!   completion can find its owning request and range.
-//! * Partial reads (`ret` smaller than requested, which is legal per
-//!   `read(2)`) queue a follow-up SQE for the remainder instead of being
-//!   silently truncated.
-//! * A request's [`File`] lives in the per-slot state, so the raw fd
-//!   referenced by in-flight SQEs stays valid until every completion for
-//!   that slot is drained.
+//! A single worker thread drains an unbounded mpsc of [`IoCommand`]s and
+//! pipelines every request's reads through one shared [`IoUring`]. SQE
+//! `user_data` packs `(slot_id << 32) | range_idx` so each completion finds
+//! its owning request and range. Partial reads re-enqueue a follow-up SQE
+//! for the remainder; the per-request [`File`] stays alive until every
+//! completion for that slot has been drained.
 
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -42,18 +34,9 @@ use io_uring::{IoUring, opcode, types};
 use object_store::Result;
 use tokio::sync::{mpsc, oneshot};
 
-/// Ring size (number of SQ entries). 256 is a good default that
-/// handles typical Parquet column-chunk batches without overflow.
+/// Number of submission-queue entries. 256 comfortably absorbs typical
+/// Parquet column-chunk batches without spilling to the backlog.
 const RING_ENTRIES: u32 = 256;
-
-/// Maximum requests held in the worker at once. Requests arriving beyond
-/// this are backpressured by the bounded command channel.
-const MAX_IN_FLIGHT_REQUESTS: usize = 64;
-
-/// Capacity of the command channel. The channel carries one element per
-/// pending read request (typically one per Parquet `get_ranges` call), so
-/// this is an upper bound on queued-but-not-yet-submitted requests.
-pub(crate) const COMMAND_CHANNEL_CAPACITY: usize = 1024;
 
 /// Command sent from the async ObjectStore methods to the io_uring thread.
 pub(crate) enum IoCommand {
@@ -64,39 +47,41 @@ pub(crate) enum IoCommand {
     },
 }
 
-/// Per-request state living in the worker's slab while SQEs are in flight.
+/// Per-request state living in the slab while SQEs are in flight.
+///
+/// The `buffers[i]` [`Vec`] grows as completions arrive — `len()` is the
+/// bytes filled so far, `capacity() >= target_len[i]` is the allocation.
+/// This avoids the zero-fill cost of `vec![0u8; n]` without touching
+/// uninitialized memory from safe code.
 struct PendingRequest {
     /// Kept alive so the raw fd stored in in-flight SQEs stays valid.
     _file: std::fs::File,
     fd: i32,
     ranges: Vec<Range<u64>>,
     buffers: Vec<Vec<u8>>,
-    filled: Vec<usize>,
-    /// Number of ranges that still need more bytes read.
-    ranges_remaining: usize,
-    /// Number of SQEs still owed to us — either sitting in the backlog or
-    /// in flight in the ring. We cannot free this slot until this reaches
-    /// zero, otherwise a late CQE could land on a reallocated slot and
-    /// scribble into an unrelated request's buffer.
-    sqes_outstanding: usize,
+    target_len: Vec<usize>,
+    /// Ranges that still need more bytes read.
+    ranges_remaining: u32,
+    /// SQEs still owed — either in the backlog or in flight. A slot may
+    /// only be freed when this hits zero; otherwise a late CQE could land
+    /// on a reallocated slot and corrupt an unrelated request.
+    sqes_outstanding: u32,
     /// `None` after the response has been sent (success or error).
     response: Option<oneshot::Sender<Result<Vec<Bytes>>>>,
-    /// Set once we have dispatched a terminal error; further completions
-    /// for this slot are accounted for but otherwise ignored.
     errored: bool,
 }
 
+#[inline]
 fn pack_user_data(slot: u32, range_idx: u32) -> u64 {
     ((slot as u64) << 32) | (range_idx as u64)
 }
 
+#[inline]
 fn unpack_user_data(user_data: u64) -> (u32, u32) {
-    ((user_data >> 32) as u32, (user_data & 0xFFFF_FFFF) as u32)
+    ((user_data >> 32) as u32, user_data as u32)
 }
 
-/// Slab holding `PendingRequest`s. `slots[i]` is `Some(..)` iff slot `i`
-/// is currently in use. `free` tracks previously allocated slot indices
-/// that are now reusable.
+/// Slab of active requests. `slots[i]` is `Some` iff slot `i` is live.
 struct Slab {
     slots: Vec<Option<PendingRequest>>,
     free: Vec<u32>,
@@ -130,6 +115,7 @@ impl Slab {
         self.in_flight -= 1;
     }
 
+    #[inline]
     fn get_mut(&mut self, id: u32) -> Option<&mut PendingRequest> {
         self.slots.get_mut(id as usize).and_then(|s| s.as_mut())
     }
@@ -139,7 +125,7 @@ impl Slab {
 ///
 /// Runs until the command channel is closed and all in-flight requests are
 /// drained.
-pub(crate) fn run_uring_loop(mut rx: mpsc::Receiver<IoCommand>) {
+pub(crate) fn run_uring_loop(mut rx: mpsc::UnboundedReceiver<IoCommand>) {
     let mut ring = match IoUring::new(RING_ENTRIES) {
         Ok(ring) => ring,
         Err(e) => {
@@ -149,19 +135,16 @@ pub(crate) fn run_uring_loop(mut rx: mpsc::Receiver<IoCommand>) {
         }
     };
 
-    let sq_capacity = ring.params().sq_entries() as usize;
     let mut slab = Slab::new();
-    // Pending SQEs waiting for room in the ring. `(slot_id, range_idx)`.
-    let mut sqe_backlog: Vec<(u32, u32)> = Vec::new();
+    // SQEs waiting for room in the ring. `(slot, range_idx)`.
+    let mut backlog: VecDeque<(u32, u32)> = VecDeque::new();
     let mut rx_closed = false;
 
     loop {
-        // 1) Pull new commands while we have room for more requests AND the
-        //    channel has not been closed.
-        while !rx_closed && slab.in_flight < MAX_IN_FLIGHT_REQUESTS {
-            let cmd = if slab.in_flight == 0 && sqe_backlog.is_empty() {
-                // Nothing in flight — block for the next command so the
-                // worker thread doesn't busy-loop when idle.
+        // 1) Pull every command currently waiting. When nothing is in flight
+        //    the thread blocks here so the worker idles without spinning.
+        while !rx_closed {
+            let cmd = if slab.in_flight == 0 && backlog.is_empty() {
                 match rx.blocking_recv() {
                     Some(cmd) => cmd,
                     None => {
@@ -179,15 +162,12 @@ pub(crate) fn run_uring_loop(mut rx: mpsc::Receiver<IoCommand>) {
                     }
                 }
             };
-            accept_command(cmd, &mut slab, &mut sqe_backlog);
+            accept_command(cmd, &mut slab, &mut backlog);
         }
 
-        // 2) Push as many pending SQEs into the ring as will fit, then
-        //    submit. `sq.push` returns Err when full.
-        submit_sqes(&mut ring, &mut slab, &mut sqe_backlog);
+        // 2) Push as many backlog SQEs into the SQ as will fit.
+        push_backlog(&mut ring, &mut slab, &mut backlog);
 
-        // 3) If there's work in the kernel, wait for at least one
-        //    completion; otherwise loop back to receive more commands.
         if slab.in_flight == 0 {
             if rx_closed {
                 break;
@@ -195,19 +175,20 @@ pub(crate) fn run_uring_loop(mut rx: mpsc::Receiver<IoCommand>) {
             continue;
         }
 
+        // 3) Single syscall that both submits the queued SQEs and waits for
+        //    at least one completion.
         if let Err(e) = ring.submit_and_wait(1) {
             fail_all(&mut slab, &format!("io_uring submit failed: {e}"));
             continue;
         }
 
-        // 4) Drain all available completions and route them back. If a
-        //    completion is short, enqueue a follow-up SQE to fill the tail.
-        drain_completions(&mut ring, &mut slab, &mut sqe_backlog, sq_capacity);
+        // 4) Drain every available CQE; short reads re-queue a follow-up SQE.
+        drain_completions(&mut ring, &mut slab, &mut backlog);
     }
 }
 
-/// Drain whatever is left on `rx` and respond to every waiter with `reason`.
-fn drain_and_error(rx: &mut mpsc::Receiver<IoCommand>, reason: &str) {
+/// Respond to every queued command with `reason` after init failure.
+fn drain_and_error(rx: &mut mpsc::UnboundedReceiver<IoCommand>, reason: &str) {
     while let Some(cmd) = rx.blocking_recv() {
         let IoCommand::ReadRanges { response, .. } = cmd;
         let _ = response.send(Err(object_store::Error::Generic {
@@ -217,10 +198,10 @@ fn drain_and_error(rx: &mut mpsc::Receiver<IoCommand>, reason: &str) {
     }
 }
 
-/// Allocate a slab slot for the incoming command and queue one SQE per
-/// range.  Errors (path not found, 32-bit overflow, etc.) are reported
-/// immediately via the response channel and do not occupy a slot.
-fn accept_command(cmd: IoCommand, slab: &mut Slab, backlog: &mut Vec<(u32, u32)>) {
+/// Allocate a slab slot for the incoming command and queue one SQE per range.
+/// Errors (missing file, 32-bit overflow) are reported immediately without
+/// occupying a slot.
+fn accept_command(cmd: IoCommand, slab: &mut Slab, backlog: &mut VecDeque<(u32, u32)>) {
     let IoCommand::ReadRanges {
         path,
         ranges,
@@ -228,7 +209,7 @@ fn accept_command(cmd: IoCommand, slab: &mut Slab, backlog: &mut Vec<(u32, u32)>
     } = cmd;
 
     if ranges.is_empty() {
-        let _ = response.send(Ok(vec![]));
+        let _ = response.send(Ok(Vec::new()));
         return;
     }
 
@@ -251,98 +232,89 @@ fn accept_command(cmd: IoCommand, slab: &mut Slab, backlog: &mut Vec<(u32, u32)>
         }
     };
 
-    let mut buffers: Vec<Vec<u8>> = Vec::with_capacity(ranges.len());
+    let n = ranges.len();
+    let mut buffers: Vec<Vec<u8>> = Vec::with_capacity(n);
+    let mut target_len: Vec<usize> = Vec::with_capacity(n);
     for r in &ranges {
         let len = r.end.saturating_sub(r.start);
-        match usize::try_from(len) {
-            Ok(n) => buffers.push(vec![0u8; n]),
-            Err(_) => {
-                let _ = response.send(Err(object_store::Error::Generic {
-                    store: "IoUringObjectStore",
-                    source: format!("range length {len} exceeds usize").into(),
-                }));
-                return;
-            }
-        }
+        let Ok(len) = usize::try_from(len) else {
+            let _ = response.send(Err(object_store::Error::Generic {
+                store: "IoUringObjectStore",
+                source: format!("range length {len} exceeds usize").into(),
+            }));
+            return;
+        };
+        // Preallocate the full range without zero-filling. Each buffer
+        // grows via `set_len` as kernel completions arrive, so the Vec
+        // always reflects exactly the bytes initialized so far.
+        buffers.push(Vec::with_capacity(len));
+        target_len.push(len);
     }
 
     let fd = file.as_raw_fd();
-    let n = ranges.len();
-    let filled = vec![0usize; n];
-
+    let n_u32 = n as u32;
     let slot = slab.alloc(PendingRequest {
         _file: file,
         fd,
         ranges,
         buffers,
-        filled,
-        ranges_remaining: n,
-        sqes_outstanding: n,
+        target_len,
+        ranges_remaining: n_u32,
+        sqes_outstanding: n_u32,
         response: Some(response),
         errored: false,
     });
 
-    for idx in 0..n as u32 {
-        backlog.push((slot, idx));
+    backlog.reserve(n);
+    for idx in 0..n_u32 {
+        backlog.push_back((slot, idx));
     }
 }
 
-/// Push as many backlog SQEs as fit into the submission queue, then submit.
-fn submit_sqes(ring: &mut IoUring, slab: &mut Slab, backlog: &mut Vec<(u32, u32)>) {
+/// Push backlog SQEs into the submission queue until either the backlog or
+/// the SQ is exhausted.
+fn push_backlog(ring: &mut IoUring, slab: &mut Slab, backlog: &mut VecDeque<(u32, u32)>) {
     if backlog.is_empty() {
         return;
     }
 
-    // SAFETY: Each `buffers[i]` lives inside `slab.slots[slot]`, which is
-    // not freed until the matching completion is processed by
-    // `drain_completions`. The raw pointer and length are valid for the
-    // lifetime of every SQE we push here.
+    // SAFETY: every `buffers[idx]` lives inside the slab slot, which is
+    // not freed until the matching completion is processed — so the raw
+    // pointer and length remain valid for the lifetime of every SQE.
     unsafe {
         let mut sq = ring.submission();
-        let mut i = 0;
-        while i < backlog.len() {
-            let (slot, range_idx) = backlog[i];
+        while let Some(&(slot, range_idx)) = backlog.front() {
             let Some(req) = slab.get_mut(slot) else {
-                // Slot was freed early (error path) — just skip.
-                i += 1;
+                // Slot was freed early (error path) — drop the stale SQE.
+                backlog.pop_front();
                 continue;
             };
             let idx = range_idx as usize;
-            let remaining_bytes = req.buffers[idx].len() - req.filled[idx];
-            debug_assert!(remaining_bytes > 0, "queued SQE for already-full range");
-            let ptr = req.buffers[idx].as_mut_ptr().add(req.filled[idx]);
-            let entry = opcode::Read::new(types::Fd(req.fd), ptr, remaining_bytes as u32)
-                .offset(req.ranges[idx].start + req.filled[idx] as u64)
+            let filled = req.buffers[idx].len();
+            let remaining = req.target_len[idx] - filled;
+            debug_assert!(remaining > 0, "queued SQE for already-full range");
+
+            let ptr = req.buffers[idx].as_mut_ptr().add(filled);
+            let entry = opcode::Read::new(types::Fd(req.fd), ptr, remaining as u32)
+                .offset(req.ranges[idx].start + filled as u64)
                 .build()
                 .user_data(pack_user_data(slot, range_idx));
 
             if sq.push(&entry).is_err() {
-                // SQ full — keep remaining in the backlog for the next
-                // iteration.
                 break;
             }
-            i += 1;
+            backlog.pop_front();
         }
         sq.sync();
-
-        // Drop the submitted entries from the backlog.
-        if i > 0 {
-            backlog.drain(0..i);
-        }
-    }
-
-    if let Err(e) = ring.submit() {
-        fail_all(slab, &format!("io_uring submit failed: {e}"));
     }
 }
 
-/// Consume all currently-available CQEs and dispatch them to their owning
-/// requests. Short reads re-queue a follow-up SQE onto `backlog`.
+/// Consume every available CQE and route it back to its owning request.
+/// Short reads re-queue a follow-up SQE onto the backlog.
 fn drain_completions(
     ring: &mut IoUring,
     slab: &mut Slab,
-    backlog: &mut Vec<(u32, u32)>,
-    _sq_capacity: usize,
+    backlog: &mut VecDeque<(u32, u32)>,
 ) {
     let cq = ring.completion();
     for cqe in cq {
@@ -350,18 +322,15 @@ fn drain_completions(
         let idx = range_idx as usize;
 
         let Some(req) = slab.get_mut(slot) else {
-            // Slot was freed — the request completed (or errored) and all
-            // its SQEs were already accounted for. Ignore.
+            // Slot freed — the request already terminated and every
+            // outstanding SQE was accounted for.
             continue;
         };
 
-        // Every CQE represents one SQE that is no longer in flight.
         debug_assert!(req.sqes_outstanding > 0);
         req.sqes_outstanding -= 1;
 
         if req.errored || req.response.is_none() {
-            // A previous CQE already dispatched a terminal result for this
-            // request; just track the SQE count down.
             maybe_free(slab, slot);
             continue;
         }
@@ -400,15 +369,25 @@ fn drain_completions(
             continue;
         }
 
-        req.filled[idx] += bytes_read;
-        if req.filled[idx] < req.buffers[idx].len() {
-            // Partial read — submit a follow-up SQE for the remainder.
-            backlog.push((slot, range_idx));
+        // SAFETY: the kernel just wrote `bytes_read` bytes starting at
+        // `buf.as_mut_ptr().add(buf.len())` (see `push_backlog`), so
+        // advancing `len` by that amount exposes only initialized bytes.
+        // `capacity == target_len[idx] >= new_len` since we never queue
+        // more than `target_len - filled` for a single SQE.
+        let buf = &mut req.buffers[idx];
+        let new_len = buf.len() + bytes_read;
+        debug_assert!(new_len <= req.target_len[idx]);
+        unsafe {
+            buf.set_len(new_len);
+        }
+
+        if new_len < req.target_len[idx] {
+            // Partial read — queue a follow-up for the remainder.
+            backlog.push_back((slot, range_idx));
             req.sqes_outstanding += 1;
             continue;
         }
 
-        // This range is complete.
         req.ranges_remaining -= 1;
         if req.ranges_remaining == 0 {
             finish_ok(slab, slot);
@@ -421,8 +400,7 @@ fn finish_ok(slab: &mut Slab, slot: u32) {
         return;
     };
     let buffers = std::mem::take(&mut req.buffers);
-    let response = req.response.take();
-    if let Some(tx) = response {
+    if let Some(tx) = req.response.take() {
         let bytes: Vec<Bytes> = buffers.into_iter().map(Bytes::from).collect();
         let _ = tx.send(Ok(bytes));
     }
@@ -440,7 +418,7 @@ fn finish_with_error(slab: &mut Slab, slot: u32, err: object_store::Error) {
     maybe_free(slab, slot);
 }
 
-/// Free the slot iff no SQEs for it remain in the backlog or in the ring.
+/// Free the slot iff no SQEs remain in the backlog or in flight.
 fn maybe_free(slab: &mut Slab, slot: u32) {
     let Some(req) = slab.slots[slot as usize].as_ref() else {
         return;
@@ -451,8 +429,7 @@ fn maybe_free(slab: &mut Slab, slot: u32) {
 }
 
 fn fail_all(slab: &mut Slab, msg: &str) {
-    let n = slab.slots.len();
-    for slot in 0..n {
+    for slot in 0..slab.slots.len() {
         if slab.slots[slot].is_some() {
             let err = object_store::Error::Generic {
                 store: "IoUringObjectStore",

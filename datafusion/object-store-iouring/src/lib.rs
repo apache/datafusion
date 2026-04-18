@@ -71,7 +71,7 @@ pub struct IoUringObjectStore {
     inner: Arc<LocalFileSystem>,
     root: PathBuf,
     #[cfg(target_os = "linux")]
-    uring_sender: tokio::sync::mpsc::Sender<uring::IoCommand>,
+    uring_sender: tokio::sync::mpsc::UnboundedSender<uring::IoCommand>,
 }
 
 impl IoUringObjectStore {
@@ -104,7 +104,7 @@ impl IoUringObjectStore {
 
         #[cfg(target_os = "linux")]
         {
-            let (tx, rx) = tokio::sync::mpsc::channel(uring::COMMAND_CHANNEL_CAPACITY);
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             std::thread::Builder::new()
                 .name("io-uring-worker".to_string())
                 .spawn(move || uring::run_uring_loop(rx))
@@ -208,7 +208,6 @@ impl IoUringObjectStore {
                 ranges: vec![range.clone()],
                 response: tx,
             })
-            .await
             .map_err(|_| object_store::Error::Generic {
                 store: "IoUringObjectStore",
                 source: "io-uring worker thread is gone".into(),
@@ -261,7 +260,6 @@ impl IoUringObjectStore {
                 ranges: ranges.to_vec(),
                 response: tx,
             })
-            .await
             .map_err(|_| object_store::Error::Generic {
                 store: "IoUringObjectStore",
                 source: "io-uring worker thread is gone".into(),
