@@ -21,6 +21,8 @@ mod memory;
 mod options;
 mod run;
 #[cfg(target_os = "linux")]
+pub mod tokio_uring_dispatch;
+#[cfg(target_os = "linux")]
 pub mod tokio_uring_pool;
 #[cfg(target_os = "linux")]
 pub mod tokio_uring_store;
