@@ -1824,6 +1824,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snmalloc-rs",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]

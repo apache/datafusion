@@ -270,7 +270,7 @@ async fn load_benchmarks(
     for path in paths {
         debug!("Loading benchmark from {path}");
 
-        let benchmark = SqlBenchmark::new(ctx, &path, SQL_BENCHMARK_DIRECTORY).await;
+        let benchmark = SqlBenchmark::new(ctx, &path, SQL_BENCHMARK_DIRECTORY).await?;
         let mut map = benches.lock().unwrap();
         let entries = map.entry(benchmark.group().to_string()).or_insert(vec![]);
 

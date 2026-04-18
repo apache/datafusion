@@ -53,9 +53,11 @@ validate results, and finally run any cleanup if required.
 
 Variables are supported in two forms:
 
-* string substitution based on environment variables (with default values if unset) (\${ENV_VAR} and \${ENV_VAR:
-  -default})
-* if / else based on whether an environment variable is true or not (\${ENV_VAR|true value|false value})
+* string substitution based on environment variables (with default values if unset): \${ENV_VAR} and
+  \${ENV_VAR:-default}.
+* if / else based on whether an environment variable is true or not (\${ENV_VAR|true value|false value}). In this
+  form only the value `true` (case-insensitive) selects the true branch; any other set value selects the false branch.
+  If ENV_VAR is unset the benchmark will return an error.
 
 Comments in files are supported with lines starting with # or --.
 
@@ -96,6 +98,9 @@ The above showcases the use of defaults for variables: `${NAME:-default}`
 
 The name of the benchmark. This will be used as part of the display name used by criterion.<br/><br/>Example:<br/>
 <blockquote>name Q${QUERY_NUMBER_PADDED}</blockquote>
+
+The `name` directive also makes the value available to benchmark-file replacements as `BENCH_NAME`. This is separate
+from the `BENCH_NAME` environment variable used to select which benchmark group to run.
 
 </td>
 </tr>
@@ -157,9 +162,10 @@ set datafusion.execution.parquet.binary_as_string = true;
 The run directive called during execution of the benchmark. If a path to a file is provided on the same line as
 the run directive that path will be parsed and any sql statements in that file will be executed during the benchmark
 run. If no path is specified the next line is required to be the sql statement to execute. <br/><br/> Multiple
-statements are allowed during the run command however when running with `BENCH_PERSIST_RESULTS` or `BENCH_VALIDATE` only
-the last `SELECT` or `WITH` statement will be used for comparison. <br/><br/> The run directive (including any following
-sql statement) must be followed by a blank line.<br/><br/>Example:<br/>
+statements are allowed within a single run directive, however a benchmark file may contain only one run directive. When
+running with `BENCH_PERSIST_RESULTS` or `BENCH_VALIDATE`, only the last `SELECT` or `WITH` statement from that run
+directive will be used for comparison. <br/><br/> The run directive (including any following sql statement) must be
+followed by a blank line.<br/><br/>Example:<br/>
 <blockquote>run sql_benchmarks/imdb/queries/${QUERY_NUMBER_PADDED}.sql</blockquote>
 
 </td>
@@ -169,8 +175,8 @@ sql statement) must be followed by a blank line.<br/><br/>Example:<br/>
 <td>
 
 The cleanup directive is called after all other directives and can be used to cleanup after the benchmark -
-e.g. to drop tables. If a path to a file is provided on the same line as the load directive that path will be parsed and
-any sql statements in that file will be executed during initialization. If no path is specified the next line is
+e.g. to drop tables. If a path to a file is provided on the same line as the cleanup directive that path will be parsed
+and any sql statements in that file will be executed during cleanup. If no path is specified the next line is
 required to be the sql statement to execute. <br/> <br/> The cleanup directive (including any following sql statement)
 must be followed by a blank line. <br/><br/>Example:<br/>
 <blockquote>
@@ -214,7 +220,7 @@ or pipe delimited.
 <td>
 
 The result_query directive is run during the verify phase and can be used to verify a different set of results than any
-that might come from any executed from the `run` directive. The format is the same as the `assert` directive
+that might come from queries executed from the `run` directive. The format is the same as the `assert` directive
 above.<br/><br/>Example:
 <blockquote>
 result_query III<br/>
@@ -234,8 +240,10 @@ using `CREATE TABLE AS (..)` or similar.
 <td>result</td>
 <td>
 
-The result directive is called during verification after benchmark execution. A path to a file is
-required on the same line as the result directive which will be parsed in CSV format. <br/><br/>Example:<br/>
+The result directive declares the expected result file used during verification. A path to a file is required on the
+same line as the result directive. The file is parsed when the benchmark file is loaded, and must be a pipe-delimited
+CSV file with a header row. During verification, these expected rows are compared with the rows produced by the last
+saved `SELECT` or `WITH` statement from the `run` directive. <br/><br/>Example:<br/>
 <blockquote>
 result sql_benchmarks/imdb/results/${QUERY_NUMBER_PADDED}.csv  
 </blockquote>
@@ -287,20 +295,20 @@ criterion have an unfortunate limitation in that custom command arguments cannot
 into a benchmark. The alternative is to use environment variables to pass in arguments which is what is used here.
 The SQL benchmarking tool uses the following environment variables:
 
-| Environment Variable            | Description                                                                                                                                                            |
-|---------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| BENCH_NAME                      | The name of the benchmark suite to run. For example 'imdb'. This should correspond to a directory name in the `sql_benchmarks` directory.                              |
-| BENCH_SUBGROUP                  | The subgroup with the benchmark suite to run. For example 'window' to run the window subgroup of the h2o benchmark.                                                    |
-| BENCH_QUERY                     | A query number to run.                                                                                                                                                 |
-| BENCH_PERSIST_RESULTS           | true/false to persist benchmark results. Results will be persisted in csv format so be cognizant of the size of the results.                                           |
-| BENCH_VALIDATE                  | true/false to validate benchmark results against persisted results or result_query's. Note that you cannot persist and validate results within a single benchmark run. |
-| SIMULATE_LATENCY                | Simulate object store latency to mimic remote storage (e.g. S3). Adds random latency in the range 20-200ms to each object store operation.                             |
-| PARTITIONS                      | Number of partitions to process in parallel. Defaults to number of available cores.                                                                                    |
-| BATCH_SIZE                      | Batch size when reading CSV or Parquet files.                                                                                                                          |
-| MEM_POOL_TYPE                   | The memory pool type to use, should be one of "fair" or "greedy".                                                                                                      |
-| MEMORY_LIMIT                    | Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query if there's any, otherwise run with no memory limit.            |
-| DATAFUSION_RUNTIME_MEMORY_LIMIT | Used if MEMORY_LIMIT is not set.                                                                                                                                       |
-| SORT_SPILL_RESERVATION_BYTES    | The amount of memory to reserve for sort spill operations. DataFusion's default value will be used if not specified.                                                   |
+| Environment Variable            | Description                                                                                                                                                                                       |
+|---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| BENCH_NAME                      | The name of the benchmark suite to run. For example 'imdb'. This should correspond to a directory name in the `sql_benchmarks` directory.                                                         |
+| BENCH_SUBGROUP                  | The subgroup with the benchmark suite to run. For example 'window' to run the window subgroup of the h2o benchmark.                                                                               |
+| BENCH_QUERY                     | A query number to run.                                                                                                                                                                            |
+| BENCH_PERSIST_RESULTS           | true/false to persist benchmark results. Results will be persisted in csv format so be cognizant of the size of the results.                                                                      |
+| BENCH_VALIDATE                  | true/false to validate benchmark results against persisted results or result_query's. If both `BENCH_PERSIST_RESULTS` and `BENCH_VALIDATE` are true, persist mode runs and validation is skipped. |
+| SIMULATE_LATENCY                | Simulate object store latency to mimic remote storage (e.g. S3). Adds random latency in the range 20-200ms to each object store operation.                                                        |
+| PARTITIONS                      | Number of partitions to process in parallel. Defaults to number of available cores.                                                                                                               |
+| BATCH_SIZE                      | Batch size when reading CSV or Parquet files.                                                                                                                                                     |
+| MEM_POOL_TYPE                   | The memory pool type to use, should be one of "fair" or "greedy".                                                                                                                                 |
+| MEMORY_LIMIT                    | Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query if there's any, otherwise run with no memory limit.                                       |
+| DATAFUSION_RUNTIME_MEMORY_LIMIT | Used if MEMORY_LIMIT is not set.                                                                                                                                                                  |
+| SORT_SPILL_RESERVATION_BYTES    | The amount of memory to reserve for sort spill operations. DataFusion's default value will be used if not specified.                                                                              |
 
 Example – Run the H2O window benchmarks on the 'small' sized CSV data files:
 
