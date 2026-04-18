@@ -466,7 +466,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         }
 
                         let params =
-                            lambda.params.iter().map(|p| p.value.clone()).collect();
+                            lambda.params.iter().map(|p| crate::utils::normalize_ident(p.clone())).collect();
 
                         let lambda_parameters = lambda_params
                             .into_iter()
@@ -1106,11 +1106,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 fn all_unique(params: &[sqlparser::ast::Ident]) -> bool {
     match params.len() {
         0 | 1 => true,
-        2 => params[0].value != params[1].value,
+        2 => {
+            crate::utils::normalize_ident(params[0].clone())
+                != crate::utils::normalize_ident(params[1].clone())
+        }
         _ => {
             let mut set = HashSet::with_capacity(params.len());
 
-            params.iter().all(|p| set.insert(p.value.as_str()))
+            params
+                .iter()
+                .map(|p| crate::utils::normalize_ident(p.clone()))
+                .all(|p| set.insert(p))
         }
     }
 }

@@ -570,7 +570,10 @@ impl Unparser<'_> {
             Expr::Lambda(Lambda { params, body }) => {
                 Ok(ast::Expr::Lambda(ast::LambdaFunction {
                     params: ast::OneOrManyWithParens::Many(
-                        params.iter().map(|param| param.as_str().into()).collect(),
+                        params
+                            .iter()
+                            .map(|param| self.new_ident_quoted_if_needs(param.clone()))
+                            .collect(),
                     ),
                     body: Box::new(self.expr_to_sql_inner(body)?),
                     syntax: ast::LambdaSyntax::Arrow,
