@@ -1342,27 +1342,34 @@ impl SchemaExt for Schema {
 /// `format!("{q}.{name}")` when `qualifier` is `Some`, or just `name` when
 /// `None`. We avoid going through the `fmt` machinery for performance reasons.
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
-    let (a, b, c) = match qualifier {
+    let qualifier = match qualifier {
         None => return name.to_string(),
-        Some(TableReference::Bare { table }) => (table.as_ref(), "", ""),
-        Some(TableReference::Partial { schema, table }) => {
-            (schema.as_ref(), table.as_ref(), "")
+        Some(q) => q,
+    };
+    let (a, b, c) = match qualifier {
+        TableReference::Bare { table } => (table.as_ref(), None, None),
+        TableReference::Partial { schema, table } => {
+            (schema.as_ref(), Some(table.as_ref()), None)
         }
-        Some(TableReference::Full {
+        TableReference::Full {
             catalog,
             schema,
             table,
-        }) => (catalog.as_ref(), schema.as_ref(), table.as_ref()),
+        } => (
+            catalog.as_ref(),
+            Some(schema.as_ref()),
+            Some(table.as_ref()),
+        ),
     };
 
-    // Reserve capacity for at most 3 separators; this might slightly over-allocate.
-    let mut s = String::with_capacity(a.len() + b.len() + c.len() + 3 + name.len());
+    let extra = b.unwrap_or("").len() + c.unwrap_or("").len();
+    let mut s = String::with_capacity(a.len() + extra + 3 + name.len());
     s.push_str(a);
-    if !b.is_empty() {
+    if let Some(b) = b {
         s.push('.');
         s.push_str(b);
     }
-    if !c.is_empty() {
+    if let Some(c) = c {
         s.push('.');
         s.push_str(c);
     }
@@ -1387,6 +1394,15 @@ mod tests {
             (Some(TableReference::partial("s", "t")), "c0"),
             (Some(TableReference::full("c", "s", "t")), "c0"),
             (Some(TableReference::bare("mytable")), "some_column_name"),
+            // Empty segments must be preserved so that distinct qualified
+            // fields don't collide in `DFSchema::field_names()`.
+            (Some(TableReference::bare("")), "col"),
+            (Some(TableReference::partial("s", "")), "col"),
+            (Some(TableReference::partial("", "t")), "col"),
+            (Some(TableReference::full("c", "", "t")), "col"),
+            (Some(TableReference::full("", "s", "t")), "col"),
+            (Some(TableReference::full("c", "s", "")), "col"),
+            (Some(TableReference::full("", "", "")), "col"),
         ];
         for (qualifier, name) in cases {
             let actual = qualified_name(qualifier.as_ref(), name);
