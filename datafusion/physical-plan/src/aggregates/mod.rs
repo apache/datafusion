@@ -2213,6 +2213,10 @@ mod tests {
     use futures::{FutureExt, Stream};
     use insta::{allow_duplicates, assert_snapshot};
 
+    // =========================================================================
+    // Helper functions & test fixtures
+    // =========================================================================
+
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
     fn create_test_schema() -> Result<SchemaRef> {
         let a = Field::new("a", DataType::Int32, true);
@@ -2328,9 +2332,19 @@ mod tests {
         Arc::new(task_ctx)
     }
 
+    /// Creates a TaskContext with the blocked groups configuration for testing.
+    fn task_ctx_with_blocked_groups(enable_blocked_groups: bool) -> Arc<TaskContext> {
+        let session_config = SessionConfig::new().set(
+            "datafusion.execution.enable_aggregation_blocked_groups",
+            &ScalarValue::Boolean(Some(enable_blocked_groups)),
+        );
+        Arc::new(TaskContext::default().with_session_config(session_config))
+    }
+
     async fn check_grouping_sets(
         input: Arc<dyn ExecutionPlan>,
         spill: bool,
+        enable_blocked_groups: bool,
     ) -> Result<()> {
         let input_schema = input.schema();
 
@@ -2360,9 +2374,9 @@ mod tests {
 
         let task_ctx = if spill {
             // adjust the max memory size to have the partial aggregate result for spill mode.
-            new_spill_ctx(4, 500, true)
+            new_spill_ctx(4, 500, enable_blocked_groups)
         } else {
-            Arc::new(TaskContext::default())
+            task_ctx_with_blocked_groups(enable_blocked_groups)
         };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
@@ -2440,7 +2454,7 @@ mod tests {
         let final_grouping_set = grouping_set.as_final();
 
         let task_ctx = if spill {
-            new_spill_ctx(4, 3160, true)
+            new_spill_ctx(4, 3160, enable_blocked_groups)
         } else {
             task_ctx
         };
@@ -2491,7 +2505,11 @@ mod tests {
     }
 
     /// build the aggregates on the data from some_data() and check the results
-    async fn check_aggregates(input: Arc<dyn ExecutionPlan>, spill: bool) -> Result<()> {
+    async fn check_aggregates(
+        input: Arc<dyn ExecutionPlan>,
+        spill: bool,
+        enable_blocked_groups: bool,
+    ) -> Result<()> {
         let input_schema = input.schema();
 
         let grouping_set = PhysicalGroupBy::new(
@@ -2510,9 +2528,9 @@ mod tests {
 
         let task_ctx = if spill {
             // set to an appropriate value to trigger spill
-            new_spill_ctx(2, 1600, true)
+            new_spill_ctx(2, 1600, enable_blocked_groups)
         } else {
-            Arc::new(TaskContext::default())
+            task_ctx_with_blocked_groups(enable_blocked_groups)
         };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
@@ -2574,7 +2592,7 @@ mod tests {
 
         let task_ctx = if spill {
             // enlarge memory limit to let the final aggregation finish
-            new_spill_ctx(2, 2600, true)
+            new_spill_ctx(2, 2600, enable_blocked_groups)
         } else {
             Arc::clone(&task_ctx)
         };
@@ -2767,63 +2785,85 @@ mod tests {
         }
     }
 
-    //--- Tests ---//
+    // =========================================================================
+    // Basic aggregation correctness tests
+    // =========================================================================
 
     #[tokio::test]
     async fn aggregate_source_not_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
-
-        check_aggregates(input, false).await
+        for enable_blocked in [false, true] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
+            check_aggregates(input, false, enable_blocked).await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
     async fn aggregate_grouping_sets_source_not_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
-
-        check_grouping_sets(input, false).await
+        for enable_blocked in [false, true] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
+            check_grouping_sets(input, false, enable_blocked).await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
     async fn aggregate_source_with_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
-
-        check_aggregates(input, false).await
+        for enable_blocked in [false, true] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
+            check_aggregates(input, false, enable_blocked).await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
     async fn aggregate_grouping_sets_with_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
-
-        check_grouping_sets(input, false).await
+        for enable_blocked in [false, true] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
+            check_grouping_sets(input, false, enable_blocked).await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
     async fn aggregate_source_not_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
-
-        check_aggregates(input, true).await
+        for enable_blocked in [false, true] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
+            check_aggregates(input, true, enable_blocked).await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
     async fn aggregate_grouping_sets_source_not_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
-
-        check_grouping_sets(input, true).await
+        for enable_blocked in [false, true] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
+            check_grouping_sets(input, true, enable_blocked).await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
     async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
-
-        check_aggregates(input, true).await
+        for enable_blocked in [false, true] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
+            check_aggregates(input, true, enable_blocked).await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
     async fn aggregate_grouping_sets_with_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
-
-        check_grouping_sets(input, true).await
+        for enable_blocked in [false, true] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
+            check_grouping_sets(input, true, enable_blocked).await?;
+        }
+        Ok(())
     }
+
+    // =========================================================================
+    // OOM & cancellation tests
+    // =========================================================================
 
     // Median(a)
     fn test_median_agg_expr(schema: SchemaRef) -> Result<AggregateFunctionExpr> {
@@ -2835,74 +2875,83 @@ mod tests {
 
     #[tokio::test]
     async fn test_oom() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
-        let input_schema = input.schema();
+        for enable_blocked in [false, true] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
+            let input_schema = input.schema();
 
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(1, 1.0)
-            .build_arc()?;
-        let task_ctx = TaskContext::default().with_runtime(runtime);
-        let task_ctx = Arc::new(task_ctx);
-
-        let groups_none = PhysicalGroupBy::default();
-        let groups_some = PhysicalGroupBy::new(
-            vec![(col("a", &input_schema)?, "a".to_string())],
-            vec![],
-            vec![vec![false]],
-            false,
-        );
-
-        // something that allocates within the aggregator
-        let aggregates_v0: Vec<Arc<AggregateFunctionExpr>> =
-            vec![Arc::new(test_median_agg_expr(Arc::clone(&input_schema))?)];
-
-        // use fast-path in `row_hash.rs`.
-        let aggregates_v2: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
-            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
-                .schema(Arc::clone(&input_schema))
-                .alias("AVG(b)")
-                .build()?,
-        )];
-
-        for (version, groups, aggregates) in [
-            (0, groups_none, aggregates_v0),
-            (2, groups_some, aggregates_v2),
-        ] {
-            let n_aggr = aggregates.len();
-            let partial_aggregate = Arc::new(AggregateExec::try_new(
-                AggregateMode::Single,
-                groups,
-                aggregates,
-                vec![None; n_aggr],
-                Arc::clone(&input),
-                Arc::clone(&input_schema),
-            )?);
-
-            let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
-
-            // ensure that we really got the version we wanted
-            match version {
-                0 => {
-                    assert!(matches!(stream, StreamType::AggregateStream(_)));
-                }
-                1 => {
-                    assert!(matches!(stream, StreamType::GroupedHash(_)));
-                }
-                2 => {
-                    assert!(matches!(stream, StreamType::GroupedHash(_)));
-                }
-                _ => panic!("Unknown version: {version}"),
-            }
-
-            let stream: SendableRecordBatchStream = stream.into();
-            let err = collect(stream).await.unwrap_err();
-
-            // error root cause traversal is a bit complicated, see #4172.
-            let err = err.find_root();
-            assert!(
-                matches!(err, DataFusionError::ResourcesExhausted(_)),
-                "Wrong error type: {err}",
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(1, 1.0)
+                .build_arc()?;
+            let mut session_config = SessionConfig::new();
+            session_config = session_config.set(
+                "datafusion.execution.enable_aggregation_blocked_groups",
+                &ScalarValue::Boolean(Some(enable_blocked)),
             );
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime);
+            let task_ctx = Arc::new(task_ctx);
+
+            let groups_none = PhysicalGroupBy::default();
+            let groups_some = PhysicalGroupBy::new(
+                vec![(col("a", &input_schema)?, "a".to_string())],
+                vec![],
+                vec![vec![false]],
+                false,
+            );
+
+            // something that allocates within the aggregator
+            let aggregates_v0: Vec<Arc<AggregateFunctionExpr>> =
+                vec![Arc::new(test_median_agg_expr(Arc::clone(&input_schema))?)];
+
+            // use fast-path in `row_hash.rs`.
+            let aggregates_v2: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
+                    .schema(Arc::clone(&input_schema))
+                    .alias("AVG(b)")
+                    .build()?,
+            )];
+
+            for (version, groups, aggregates) in [
+                (0, groups_none, aggregates_v0),
+                (2, groups_some, aggregates_v2),
+            ] {
+                let n_aggr = aggregates.len();
+                let partial_aggregate = Arc::new(AggregateExec::try_new(
+                    AggregateMode::Single,
+                    groups,
+                    aggregates,
+                    vec![None; n_aggr],
+                    Arc::clone(&input),
+                    Arc::clone(&input_schema),
+                )?);
+
+                let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
+
+                // ensure that we really got the version we wanted
+                match version {
+                    0 => {
+                        assert!(matches!(stream, StreamType::AggregateStream(_)));
+                    }
+                    1 => {
+                        assert!(matches!(stream, StreamType::GroupedHash(_)));
+                    }
+                    2 => {
+                        assert!(matches!(stream, StreamType::GroupedHash(_)));
+                    }
+                    _ => panic!("Unknown version: {version}"),
+                }
+
+                let stream: SendableRecordBatchStream = stream.into();
+                let err = collect(stream).await.unwrap_err();
+
+                // error root cause traversal is a bit complicated, see #4172.
+                let err = err.find_root();
+                assert!(
+                    matches!(err, DataFusionError::ResourcesExhausted(_)),
+                    "Wrong error type: {err}",
+                );
+            }
         }
 
         Ok(())
@@ -2946,48 +2995,57 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel_with_groups() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Float64, true),
-            Field::new("b", DataType::Float64, true),
-        ]));
+        for enable_blocked in [false, true] {
+            let task_ctx = task_ctx_with_blocked_groups(enable_blocked);
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Float64, true),
+                Field::new("b", DataType::Float64, true),
+            ]));
 
-        let groups =
-            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+            let groups =
+                PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
-            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("AVG(b)")
-                .build()?,
-        )];
+            let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(b)")
+                    .build()?,
+            )];
 
-        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
-        let refs = blocking_exec.refs();
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            groups,
-            aggregates.clone(),
-            vec![None],
-            blocking_exec,
-            schema,
-        )?);
+            let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
+            let refs = blocking_exec.refs();
+            let aggregate_exec = Arc::new(AggregateExec::try_new(
+                AggregateMode::Partial,
+                groups,
+                aggregates.clone(),
+                vec![None],
+                blocking_exec,
+                schema,
+            )?);
 
-        let fut = crate::collect(aggregate_exec, task_ctx);
-        let mut fut = fut.boxed();
+            let fut = crate::collect(aggregate_exec, task_ctx);
+            let mut fut = fut.boxed();
 
-        assert_is_pending(&mut fut);
-        drop(fut);
-        assert_strong_count_converges_to_zero(refs).await;
+            assert_is_pending(&mut fut);
+            drop(fut);
+            assert_strong_count_converges_to_zero(refs).await;
+        }
 
         Ok(())
     }
+
+    // =========================================================================
+    // Ordered aggregation tests (FIRST_VALUE / LAST_VALUE)
+    // =========================================================================
 
     #[tokio::test]
     async fn run_first_last_multi_partitions() -> Result<()> {
         for is_first_acc in [false, true] {
             for spill in [false, true] {
-                first_last_multi_partitions(is_first_acc, spill, 4200).await?
+                for enable_blocked in [false, true] {
+                    first_last_multi_partitions(is_first_acc, spill, 4200, enable_blocked)
+                        .await?
+                }
             }
         }
         Ok(())
@@ -3043,11 +3101,12 @@ mod tests {
         is_first_acc: bool,
         spill: bool,
         max_memory: usize,
+        enable_blocked_groups: bool,
     ) -> Result<()> {
         let task_ctx = if spill {
-            new_spill_ctx(2, max_memory, true)
+            new_spill_ctx(2, max_memory, enable_blocked_groups)
         } else {
-            Arc::new(TaskContext::default())
+            task_ctx_with_blocked_groups(enable_blocked_groups)
         };
 
         let (schema, data) = some_data_v2();
@@ -3126,6 +3185,10 @@ mod tests {
         };
         Ok(())
     }
+
+    // =========================================================================
+    // Schema & planning tests
+    // =========================================================================
 
     #[tokio::test]
     async fn test_get_finest_requirements() -> Result<()> {
@@ -3237,79 +3300,86 @@ mod tests {
 
     #[tokio::test]
     async fn test_agg_exec_group_by_const() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Float32, true),
-            Field::new("b", DataType::Float32, true),
-            Field::new("const", DataType::Int32, false),
-        ]));
+        for enable_blocked in [false, true] {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Float32, true),
+                Field::new("b", DataType::Float32, true),
+                Field::new("const", DataType::Int32, false),
+            ]));
 
-        let col_a = col("a", &schema)?;
-        let col_b = col("b", &schema)?;
-        let const_expr = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
+            let col_a = col("a", &schema)?;
+            let col_b = col("b", &schema)?;
+            let const_expr = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
 
-        let groups = PhysicalGroupBy::new(
-            vec![
-                (col_a, "a".to_string()),
-                (col_b, "b".to_string()),
-                (const_expr, "const".to_string()),
-            ],
-            vec![
-                (
-                    Arc::new(Literal::new(ScalarValue::Float32(None))),
-                    "a".to_string(),
-                ),
-                (
-                    Arc::new(Literal::new(ScalarValue::Float32(None))),
-                    "b".to_string(),
-                ),
-                (
-                    Arc::new(Literal::new(ScalarValue::Int32(None))),
-                    "const".to_string(),
-                ),
-            ],
-            vec![
-                vec![false, true, true],
-                vec![true, false, true],
-                vec![true, true, false],
-            ],
-            true,
-        );
+            let groups = PhysicalGroupBy::new(
+                vec![
+                    (col_a, "a".to_string()),
+                    (col_b, "b".to_string()),
+                    (const_expr, "const".to_string()),
+                ],
+                vec![
+                    (
+                        Arc::new(Literal::new(ScalarValue::Float32(None))),
+                        "a".to_string(),
+                    ),
+                    (
+                        Arc::new(Literal::new(ScalarValue::Float32(None))),
+                        "b".to_string(),
+                    ),
+                    (
+                        Arc::new(Literal::new(ScalarValue::Int32(None))),
+                        "const".to_string(),
+                    ),
+                ],
+                vec![
+                    vec![false, true, true],
+                    vec![true, false, true],
+                    vec![true, true, false],
+                ],
+                true,
+            );
 
-        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
-            AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
-                .schema(Arc::clone(&schema))
-                .alias("1")
-                .build()
-                .map(Arc::new)?,
-        ];
+            let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+                AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
+                    .schema(Arc::clone(&schema))
+                    .alias("1")
+                    .build()
+                    .map(Arc::new)?,
+            ];
 
-        let input_batches = (0..4)
-            .map(|_| {
-                let a = Arc::new(Float32Array::from(vec![0.; 8192]));
-                let b = Arc::new(Float32Array::from(vec![0.; 8192]));
-                let c = Arc::new(Int32Array::from(vec![1; 8192]));
+            let input_batches = (0..4)
+                .map(|_| {
+                    let a = Arc::new(Float32Array::from(vec![0.; 8192]));
+                    let b = Arc::new(Float32Array::from(vec![0.; 8192]));
+                    let c = Arc::new(Int32Array::from(vec![1; 8192]));
 
-                RecordBatch::try_new(Arc::clone(&schema), vec![a, b, c]).unwrap()
-            })
-            .collect();
+                    RecordBatch::try_new(Arc::clone(&schema), vec![a, b, c]).unwrap()
+                })
+                .collect();
 
-        let input =
-            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+            let input = TestMemoryExec::try_new_exec(
+                &[input_batches],
+                Arc::clone(&schema),
+                None,
+            )?;
 
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Single,
-            groups,
-            aggregates.clone(),
-            vec![None],
-            input,
-            schema,
-        )?);
+            let aggregate_exec = Arc::new(AggregateExec::try_new(
+                AggregateMode::Single,
+                groups,
+                aggregates.clone(),
+                vec![None],
+                input,
+                schema,
+            )?);
 
-        let output =
-            collect(aggregate_exec.execute(0, Arc::new(TaskContext::default()))?).await?;
+            let output = collect(
+                aggregate_exec
+                    .execute(0, task_ctx_with_blocked_groups(enable_blocked))?,
+            )
+            .await?;
 
-        allow_duplicates! {
-        assert_snapshot!(batches_to_sort_string(&output), @r"
+            allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&output), @r"
         +-----+-----+-------+---------------+-------+
         | a   | b   | const | __grouping_id | 1     |
         +-----+-----+-------+---------------+-------+
@@ -3318,6 +3388,7 @@ mod tests {
         | 0.0 |     |       | 3             | 32768 |
         +-----+-----+-------+---------------+-------+
         ");
+            }
         }
 
         Ok(())
@@ -3325,106 +3396,113 @@ mod tests {
 
     #[tokio::test]
     async fn test_agg_exec_struct_of_dicts() -> Result<()> {
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new(
-                    "labels".to_string(),
-                    DataType::Struct(
-                        vec![
-                            Field::new(
+        for enable_blocked in [false, true] {
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new(
+                        "labels".to_string(),
+                        DataType::Struct(
+                            vec![
+                                Field::new(
+                                    "a".to_string(),
+                                    DataType::Dictionary(
+                                        Box::new(DataType::Int32),
+                                        Box::new(DataType::Utf8),
+                                    ),
+                                    true,
+                                ),
+                                Field::new(
+                                    "b".to_string(),
+                                    DataType::Dictionary(
+                                        Box::new(DataType::Int32),
+                                        Box::new(DataType::Utf8),
+                                    ),
+                                    true,
+                                ),
+                            ]
+                            .into(),
+                        ),
+                        false,
+                    ),
+                    Field::new("value", DataType::UInt64, false),
+                ])),
+                vec![
+                    Arc::new(StructArray::from(vec![
+                        (
+                            Arc::new(Field::new(
                                 "a".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                            ),
-                            Field::new(
+                            )),
+                            Arc::new(
+                                vec![Some("a"), None, Some("a")]
+                                    .into_iter()
+                                    .collect::<DictionaryArray<Int32Type>>(),
+                            ) as ArrayRef,
+                        ),
+                        (
+                            Arc::new(Field::new(
                                 "b".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                            ),
-                        ]
-                        .into(),
-                    ),
-                    false,
-                ),
-                Field::new("value", DataType::UInt64, false),
-            ])),
-            vec![
-                Arc::new(StructArray::from(vec![
-                    (
-                        Arc::new(Field::new(
-                            "a".to_string(),
-                            DataType::Dictionary(
-                                Box::new(DataType::Int32),
-                                Box::new(DataType::Utf8),
-                            ),
-                            true,
-                        )),
-                        Arc::new(
-                            vec![Some("a"), None, Some("a")]
-                                .into_iter()
-                                .collect::<DictionaryArray<Int32Type>>(),
-                        ) as ArrayRef,
-                    ),
-                    (
-                        Arc::new(Field::new(
-                            "b".to_string(),
-                            DataType::Dictionary(
-                                Box::new(DataType::Int32),
-                                Box::new(DataType::Utf8),
-                            ),
-                            true,
-                        )),
-                        Arc::new(
-                            vec![Some("b"), Some("c"), Some("b")]
-                                .into_iter()
-                                .collect::<DictionaryArray<Int32Type>>(),
-                        ) as ArrayRef,
-                    ),
-                ])),
-                Arc::new(UInt64Array::from(vec![1, 1, 1])),
-            ],
-        )
-        .expect("Failed to create RecordBatch");
+                            )),
+                            Arc::new(
+                                vec![Some("b"), Some("c"), Some("b")]
+                                    .into_iter()
+                                    .collect::<DictionaryArray<Int32Type>>(),
+                            ) as ArrayRef,
+                        ),
+                    ])),
+                    Arc::new(UInt64Array::from(vec![1, 1, 1])),
+                ],
+            )
+            .expect("Failed to create RecordBatch");
 
-        let group_by = PhysicalGroupBy::new_single(vec![(
-            col("labels", &batch.schema())?,
-            "labels".to_string(),
-        )]);
+            let group_by = PhysicalGroupBy::new_single(vec![(
+                col("labels", &batch.schema())?,
+                "labels".to_string(),
+            )]);
 
-        let aggr_expr = vec![
-            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &batch.schema())?])
+            let aggr_expr = vec![
+                AggregateExprBuilder::new(
+                    sum_udaf(),
+                    vec![col("value", &batch.schema())?],
+                )
                 .schema(Arc::clone(&batch.schema()))
                 .alias(String::from("SUM(value)"))
                 .build()
                 .map(Arc::new)?,
-        ];
+            ];
 
-        let input = TestMemoryExec::try_new_exec(
-            &[vec![batch.clone()]],
-            Arc::<Schema>::clone(&batch.schema()),
-            None,
-        )?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::FinalPartitioned,
-            group_by,
-            aggr_expr,
-            vec![None],
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            batch.schema(),
-        )?);
+            let input = TestMemoryExec::try_new_exec(
+                &[vec![batch.clone()]],
+                Arc::<Schema>::clone(&batch.schema()),
+                None,
+            )?;
+            let aggregate_exec = Arc::new(AggregateExec::try_new(
+                AggregateMode::FinalPartitioned,
+                group_by,
+                aggr_expr,
+                vec![None],
+                Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+                batch.schema(),
+            )?);
 
-        let session_config = SessionConfig::default();
-        let ctx = TaskContext::default().with_session_config(session_config);
-        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+            let session_config = SessionConfig::default().set(
+                "datafusion.execution.enable_aggregation_blocked_groups",
+                &ScalarValue::Boolean(Some(enable_blocked)),
+            );
+            let ctx = TaskContext::default().with_session_config(session_config);
+            let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
 
-        allow_duplicates! {
-        assert_snapshot!(batches_to_string(&output), @r"
+            allow_duplicates! {
+            assert_snapshot!(batches_to_string(&output), @r"
         +--------------+------------+
         | labels       | SUM(value) |
         +--------------+------------+
@@ -3432,74 +3510,86 @@ mod tests {
         | {a: , b: c}  | 1          |
         +--------------+------------+
         ");
+            }
         }
 
         Ok(())
     }
 
+    // =========================================================================
+    // Skip aggregation tests
+    // =========================================================================
+
     #[tokio::test]
     async fn test_skip_aggregation_after_first_batch() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("val", DataType::Int32, true),
-        ]));
+        for enable_blocked in [false, true] {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("key", DataType::Int32, true),
+                Field::new("val", DataType::Int32, true),
+            ]));
 
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+            let group_by = PhysicalGroupBy::new_single(vec![(
+                col("key", &schema)?,
+                "key".to_string(),
+            )]);
 
-        let aggr_expr = vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias(String::from("COUNT(val)"))
-                .build()
-                .map(Arc::new)?,
-        ];
+            let aggr_expr = vec![
+                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias(String::from("COUNT(val)"))
+                    .build()
+                    .map(Arc::new)?,
+            ];
 
-        let input_data = vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![1, 2, 3])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-        ];
+            let input_data = vec![
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(vec![1, 2, 3])),
+                        Arc::new(Int32Array::from(vec![0, 0, 0])),
+                    ],
+                )
+                .unwrap(),
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(vec![2, 3, 4])),
+                        Arc::new(Int32Array::from(vec![0, 0, 0])),
+                    ],
+                )
+                .unwrap(),
+            ];
 
-        let input =
-            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by,
-            aggr_expr,
-            vec![None],
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            schema,
-        )?);
+            let input =
+                TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+            let aggregate_exec = Arc::new(AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by,
+                aggr_expr,
+                vec![None],
+                Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+                schema,
+            )?);
 
-        let mut session_config = SessionConfig::default();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::Int64(Some(2)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(0.1)),
-        );
+            let mut session_config = SessionConfig::default();
+            session_config = session_config.set(
+                "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                &ScalarValue::Int64(Some(2)),
+            );
+            session_config = session_config.set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(0.1)),
+            );
+            session_config = session_config.set(
+                "datafusion.execution.enable_aggregation_blocked_groups",
+                &ScalarValue::Boolean(Some(enable_blocked)),
+            );
 
-        let ctx = TaskContext::default().with_session_config(session_config);
-        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+            let ctx = TaskContext::default().with_session_config(session_config);
+            let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
 
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&output), @r"
+            allow_duplicates! {
+                assert_snapshot!(batches_to_string(&output), @r"
             +-----+-------------------+
             | key | COUNT(val)[count] |
             +-----+-------------------+
@@ -3511,6 +3601,7 @@ mod tests {
             | 4   | 1                 |
             +-----+-------------------+
             ");
+            }
         }
 
         Ok(())
@@ -3518,75 +3609,82 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_aggregation_after_threshold() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("val", DataType::Int32, true),
-        ]));
+        for enable_blocked in [false, true] {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("key", DataType::Int32, true),
+                Field::new("val", DataType::Int32, true),
+            ]));
 
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+            let group_by = PhysicalGroupBy::new_single(vec![(
+                col("key", &schema)?,
+                "key".to_string(),
+            )]);
 
-        let aggr_expr = vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias(String::from("COUNT(val)"))
-                .build()
-                .map(Arc::new)?,
-        ];
+            let aggr_expr = vec![
+                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias(String::from("COUNT(val)"))
+                    .build()
+                    .map(Arc::new)?,
+            ];
 
-        let input_data = vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![1, 2, 3])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-        ];
+            let input_data = vec![
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(vec![1, 2, 3])),
+                        Arc::new(Int32Array::from(vec![0, 0, 0])),
+                    ],
+                )
+                .unwrap(),
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(vec![2, 3, 4])),
+                        Arc::new(Int32Array::from(vec![0, 0, 0])),
+                    ],
+                )
+                .unwrap(),
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(vec![2, 3, 4])),
+                        Arc::new(Int32Array::from(vec![0, 0, 0])),
+                    ],
+                )
+                .unwrap(),
+            ];
 
-        let input =
-            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by,
-            aggr_expr,
-            vec![None],
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            schema,
-        )?);
+            let input =
+                TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+            let aggregate_exec = Arc::new(AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by,
+                aggr_expr,
+                vec![None],
+                Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+                schema,
+            )?);
 
-        let mut session_config = SessionConfig::default();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::Int64(Some(5)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(0.1)),
-        );
+            let mut session_config = SessionConfig::default();
+            session_config = session_config.set(
+                "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                &ScalarValue::Int64(Some(5)),
+            );
+            session_config = session_config.set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(0.1)),
+            );
+            session_config = session_config.set(
+                "datafusion.execution.enable_aggregation_blocked_groups",
+                &ScalarValue::Boolean(Some(enable_blocked)),
+            );
 
-        let ctx = TaskContext::default().with_session_config(session_config);
-        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+            let ctx = TaskContext::default().with_session_config(session_config);
+            let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
 
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&output), @r"
+            allow_duplicates! {
+                assert_snapshot!(batches_to_string(&output), @r"
             +-----+-------------------+
             | key | COUNT(val)[count] |
             +-----+-------------------+
@@ -3599,6 +3697,7 @@ mod tests {
             | 4   | 1                 |
             +-----+-------------------+
             ");
+            }
         }
 
         Ok(())
@@ -3650,10 +3749,15 @@ mod tests {
         Ok(())
     }
 
+    // =========================================================================
+    // Spill & memory limit tests
+    // =========================================================================
+
     // test for https://github.com/apache/datafusion/issues/13949
     async fn run_test_with_spill_pool_if_necessary(
         pool_size: usize,
         expect_spill: bool,
+        enable_blocked_groups: bool,
     ) -> Result<()> {
         fn create_record_batch(
             schema: &Arc<Schema>,
@@ -3716,10 +3820,15 @@ mod tests {
         )?);
 
         let batch_size = 2;
+        let mut session_config = SessionConfig::new().with_batch_size(batch_size);
+        session_config = session_config.set(
+            "datafusion.execution.enable_aggregation_blocked_groups",
+            &ScalarValue::Boolean(Some(enable_blocked_groups)),
+        );
         let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         let task_ctx = Arc::new(
             TaskContext::default()
-                .with_session_config(SessionConfig::new().with_batch_size(batch_size))
+                .with_session_config(session_config)
                 .with_runtime(Arc::new(
                     RuntimeEnvBuilder::new()
                         .with_memory_pool(memory_pool)
@@ -3777,108 +3886,123 @@ mod tests {
 
     #[tokio::test]
     async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
-        // test with spill
-        run_test_with_spill_pool_if_necessary(2_000, true).await?;
-        // test without spill
-        run_test_with_spill_pool_if_necessary(20_000, false).await?;
+        for enable_blocked in [false, true] {
+            // test with spill
+            run_test_with_spill_pool_if_necessary(2_000, true, enable_blocked).await?;
+            // test without spill
+            run_test_with_spill_pool_if_necessary(20_000, false, enable_blocked).await?;
+        }
         Ok(())
     }
 
     #[tokio::test]
     async fn test_grouped_aggregation_respects_memory_limit() -> Result<()> {
-        // test with spill
-        fn create_record_batch(
-            schema: &Arc<Schema>,
-            data: (Vec<u32>, Vec<f64>),
-        ) -> Result<RecordBatch> {
-            Ok(RecordBatch::try_new(
-                Arc::clone(schema),
+        for enable_blocked in [false, true] {
+            // test with spill
+            fn create_record_batch(
+                schema: &Arc<Schema>,
+                data: (Vec<u32>, Vec<f64>),
+            ) -> Result<RecordBatch> {
+                Ok(RecordBatch::try_new(
+                    Arc::clone(schema),
+                    vec![
+                        Arc::new(UInt32Array::from(data.0)),
+                        Arc::new(Float64Array::from(data.1)),
+                    ],
+                )?)
+            }
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::UInt32, false),
+                Field::new("b", DataType::Float64, false),
+            ]));
+
+            let batches = vec![
+                create_record_batch(
+                    &schema,
+                    (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]),
+                )?,
+                create_record_batch(
+                    &schema,
+                    (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]),
+                )?,
+            ];
+            let plan: Arc<dyn ExecutionPlan> =
+                TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+            let proj = ProjectionExec::try_new(
                 vec![
-                    Arc::new(UInt32Array::from(data.0)),
-                    Arc::new(Float64Array::from(data.1)),
+                    ProjectionExpr::new(lit("0"), "l".to_string()),
+                    ProjectionExpr::new_from_expression(col("a", &schema)?, &schema)?,
+                    ProjectionExpr::new_from_expression(col("b", &schema)?, &schema)?,
                 ],
-            )?)
-        }
+                plan,
+            )?;
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(proj);
+            let schema = plan.schema();
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::UInt32, false),
-            Field::new("b", DataType::Float64, false),
-        ]));
+            let grouping_set = PhysicalGroupBy::new(
+                vec![
+                    (col("l", &schema)?, "l".to_string()),
+                    (col("a", &schema)?, "a".to_string()),
+                ],
+                vec![],
+                vec![vec![false, false]],
+                false,
+            );
 
-        let batches = vec![
-            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
-            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
-        ];
-        let plan: Arc<dyn ExecutionPlan> =
-            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
-        let proj = ProjectionExec::try_new(
-            vec![
-                ProjectionExpr::new(lit("0"), "l".to_string()),
-                ProjectionExpr::new_from_expression(col("a", &schema)?, &schema)?,
-                ProjectionExpr::new_from_expression(col("b", &schema)?, &schema)?,
-            ],
-            plan,
-        )?;
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(proj);
-        let schema = plan.schema();
-
-        let grouping_set = PhysicalGroupBy::new(
-            vec![
-                (col("l", &schema)?, "l".to_string()),
-                (col("a", &schema)?, "a".to_string()),
-            ],
-            vec![],
-            vec![vec![false, false]],
-            false,
-        );
-
-        // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
-        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
-            Arc::new(
-                AggregateExprBuilder::new(
-                    datafusion_functions_aggregate::min_max::min_udaf(),
-                    vec![col("b", &schema)?],
-                )
-                .schema(Arc::clone(&schema))
-                .alias("MIN(b)")
-                .build()?,
-            ),
-            Arc::new(
-                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+            // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
+            let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        datafusion_functions_aggregate::min_max::min_udaf(),
+                        vec![col("b", &schema)?],
+                    )
                     .schema(Arc::clone(&schema))
-                    .alias("AVG(b)")
+                    .alias("MIN(b)")
                     .build()?,
-            ),
-        ];
-
-        let single_aggregate = Arc::new(AggregateExec::try_new(
-            AggregateMode::Single,
-            grouping_set,
-            aggregates,
-            vec![None, None],
-            plan,
-            Arc::clone(&schema),
-        )?);
-
-        let batch_size = 2;
-        let memory_pool = Arc::new(FairSpillPool::new(2000));
-        let task_ctx = Arc::new(
-            TaskContext::default()
-                .with_session_config(SessionConfig::new().with_batch_size(batch_size))
-                .with_runtime(Arc::new(
-                    RuntimeEnvBuilder::new()
-                        .with_memory_pool(memory_pool)
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                        .schema(Arc::clone(&schema))
+                        .alias("AVG(b)")
                         .build()?,
-                )),
-        );
+                ),
+            ];
 
-        let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await;
-        match result {
-            Ok(result) => {
-                assert_spill_count_metric(true, single_aggregate);
+            let single_aggregate = Arc::new(AggregateExec::try_new(
+                AggregateMode::Single,
+                grouping_set,
+                aggregates,
+                vec![None, None],
+                plan,
+                Arc::clone(&schema),
+            )?);
 
-                allow_duplicates! {
-                    assert_snapshot!(batches_to_string(&result), @r"
+            let batch_size = 2;
+            let mut session_config = SessionConfig::new().with_batch_size(batch_size);
+            session_config = session_config.set(
+                "datafusion.execution.enable_aggregation_blocked_groups",
+                &ScalarValue::Boolean(Some(enable_blocked)),
+            );
+            let memory_pool = Arc::new(FairSpillPool::new(2000));
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(session_config)
+                    .with_runtime(Arc::new(
+                        RuntimeEnvBuilder::new()
+                            .with_memory_pool(memory_pool)
+                            .build()?,
+                    )),
+            );
+
+            let result =
+                collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await;
+            match result {
+                Ok(result) => {
+                    assert_spill_count_metric(true, single_aggregate);
+
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_string(&result), @r"
                 +---+---+--------+--------+
                 | l | a | MIN(b) | AVG(b) |
                 +---+---+--------+--------+
@@ -3887,13 +4011,18 @@ mod tests {
                 | 0 | 4 | 3.0    | 3.5    |
                 +---+---+--------+--------+
             ");
+                    }
                 }
+                Err(e) => assert!(matches!(e, DataFusionError::ResourcesExhausted(_))),
             }
-            Err(e) => assert!(matches!(e, DataFusionError::ResourcesExhausted(_))),
         }
 
         Ok(())
     }
+
+    // =========================================================================
+    // Statistics & cardinality estimation tests
+    // =========================================================================
 
     #[tokio::test]
     async fn test_aggregate_statistics_edge_cases() -> Result<()> {
@@ -4441,15 +4570,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_order_is_retained_when_spilling_flat() -> Result<()> {
-        check_order_is_retained_when_spilling(false, 600).await
-    }
-
-    #[tokio::test]
-    async fn test_order_is_retained_when_spilling_blocked() -> Result<()> {
-        // Blocked groups pre-allocates the full block capacity upfront,
-        // requiring a larger pool to proceed before triggering spill.
-        check_order_is_retained_when_spilling(true, 600).await
+    async fn test_order_is_retained_when_spilling() -> Result<()> {
+        for enable_blocked in [false, true] {
+            check_order_is_retained_when_spilling(enable_blocked, 600).await?;
+        }
+        Ok(())
     }
 
     async fn check_order_is_retained_when_spilling(
@@ -4541,15 +4666,11 @@ mod tests {
     /// reservation during spill, the error is properly propagated as
     /// ResourcesExhausted rather than silently exceeding memory limits.
     #[tokio::test]
-    async fn test_sort_reservation_fails_during_spill_flat() -> Result<()> {
-        check_sort_reservation_fails_during_spill(false, 500).await
-    }
-
-    #[tokio::test]
-    async fn test_sort_reservation_fails_during_spill_blocked() -> Result<()> {
-        // Blocked groups pre-allocates memory per block, so use a larger
-        // pool that still triggers sort reservation failure.
-        check_sort_reservation_fails_during_spill(true, 500).await
+    async fn test_sort_reservation_fails_during_spill() -> Result<()> {
+        for enable_blocked in [false, true] {
+            check_sort_reservation_fails_during_spill(enable_blocked, 500).await?;
+        }
+        Ok(())
     }
 
     async fn check_sort_reservation_fails_during_spill(
@@ -4687,6 +4808,10 @@ mod tests {
         Ok(())
     }
 
+    // =========================================================================
+    // Multi-stage aggregation tests
+    // =========================================================================
+
     /// Tests that PartialReduce mode:
     /// 1. Accepts state as input (like Final)
     /// 2. Produces state as output (like Partial)
@@ -4696,116 +4821,118 @@ mod tests {
     ///   Partial -> PartialReduce -> Final
     #[tokio::test]
     async fn test_partial_reduce_mode() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::UInt32, false),
-            Field::new("b", DataType::Float64, false),
-        ]));
+        for enable_blocked in [false, true] {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::UInt32, false),
+                Field::new("b", DataType::Float64, false),
+            ]));
 
-        // Produce two partitions of input data
-        let batch1 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(UInt32Array::from(vec![1, 2, 3])),
-                Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
-            ],
-        )?;
-        let batch2 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(UInt32Array::from(vec![1, 2, 3])),
-                Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
-            ],
-        )?;
+            // Produce two partitions of input data
+            let batch1 = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                    Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
+                ],
+            )?;
+            let batch2 = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                    Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
+                ],
+            )?;
 
-        let groups =
-            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
-        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
-            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("SUM(b)")
-                .build()?,
-        )];
+            let groups =
+                PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+            let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(b)")
+                    .build()?,
+            )];
 
-        // Step 1: Partial aggregation on partition 1
-        let input1 =
-            TestMemoryExec::try_new_exec(&[vec![batch1]], Arc::clone(&schema), None)?;
-        let partial1 = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            groups.clone(),
-            aggregates.clone(),
-            vec![None],
-            input1,
-            Arc::clone(&schema),
-        )?);
+            // Step 1: Partial aggregation on partition 1
+            let input1 =
+                TestMemoryExec::try_new_exec(&[vec![batch1]], Arc::clone(&schema), None)?;
+            let partial1 = Arc::new(AggregateExec::try_new(
+                AggregateMode::Partial,
+                groups.clone(),
+                aggregates.clone(),
+                vec![None],
+                input1,
+                Arc::clone(&schema),
+            )?);
 
-        // Step 2: Partial aggregation on partition 2
-        let input2 =
-            TestMemoryExec::try_new_exec(&[vec![batch2]], Arc::clone(&schema), None)?;
-        let partial2 = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            groups.clone(),
-            aggregates.clone(),
-            vec![None],
-            input2,
-            Arc::clone(&schema),
-        )?);
+            // Step 2: Partial aggregation on partition 2
+            let input2 =
+                TestMemoryExec::try_new_exec(&[vec![batch2]], Arc::clone(&schema), None)?;
+            let partial2 = Arc::new(AggregateExec::try_new(
+                AggregateMode::Partial,
+                groups.clone(),
+                aggregates.clone(),
+                vec![None],
+                input2,
+                Arc::clone(&schema),
+            )?);
 
-        // Collect partial results
-        let task_ctx = Arc::new(TaskContext::default());
-        let partial_result1 =
-            crate::collect(Arc::clone(&partial1) as _, Arc::clone(&task_ctx)).await?;
-        let partial_result2 =
-            crate::collect(Arc::clone(&partial2) as _, Arc::clone(&task_ctx)).await?;
+            // Collect partial results
+            let task_ctx = task_ctx_with_blocked_groups(enable_blocked);
+            let partial_result1 =
+                crate::collect(Arc::clone(&partial1) as _, Arc::clone(&task_ctx)).await?;
+            let partial_result2 =
+                crate::collect(Arc::clone(&partial2) as _, Arc::clone(&task_ctx)).await?;
 
-        // The partial results have state schema (group cols + accumulator state)
-        let partial_schema = partial1.schema();
+            // The partial results have state schema (group cols + accumulator state)
+            let partial_schema = partial1.schema();
 
-        // Step 3: PartialReduce — combine partial results, still producing state
-        let combined_input = TestMemoryExec::try_new_exec(
-            &[partial_result1, partial_result2],
-            Arc::clone(&partial_schema),
-            None,
-        )?;
-        // Coalesce into a single partition for the PartialReduce
-        let coalesced = Arc::new(CoalescePartitionsExec::new(combined_input));
+            // Step 3: PartialReduce — combine partial results, still producing state
+            let combined_input = TestMemoryExec::try_new_exec(
+                &[partial_result1, partial_result2],
+                Arc::clone(&partial_schema),
+                None,
+            )?;
+            // Coalesce into a single partition for the PartialReduce
+            let coalesced = Arc::new(CoalescePartitionsExec::new(combined_input));
 
-        let partial_reduce = Arc::new(AggregateExec::try_new(
-            AggregateMode::PartialReduce,
-            groups.clone(),
-            aggregates.clone(),
-            vec![None],
-            coalesced,
-            Arc::clone(&partial_schema),
-        )?);
+            let partial_reduce = Arc::new(AggregateExec::try_new(
+                AggregateMode::PartialReduce,
+                groups.clone(),
+                aggregates.clone(),
+                vec![None],
+                coalesced,
+                Arc::clone(&partial_schema),
+            )?);
 
-        // Verify PartialReduce output schema matches Partial output schema
-        // (both produce state, not final values)
-        assert_eq!(partial_reduce.schema(), partial_schema);
+            // Verify PartialReduce output schema matches Partial output schema
+            // (both produce state, not final values)
+            assert_eq!(partial_reduce.schema(), partial_schema);
 
-        // Collect PartialReduce results
-        let reduce_result =
-            crate::collect(Arc::clone(&partial_reduce) as _, Arc::clone(&task_ctx))
-                .await?;
+            // Collect PartialReduce results
+            let reduce_result =
+                crate::collect(Arc::clone(&partial_reduce) as _, Arc::clone(&task_ctx))
+                    .await?;
 
-        // Step 4: Final aggregation on the PartialReduce output
-        let final_input = TestMemoryExec::try_new_exec(
-            &[reduce_result],
-            Arc::clone(&partial_schema),
-            None,
-        )?;
-        let final_agg = Arc::new(AggregateExec::try_new(
-            AggregateMode::Final,
-            groups.clone(),
-            aggregates.clone(),
-            vec![None],
-            final_input,
-            Arc::clone(&partial_schema),
-        )?);
+            // Step 4: Final aggregation on the PartialReduce output
+            let final_input = TestMemoryExec::try_new_exec(
+                &[reduce_result],
+                Arc::clone(&partial_schema),
+                None,
+            )?;
+            let final_agg = Arc::new(AggregateExec::try_new(
+                AggregateMode::Final,
+                groups.clone(),
+                aggregates.clone(),
+                vec![None],
+                final_input,
+                Arc::clone(&partial_schema),
+            )?);
 
-        let result = crate::collect(final_agg, Arc::clone(&task_ctx)).await?;
+            let result = crate::collect(final_agg, Arc::clone(&task_ctx)).await?;
 
-        // Expected: group 1 -> 10+40=50, group 2 -> 20+50=70, group 3 -> 30+60=90
-        assert_snapshot!(batches_to_sort_string(&result), @r"
+            // Expected: group 1 -> 10+40=50, group 2 -> 20+50=70, group 3 -> 30+60=90
+            allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&result), @r"
             +---+--------+
             | a | SUM(b) |
             +---+--------+
@@ -4814,6 +4941,8 @@ mod tests {
             | 3 | 90.0   |
             +---+--------+
         ");
+            }
+        }
 
         Ok(())
     }
