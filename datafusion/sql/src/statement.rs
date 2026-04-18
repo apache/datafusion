@@ -31,7 +31,7 @@ use crate::utils::normalize_ident;
 
 use arrow::datatypes::{Field, FieldRef, Fields, Metadata};
 use datafusion_common::error::_plan_err;
-use datafusion_common::format::ExplainStatementOptions;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
@@ -48,7 +48,6 @@ use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     Analyze, Cast, CreateCatalog, CreateCatalogSchema,
-    CreateExternalCatalog as PlanCreateExternalCatalog,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalog, DropCatalogSchema, DropFunction, DropTable,
@@ -56,7 +55,7 @@ use datafusion_expr::{
     Filter, LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
     ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
     TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast,
+    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, col,
 };
 use sqlparser::ast::{
     self, BeginTransactionKind, CheckConstraint, ForeignKeyConstraint, IndexColumn,
@@ -591,13 +590,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             let project_exprs = schema
                                 .fields()
                                 .iter()
-                                .zip(input_columns)
-                                .map(|(field, input_column)| {
-                                    cast(
-                                        Expr::Column(input_column),
-                                        field.data_type().clone(),
-                                    )
-                                    .alias(field.name())
+                                .zip(input_fields)
+                                .map(|(field, input_field)| {
+                                    let target_field = Arc::new(
+                                        Field::new(
+                                            field.name(),
+                                            field.data_type().clone(),
+                                            field.is_nullable(),
+                                        )
+                                        .with_metadata(field.metadata().clone()),
+                                    );
+                                    let metadata =
+                                        FieldMetadata::new_from_field(field.as_ref());
+                                    let alias_metadata = if metadata.is_empty() {
+                                        None
+                                    } else {
+                                        Some(metadata)
+                                    };
+                                    Expr::Cast(Cast::new_from_field(
+                                        Box::new(col(input_field.name())),
+                                        target_field,
+                                    ))
+                                    .alias_with_metadata(field.name(), alias_metadata)
                                 })
                                 .collect::<Vec<_>>();
 
