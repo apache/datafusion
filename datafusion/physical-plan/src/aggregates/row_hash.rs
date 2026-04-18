@@ -23,7 +23,9 @@ use std::vec;
 
 use super::AggregateExec;
 use super::order::GroupOrdering;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, new_group_values, new_group_values_with_group_indices,
+};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
@@ -589,8 +591,11 @@ impl GroupedHashAggregateStream {
 
         let require_group_indices = !accumulators.is_empty()
             || matches!(group_ordering, GroupOrdering::Partial(_));
-        let group_values =
-            new_group_values(group_schema, &group_ordering, require_group_indices)?;
+        let group_values = new_group_values_with_group_indices(
+            group_schema,
+            &group_ordering,
+            require_group_indices,
+        )?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
@@ -1013,7 +1018,9 @@ impl GroupedHashAggregateStream {
                         .add_elapsed(agg_start_time);
                 }
             } else {
-                self.group_values.intern_no_group_ids(group_values)?;
+                self.current_group_indices.clear();
+                self.group_values
+                    .intern(group_values, &mut self.current_group_indices)?;
 
                 let total_num_groups = self.group_values.len();
                 if total_num_groups > starting_num_groups {
@@ -1297,8 +1304,7 @@ impl GroupedHashAggregateStream {
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
             if group_schema.fields().len() > 1 {
-                self.group_values =
-                    new_group_values(group_schema, &self.group_ordering, true)?;
+                self.group_values = new_group_values(group_schema, &self.group_ordering)?;
             }
 
             // Use `OutOfMemoryMode::ReportError` from this point on

@@ -148,42 +148,6 @@ where
         PrimitiveArray::<T>::new(values.into(), nulls)
     }
 
-    fn ensure_group_id_tracking(&mut self) {
-        if matches!(self.state, GroupValuesPrimitiveState::GroupIds { .. }) {
-            return;
-        }
-
-        let GroupValuesPrimitiveState::DistinctOnly { map, has_null } = std::mem::replace(
-            &mut self.state,
-            GroupValuesPrimitiveState::GroupIds {
-                map: HashTable::with_capacity(128),
-                null_group: None,
-                values: Vec::with_capacity(128),
-            },
-        ) else {
-            unreachable!();
-        };
-
-        let mut values = Vec::with_capacity(map.len() + usize::from(has_null));
-        let null_group = has_null.then(|| {
-            values.push(Default::default());
-            0
-        });
-        let mut group_map = HashTable::with_capacity(map.len());
-        for value in map {
-            let group_idx = values.len();
-            values.push(value);
-            let hash = value.hash(&self.random_state);
-            group_map
-                .insert_unique(hash, (group_idx, hash), |&(_, stored_hash)| stored_hash);
-        }
-        self.state = GroupValuesPrimitiveState::GroupIds {
-            map: group_map,
-            null_group,
-            values,
-        };
-    }
-
     fn insert_group_id(
         random_state: &RandomState,
         map: &mut HashTable<(usize, u64)>,
@@ -351,29 +315,8 @@ where
     T::Native: HashValue,
 {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        self.ensure_group_id_tracking();
         assert_eq!(cols.len(), 1);
         groups.clear();
-        let GroupValuesPrimitiveState::GroupIds {
-            map,
-            null_group,
-            values,
-        } = &mut self.state
-        else {
-            unreachable!();
-        };
-
-        for v in cols[0].as_primitive::<T>() {
-            let group_id =
-                Self::insert_group_id(&self.random_state, map, values, null_group, v);
-            groups.push(group_id)
-        }
-        Ok(())
-    }
-
-    fn intern_no_group_ids(&mut self, cols: &[ArrayRef]) -> Result<()> {
-        assert_eq!(cols.len(), 1);
-
         match &mut self.state {
             GroupValuesPrimitiveState::GroupIds {
                 map,
@@ -381,13 +324,14 @@ where
                 values,
             } => {
                 for v in cols[0].as_primitive::<T>() {
-                    let _ = Self::insert_group_id(
+                    let group_id = Self::insert_group_id(
                         &self.random_state,
                         map,
                         values,
                         null_group,
                         v,
                     );
+                    groups.push(group_id);
                 }
             }
             GroupValuesPrimitiveState::DistinctOnly { map, has_null } => {

@@ -99,16 +99,6 @@ pub trait GroupValues: Send {
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
-    /// Interns the rows from `cols` without materializing a group id per input
-    /// row.
-    ///
-    /// This is useful for hash aggregate operators that only need the set of
-    /// distinct group keys and have no per-row accumulator updates to perform.
-    fn intern_no_group_ids(&mut self, cols: &[ArrayRef]) -> Result<()> {
-        let mut groups = Vec::new();
-        self.intern(cols, &mut groups)
-    }
-
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;
 
@@ -142,6 +132,13 @@ pub trait GroupValues: Send {
 /// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
 /// `GroupValuesRows`: crate::aggregates::group_values::row::GroupValuesRows
 pub fn new_group_values(
+    schema: SchemaRef,
+    group_ordering: &GroupOrdering,
+) -> Result<Box<dyn GroupValues>> {
+    new_group_values_with_group_indices(schema, group_ordering, true)
+}
+
+pub(crate) fn new_group_values_with_group_indices(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
     require_group_indices: bool,
