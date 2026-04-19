@@ -535,7 +535,7 @@ impl RuntimeEnvBuilder {
             Some("50M".to_owned()),
             Some("1M".to_owned()),
             None,
-            Some("1M".to_owned()),
+            Some("20M".to_owned()),
         )
     }
 
