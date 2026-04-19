@@ -214,7 +214,7 @@ where
         if self.values.is_empty() {
             return 0;
         }
-        let values_cap = self.values.len() * self.values[0].capacity();
+        let values_cap = self.values.num_blocks() * self.values[0].capacity();
         let values_size = values_cap * size_of::<T::Native>();
         let nulls_size = self.null_state.size();
         values_size + nulls_size

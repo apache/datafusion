@@ -150,10 +150,6 @@ impl<B: Block> Blocks<B> {
         self.inner.len() - self.start
     }
 
-    pub fn len(&self) -> usize {
-        self.inner.len() - self.start
-    }
-
     pub fn is_empty(&self) -> bool {
         self.start >= self.inner.len()
     }
