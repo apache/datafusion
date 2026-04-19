@@ -386,6 +386,14 @@ pub(crate) struct GroupedHashAggregateStream {
     /// max rows in output RecordBatches
     batch_size: usize,
 
+    /// Max rows per emitted output batch. Matches `batch_size` for most
+    /// modes, but for `Partial` / `PartialReduce` — whose output feeds
+    /// a hash repartition that will split every input batch into `P`
+    /// sub-batches — we scale this to `batch_size * P` so the
+    /// post-repartition sub-batches already land at ~`batch_size` and
+    /// a downstream `CoalesceBatchesExec` has nothing to do.
+    emit_batch_size: usize,
+
     /// Optional soft limit on the number of `group_values` in a batch
     /// If the number of `group_values` in a single batch exceeds this value,
     /// the `GroupedHashAggregateStream` operation immediately switches to
@@ -470,6 +478,11 @@ impl GroupedHashAggregateStream {
         let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let batch_size = context.session_config().batch_size();
+        let emit_batch_size = match agg.mode {
+            AggregateMode::Partial | AggregateMode::PartialReduce => batch_size
+                .saturating_mul(context.session_config().target_partitions().max(1)),
+            _ => batch_size,
+        };
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
@@ -675,6 +688,7 @@ impl GroupedHashAggregateStream {
             baseline_metrics,
             group_by_metrics,
             batch_size,
+            emit_batch_size,
             group_ordering,
             input_done: false,
             spill_state,
@@ -842,7 +856,7 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::ProducingOutput(batch) => {
                     // slice off a part of the batch, if needed
                     let output_batch;
-                    let size = self.batch_size;
+                    let size = self.emit_batch_size;
                     (self.exec_state, output_batch) = if batch.num_rows() <= size {
                         (
                             if self.input_done {
@@ -860,8 +874,7 @@ impl Stream for GroupedHashAggregateStream {
                             batch.clone(),
                         )
                     } else {
-                        // output first batch_size rows
-                        let size = self.batch_size;
+                        // output first `emit_batch_size` rows
                         let num_remaining = batch.num_rows() - size;
                         let remaining = batch.slice(size, num_remaining);
                         let output = batch.slice(0, size);
