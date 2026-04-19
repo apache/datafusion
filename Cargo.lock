@@ -2478,7 +2478,6 @@ dependencies = [
  "arrow-schema",
  "async-trait",
  "criterion",
- "crossbeam-channel",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
