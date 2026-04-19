@@ -122,19 +122,13 @@ impl RequiredIndices {
                     }
                 }
                 Expr::ScalarSubquery(sub) => {
-                    for outer in &sub.outer_ref_columns {
-                        self.add_expr(input_schema, outer);
-                    }
+                    self.add_exprs(input_schema, &sub.outer_ref_columns);
                 }
                 Expr::Exists(ex) => {
-                    for outer in &ex.subquery.outer_ref_columns {
-                        self.add_expr(input_schema, outer);
-                    }
+                    self.add_exprs(input_schema, &ex.subquery.outer_ref_columns);
                 }
                 Expr::InSubquery(isq) => {
-                    for outer in &isq.subquery.outer_ref_columns {
-                        self.add_expr(input_schema, outer);
-                    }
+                    self.add_exprs(input_schema, &isq.subquery.outer_ref_columns);
                 }
                 _ => {}
             }
@@ -143,25 +137,26 @@ impl RequiredIndices {
         .expect("traversal is infallible");
     }
 
+    /// Like [`Self::add_expr`], but for multiple expressions.
+    fn add_exprs<'a>(
+        &mut self,
+        input_schema: &DFSchemaRef,
+        exprs: impl IntoIterator<Item = &'a Expr>,
+    ) {
+        for expr in exprs {
+            self.add_expr(input_schema, expr);
+        }
+    }
+
     /// Adds the indices of the fields referred to by the given expressions
-    /// `within the given schema.
-    ///
-    /// # Parameters
-    ///
-    /// * `input_schema`: The input schema to analyze for index requirements.
-    /// * `exprs`: the expressions for which we want to find field indices.
+    /// within the given schema.
     pub fn with_exprs<'a>(
-        self,
+        mut self,
         schema: &DFSchemaRef,
         exprs: impl IntoIterator<Item = &'a Expr>,
     ) -> Self {
-        exprs
-            .into_iter()
-            .fold(self, |mut acc, expr| {
-                acc.add_expr(schema, expr);
-                acc
-            })
-            .compact()
+        self.add_exprs(schema, exprs);
+        self.compact()
     }
 
     /// Adds all `indices` into this instance.
