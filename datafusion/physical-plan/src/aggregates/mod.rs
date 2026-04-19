@@ -2190,7 +2190,7 @@ pub fn evaluate_group_by(
 /// On the first `poll_next`, we take the caller's tokio worker
 /// thread via `tokio::task::block_in_place` and drive
 /// `stream.next().await` to completion with
-/// `futures::executor::block_on`. For `GroupedHashAggregateStream`
+/// `Handle::current().block_on`. For `GroupedHashAggregateStream`
 /// this one `.await` covers the entire `ReadingInput` phase
 /// (hash-map + accumulator updates across every input batch) and
 /// returns the first materialized output batch — i.e. the
@@ -2267,9 +2267,9 @@ impl futures::Stream for PinBuildStream {
                 // Synchronously drive the inner stream until it
                 // yields its first batch. No scheduling point, so
                 // no thread migration for the whole build.
-                let first = tokio::task::block_in_place(|| {
-                    futures::executor::block_on(stream.next())
-                });
+                let handle = tokio::runtime::Handle::current();
+                let first =
+                    tokio::task::block_in_place(|| handle.block_on(stream.next()));
                 match first {
                     Some(batch) => {
                         this.state = PinBuildState::Draining(stream);
