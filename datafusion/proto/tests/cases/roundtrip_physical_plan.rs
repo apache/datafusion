@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, RwLock};
@@ -975,14 +974,12 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
         })?;
     let file_scan = data_source
         .data_source()
-        .as_any()
         .downcast_ref::<FileScanConfig>()
         .ok_or_else(|| {
             internal_datafusion_err!("Expected FileScanConfig after roundtrip")
         })?;
     let parquet_source = file_scan
         .file_source()
-        .as_any()
         .downcast_ref::<ParquetSource>()
         .ok_or_else(|| {
             internal_datafusion_err!("Expected ParquetSource after roundtrip")
@@ -1100,10 +1097,6 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     }
 
     impl PhysicalExpr for CustomPredicateExpr {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
             unreachable!()
         }
@@ -1171,11 +1164,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             node: &Arc<dyn PhysicalExpr>,
             buf: &mut Vec<u8>,
         ) -> Result<()> {
-            if node
-                .as_any()
-                .downcast_ref::<CustomPredicateExpr>()
-                .is_some()
-            {
+            if node.downcast_ref::<CustomPredicateExpr>().is_some() {
                 buf.extend_from_slice("CustomPredicateExpr".as_bytes());
                 Ok(())
             } else {
@@ -1656,11 +1645,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     )?;
 
     let roundtrip_plan = roundtrip_plan.downcast_ref::<DataSinkExec>().unwrap();
-    let csv_sink = roundtrip_plan
-        .sink()
-        .as_any()
-        .downcast_ref::<CsvSink>()
-        .unwrap();
+    let csv_sink = roundtrip_plan.sink().downcast_ref::<CsvSink>().unwrap();
     assert_eq!(
         CompressionTypeVariant::ZSTD,
         csv_sink.writer_options().compression
@@ -2519,7 +2504,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     // Verify the filter predicate is a Literal(true)
     let result_filter = result.downcast_ref::<FilterExec>().unwrap();
     let predicate = result_filter.predicate();
-    let literal = predicate.as_any().downcast_ref::<Literal>().unwrap();
+    let literal = predicate.downcast_ref::<Literal>().unwrap();
     assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
 
     Ok(())
@@ -2862,10 +2847,7 @@ fn test_backward_compatibility_no_expr_id() -> Result<()> {
     )?;
 
     // Verify the result is correct
-    let col = result
-        .as_any()
-        .downcast_ref::<Column>()
-        .expect("Expected Column");
+    let col = result.downcast_ref::<Column>().expect("Expected Column");
     assert_eq!(col.name(), "a");
     assert_eq!(col.index(), 0);
 
@@ -2996,7 +2978,6 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
 
     // Check that deduplication worked within the deserialization
     let binary1 = expr1
-        .as_any()
         .downcast_ref::<BinaryExpr>()
         .expect("Expected BinaryExpr");
     assert!(
@@ -3014,7 +2995,6 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
 
     // Check that the second expression was also deserialized correctly
     let binary2 = expr2
-        .as_any()
         .downcast_ref::<BinaryExpr>()
         .expect("Expected BinaryExpr");
     assert!(
@@ -3185,4 +3165,291 @@ fn roundtrip_lead_with_default_value() -> Result<()> {
         InputOrderMode::Sorted,
         true,
     )?))
+}
+
+/// Test that a chain of the same operator (a AND b AND c) is linearized
+/// and roundtrips correctly.
+#[test]
+fn roundtrip_binary_expr_chain_same_op() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Boolean, false);
+    let field_c = Field::new("c", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
+    let ab = binary(
+        col("a", &schema)?,
+        Operator::And,
+        col("b", &schema)?,
+        &schema,
+    )?;
+    let abc = binary(ab, Operator::And, col("c", &schema)?, &schema)?;
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        abc,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Test that mixed operators (a AND b OR c) are NOT linearized together —
+/// only chains of the same operator are flattened.
+#[test]
+fn roundtrip_binary_expr_mixed_ops() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Boolean, false);
+    let field_c = Field::new("c", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
+    // (a AND b) OR c — AND and OR are different operators, so linearization stops
+    let a_and_b = binary(
+        col("a", &schema)?,
+        Operator::And,
+        col("b", &schema)?,
+        &schema,
+    )?;
+    let expr = binary(a_and_b, Operator::Or, col("c", &schema)?, &schema)?;
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Test that a deeply nested chain of AND expressions (like many WHERE conditions)
+/// roundtrips correctly. This is the scenario from issue #18602.
+#[test]
+fn roundtrip_binary_expr_deeply_nested_and_chain() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+
+    // Build a chain: a AND a AND a AND ... (100 times)
+    let col_a = col("a", &schema)?;
+    let mut expr = Arc::clone(&col_a);
+    for _ in 0..99 {
+        expr = binary(expr, Operator::And, Arc::clone(&col_a), &schema)?;
+    }
+
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Test that a deeply nested chain of OR expressions roundtrips correctly.
+#[test]
+fn roundtrip_binary_expr_deeply_nested_or_chain() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+
+    let col_a = col("a", &schema)?;
+    let mut expr = Arc::clone(&col_a);
+    for _ in 0..99 {
+        expr = binary(expr, Operator::Or, Arc::clone(&col_a), &schema)?;
+    }
+
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Test that alternating AND/OR operators produce correct results —
+/// each sub-chain gets linearized independently.
+#[test]
+fn roundtrip_binary_expr_alternating_and_or() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Boolean, false);
+    let field_c = Field::new("c", DataType::Boolean, false);
+    let field_d = Field::new("d", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c, field_d]));
+
+    // (a AND b) OR (c AND d)
+    let a_and_b = binary(
+        col("a", &schema)?,
+        Operator::And,
+        col("b", &schema)?,
+        &schema,
+    )?;
+    let c_and_d = binary(
+        col("c", &schema)?,
+        Operator::And,
+        col("d", &schema)?,
+        &schema,
+    )?;
+    let expr = binary(a_and_b, Operator::Or, c_and_d, &schema)?;
+
+    roundtrip_test(Arc::new(FilterExec::try_new(
+        expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?))
+}
+
+/// Verify that the linearized proto format has a flat operands list
+/// rather than deeply nested l/r fields.
+#[test]
+fn test_linearization_produces_flat_operands() -> Result<()> {
+    // Build: a AND a AND a AND a (4 operands, 3 levels of nesting)
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                Operator::And,
+                Arc::clone(&col_a),
+            )),
+            Operator::And,
+            Arc::clone(&col_a),
+        )),
+        Operator::And,
+        Arc::clone(&col_a),
+    ));
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto = proto_converter.physical_expr_to_proto(&expr, &codec)?;
+
+    // The top-level should use the operands field with 4 entries
+    match &proto.expr_type {
+        Some(protobuf::physical_expr_node::ExprType::BinaryExpr(b)) => {
+            assert!(
+                b.l.is_none(),
+                "l should be None when using linearized operands"
+            );
+            assert!(
+                b.r.is_none(),
+                "r should be None when using linearized operands"
+            );
+            assert_eq!(
+                b.operands.len(),
+                4,
+                "Expected 4 linearized operands for a AND a AND a AND a"
+            );
+            assert_eq!(b.op, "And");
+        }
+        other => panic!("Expected BinaryExpr, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+/// Test that linearization stops when encountering a different operator.
+/// For (a AND b) OR c, only the top-level OR should be represented, and
+/// the left-hand AND subtree should be a separate nested BinaryExpr.
+#[test]
+fn test_linearization_stops_at_different_op() -> Result<()> {
+    // (a AND b) OR c
+    let a_and_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("a", 0)),
+        Operator::And,
+        Arc::new(Column::new("b", 1)),
+    ));
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        a_and_b,
+        Operator::Or,
+        Arc::new(Column::new("c", 2)),
+    ));
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto = proto_converter.physical_expr_to_proto(&expr, &codec)?;
+
+    // The top-level OR should have only 2 operands (can't linearize through AND)
+    match &proto.expr_type {
+        Some(protobuf::physical_expr_node::ExprType::BinaryExpr(b)) => {
+            assert_eq!(
+                b.operands.len(),
+                2,
+                "Expected 2 operands for (a AND b) OR c"
+            );
+            assert_eq!(b.op, "Or");
+            // The first operand should be a nested AND BinaryExpr
+            match &b.operands[0].expr_type {
+                Some(protobuf::physical_expr_node::ExprType::BinaryExpr(inner)) => {
+                    assert_eq!(inner.op, "And");
+                    assert_eq!(inner.operands.len(), 2);
+                }
+                other => panic!("Expected inner BinaryExpr(AND), got {other:?}"),
+            }
+        }
+        other => panic!("Expected BinaryExpr, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+/// returns a SessionContext with an empty `netflow` table registered
+fn netflow_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("dst_geo_country_name", DataType::Utf8, true),
+        Field::new("dst_geo_city_name", DataType::Utf8, true),
+        Field::new("packets", DataType::UInt64, true),
+        Field::new("src_addr", DataType::Utf8, true),
+        Field::new("dst_addr", DataType::Utf8, true),
+    ]));
+
+    ctx.register_table("netflow", Arc::new(EmptyTable::new(schema)))?;
+
+    Ok(ctx)
+}
+
+/// Regression test for issue #18602:
+/// https://github.com/apache/datafusion/issues/18602
+///
+/// The physical filter expression here contains a long chain of `AND` predicates.
+/// Before linearizing `PhysicalBinaryExprNode`, encoding then decoding the protobuf
+/// could fail with `DecodeError: recursion limit reached`.
+#[tokio::test]
+async fn roundtrip_issue_18602_complex_filter_decode_recursion() -> Result<()> {
+    let ctx = netflow_context()?;
+    let sql = "SELECT \
+      dst_geo_country_name AS x_axis_1, \
+      dst_geo_city_name AS x_axis_2, \
+      sum(packets) AS y_axis_1 \
+    FROM netflow \
+    WHERE dst_geo_country_name IS NOT NULL \
+      AND src_addr NOT LIKE '10.201.%' \
+      AND dst_addr NOT LIKE '10.201.%' \
+      AND src_addr NOT LIKE '10.202.%' \
+      AND dst_addr NOT LIKE '10.202.%' \
+      AND src_addr NOT LIKE '10.203.%' \
+      AND dst_addr NOT LIKE '10.203.%' \
+      AND src_addr NOT LIKE '10.204.%' \
+      AND dst_addr NOT LIKE '10.204.%' \
+      AND src_addr NOT LIKE '172.16.186.%' \
+      AND dst_addr NOT LIKE '172.16.186.%' \
+      AND src_addr NOT LIKE '172.16.187.%' \
+      AND dst_addr NOT LIKE '172.16.187.%' \
+      AND src_addr NOT LIKE '172.16.188.%' \
+      AND dst_addr NOT LIKE '172.16.188.%' \
+      AND src_addr NOT LIKE '10.102.45.%' \
+      AND dst_addr NOT LIKE '10.102.45.%' \
+      AND src_addr NOT LIKE '172.25.210.%' \
+      AND dst_addr NOT LIKE '172.25.210.%' \
+      AND src_addr NOT LIKE '172.25.211.%' \
+      AND dst_addr NOT LIKE '172.25.211.%' \
+      AND src_addr NOT LIKE '141.226.101.%' \
+      AND dst_addr NOT LIKE '141.226.101.%' \
+      AND src_addr NOT LIKE '167.86.40.%' \
+      AND dst_addr NOT LIKE '167.86.40.%' \
+      AND src_addr NOT LIKE '66.22.38.%' \
+      AND dst_addr NOT LIKE '66.22.38.%' \
+      AND src_addr != '168.143.191.55' \
+      AND dst_addr != '168.143.191.55' \
+      AND src_addr != '82.112.107.142' \
+      AND dst_addr != '82.112.107.142' \
+      AND src_addr != '20.76.39.176' \
+      AND dst_addr != '20.76.39.176' \
+      AND src_addr != '162.159.129.83' \
+      AND dst_addr != '162.159.129.83' \
+      AND src_addr != '34.201.223.155' \
+      AND dst_addr != '34.201.223.155' \
+      AND src_addr != '34.201.223.156' \
+      AND dst_addr != '34.201.223.156' \
+      AND src_addr != '34.201.223.157' \
+      AND dst_addr != '34.201.223.157' \
+      AND src_addr != '134.201.223.157' \
+      AND dst_addr != '134.201.223.157' \
+      AND src_addr != '341.201.223.157' \
+      AND dst_addr != '341.201.223.157' \
+    GROUP BY x_axis_1, x_axis_2 \
+    ORDER BY y_axis_1 DESC \
+    LIMIT 20";
+
+    roundtrip_test_sql_with_context(sql, &ctx).await
 }

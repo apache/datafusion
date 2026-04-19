@@ -420,10 +420,7 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
         {
             let args = func.args();
 
-            if let Some(column) = args
-                .first()
-                .and_then(|a| a.as_any().downcast_ref::<Column>())
-            {
+            if let Some(column) = args.first().and_then(|a| a.downcast_ref::<Column>()) {
                 // for Map columns, get_field performs a runtime key lookup rather than a
                 // schema-level field access so the entire Map column must be read,
                 // we skip the struct field optimization and defer to normal Column traversal
@@ -451,7 +448,7 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
                     let field_path = args[1..]
                         .iter()
                         .map(|arg| {
-                            arg.as_any().downcast_ref::<Literal>().and_then(|lit| {
+                            arg.downcast_ref::<Literal>().and_then(|lit| {
                                 lit.value().try_as_str().flatten().map(|s| s.to_string())
                             })
                         })
@@ -481,7 +478,7 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
             }
         }
 
-        if let Some(column) = node.as_any().downcast_ref::<Column>()
+        if let Some(column) = node.downcast_ref::<Column>()
             && let Some(recursion) = self.check_single_column(column.name())
         {
             return Ok(recursion);
@@ -611,14 +608,12 @@ pub(crate) fn build_projection_read_plan(
     // fast path: if every expression is a plain Column reference, skip all
     // struct analysis and use root-level projection directly
     let exprs = exprs.into_iter().collect::<Vec<_>>();
-    let all_plain_columns = exprs
-        .iter()
-        .all(|e| e.as_any().downcast_ref::<Column>().is_some());
+    let all_plain_columns = exprs.iter().all(|e| e.downcast_ref::<Column>().is_some());
 
     if all_plain_columns {
         let mut root_indices: Vec<usize> = exprs
             .iter()
-            .map(|e| e.as_any().downcast_ref::<Column>().unwrap().index())
+            .map(|e| e.downcast_ref::<Column>().unwrap().index())
             .collect();
         root_indices.sort_unstable();
         root_indices.dedup();

@@ -75,7 +75,6 @@ use parquet::arrow::parquet_column;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::errors::ParquetError;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
 /// Stateless Parquet morselizer implementation.
@@ -1200,10 +1199,7 @@ impl RowGroupsPrunedParquetOpen {
                 predicate_cache_records,
                 baseline_metrics: prepared.baseline_metrics,
             },
-            |mut state| async move {
-                let result = state.transition().await;
-                result.map(|r| (r, state))
-            },
+            |state| async move { state.transition().await },
         )
         .fuse();
 
@@ -1249,17 +1245,27 @@ impl PushDecoderStreamState {
     ///   fetched from the [`AsyncFileReader`] and fed back into the decoder.
     /// - [`Data`](DecodeResult::Data) – a decoded batch is projected and returned.
     /// - [`Finished`](DecodeResult::Finished) – signals end-of-stream (`None`).
-    async fn transition(&mut self) -> Option<Result<RecordBatch>> {
+    ///
+    /// Takes `self` by value (rather than `&mut self`) so the generated future
+    /// owns the state directly. This avoids a Stacked Borrows violation under
+    /// miri where `&mut self` creates a single opaque borrow that conflicts
+    /// with `unfold`'s ownership across yield points.
+    async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
         loop {
             match self.decoder.try_decode() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
-                    let fetch = async {
-                        let data = self.reader.get_byte_ranges(ranges.clone()).await?;
-                        self.decoder.push_ranges(ranges, data)?;
-                        Ok::<_, ParquetError>(())
-                    };
-                    if let Err(e) = fetch.await {
-                        return Some(Err(DataFusionError::from(e)));
+                    let data = self
+                        .reader
+                        .get_byte_ranges(ranges.clone())
+                        .await
+                        .map_err(DataFusionError::from);
+                    match data {
+                        Ok(data) => {
+                            if let Err(e) = self.decoder.push_ranges(ranges, data) {
+                                return Some((Err(DataFusionError::from(e)), self));
+                            }
+                        }
+                        Err(e) => return Some((Err(e), self)),
                     }
                 }
                 Ok(DecodeResult::Data(batch)) => {
@@ -1267,13 +1273,15 @@ impl PushDecoderStreamState {
                     self.copy_arrow_reader_metrics();
                     let result = self.project_batch(&batch);
                     timer.stop();
-                    return Some(result);
+                    // Release the borrow on baseline_metrics before moving self
+                    drop(timer);
+                    return Some((result, self));
                 }
                 Ok(DecodeResult::Finished) => {
                     return None;
                 }
                 Err(e) => {
-                    return Some(Err(DataFusionError::from(e)));
+                    return Some((Err(DataFusionError::from(e)), self));
                 }
             }
         }
@@ -1916,8 +1924,8 @@ mod test {
             .try_map_exprs(|expr| replace_columns_with_literals(expr, &constants))
             .unwrap();
         let exprs = rewritten.as_ref();
-        assert!(exprs[0].expr.as_any().downcast_ref::<Literal>().is_some());
-        assert!(exprs[1].expr.as_any().downcast_ref::<Column>().is_some());
+        assert!(exprs[0].expr.downcast_ref::<Literal>().is_some());
+        assert!(exprs[1].expr.downcast_ref::<Column>().is_some());
 
         // Only column `b` should remain in the projection mask
         assert_eq!(rewritten.column_indices(), vec![1]);
@@ -1930,7 +1938,7 @@ mod test {
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
 
         let rewritten = replace_columns_with_literals(expr, &constants).unwrap();
-        assert!(rewritten.as_any().downcast_ref::<Literal>().is_some());
+        assert!(rewritten.downcast_ref::<Literal>().is_some());
     }
 
     async fn count_batches_and_rows(
