@@ -287,6 +287,23 @@ fn test_cli_with_unbounded_memory_pool() {
     assert_cmd_snapshot!(cmd);
 }
 
+#[test]
+fn test_cli_wide_result_set_no_crash() {
+    let mut settings = make_settings();
+
+    settings.set_snapshot_suffix("wide_result_set");
+
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    let sql = "SELECT v1 as c0, v1+1 as c1, v1+2 as c2, v1+3 as c3, v1+4 as c4, \
+               v1+5 as c5, v1+6 as c6, v1+7 as c7, v1+8 as c8, v1+9 as c9 \
+               FROM generate_series(1, 100) as t1(v1);";
+    cmd.args(["--maxrows", "5", "--command", sql]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
 #[tokio::test]
 async fn test_cli() {
     if env::var("TEST_STORAGE_INTEGRATION").is_err() {
