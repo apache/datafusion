@@ -46,8 +46,7 @@ use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraint, Constraints, DataFusionError, Result, ScalarValue,
-    assert_eq_or_internal_err, not_impl_err,
+    Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
@@ -2226,20 +2225,14 @@ fn pin_stream_to_thread(
     )>();
 
     let task = SpawnedTask::spawn_blocking(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => rt,
-            Err(e) => {
-                let err = Err(DataFusionError::External(
-                    format!("pin_stream_to_thread: rt build failed: {e}").into(),
-                ));
-                let _ = handoff_tx.send((Some(err), stream));
-                return;
-            }
-        };
-        rt.block_on(async move {
+        // `spawn_blocking` runs us on a tokio blocking thread that
+        // already has `Handle::current()` pointing at the parent
+        // runtime, so the inner stream's tokio primitives (mpsc
+        // wakers, `tokio::spawn`, timers) stay usable. We only need
+        // an executor to drive one `.await` on this thread —
+        // `futures::executor::block_on` does that with a thread-
+        // local waker + park/unpark, no second reactor.
+        futures::executor::block_on(async move {
             let first = stream.next().await;
             let _ = handoff_tx.send((first, stream));
         });
