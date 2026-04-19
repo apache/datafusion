@@ -207,9 +207,9 @@ fn map_deduplicate_keys(
                     if seen_keys.contains(&key) {
                         return exec_err!(
                             "[DUPLICATED_MAP_KEY] Duplicate map key {key} was found, \
-                             please check the input data. If you want to remove the \
-                             duplicated keys, you can set spark.sql.mapKeyDedupPolicy \
-                             to LAST_WIN so that the key inserted at last takes precedence."
+                             please check the input data. DataFusion currently only \
+                             supports the EXCEPTION policy for duplicate map keys; \
+                             deduplicate the input before calling this function."
                         );
                     }
                     keys_mask_one[cur_entry_idx] = true;
