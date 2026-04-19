@@ -2271,6 +2271,111 @@ DROP TABLE tg_src_high;
 statement ok
 DROP TABLE tg_buffer;
 
+# ===========================================================
+# Test H: Row group reorder by statistics for TopK queries.
+# When a file has multiple row groups with overlapping or
+# out-of-order statistics, sort pushdown returns Inexact and
+# `reorder_by_statistics` reorders row groups within the file
+# so TopK finds optimal values first.
+# ===========================================================
+
+# Create a table with 30 rows and write to parquet with small row groups
+# so we get multiple row groups per file. Rows are inserted in a mixed
+# order so row groups span overlapping ranges (forcing Inexact path).
+statement ok
+CREATE TABLE th_mixed(id INT, value INT) AS VALUES
+  (15, 150), (5, 50),  (25, 250),
+  (10, 100), (20, 200), (1, 10),
+  (30, 300), (3, 30),  (18, 180);
+
+# Write with row_group_size=3 → 3 rows per RG, 3 RGs total
+# RG statistics (unsorted order): RG0(5-25), RG1(1-20), RG2(3-30)
+# Note: files are overlapping → Inexact path → TopK retained
+query I
+COPY (SELECT * FROM th_mixed)
+TO 'test_files/scratch/sort_pushdown/th_reorder/data.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '3');
+----
+9
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE th_reorder(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/th_reorder/data.parquet';
+
+# Test H.1: ASC ORDER BY with LIMIT — Inexact path (file has no declared ordering)
+# Plan: SortExec(TopK) preserved. RG reorder happens inside DataSourceExec
+# (not visible in EXPLAIN, but verified by unit tests in access_plan.rs).
+query TT
+EXPLAIN SELECT * FROM th_reorder ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: th_reorder.id ASC NULLS LAST, fetch=3
+02)--TableScan: th_reorder projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/th_reorder/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Results must be correct regardless of RG reorder.
+query II
+SELECT * FROM th_reorder ORDER BY id ASC LIMIT 3;
+----
+1 10
+3 30
+5 50
+
+# Test H.2: DESC ORDER BY with LIMIT — reorder + reverse compose
+query TT
+EXPLAIN SELECT * FROM th_reorder ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: th_reorder.id DESC NULLS FIRST, fetch=3
+02)--TableScan: th_reorder projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/th_reorder/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+query II
+SELECT * FROM th_reorder ORDER BY id DESC LIMIT 3;
+----
+30 300
+25 250
+20 200
+
+# Test H.3: Full sort (no LIMIT) — output must still be correctly sorted
+query II
+SELECT * FROM th_reorder ORDER BY id ASC;
+----
+1 10
+3 30
+5 50
+10 100
+15 150
+18 180
+20 200
+25 250
+30 300
+
+# Test H.4: ORDER BY expression (not a simple column) — reorder should
+# gracefully skip, results still correct
+query II
+SELECT id, value FROM th_reorder ORDER BY id + 1 ASC LIMIT 3;
+----
+1 10
+3 30
+5 50
+
+# Cleanup Test H
+statement ok
+DROP TABLE th_mixed;
+
+statement ok
+DROP TABLE th_reorder;
+
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok
 SET datafusion.execution.target_partitions = 4;

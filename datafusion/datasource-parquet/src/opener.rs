@@ -50,6 +50,7 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
     MetricCategory, PruningMetrics,
@@ -136,6 +137,10 @@ pub(super) struct ParquetMorselizer {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Optional sort order used to reorder row groups by their min/max statistics.
+    /// When set, row groups are reordered before reading so that row groups likely
+    /// to contain optimal values (for TopK queries) are read first.
+    pub sort_order_for_reorder: Option<LexOrdering>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -286,6 +291,7 @@ struct PreparedParquetOpen {
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
     reverse_row_groups: bool,
+    sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -655,6 +661,7 @@ impl ParquetMorselizer {
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
             reverse_row_groups: self.reverse_row_groups,
+            sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
@@ -1123,13 +1130,52 @@ impl RowGroupsPrunedParquetOpen {
             );
         }
 
-        // Prepare the access plan (extract row groups and row selection)
-        let mut prepared_plan = access_plan.prepare(rg_metadata)?;
+        // Row group ordering optimization (two composable steps):
+        //
+        // 1. reorder_by_statistics: sort RGs by min values (ASC) to align
+        //    with the file's declared output ordering. This fixes out-of-order
+        //    RGs (e.g., from append-heavy workloads) without changing direction.
+        //    Skipped gracefully when statistics are unavailable.
+        //
+        // 2. reverse: flip the order for DESC queries. Applied AFTER reorder
+        //    so the reversed order is correct whether or not reorder changed
+        //    anything. Also handles row_selection remapping.
+        //
+        // For sorted data: reorder is a no-op, reverse gives perfect DESC.
+        // For unsorted data: reorder fixes the order, reverse flips for DESC.
+        let reorder_optimizer: Option<
+            Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+        > = prepared.sort_order_for_reorder.as_ref().map(|sort_order| {
+            Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                sort_order.clone(),
+            )) as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
+        });
 
-        // Potentially reverse the access plan for performance.
-        // See `ParquetSource::try_pushdown_sort` for the rationale.
-        if prepared.reverse_row_groups {
-            prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
+        let reverse_optimizer: Option<
+            Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+        > = if prepared.reverse_row_groups {
+            Some(Box::new(crate::access_plan_optimizer::ReverseRowGroups))
+        } else {
+            None
+        };
+
+        // Prepare the access plan and apply optimizers in order:
+        // 1. reorder (fix out-of-order RGs to match declared ordering)
+        // 2. reverse (flip for DESC queries)
+        let mut prepared_plan = access_plan.prepare(rg_metadata)?;
+        if let Some(opt) = &reorder_optimizer {
+            prepared_plan = opt.optimize(
+                prepared_plan,
+                file_metadata.as_ref(),
+                &prepared.physical_file_schema,
+            )?;
+        }
+        if let Some(opt) = &reverse_optimizer {
+            prepared_plan = opt.optimize(
+                prepared_plan,
+                file_metadata.as_ref(),
+                &prepared.physical_file_schema,
+            )?;
         }
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
@@ -1199,10 +1245,7 @@ impl RowGroupsPrunedParquetOpen {
                 predicate_cache_records,
                 baseline_metrics: prepared.baseline_metrics,
             },
-            |mut state| async move {
-                let result = state.transition().await;
-                result.map(|r| (r, state))
-            },
+            |state| async move { state.transition().await },
         )
         .fuse();
 
@@ -1248,15 +1291,15 @@ impl PushDecoderStreamState {
     ///   fetched from the [`AsyncFileReader`] and fed back into the decoder.
     /// - [`Data`](DecodeResult::Data) – a decoded batch is projected and returned.
     /// - [`Finished`](DecodeResult::Finished) – signals end-of-stream (`None`).
-    async fn transition(&mut self) -> Option<Result<RecordBatch>> {
+    ///
+    /// Takes `self` by value (rather than `&mut self`) so the generated future
+    /// owns the state directly. This avoids a Stacked Borrows violation under
+    /// miri where `&mut self` creates a single opaque borrow that conflicts
+    /// with `unfold`'s ownership across yield points.
+    async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
         loop {
             match self.decoder.try_decode() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
-                    // IO (get_byte_ranges) and CPU (push_ranges) are still
-                    // decoupled — they just can't live in a nested async block
-                    // because that captures `&mut self` as one opaque borrow,
-                    // which violates Stacked Borrows across the yield point.
-                    // Inlining lets the compiler split the disjoint field borrows.
                     let data = self
                         .reader
                         .get_byte_ranges(ranges.clone())
@@ -1265,10 +1308,10 @@ impl PushDecoderStreamState {
                     match data {
                         Ok(data) => {
                             if let Err(e) = self.decoder.push_ranges(ranges, data) {
-                                return Some(Err(DataFusionError::from(e)));
+                                return Some((Err(DataFusionError::from(e)), self));
                             }
                         }
-                        Err(e) => return Some(Err(e)),
+                        Err(e) => return Some((Err(e), self)),
                     }
                 }
                 Ok(DecodeResult::Data(batch)) => {
@@ -1276,13 +1319,15 @@ impl PushDecoderStreamState {
                     self.copy_arrow_reader_metrics();
                     let result = self.project_batch(&batch);
                     timer.stop();
-                    return Some(result);
+                    // Release the borrow on baseline_metrics before moving self
+                    drop(timer);
+                    return Some((result, self));
                 }
                 Ok(DecodeResult::Finished) => {
                     return None;
                 }
                 Err(e) => {
-                    return Some(Err(DataFusionError::from(e)));
+                    return Some((Err(DataFusionError::from(e)), self));
                 }
             }
         }
@@ -1645,6 +1690,7 @@ mod test {
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::StreamExt;
     use futures::stream::BoxStream;
@@ -1676,6 +1722,7 @@ mod test {
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
+        sort_order_for_reorder: Option<LexOrdering>,
         preserve_order: bool,
     }
 
@@ -1702,6 +1749,7 @@ mod test {
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
+                sort_order_for_reorder: None,
                 preserve_order: false,
             }
         }
@@ -1817,6 +1865,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                sort_order_for_reorder: self.sort_order_for_reorder,
             }
         }
     }
