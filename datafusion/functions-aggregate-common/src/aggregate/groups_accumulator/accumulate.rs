@@ -35,6 +35,49 @@ use crate::aggregate::groups_accumulator::blocks::{Block, Blocks};
 use crate::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
 };
+
+/// Newtype wrapper around [`BooleanBufferBuilder`] that implements [`Default`]
+/// (and thus [`Block`]) so it can be used in [`Blocks`].
+#[derive(Debug)]
+pub struct BooleanBlock(BooleanBufferBuilder);
+
+impl BooleanBlock {
+    pub fn new(capacity: usize) -> Self {
+        Self(BooleanBufferBuilder::new(capacity))
+    }
+}
+
+impl Default for BooleanBlock {
+    fn default() -> Self {
+        Self(BooleanBufferBuilder::new(0))
+    }
+}
+
+impl std::ops::Deref for BooleanBlock {
+    type Target = BooleanBufferBuilder;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for BooleanBlock {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Block for BooleanBlock {
+    type T = bool;
+
+    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
+        self.0.append_n(fill_len, default_value);
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
 /// If the input has nulls, then the accumulator must potentially
 /// handle each input null value specially (e.g. for `SUM` to mark the
 /// corresponding sum as null)
@@ -47,10 +90,12 @@ use crate::aggregate::groups_accumulator::group_index_operations::{
 #[derive(Debug)]
 pub enum SeenValues {
     /// All groups seen so far have seen at least one non-null value
-    All { num_values: usize },
+    All {
+        num_values: usize,
+    },
     // Some groups have not yet seen a non-null value
     Some {
-        builder: Blocks<BooleanBufferBuilder>,
+        builder: Blocks<BooleanBlock>,
     },
 }
 
@@ -72,13 +117,12 @@ impl SeenValues {
         &mut self,
         total_num_groups: usize,
         block_size: Option<usize>,
-    ) -> &mut Blocks<BooleanBufferBuilder> {
+    ) -> &mut Blocks<BooleanBlock> {
         // If `self` is `SeenValues::All`, transition it to `SeenValues::Some` with `num_values trues` firstly,
         // then return mutable reference to the builder.
         // If `self` is `SeenValues::Some`, just directly return mutable reference to the builder.
-        let new_block = |block_size: Option<usize>| {
-            BooleanBufferBuilder::new(block_size.unwrap_or(0))
-        };
+        let new_block =
+            |block_size: Option<usize>| BooleanBlock::new(block_size.unwrap_or(0));
 
         let builder = match self {
             SeenValues::All { num_values } => {
@@ -580,19 +624,7 @@ pub type FlatNullState = NullState<FlatGroupIndexOperations>;
 ///
 pub type BlockedNullState = NullState<BlockedGroupIndexOperations>;
 
-impl Block for BooleanBufferBuilder {
-    type T = bool;
-
-    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
-        self.append_n(fill_len, default_value);
-    }
-
-    fn len(&self) -> usize {
-        self.len()
-    }
-}
-
-impl Blocks<BooleanBufferBuilder> {
+impl Blocks<BooleanBlock> {
     fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool) {
         self[block_id as usize].set_bit(block_offset as usize, value);
     }
