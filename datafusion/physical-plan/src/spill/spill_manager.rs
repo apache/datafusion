@@ -161,7 +161,7 @@ impl SpillManager {
     }
 
     /// Reads a spill file as a stream. The file must be created by the current
-    /// `SpillManager`.
+    /// `SpillManager`; otherwise behavior is undefined.
     ///
     /// Output is produced in FIFO order: the batch appended first is read first.
     ///
