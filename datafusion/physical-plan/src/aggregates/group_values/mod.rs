@@ -18,9 +18,10 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Date64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
@@ -51,6 +52,11 @@ mod metrics;
 mod null_builder;
 
 pub(crate) use metrics::GroupByMetrics;
+macro_rules! make_dict {
+    ($t:ty, $value_type:expr) => {
+        Ok(Box::new(GroupValuesDictionary::<$t>::new($value_type)))
+    };
+}
 
 /// Stores the group values during hash aggregation.
 ///
@@ -200,49 +206,16 @@ pub fn new_group_values(
             DataType::Dictionary(key_type, value_type) => {
                 if supported_single_dictionary_value(value_type) {
                     return match key_type.as_ref() {
-                        // TODO: turn this into a macro
-                        DataType::Int8 => {
-                            Ok(Box::new(GroupValuesDictionary::<
-                                arrow::datatypes::Int8Type,
-                            >::new(value_type)))
-                        }
-                        DataType::Int16 => {
-                            Ok(Box::new(GroupValuesDictionary::<
-                                arrow::datatypes::Int16Type,
-                            >::new(value_type)))
-                        }
-                        DataType::Int32 => {
-                            Ok(Box::new(GroupValuesDictionary::<
-                                arrow::datatypes::Int32Type,
-                            >::new(value_type)))
-                        }
-                        DataType::Int64 => {
-                            Ok(Box::new(GroupValuesDictionary::<
-                                arrow::datatypes::Int64Type,
-                            >::new(value_type)))
-                        }
-                        DataType::UInt8 => {
-                            Ok(Box::new(GroupValuesDictionary::<
-                                arrow::datatypes::UInt8Type,
-                            >::new(value_type)))
-                        }
-                        DataType::UInt16 => {
-                            Ok(Box::new(GroupValuesDictionary::<
-                                arrow::datatypes::UInt16Type,
-                            >::new(value_type)))
-                        }
-                        DataType::UInt32 => {
-                            Ok(Box::new(GroupValuesDictionary::<
-                                arrow::datatypes::UInt32Type,
-                            >::new(value_type)))
-                        }
-                        DataType::UInt64 => {
-                            Ok(Box::new(GroupValuesDictionary::<
-                                arrow::datatypes::UInt64Type,
-                            >::new(value_type)))
-                        }
+                        DataType::Int8 => make_dict!(Int8Type, value_type),
+                        DataType::Int16 => make_dict!(Int16Type, value_type),
+                        DataType::Int32 => make_dict!(Int32Type, value_type),
+                        DataType::Int64 => make_dict!(Int64Type, value_type),
+                        DataType::UInt8 => make_dict!(UInt8Type, value_type),
+                        DataType::UInt16 => make_dict!(UInt16Type, value_type),
+                        DataType::UInt32 => make_dict!(UInt32Type, value_type),
+                        DataType::UInt64 => make_dict!(UInt64Type, value_type),
                         _ => Err(datafusion_common::DataFusionError::NotImplemented(
-                            format!("Unsupported dictionary key type: {key_type:?}",),
+                            format!("Unsupported dictionary key type: {key_type:?}"),
                         )),
                     };
                 }

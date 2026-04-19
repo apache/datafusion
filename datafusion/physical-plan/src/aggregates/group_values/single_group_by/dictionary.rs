@@ -87,14 +87,14 @@ macro_rules! decode_scalar_string {
         Ok(Arc::new(builder.finish()) as ArrayRef)
     }};
 }
-
+type GroupEntry = (usize, Option<Vec<u8>>);
 pub struct GroupValuesDictionary<K: ArrowDictionaryKeyType + Send> {
     // stores the order new unique elements are seen for self.emit()
     seen_elements: Vec<Option<Vec<u8>>>, //  Box<dyn Builder> doesnt provide the flexibility of building partition arrays that wed need to support emit::First(N)
     value_dt: DataType,
     _phantom: PhantomData<K>,
     // keeps track of which values weve already seen. stored as -> <unique_value_hash:(initial_group_id, raw_bytes)>
-    unique_dict_value_mapping: HashMap<u64, Vec<(usize, Option<Vec<u8>>)>>,
+    unique_dict_value_mapping: HashMap<u64, Vec<GroupEntry>>,
 
     random_state: RandomState,
 
@@ -356,11 +356,6 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
                         // new unique value we havent seen before, assign a new group id and store it in the map
                         let new_group_id = self.seen_elements.len();
                         let raw_bytes = Self::get_raw_bytes(values, *key).to_vec();
-                        println!(
-                            "{:?} is new, adding to seen elements -> {:?}",
-                            std::str::from_utf8(&raw_bytes).unwrap_or("Invalid UTF-8"),
-                            self.seen_elements
-                        );
                         self.seen_elements.push(Some(raw_bytes.clone()));
                         if let Some(entries) =
                             self.unique_dict_value_mapping.get_mut(&value_hashes[*key])
@@ -380,13 +375,12 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
             groups.push(group_id);
         }
         self.intern_called = true; // set this flag after the first call to intern so that we know to do phase 1 on subsequent calls. 
-        println!("seen_elements {:?}", self.seen_elements);
         Ok(())
     }
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let (elements_to_emit, null_id) = match emit_to {
             EmitTo::All => {
-                let original_null_id = self.null_group_id.clone();
+                let original_null_id = self.null_group_id;
                 self.null_group_id = None;
                 self.unique_dict_value_mapping.clear();
                 (std::mem::take(&mut self.seen_elements), original_null_id)
@@ -394,7 +388,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
             EmitTo::First(n) => {
                 let n = n.min(self.seen_elements.len());
                 let first_n = self.seen_elements.drain(..n).collect::<Vec<_>>();
-                let orignal_null_id = self.null_group_id.filter(|&id| id < n);
+                let original_null_id = self.null_group_id.filter(|&id| id < n);
                 // update null_group_id if the null group was in the first n
                 if let Some(null_id) = self.null_group_id {
                     if null_id < n {
@@ -415,7 +409,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
                     });
                     !entries.is_empty()
                 });
-                (first_n, orignal_null_id)
+                (first_n, original_null_id)
             }
         };
 
@@ -429,7 +423,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
         if let Some(null_id) = null_id {
             for i in 0..n {
                 if i == null_id {
-                    // TODO: mabey we shouldt be adding nulls to the keys?
+                    // TODO: should keys contain nulls?
                     keys_builder.append_null();
                 } else {
                     keys_builder.append_value(K::Native::usize_as(i));
@@ -453,6 +447,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
     }
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
     use arrow::datatypes::{Field, Int32Type};
@@ -477,7 +472,7 @@ mod test {
         let keys_array = keys_builder.finish();
 
         let dict_array =
-            DictionaryArray::<Int32Type>::try_new(keys_array, values_array.clone())
+            DictionaryArray::<Int32Type>::try_new(keys_array, Arc::clone(&values_array))
                 .expect("Failed to create dictionary array");
 
         (Arc::new(dict_array), values_array)
@@ -487,7 +482,7 @@ mod test {
     /// Supports Utf8, Utf8View, and LargeUtf8 data types
     fn assert_dict_array_values(
         dict_array: &DictionaryArray<Int32Type>,
-        expected: Vec<Option<&str>>,
+        expected: &[Option<&str>],
         data_type: &DataType,
     ) {
         let values = dict_array.values();
@@ -535,8 +530,7 @@ mod test {
                 }
             }
             _ => panic!(
-                "Unsupported data type for assert_dict_array_values: {:?}",
-                data_type
+                "Unsupported data type for assert_dict_array_values: {data_type:?}",
             ),
         }
     }
@@ -573,7 +567,7 @@ mod test {
         let keys_array = keys_builder.finish();
 
         let dict_array =
-            DictionaryArray::<Int32Type>::try_new(keys_array, values_array.clone())
+            DictionaryArray::<Int32Type>::try_new(keys_array, Arc::clone(&values_array))
                 .expect("Failed to create dictionary array");
 
         (Arc::new(dict_array), values_array)
@@ -611,7 +605,7 @@ mod test {
         let keys_array = keys_builder.finish();
 
         let dict_array =
-            DictionaryArray::<Int32Type>::try_new(keys_array, values_array.clone())
+            DictionaryArray::<Int32Type>::try_new(keys_array, Arc::clone(&values_array))
                 .expect("Failed to create dictionary array");
 
         (Arc::new(dict_array), values_array)
@@ -649,15 +643,15 @@ mod test {
         let keys_array = keys_builder.finish();
 
         let dict_array =
-            DictionaryArray::<Int32Type>::try_new(keys_array, values_array.clone())
+            DictionaryArray::<Int32Type>::try_new(keys_array, Arc::clone(&values_array))
                 .expect("Failed to create dictionary array");
 
         (Arc::new(dict_array), values_array)
     }
 
+    #[cfg(test)]
     mod basic_functionality {
         use super::*;
-
         // 1. basic functionality test
         // * call intern with all data types we support and verify the group ids are correct
         #[test]
@@ -695,9 +689,11 @@ mod test {
                 keys_builder.append_value(0i32);
                 let keys_array = keys_builder.finish();
 
-                let dict_array =
-                    DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                        .expect("Failed to create dictionary array");
+                let dict_array = DictionaryArray::<Int32Type>::try_new(
+                    keys_array,
+                    Arc::clone(&values_array),
+                )
+                .expect("Failed to create dictionary array");
 
                 let mut group_vals =
                     GroupValuesDictionary::<Int32Type>::new(&DataType::LargeUtf8);
@@ -724,9 +720,11 @@ mod test {
                 keys_builder.append_value(0i32);
                 let keys_array = keys_builder.finish();
 
-                let dict_array =
-                    DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                        .expect("Failed to create dictionary array");
+                let dict_array = DictionaryArray::<Int32Type>::try_new(
+                    keys_array,
+                    Arc::clone(&values_array),
+                )
+                .expect("Failed to create dictionary array");
 
                 let mut group_vals =
                     GroupValuesDictionary::<Int32Type>::new(&DataType::Utf8View);
@@ -933,9 +931,11 @@ mod test {
                 keys_builder.append_value(0i32);
                 let keys_array = keys_builder.finish();
 
-                let dict_array_1 =
-                    DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                        .expect("Failed to create dictionary array");
+                let dict_array_1 = DictionaryArray::<Int32Type>::try_new(
+                    keys_array,
+                    Arc::clone(&values_array),
+                )
+                .expect("Failed to create dictionary array");
 
                 group_vals
                     .intern(&[Arc::new(dict_array_1)], &mut groups)
@@ -955,9 +955,11 @@ mod test {
                 keys_builder.append_value(1i32);
                 let keys_array = keys_builder.finish();
 
-                let dict_array_2 =
-                    DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                        .expect("Failed to create dictionary array");
+                let dict_array_2 = DictionaryArray::<Int32Type>::try_new(
+                    keys_array,
+                    Arc::clone(&values_array),
+                )
+                .expect("Failed to create dictionary array");
 
                 group_vals
                     .intern(&[Arc::new(dict_array_2)], &mut groups)
@@ -977,7 +979,7 @@ mod test {
                     .expect("Expected DictionaryArray");
                 assert_dict_array_values(
                     dict_array,
-                    vec![Some("alice")],
+                    &[Some("alice")],
                     &DataType::Utf8View,
                 );
 
@@ -995,9 +997,11 @@ mod test {
                 keys_builder.append_value(3i32);
                 let keys_array = keys_builder.finish();
 
-                let dict_array_3 =
-                    DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                        .expect("Failed to create dictionary array");
+                let dict_array_3 = DictionaryArray::<Int32Type>::try_new(
+                    keys_array,
+                    Arc::clone(&values_array),
+                )
+                .expect("Failed to create dictionary array");
 
                 group_vals
                     .intern(&[Arc::new(dict_array_3)], &mut groups)
@@ -1098,7 +1102,7 @@ mod test {
                     .expect("Expected DictionaryArray");
                 assert_dict_array_values(
                     dict_array_1,
-                    vec![Some("a"), Some("b")],
+                    &[Some("a"), Some("b")],
                     &DataType::Utf8,
                 );
 
@@ -1115,7 +1119,7 @@ mod test {
                     .expect("Expected DictionaryArray");
                 assert_dict_array_values(
                     dict_array_2,
-                    vec![Some("c"), Some("d")],
+                    &[Some("c"), Some("d")],
                     &DataType::Utf8,
                 );
             }
@@ -1156,10 +1160,6 @@ mod test {
                     .expect("second emit should succeed");
                 assert_eq!(emitted_2.len(), 1);
                 assert_eq!(group_vals.len(), 0);
-                println!(
-                    "output of emit, value type of dictionary should be of type List_utf8: {:?}",
-                    emitted_2[0]
-                );
                 let _ = emitted_2[0]
                     .as_any()
                     .downcast_ref::<DictionaryArray<Int32Type>>()
@@ -1184,7 +1184,6 @@ mod test {
                 group_vals
                     .intern(&[dict_array], &mut groups)
                     .expect("intern should succeed");
-                println!(".intern : {:?}", groups);
                 // 2 unique values + 1 null group = 3 groups
                 assert_eq!(group_vals.len(), 3);
                 // groups should be: [0, 2, 1, 2, 0] (null maps to group 2)
@@ -1284,9 +1283,8 @@ mod test {
                 group_vals
                     .intern(&[dict_array_2], &mut groups)
                     .expect("second intern should succeed");
-                print!("len after call to intern : {}\n", pre_len);
 
-                // ["a","b"] was emited in first emit, so it should get a new group id. "m","n" is new and should get a new group id. The null list should map to the same null list group as before.
+                // ["a","b"] was emitted in first emit, so it should get a new group id. "m","n" is new and should get a new group id. The null list should map to the same null list group as before.
                 assert_eq!(group_vals.len(), pre_len + 2);
                 // Verify null keys still map to same group even after second intern
 
@@ -1341,7 +1339,6 @@ mod test {
             }
         }
 
-        // * call intern and emit and intertwin them. verify behavoir
         #[test]
         fn test_intern_and_emit_intertwined() {
             // Test with Utf8
@@ -1371,11 +1368,7 @@ mod test {
                     .as_any()
                     .downcast_ref::<DictionaryArray<Int32Type>>()
                     .expect("Expected DictionaryArray");
-                assert_dict_array_values(
-                    dict_array,
-                    vec![Some("alice")],
-                    &DataType::Utf8,
-                );
+                assert_dict_array_values(dict_array, &[Some("alice")], &DataType::Utf8);
 
                 // Intern batch 2
                 groups.clear();
@@ -1403,7 +1396,7 @@ mod test {
                     .expect("Expected DictionaryArray");
                 assert_dict_array_values(
                     dict_array,
-                    vec![Some("bob"), Some("charlie")],
+                    &[Some("bob"), Some("charlie")],
                     &DataType::Utf8,
                 );
             }
@@ -1635,6 +1628,7 @@ mod test {
         }
     }
 
+    #[cfg(test)]
     mod trivial_test {
         use super::*;
 
@@ -1652,9 +1646,11 @@ mod test {
                 let mut keys_builder = PrimitiveBuilder::<Int32Type>::new();
                 let keys_array = keys_builder.finish();
 
-                let dict_array =
-                    DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                        .expect("Failed to create dictionary array");
+                let dict_array = DictionaryArray::<Int32Type>::try_new(
+                    keys_array,
+                    Arc::clone(&values_array),
+                )
+                .expect("Failed to create dictionary array");
 
                 let result = group_vals.intern(&[Arc::new(dict_array)], &mut groups);
                 assert!(result.is_ok(), "intern with empty array should succeed");
@@ -1762,7 +1758,7 @@ mod test {
                     .expect("Expected DictionaryArray");
                 assert_dict_array_values(
                     dict_array,
-                    vec![Some("a"), Some("b"), Some("c")],
+                    &[Some("a"), Some("b"), Some("c")],
                     &DataType::Utf8,
                 );
                 // After emitting, all elements should be drained
@@ -1775,6 +1771,7 @@ mod test {
         }
     }
 
+    #[cfg(test)]
     mod state_management {
         use super::*;
 
@@ -1982,7 +1979,7 @@ mod test {
                     "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40",
                     "v41", "v42", "v43", "v44", "v45", "v46", "v47", "v48", "v49",
                 ];
-                let large_keys: Vec<Option<usize>> = (0..50).map(|i| Some(i)).collect();
+                let large_keys: Vec<Option<usize>> = (0..50).map(Some).collect();
 
                 let (dict_array, _) = create_utf8_dict_array(large_values, large_keys);
                 group_vals
@@ -2046,6 +2043,7 @@ mod test {
         }
     }
 
+    #[cfg(test)]
     mod null_test {
         use super::*;
 
@@ -2093,9 +2091,11 @@ mod test {
             keys_builder.append_value(1i32); // points to null value again
             let keys_array = keys_builder.finish();
 
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             group_vals
                 .intern(&[Arc::new(dict_array)], &mut groups)
@@ -2127,9 +2127,11 @@ mod test {
             keys_builder.append_value(2i32);
             let keys_array = keys_builder.finish();
 
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             group_vals
                 .intern(&[Arc::new(dict_array)], &mut groups)
@@ -2177,9 +2179,11 @@ mod test {
             keys_builder.append_value(2i32);
             let keys_array = keys_builder.finish();
 
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             group_vals
                 .intern(&[Arc::new(dict_array)], &mut groups)
@@ -2344,7 +2348,7 @@ mod test {
             let (dict_array_2, _) = create_list_utf8_dict_array(
                 vec![
                     Some(vec!["a", "b"]), // was emitted, so new
-                    None,                 // was emmited, so new
+                    None,                 // was emitted, so new
                     Some(vec!["d"]),      // new list
                 ],
                 vec![
@@ -2421,7 +2425,6 @@ mod test {
 
             // Should have 2 unique list values + 1 null key group = 3 groups
             // But all 3 keys are null, so they all map to null key group
-            print!("Group values: {:?}", groups);
             assert_eq!(
                 group_vals.len(),
                 1,
@@ -2481,9 +2484,11 @@ mod test {
             keys_builder.append_value(3i32); // points to null at index 3
             let keys_array = keys_builder.finish();
 
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups = Vec::new();
             group_vals
@@ -2598,9 +2603,11 @@ mod test {
             keys_builder.append_null();
             let keys_array = keys_builder.finish();
 
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups = Vec::new();
             group_vals
@@ -2646,7 +2653,7 @@ mod test {
             assert_eq!(groups[1], groups[2]);
         }
     }
-
+    #[cfg(test)]
     mod data_correctness {
         use super::*;
 
@@ -2671,9 +2678,11 @@ mod test {
             keys_builder.append_value(3i32);
             let keys_array = keys_builder.finish();
 
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups = Vec::new();
             group_vals
@@ -2794,9 +2803,11 @@ mod test {
             keys_builder.append_value(0i32);
             let keys_array = keys_builder.finish();
             // values: ["group_a", "group_b"] , keys: [0, null, 1, null, 0] => ["group_a", null, "group_b", null, "group_a"] => groups: [0, 1, 2, 1, 0]
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups = Vec::new();
             group_vals
@@ -2871,7 +2882,6 @@ mod test {
                 .as_any()
                 .downcast_ref::<DictionaryArray<Int32Type>>()
                 .expect("Expected DictionaryArray");
-            println!("emitted dict array: : {:?}", emitted);
             let list_array = emitted
                 .values()
                 .as_any()
@@ -2924,9 +2934,11 @@ mod test {
             keys_builder.append_value(0i32);
             let keys_array = keys_builder.finish();
             // values: ["val_x", null, "val_y"], keys: [0, 1, 2, 1, 0] => ["val_x", null, "val_y", null, "val_x"] => groups: [0, 1, 2, 1, 0]
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups = Vec::new();
             group_vals
@@ -3039,9 +3051,11 @@ mod test {
             keys_builder.append_value(1i32); // beta
             let keys_array = keys_builder.finish();
 
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups = Vec::new();
             group_vals
@@ -3113,7 +3127,7 @@ mod test {
                 vec![Some(2), Some(0), Some(1), Some(2), Some(1)],
             );
             // values: [["gamma"], ["alpha"], ["beta"], ["gamma"], ["beta"]], keys: [2, 0, 1, 2, 1] => logically [["gamma"], ["alpha"], ["beta"],["gamma"],["beta"]] | groups: [0, 1, 2, 0, 2]
-            // sequenece of unqique values : -> ["gamma"] -> ["alpha"] -> ["beta"] (0,1,2)
+            // sequence of unique values : -> ["gamma"] -> ["alpha"] -> ["beta"] (0,1,2)
             let mut groups = Vec::new();
             group_vals
                 .intern(&[dict_array], &mut groups)
@@ -3133,7 +3147,6 @@ mod test {
                 .as_any()
                 .downcast_ref::<DictionaryArray<Int32Type>>()
                 .expect("Expected DictionaryArray");
-            println!("emitted dict array: : {:?}", emitted);
 
             let list_array = emitted
                 .values()
@@ -3193,9 +3206,11 @@ mod test {
             keys_builder.append_value(0i32); // "x"
             let keys_array = keys_builder.finish();
 
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups = Vec::new();
             group_vals
@@ -3283,9 +3298,11 @@ mod test {
             keys_builder.append_value(0i32);
             let keys_array = keys_builder.finish();
 
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups = Vec::new();
             group_vals
@@ -3348,9 +3365,11 @@ mod test {
             keys_builder.append_null(); // NULL
             let keys_array = keys_builder.finish();
             // keys: [0,null,1,null] values: ["value_a", "value_b"] | logically [ "value_a", null, "value_b", null] | groups: [0,1,2,1] where group 1 is null group
-            let dict_array =
-                DictionaryArray::<Int32Type>::try_new(keys_array, values_array)
-                    .expect("Failed to create dictionary array");
+            let dict_array = DictionaryArray::<Int32Type>::try_new(
+                keys_array,
+                Arc::clone(&values_array),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups = Vec::new();
             group_vals
@@ -3376,7 +3395,7 @@ mod test {
             // Now intern the null key again in a second batch
             let mut values_builder2 = StringBuilder::new();
             values_builder2.append_value("value_c");
-            values_builder2.append_null(); // NULL, was previously emited so it should be treated as a new group
+            values_builder2.append_null(); // NULL, was  emitted so it should be treated as a new group
             let values_array2 = Arc::new(values_builder2.finish()) as ArrayRef;
 
             let mut keys_builder2 = PrimitiveBuilder::<Int32Type>::new();
@@ -3384,9 +3403,11 @@ mod test {
             keys_builder2.append_null(); // NULL again
             let keys_array2 = keys_builder2.finish();
 
-            let dict_array2 =
-                DictionaryArray::<Int32Type>::try_new(keys_array2, values_array2)
-                    .expect("Failed to create dictionary array");
+            let dict_array2 = DictionaryArray::<Int32Type>::try_new(
+                keys_array2,
+                Arc::clone(&values_array2),
+            )
+            .expect("Failed to create dictionary array");
 
             let mut groups2 = Vec::new();
             group_vals
@@ -3468,38 +3489,3 @@ mod test {
         }
     }
 }
-// * call intern with all data types we support and verify the group ids are correct
-// * call intern multiple times and verify behavior is correct [with same columns , with different columns]
-// * call intern multiple times, then call emit and verify that the emitted arrays are correct and that subsequent calls to intern and emit behave correctly with the updated state after emit
-// * call intern multiple times, then call emit multiple times , verify its correct and then verify the once drained the len is 0
-// * call intern and emit with null values and verify that nulls are handled correctly
-// * call intern and emit and intertwin them. verify behavoir
-// * call emit with EmitTo::All() and validate that all contents are drained and emitted correctly + len is correct
-
-// 2. basic- edge case
-// * call intern with an empty array and verify that it behaves correctly
-// * call intern with an 2+ columns and verify that it returns an error
-// * call intern with an array with all nulls and verify that it behaves correctly
-// * call intern with an array with all identical values and verify that it behaves correctly
-// * call emit with EmitTo::First(n) where n is larger than the number of seen elements and verify that it behaves correctly
-// 3. null cases
-// TBD - this will have a focus on regresion test that we came across
-// 3.A null keys
-// 3.B null values
-// 3.C null keys + values
-// 3.D null values nested within nested data types like list of strings with null values
-
-// 4. state managment test
-// * validate len() for empty is correct,  validate that size + len increase as we intern more unique values
-// * validate len() after multiple intern calls is correct
-// * validate len() after intern + emit is correct
-// * validate size() returns a non-zero value that increases as we intern more unique values
-// * validate shrink behavior of clear_shrink by interning a large number of unique values, calling clear_shrink with a smaller num_rows and validating that size() decreases and len() is correct
-// * validate emit updates internal state correct
-
-// 5. data correctness test
-// * call intern with a dictionary array with non-canonicalized values and verify that the emitted values are correct after calling emit. this validates that our normalize_dict_array function is working correctly and that we dont have any bugs related to non-canonicalized dictionary arrays. we should test this with a variety of data types including nested types like list of strings to ensure that our get_raw_bytes function is correctly handling the raw byte representation of different data types and that our equality checks in intern are working correctly.
-// * call intern with a dictionary array where multiple keys point to the same value and verify that the emitted values are correct after calling emit. this validates that we correctly handle the case where multiple keys in the dictionary array point to the same value and that we dont have any bugs related to this scenario. again we should test this with a variety of data types to ensure correctness across the board.
-// * verify cases where the values array contains duplicate values, these should point to the same group id and be emitted only once. this validates that we correctly handle duplicate values in the values array and that our hashing + equality logic in intern is working correctly to ensure that duplicate values are not emitted multiple times.
-// * verify this sequence, intern is called with a null key present, emit is called but this null key is not in the first n values emitted, then intern is called again with the same null key and verify that it points to the same group id as before. this validates that we correctly handle the case where a null key is interned, emitted, and then interned again and that we maintain the correct group id for nulls across emits.
-// * verify this sequence, intern is called with a null key present, emit is called with EmitTo::All which drains all values including the null key, then intern is called again with the same null key and verify that it points to a new group id since the previous null key was drained. this validates that we correctly handle the case where a null key is interned, emitted with EmitTo::All, and then interned again and that we assign a new group id for the null key after it has been drained.
