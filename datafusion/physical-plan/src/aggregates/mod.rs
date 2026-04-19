@@ -2187,152 +2187,110 @@ pub fn evaluate_group_by(
 /// Pin the aggregation's cache-hot build phase to a single thread,
 /// then release the stream back to the caller for emission.
 ///
-/// A `spawn_blocking` thread hosts a `current_thread` tokio runtime
-/// and drives `stream.next().await` exactly once. For
-/// `GroupedHashAggregateStream` this one `.await` covers the entire
-/// `ReadingInput` phase (hash-map + accumulator updates across every
-/// input batch) and returns the first materialized output batch —
-/// i.e. the `ReadingInput → ProducingOutput` transition. After that
-/// transition, the aggregation's remaining polls just slice an
-/// owned `RecordBatch`; they don't touch the hash map.
+/// On the first `poll_next`, we take the caller's tokio worker
+/// thread via `tokio::task::block_in_place` and drive
+/// `stream.next().await` to completion with
+/// `futures::executor::block_on`. For `GroupedHashAggregateStream`
+/// this one `.await` covers the entire `ReadingInput` phase
+/// (hash-map + accumulator updates across every input batch) and
+/// returns the first materialized output batch — i.e. the
+/// `ReadingInput → ProducingOutput` transition. Because the whole
+/// build runs inside a synchronous closure, there is no scheduling
+/// point for tokio to migrate the work off this thread.
 ///
-/// So we hand the stream back to the caller through a `oneshot` and
-/// let the caller's thread poll it directly from then on. The
-/// pinned thread exits, the blocking-pool slot is returned, and the
-/// emission side pays zero per-batch channel cost — same shape as
-/// HEAD on the hot output path.
+/// After the first batch is produced, the wrapper transitions to
+/// `Draining` and polls the inner stream directly on whatever
+/// thread the caller polls us from. Subsequent aggregate polls just
+/// slice an owned `RecordBatch`, so losing thread-locality there
+/// does not matter — emission pays zero extra cost vs. HEAD.
+///
+/// On a `current_thread` runtime there is no migration to prevent,
+/// so we pass the stream through unchanged.
 ///
 /// Edge cases:
-/// - Empty input → oneshot carries `(None, stream)`, wrapper yields
-///   `None` on next poll.
-/// - Errors during build → sent as `Some(Err(...))`; the handed-off
-///   stream is still polled afterwards (it will typically yield
-///   `None`).
-/// - Spill path re-enters `ReadingInput` after the initial handoff.
-///   Those `.await`s then run on the caller thread, losing the
-///   locality win — but the spilled data is already off the CPU so
-///   the loss is small in practice.
-fn pin_stream_to_thread(
-    mut stream: SendableRecordBatchStream,
-) -> SendableRecordBatchStream {
-    use datafusion_common_runtime::SpawnedTask;
-    use futures::StreamExt;
-
+/// - Empty input → transition straight to `Done`.
+/// - Errors during build → yielded as the first batch; subsequent
+///   polls of the drained stream typically yield `None`.
+/// - Spill path re-enters `ReadingInput` after the initial
+///   handoff. Those `.await`s run on the caller thread and lose
+///   the locality win — but the spilled data is already off the
+///   CPU so the loss is small in practice.
+fn pin_stream_to_thread(stream: SendableRecordBatchStream) -> SendableRecordBatchStream {
+    use tokio::runtime::RuntimeFlavor;
+    // `block_in_place` panics outside a multi-thread runtime, and
+    // current_thread runtimes can't migrate polls anyway.
+    if !matches!(
+        tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
+        Ok(RuntimeFlavor::MultiThread)
+    ) {
+        return stream;
+    }
     let schema = stream.schema();
-    let (handoff_tx, handoff_rx) = tokio::sync::oneshot::channel::<(
-        Option<Result<RecordBatch>>,
-        SendableRecordBatchStream,
-    )>();
-
-    let task = SpawnedTask::spawn_blocking(move || {
-        // `spawn_blocking` runs us on a tokio blocking thread that
-        // already has `Handle::current()` pointing at the parent
-        // runtime, so the inner stream's tokio primitives (mpsc
-        // wakers, `tokio::spawn`, timers) stay usable. We only need
-        // an executor to drive one `.await` on this thread —
-        // `futures::executor::block_on` does that with a thread-
-        // local waker + park/unpark, no second reactor.
-        futures::executor::block_on(async move {
-            let first = stream.next().await;
-            let _ = handoff_tx.send((first, stream));
-        });
-    });
-
-    Box::pin(HandoffStream {
+    Box::pin(PinBuildStream {
         schema,
-        state: HandoffState::Building {
-            rx: handoff_rx,
-            _task: task,
-        },
+        state: PinBuildState::Building(stream),
     })
 }
 
-enum HandoffState {
-    /// Pinned task is driving the aggregation's build phase. The
-    /// `oneshot` receiver will resolve to the first output batch +
-    /// the remainder of the stream.
-    Building {
-        rx: tokio::sync::oneshot::Receiver<(
-            Option<Result<RecordBatch>>,
-            SendableRecordBatchStream,
-        )>,
-        // Keeps the pinned task alive until handoff completes; drop
-        // aborts the blocking task (cancel-safety).
-        _task: datafusion_common_runtime::SpawnedTask<()>,
-    },
-    /// Build done, first batch pending emission.
-    YieldFirst {
-        first: Option<Result<RecordBatch>>,
-        stream: Option<SendableRecordBatchStream>,
-    },
-    /// Polling the handed-off stream directly on the caller thread.
+enum PinBuildState {
+    /// Not yet polled; the next `poll_next` will drive the build on
+    /// the caller's worker thread via `block_in_place`.
+    Building(SendableRecordBatchStream),
+    /// Build done; emission polls go through the inner stream.
     Draining(SendableRecordBatchStream),
     Done,
 }
 
-struct HandoffStream {
+struct PinBuildStream {
     schema: SchemaRef,
-    state: HandoffState,
+    state: PinBuildState,
 }
 
-impl futures::Stream for HandoffStream {
+impl futures::Stream for PinBuildStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        use std::future::Future;
+        use futures::StreamExt;
         use std::task::Poll;
 
         let this = self.get_mut();
-        loop {
-            match &mut this.state {
-                HandoffState::Building { rx, .. } => {
-                    match std::pin::Pin::new(rx).poll(cx) {
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(Err(_)) => {
-                            // Pinned task dropped its sender without
-                            // sending (panic / abort). Treat as EOS.
-                            this.state = HandoffState::Done;
-                            return Poll::Ready(None);
-                        }
-                        Poll::Ready(Ok((first, stream))) => {
-                            this.state = HandoffState::YieldFirst {
-                                first,
-                                stream: Some(stream),
-                            };
-                        }
+        match &mut this.state {
+            PinBuildState::Building(_) => {
+                let mut stream =
+                    match std::mem::replace(&mut this.state, PinBuildState::Done) {
+                        PinBuildState::Building(s) => s,
+                        _ => unreachable!(),
+                    };
+                // Synchronously drive the inner stream until it
+                // yields its first batch. No scheduling point, so
+                // no thread migration for the whole build.
+                let first = tokio::task::block_in_place(|| {
+                    futures::executor::block_on(stream.next())
+                });
+                match first {
+                    Some(batch) => {
+                        this.state = PinBuildState::Draining(stream);
+                        Poll::Ready(Some(batch))
                     }
+                    None => Poll::Ready(None),
                 }
-                HandoffState::YieldFirst { first, stream } => {
-                    let item = first.take();
-                    let stream = stream.take().expect("stream taken twice");
-                    match item {
-                        Some(batch) => {
-                            this.state = HandoffState::Draining(stream);
-                            return Poll::Ready(Some(batch));
-                        }
-                        None => {
-                            this.state = HandoffState::Done;
-                            return Poll::Ready(None);
-                        }
-                    }
-                }
-                HandoffState::Draining(stream) => {
-                    let poll = stream.as_mut().poll_next(cx);
-                    if matches!(poll, Poll::Ready(None)) {
-                        this.state = HandoffState::Done;
-                    }
-                    return poll;
-                }
-                HandoffState::Done => return Poll::Ready(None),
             }
+            PinBuildState::Draining(stream) => {
+                let poll = stream.as_mut().poll_next(cx);
+                if matches!(poll, Poll::Ready(None)) {
+                    this.state = PinBuildState::Done;
+                }
+                poll
+            }
+            PinBuildState::Done => Poll::Ready(None),
         }
     }
 }
 
-impl crate::RecordBatchStream for HandoffStream {
+impl crate::RecordBatchStream for PinBuildStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
