@@ -20,11 +20,12 @@ use std::sync::Arc;
 use arrow::array::{AsArray, StringArray};
 use arrow::compute::{DatePart, date_part};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::types::{NativeType, logical_date};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignatureClass, Volatility,
 };
 
 const MONTH_NAMES: [&str; 12] = [
@@ -53,7 +54,14 @@ impl Default for SparkMonthName {
 impl SparkMonthName {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![DataType::Date32], Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_date()),
+                    vec![TypeSignatureClass::Timestamp],
+                    NativeType::Date,
+                )],
+                Volatility::Immutable,
+            ),
         }
     }
 }

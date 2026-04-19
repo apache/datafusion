@@ -97,12 +97,77 @@ Jun
 Dec
 NULL
 
+# Timestamp input: Spark coerces TIMESTAMP/TIMESTAMP_NTZ to DATE before evaluation
+query T
+SELECT monthname('2024-03-15 12:34:56'::TIMESTAMP);
+----
+Mar
+
+query T
+SELECT monthname('2024-07-04 00:00:00'::TIMESTAMP);
+----
+Jul
+
+query T
+SELECT monthname(NULL::TIMESTAMP);
+----
+NULL
+
+# Timestamp array input
+query T
+SELECT monthname(ts) FROM (VALUES
+  ('2024-01-15 01:02:03'::TIMESTAMP),
+  ('2024-08-20 10:20:30'::TIMESTAMP),
+  ('2024-11-30 23:59:59'::TIMESTAMP),
+  (NULL::TIMESTAMP)
+) AS t(ts);
+----
+Jan
+Aug
+Nov
+NULL
+
+# TIMESTAMP_NTZ (Timestamp without timezone) — explicit Microsecond precision
+query T
+SELECT monthname(arrow_cast('2024-04-10 09:15:00', 'Timestamp(Microsecond, None)'));
+----
+Apr
+
+# TIMESTAMP_NTZ — explicit Millisecond precision
+query T
+SELECT monthname(arrow_cast('2024-09-05 18:45:30', 'Timestamp(Millisecond, None)'));
+----
+Sep
+
+# TIMESTAMP_NTZ — explicit Second precision
+query T
+SELECT monthname(arrow_cast('2024-02-29 00:00:00', 'Timestamp(Second, None)'));
+----
+Feb
+
+# TIMESTAMP_NTZ — NULL handling
+query T
+SELECT monthname(arrow_cast(NULL, 'Timestamp(Microsecond, None)'));
+----
+NULL
+
+# TIMESTAMP with timezone (Spark TIMESTAMP / LTZ) — coerces to Date32
+query T
+SELECT monthname(arrow_cast('2024-05-20 03:00:00', 'Timestamp(Nanosecond, Some("UTC"))'));
+----
+May
+
+query T
+SELECT monthname(arrow_cast('2024-10-31 23:59:59', 'Timestamp(Microsecond, Some("America/New_York"))'));
+----
+Oct
+
 # Error: wrong argument type (string without cast)
-statement error Failed to coerce arguments to satisfy a call to 'monthname' function
+statement error Function 'monthname' requires Date, but received String
 SELECT monthname('not-a-date');
 
 # Error: wrong argument type (integer)
-statement error Failed to coerce arguments to satisfy a call to 'monthname' function
+statement error Function 'monthname' requires Date, but received Int64
 SELECT monthname(123);
 
 # Error: no arguments
