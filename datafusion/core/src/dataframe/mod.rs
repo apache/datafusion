@@ -48,6 +48,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
@@ -1074,9 +1075,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                    })
+                    .filter(|f| !matches!(f.data_type(), DataType::Boolean))
                     .map(|f| min(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -1085,9 +1084,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                    })
+                    .filter(|f| !matches!(f.data_type(), DataType::Boolean))
                     .map(|f| max(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -1126,6 +1123,28 @@ impl DataFrame {
                                     Arc::new(StringArray::from(vec!["null"]))
                                 } else if field.data_type().is_numeric() {
                                     cast(column, &DataType::Float64)?
+                                } else if matches!(
+                                    field.data_type(),
+                                    DataType::Binary
+                                        | DataType::LargeBinary
+                                        | DataType::BinaryView
+                                        | DataType::FixedSizeBinary(..)
+                                ) {
+                                    let formatter = ArrayFormatter::try_new(
+                                        column.as_ref(),
+                                        &FormatOptions::default(),
+                                    )?;
+                                    let values: Vec<Option<String>> = (0..column.len())
+                                        .map(|i| {
+                                            if column.is_null(i) {
+                                                None
+                                            } else {
+                                                let value = formatter.value(i);
+                                                Some(value.to_string())
+                                            }
+                                        })
+                                        .collect();
+                                    Arc::new(StringArray::from(values))
                                 } else {
                                     cast(column, &DataType::Utf8)?
                                 }
@@ -1133,7 +1152,8 @@ impl DataFrame {
                             _ => Arc::new(StringArray::from(vec!["null"])),
                         }
                     }
-                    //Handling error when only boolean/binary column, and in other cases
+                    // Handles the case where all columns were filtered out
+                    // (e.g. only boolean columns for mean/std/min/max/median)
                     Err(err)
                         if err.to_string().contains(
                             "Error during planning: \
@@ -1517,7 +1537,7 @@ impl DataFrame {
     /// # }
     pub async fn to_string(self) -> Result<String> {
         let options = self.session_state.config().options().format.clone();
-        let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
+        let arrow_options: FormatOptions = (&options).try_into()?;
 
         let registry = self.session_state.extension_type_registry();
         let formatter_factory = DFArrayFormatterFactory::new(Arc::clone(registry));
