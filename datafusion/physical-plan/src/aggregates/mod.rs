@@ -2191,14 +2191,13 @@ pub fn evaluate_group_by(
 /// forwarded back to the caller through a small crossbeam SPSC
 /// ring; the caller sees a normal `SendableRecordBatchStream`.
 ///
-/// The pinned thread hosts a `current_thread` tokio runtime and
-/// uses `rt.block_on(stream.next())` to pull each batch, so every
-/// `.await` inside the aggregation body stays on this thread rather
-/// than being migrated by the multi-threaded runtime. Crossbeam's
-/// SPSC (one producer, one consumer) replaces `tokio::mpsc` so the
-/// per-batch handoff is a single sync operation instead of two
-/// async awaits — there's no multi-producer bookkeeping and no
-/// second waker roundtrip for the send side.
+/// The pinned thread hosts a `current_thread` tokio runtime and a
+/// single `block_on` drives the whole upstream stream, so every
+/// `.await` inside the aggregation body stays on this thread
+/// rather than being migrated by the multi-threaded runtime.
+/// Crossbeam's SPSC (one producer, one consumer) replaces
+/// `tokio::mpsc` so the batch handoff is a single sync send
+/// instead of an async await with multi-producer bookkeeping.
 fn pin_stream_to_thread(
     mut stream: SendableRecordBatchStream,
 ) -> SendableRecordBatchStream {
@@ -2214,11 +2213,11 @@ fn pin_stream_to_thread(
     let waker = Arc::new(AtomicWaker::new());
 
     let waker_inner = Arc::clone(&waker);
-    // `SpawnedTask::spawn_blocking` is the cancel-safe wrapper.
-    // The handle is deliberately dropped — the blocking task runs
-    // to the end of the upstream stream (or until the consumer
-    // drops `rx`, which makes `tx.send` fail and breaks the loop).
-    drop(SpawnedTask::spawn_blocking(move || {
+    // `SpawnedTask::spawn_blocking` is the cancel-safe wrapper. The
+    // handle is kept alive on `PinnedStream` so that dropping it
+    // aborts the blocking task — `SpawnedTask`'s `Drop` would
+    // otherwise abort the task before it starts running.
+    let task = SpawnedTask::spawn_blocking(move || {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -2232,27 +2231,38 @@ fn pin_stream_to_thread(
                 return;
             }
         };
-        // One `block_on` per batch: the current-thread runtime
-        // drives upstream's `.await` points here, then we hand the
-        // batch off through crossbeam synchronously. A failed send
-        // means the consumer dropped — stop pulling.
-        while let Some(batch) = rt.block_on(stream.next()) {
-            if tx.send(batch).is_err() {
-                break;
+        // One `block_on` for the whole stream: the current-thread
+        // runtime drives every `.await` on this thread. Handoff to
+        // the consumer is a sync crossbeam send — no waker
+        // roundtrip for the send side — and blocks the pinned
+        // thread when the buffer is full (backpressure).
+        rt.block_on(async {
+            while let Some(batch) = stream.next().await {
+                if tx.send(batch).is_err() {
+                    break;
+                }
+                waker_inner.wake();
             }
-            waker_inner.wake();
-        }
+        });
         drop(tx);
         waker_inner.wake();
-    }));
+    });
 
-    Box::pin(PinnedStream { rx, waker, schema })
+    Box::pin(PinnedStream {
+        rx,
+        waker,
+        schema,
+        _task: task,
+    })
 }
 
 struct PinnedStream {
     rx: crossbeam_channel::Receiver<Result<RecordBatch>>,
     waker: Arc<futures::task::AtomicWaker>,
     schema: SchemaRef,
+    // Keeps the producer alive for the stream's lifetime; on drop
+    // the `SpawnedTask`'s own `Drop` aborts any still-pending task.
+    _task: datafusion_common_runtime::SpawnedTask<()>,
 }
 
 impl futures::Stream for PinnedStream {
