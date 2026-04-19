@@ -62,21 +62,8 @@ pub enum PartitionAssignment {
 }
 
 /// Bounded channel capacity (in batches) used to bridge the worker's
-/// stream back to the caller when the caller isn't on the target
-/// worker.
-///
-/// The fetcher task on the target worker produces batches and the
-/// consumer on the origin worker drains them; the channel is the only
-/// slack between the two. A `RepartitionExec` fan-out with N input
-/// partitions spawns one fetcher per partition, and each fetcher whose
-/// target differs from the fan-out's origin worker is subject to this
-/// cap. Setting it to 2 made every cross-worker fetcher block after
-/// two batches of slack whenever the downstream consumer lagged even
-/// briefly, serialising fan-out into a trickle (head-of-line blocking
-/// on the fetcher side). 16 is large enough to keep the producer
-/// ahead of transient consumer stalls while still capping memory
-/// buildup per bridge.
-const DISPATCH_CHANNEL_CAPACITY: usize = 16;
+/// stream back to the caller.
+const DISPATCH_CHANNEL_CAPACITY: usize = 2;
 
 /// Transparent wrapper that dispatches `execute` onto a [`WorkerPool`]
 /// worker. See the module docs for the motivation.

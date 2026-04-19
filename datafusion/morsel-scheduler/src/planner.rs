@@ -52,9 +52,7 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
-use crate::inbox::{
-    DEFAULT_INBOX_CAPACITY, InboxSender, InboxSourceExec, inbox, shared_inbox,
-};
+use crate::inbox::{DEFAULT_INBOX_CAPACITY, InboxSender, InboxSourceExec, inbox};
 use crate::pipeline::{Pipeline, PipelineGraph};
 
 /// `true` if `plan` should be treated as a pipeline breaker (cut
@@ -78,26 +76,8 @@ pub fn plan_to_pipelines_with_capacity(
     root: &Arc<dyn ExecutionPlan>,
     capacity: usize,
 ) -> Result<PipelineGraph> {
-    plan_to_pipelines_with_config(root, capacity, 1)
-}
-
-/// Split `root` into a pipeline graph.
-///
-/// * `capacity` — bounded size of each inter-pipeline inbox in batches.
-/// * `min_shared_fanout` — for breakers that use a shared-morsel inbox
-///   (today: [`RepartitionExec`]), the downstream stub is padded to at
-///   least this many partitions. This is how the executor spreads
-///   shared-queue consumers across every worker: passing
-///   `pool.worker_count()` guarantees one fetcher per worker even when
-///   the upstream only produced a couple of partitions.
-pub fn plan_to_pipelines_with_config(
-    root: &Arc<dyn ExecutionPlan>,
-    capacity: usize,
-    min_shared_fanout: usize,
-) -> Result<PipelineGraph> {
     let mut pending: Vec<PendingUpstream> = Vec::new();
-    let rewritten_root =
-        cut(Arc::clone(root), &mut pending, capacity, min_shared_fanout)?;
+    let rewritten_root = cut(Arc::clone(root), &mut pending, capacity)?;
 
     let mut pipelines = Vec::with_capacity(pending.len() + 1);
     pipelines.push(Pipeline {
@@ -129,59 +109,25 @@ fn cut(
     plan: Arc<dyn ExecutionPlan>,
     pending: &mut Vec<PendingUpstream>,
     capacity: usize,
-    min_shared_fanout: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if is_breaker(plan.as_ref()) {
-        // Pick the inbox layout based on the breaker's semantics:
-        //
-        // * `RepartitionExec` treats its input partitions as a pool
-        //   of batches (hash / round-robin decides the *output*
-        //   partition per batch) — input identity is irrelevant, so
-        //   we use a single shared queue and let every fetcher steal
-        //   morsels from it.
-        // * Every other breaker we recognise relies on per-partition
-        //   order (`SortPreservingMergeExec`) or simply has one
-        //   consumer (`CoalescePartitionsExec`, non-preserving
-        //   `SortExec`) where stealing wouldn't help — stay with
-        //   independent inboxes.
-        let use_shared = plan.is::<RepartitionExec>();
-
         let mut stub_children = Vec::with_capacity(plan.children().len());
         for child in plan.children() {
             let child = Arc::clone(child);
             let n = child.properties().partitioning.partition_count();
             let schema = child.schema();
 
-            let (senders, stub): (Vec<InboxSender>, Arc<dyn ExecutionPlan>) =
-                if use_shared {
-                    // Pad the *downstream* partition count up to
-                    // `min_shared_fanout` so that a RepartitionExec
-                    // with only a couple of upstream partitions still
-                    // gets enough fetcher tasks to saturate every
-                    // worker. Upstream producers stay at `n` — only
-                    // the consumer side grows.
-                    let fanout = n.max(min_shared_fanout).max(1);
-                    // One queue sized so the aggregate buffer matches the
-                    // independent-mode memory budget (`capacity` batches
-                    // per upstream partition).
-                    let (senders, shared) =
-                        shared_inbox(capacity.saturating_mul(n).max(1), n);
-                    (
-                        senders,
-                        Arc::new(InboxSourceExec::new_shared(schema, shared, fanout)),
-                    )
-                } else {
-                    let mut senders = Vec::with_capacity(n);
-                    let mut receivers = Vec::with_capacity(n);
-                    for _ in 0..n {
-                        let (s, r) = inbox(capacity);
-                        senders.push(s);
-                        receivers.push(r);
-                    }
-                    (senders, Arc::new(InboxSourceExec::new(schema, receivers)))
-                };
+            let mut senders = Vec::with_capacity(n);
+            let mut receivers = Vec::with_capacity(n);
+            for _ in 0..n {
+                let (s, r) = inbox(capacity);
+                senders.push(s);
+                receivers.push(r);
+            }
+            let stub: Arc<dyn ExecutionPlan> =
+                Arc::new(InboxSourceExec::new(schema, receivers));
 
-            let rewritten_child = cut(child, pending, capacity, min_shared_fanout)?;
+            let rewritten_child = cut(child, pending, capacity)?;
             pending.push(PendingUpstream {
                 plan: rewritten_child,
                 senders,
@@ -197,7 +143,7 @@ fn cut(
         }
         let mut new_children = Vec::with_capacity(child_refs.len());
         for child in child_refs {
-            new_children.push(cut(child, pending, capacity, min_shared_fanout)?);
+            new_children.push(cut(child, pending, capacity)?);
         }
         plan.with_new_children(new_children)
     }
@@ -257,9 +203,7 @@ mod tests {
         // RepartitionExec with 4-partition input, hash-repartitioned to
         // 2 outputs. The cut should detach the input (4 partitions)
         // into an upstream pipeline and keep the RepartitionExec as
-        // the root of the downstream pipeline — and because the
-        // RepartitionExec doesn't care about input-partition
-        // identity, the inbox should be shared-morsel.
+        // the root of the downstream pipeline.
         let s = schema();
         let child: Arc<dyn ExecutionPlan> =
             Arc::new(EmptyExec::new(Arc::clone(&s)).with_partitions(4));
@@ -276,31 +220,12 @@ mod tests {
         let children = final_p.plan.children();
         assert_eq!(children.len(), 1);
         let source = children[0].downcast_ref::<InboxSourceExec>().unwrap();
-        assert!(
-            source.is_shared(),
-            "RepartitionExec breaker should use shared-morsel inbox"
-        );
         assert_eq!(source.partitions(), 4);
 
         let upstream = &graph.pipelines[1];
         let senders = upstream.output_senders.as_ref().unwrap();
         assert_eq!(senders.len(), 4);
         assert_eq!(upstream.partition_count(), 4);
-    }
-
-    #[test]
-    fn coalesce_uses_independent_inbox() {
-        // CoalescePartitionsExec preserves per-partition semantics at
-        // the cut (only one consumer anyway), so no shared-morsel.
-        let child: Arc<dyn ExecutionPlan> =
-            Arc::new(EmptyExec::new(schema()).with_partitions(4));
-        let root: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(child));
-
-        let graph = plan_to_pipelines(&root).unwrap();
-        let source = graph.pipelines[graph.final_pipeline].plan.children()[0]
-            .downcast_ref::<InboxSourceExec>()
-            .unwrap();
-        assert!(!source.is_shared());
     }
 
     #[test]
@@ -328,58 +253,6 @@ mod tests {
         let upstream = &graph.pipelines[1];
         let senders = upstream.output_senders.as_ref().unwrap();
         assert_eq!(senders.len(), 4);
-    }
-
-    #[test]
-    fn repartition_shared_inbox_fans_out_to_worker_count() {
-        // Upstream has 2 partitions but the pool has 8 workers; the
-        // shared-inbox stub below RepartitionExec should expose 8
-        // consumer partitions so RepartitionExec spawns 8 fetcher
-        // tasks, one per worker. Upstream producers stay at 2.
-        let s = schema();
-        let child: Arc<dyn ExecutionPlan> =
-            Arc::new(EmptyExec::new(Arc::clone(&s)).with_partitions(2));
-        let root: Arc<dyn ExecutionPlan> = Arc::new(
-            RepartitionExec::try_new(child, Partitioning::RoundRobinBatch(2)).unwrap(),
-        );
-
-        let graph =
-            plan_to_pipelines_with_config(&root, DEFAULT_INBOX_CAPACITY, 8).unwrap();
-        assert_eq!(graph.pipelines.len(), 2);
-
-        let final_p = &graph.pipelines[graph.final_pipeline];
-        let children = final_p.plan.children();
-        let source = children[0].downcast_ref::<InboxSourceExec>().unwrap();
-        assert!(source.is_shared());
-        assert_eq!(
-            source.partitions(),
-            8,
-            "shared-inbox stub should fan out to min_shared_fanout consumers"
-        );
-
-        // Upstream producers are unchanged at n=2.
-        let upstream = &graph.pipelines[1];
-        let senders = upstream.output_senders.as_ref().unwrap();
-        assert_eq!(senders.len(), 2);
-        assert_eq!(upstream.partition_count(), 2);
-    }
-
-    #[test]
-    fn repartition_fanout_does_not_shrink_below_n() {
-        // If n >= min_shared_fanout, the stub stays at n (never shrinks).
-        let s = schema();
-        let child: Arc<dyn ExecutionPlan> =
-            Arc::new(EmptyExec::new(Arc::clone(&s)).with_partitions(16));
-        let root: Arc<dyn ExecutionPlan> = Arc::new(
-            RepartitionExec::try_new(child, Partitioning::RoundRobinBatch(4)).unwrap(),
-        );
-
-        let graph =
-            plan_to_pipelines_with_config(&root, DEFAULT_INBOX_CAPACITY, 4).unwrap();
-        let source = graph.pipelines[graph.final_pipeline].plan.children()[0]
-            .downcast_ref::<InboxSourceExec>()
-            .unwrap();
-        assert_eq!(source.partitions(), 16);
     }
 
     #[test]

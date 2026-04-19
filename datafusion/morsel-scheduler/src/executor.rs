@@ -39,7 +39,7 @@ use tokio::sync::mpsc::Sender as MpscSender;
 
 use crate::dispatch::wrap_leaves;
 use crate::inbox::{DEFAULT_INBOX_CAPACITY, InboxSender};
-use crate::planner::plan_to_pipelines_with_config;
+use crate::planner::plan_to_pipelines_with_capacity;
 use crate::runtime::WorkerPool;
 
 /// Options that control how [`execute`] schedules a plan.
@@ -80,11 +80,7 @@ pub fn execute_with_options(
     options: &ExecuteOptions,
 ) -> Result<SendableRecordBatchStream> {
     let worker_count = pool.worker_count();
-    // Pad shared-inbox consumers (i.e. RepartitionExec fetchers) up to
-    // the pool size so every worker gets one, even when the upstream
-    // only produced a small number of partitions.
-    let graph =
-        plan_to_pipelines_with_config(plan, options.inbox_capacity, worker_count)?;
+    let graph = plan_to_pipelines_with_capacity(plan, options.inbox_capacity)?;
     let final_idx = graph.final_pipeline;
     let output_schema = graph.pipelines[final_idx].plan.schema();
     let output_partitions = graph.pipelines[final_idx].partition_count();
@@ -213,14 +209,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn repartition_fans_consumers_across_workers() {
+    async fn repartition_through_coalesce_delivers_every_row() {
         // 2 upstream partitions feeding a RepartitionExec into 3 output
-        // partitions on a pool of 8 workers. With the fan-out fix the
-        // shared-inbox stub below RepartitionExec exposes 8 consumer
-        // partitions, so 8 fetcher tasks (one per worker) drain the
-        // shared queue in parallel. This test verifies correctness —
-        // that padding the consumer count doesn't drop or duplicate
-        // morsels.
+        // partitions on a pool of 8 workers, coalesced back for
+        // verification. Exercises the RepartitionExec-as-breaker path
+        // and confirms no morsels are dropped or duplicated.
         let s = schema();
         let partitions = vec![
             vec![batch(&s, &[1, 2, 3]), batch(&s, &[4, 5])],
