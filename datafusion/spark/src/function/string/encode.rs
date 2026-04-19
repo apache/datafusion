@@ -32,6 +32,27 @@ use datafusion_expr::{
 /// Encodes a string or binary value into binary using the specified character encoding.
 /// Binary input is interpreted as UTF-8 with lossy conversion (invalid bytes become U+FFFD).
 ///
+/// # Target Spark version
+/// Emulates Spark 3.5 semantics:
+/// - Accepts canonical charset names and common aliases (`UTF8`, `LATIN1`,
+///   `ISO88591`, `ASCII`, `UTF-32BE`, etc.).
+/// - Unmappable characters (non-ASCII in `US-ASCII`, code points above
+///   `U+00FF` in `ISO-8859-1`) are silently replaced with `?`.
+/// - `UTF-32` is an alias for `UTF-32BE` (no BOM), matching both Spark 3.5
+///   and Spark 4.1.
+///
+/// # Spark 4.0 differences (not implemented)
+/// Spark 4.0 tightened `encode` in two ways, each gated by a `spark.sql.legacy.*`
+/// config that can restore the 3.5 behavior:
+///
+/// - Charset whitelist — rejects aliases with `INVALID_PARAMETER_VALUE.CHARSET`.
+///   Controlled by `spark.sql.legacy.javaCharsets`.
+/// - Unmappable characters — raises `MALFORMED_CHARACTER_CODING`.
+///   Controlled by `spark.sql.legacy.codingErrorAction`.
+///
+/// TODO: wire both configs so Spark 4.0 behavior can be selected at runtime.
+/// See: <https://spark.apache.org/docs/4.0.0/sql-migration-guide.html>
+///
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#encode>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkEncode {
@@ -70,46 +91,21 @@ impl SparkEncode {
 }
 
 /// Encodes a single string value using the specified charset.
-/// In ANSI mode, unmappable characters cause an error.
-/// In legacy mode, unmappable characters are replaced with `?`.
-fn encode_string(s: &str, charset: &str, enable_ansi_mode: bool) -> Result<Vec<u8>> {
+/// Unmappable characters are silently replaced with `?` (Spark 3.5 behavior).
+fn encode_string(s: &str, charset: &str) -> Result<Vec<u8>> {
     match charset {
         "UTF-8" | "UTF8" => Ok(s.as_bytes().to_vec()),
-        "US-ASCII" | "ASCII" => {
-            let mut bytes = Vec::with_capacity(s.len());
-            for c in s.chars() {
-                if c.is_ascii() {
-                    bytes.push(c as u8);
-                } else if enable_ansi_mode {
-                    return exec_err!(
-                        "cannot encode character '{}' (U+{:04X}) in US-ASCII",
-                        c,
-                        c as u32
-                    );
-                } else {
-                    bytes.push(b'?');
-                }
-            }
-            Ok(bytes)
-        }
-        "ISO-8859-1" | "ISO88591" | "LATIN1" => {
-            let mut bytes = Vec::with_capacity(s.len());
-            for c in s.chars() {
+        "US-ASCII" | "ASCII" => Ok(s
+            .chars()
+            .map(|c| if c.is_ascii() { c as u8 } else { b'?' })
+            .collect()),
+        "ISO-8859-1" | "ISO88591" | "LATIN1" => Ok(s
+            .chars()
+            .map(|c| {
                 let cp = c as u32;
-                if cp <= 255 {
-                    bytes.push(cp as u8);
-                } else if enable_ansi_mode {
-                    return exec_err!(
-                        "cannot encode character '{}' (U+{:04X}) in ISO-8859-1",
-                        c,
-                        c as u32
-                    );
-                } else {
-                    bytes.push(b'?');
-                }
-            }
-            Ok(bytes)
-        }
+                if cp <= 255 { cp as u8 } else { b'?' }
+            })
+            .collect()),
         "UTF-16BE" | "UTF16BE" => {
             let mut bytes = Vec::new();
             for code_unit in s.encode_utf16() {
@@ -132,25 +128,18 @@ fn encode_string(s: &str, charset: &str, enable_ansi_mode: bool) -> Result<Vec<u
             }
             Ok(bytes)
         }
-        "UTF-32BE" | "UTF32BE" => {
-            let mut bytes = Vec::new();
+        // Spark treats UTF-32 as UTF-32BE (no BOM), matching Spark 3.5 and 4.1.
+        "UTF-32" | "UTF32" | "UTF-32BE" | "UTF32BE" => {
+            let mut bytes = Vec::with_capacity(s.len() * 4);
             for c in s.chars() {
                 bytes.extend_from_slice(&(c as u32).to_be_bytes());
             }
             Ok(bytes)
         }
         "UTF-32LE" | "UTF32LE" => {
-            let mut bytes = Vec::new();
+            let mut bytes = Vec::with_capacity(s.len() * 4);
             for c in s.chars() {
                 bytes.extend_from_slice(&(c as u32).to_le_bytes());
-            }
-            Ok(bytes)
-        }
-        "UTF-32" | "UTF32" => {
-            // BOM (big-endian marker) followed by UTF-32BE encoded bytes
-            let mut bytes = vec![0x00, 0x00, 0xFE, 0xFF];
-            for c in s.chars() {
-                bytes.extend_from_slice(&(c as u32).to_be_bytes());
             }
             Ok(bytes)
         }
@@ -165,7 +154,6 @@ fn encode_string(s: &str, charset: &str, enable_ansi_mode: bool) -> Result<Vec<u
 fn encode_array<'a, S: StringArrayType<'a>>(
     string_array: &S,
     charset: &str,
-    enable_ansi_mode: bool,
 ) -> Result<ArrayRef> {
     let mut builder =
         BinaryBuilder::with_capacity(string_array.len(), string_array.len() * 4);
@@ -174,7 +162,7 @@ fn encode_array<'a, S: StringArrayType<'a>>(
             builder.append_null();
         } else {
             let s = string_array.value(i);
-            let encoded = encode_string(s, charset, enable_ansi_mode)?;
+            let encoded = encode_string(s, charset)?;
             builder.append_value(&encoded);
         }
     }
@@ -186,7 +174,6 @@ fn encode_array<'a, S: StringArrayType<'a>>(
 fn encode_binary_array<'a, B: arrow::array::BinaryArrayType<'a>>(
     binary_array: &'a B,
     charset: &str,
-    enable_ansi_mode: bool,
 ) -> Result<ArrayRef> {
     let mut builder =
         BinaryBuilder::with_capacity(binary_array.len(), binary_array.len() * 4);
@@ -195,7 +182,7 @@ fn encode_binary_array<'a, B: arrow::array::BinaryArrayType<'a>>(
             builder.append_null();
         } else {
             let s = String::from_utf8_lossy(binary_array.value(i));
-            let encoded = encode_string(&s, charset, enable_ansi_mode)?;
+            let encoded = encode_string(&s, charset)?;
             builder.append_value(&encoded);
         }
     }
@@ -203,30 +190,14 @@ fn encode_binary_array<'a, B: arrow::array::BinaryArrayType<'a>>(
 }
 
 /// Dispatches to the correct typed array encoder based on the DataType.
-fn encode_dispatch(
-    arr: &ArrayRef,
-    charset: &str,
-    enable_ansi_mode: bool,
-) -> Result<ArrayRef> {
+fn encode_dispatch(arr: &ArrayRef, charset: &str) -> Result<ArrayRef> {
     match arr.data_type() {
-        DataType::Utf8 => {
-            encode_array(&arr.as_string::<i32>(), charset, enable_ansi_mode)
-        }
-        DataType::LargeUtf8 => {
-            encode_array(&arr.as_string::<i64>(), charset, enable_ansi_mode)
-        }
-        DataType::Utf8View => {
-            encode_array(&arr.as_string_view(), charset, enable_ansi_mode)
-        }
-        DataType::Binary => {
-            encode_binary_array(&arr.as_binary::<i32>(), charset, enable_ansi_mode)
-        }
-        DataType::LargeBinary => {
-            encode_binary_array(&arr.as_binary::<i64>(), charset, enable_ansi_mode)
-        }
-        DataType::BinaryView => {
-            encode_binary_array(&arr.as_binary_view(), charset, enable_ansi_mode)
-        }
+        DataType::Utf8 => encode_array(&arr.as_string::<i32>(), charset),
+        DataType::LargeUtf8 => encode_array(&arr.as_string::<i64>(), charset),
+        DataType::Utf8View => encode_array(&arr.as_string_view(), charset),
+        DataType::Binary => encode_binary_array(&arr.as_binary::<i32>(), charset),
+        DataType::LargeBinary => encode_binary_array(&arr.as_binary::<i64>(), charset),
+        DataType::BinaryView => encode_binary_array(&arr.as_binary_view(), charset),
         DataType::Null => {
             let mut builder = BinaryBuilder::new();
             for _ in 0..arr.len() {
@@ -309,7 +280,6 @@ impl ScalarUDFImpl for SparkEncode {
         }
 
         let charset = extract_charset(&args.args[1])?;
-        let enable_ansi_mode = args.config_options.execution.enable_ansi_mode;
 
         // Determine if the result should be scalar or array
         let len = args.args.iter().find_map(|arg| match arg {
@@ -324,7 +294,7 @@ impl ScalarUDFImpl for SparkEncode {
             ColumnarValue::Array(array) => Arc::clone(array),
         };
 
-        let result = encode_dispatch(&string_arr, &charset, enable_ansi_mode)?;
+        let result = encode_dispatch(&string_arr, &charset)?;
 
         if is_scalar {
             ScalarValue::try_from_array(&result, 0).map(ColumnarValue::Scalar)
@@ -341,16 +311,10 @@ mod tests {
     use datafusion_common::config::ConfigOptions;
 
     /// Helper to invoke encode as a scalar with two literal string arguments.
-    fn eval_encode_scalar_with_ansi(
-        input: ScalarValue,
-        charset: &str,
-        enable_ansi_mode: bool,
-    ) -> Result<ColumnarValue> {
+    fn eval_encode_scalar(input: ScalarValue, charset: &str) -> Result<ColumnarValue> {
         let func = SparkEncode::new();
         let input_field = Arc::new(Field::new("input", input.data_type(), true));
         let charset_field = Arc::new(Field::new("charset", DataType::Utf8, false));
-        let mut config = ConfigOptions::default();
-        config.execution.enable_ansi_mode = enable_ansi_mode;
         func.invoke_with_args(ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(input),
@@ -359,13 +323,8 @@ mod tests {
             arg_fields: vec![input_field, charset_field],
             number_rows: 1,
             return_field: Arc::new(Field::new("encode", DataType::Binary, true)),
-            config_options: Arc::new(config),
+            config_options: Arc::new(ConfigOptions::default()),
         })
-    }
-
-    /// Helper with ANSI mode disabled (legacy behavior).
-    fn eval_encode_scalar(input: ScalarValue, charset: &str) -> Result<ColumnarValue> {
-        eval_encode_scalar_with_ansi(input, charset, false)
     }
 
     fn expect_binary_scalar(result: ColumnarValue) -> Vec<u8> {
@@ -396,8 +355,8 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_ascii_unmappable_legacy_mode() {
-        // Legacy mode: non-ASCII chars replaced with '?'
+    fn test_encode_ascii_unmappable_replaced() {
+        // Spark 3.5: non-ASCII chars replaced with '?'
         let result = eval_encode_scalar(
             ScalarValue::Utf8(Some("\u{00E9}".into())), // é
             "US-ASCII",
@@ -407,38 +366,14 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_ascii_unmappable_ansi_mode() {
-        // ANSI mode: non-ASCII chars cause an error
-        let result = eval_encode_scalar_with_ansi(
-            ScalarValue::Utf8(Some("\u{00E9}".into())),
-            "US-ASCII",
-            true,
-        );
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cannot encode"));
-    }
-
-    #[test]
-    fn test_encode_iso8859_unmappable_legacy_mode() {
-        // Legacy mode: chars > U+00FF replaced with '?'
+    fn test_encode_iso8859_unmappable_replaced() {
+        // Spark 3.5: chars > U+00FF replaced with '?'
         let result = eval_encode_scalar(
             ScalarValue::Utf8(Some("\u{0100}".into())), // Ā (U+0100)
             "ISO-8859-1",
         )
         .unwrap();
         assert_eq!(expect_binary_scalar(result), vec![b'?']);
-    }
-
-    #[test]
-    fn test_encode_iso8859_unmappable_ansi_mode() {
-        // ANSI mode: chars > U+00FF cause an error
-        let result = eval_encode_scalar_with_ansi(
-            ScalarValue::Utf8(Some("\u{0100}".into())),
-            "ISO-8859-1",
-            true,
-        );
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cannot encode"));
     }
 
     #[test]
@@ -584,14 +519,11 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_utf32_with_bom() {
-        // UTF-32 = BOM (0000FEFF) + UTF-32BE
+    fn test_encode_utf32_no_bom() {
+        // Spark's UTF-32 = UTF-32BE, no BOM prefix. 'A' = U+0041 → 00 00 00 41
         let result =
             eval_encode_scalar(ScalarValue::Utf8(Some("A".into())), "UTF-32").unwrap();
-        assert_eq!(
-            expect_binary_scalar(result),
-            vec![0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x41]
-        );
+        assert_eq!(expect_binary_scalar(result), vec![0x00, 0x00, 0x00, 0x41]);
     }
 
     #[test]
@@ -611,14 +543,11 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_emoji_utf32_with_bom() {
-        // UTF-32 = BOM (0000FEFF) + UTF-32BE: 00 01 F6 00
+    fn test_encode_emoji_utf32_no_bom() {
+        // Spark's UTF-32 = UTF-32BE, no BOM prefix. U+1F600 (😀) → 00 01 F6 00
         let result =
             eval_encode_scalar(ScalarValue::Utf8(Some("😀".into())), "UTF-32").unwrap();
-        assert_eq!(
-            expect_binary_scalar(result),
-            vec![0x00, 0x00, 0xFE, 0xFF, 0x00, 0x01, 0xF6, 0x00]
-        );
+        assert_eq!(expect_binary_scalar(result), vec![0x00, 0x01, 0xF6, 0x00]);
     }
 
     /// Simple hex encoding for test assertions.

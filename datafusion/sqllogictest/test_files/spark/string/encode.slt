@@ -45,6 +45,12 @@ SELECT encode('A'::string, 'utf-32be'::string);
 ----
 00000041
 
+# UTF-32 (Spark 3.5 / 4.1: no BOM, identical to UTF-32BE)
+query ?
+SELECT encode('A'::string, 'utf-32'::string);
+----
+00000041
+
 # Case-insensitive charset
 query ?
 SELECT encode('hello'::string, 'Utf-8'::string);
