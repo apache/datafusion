@@ -216,6 +216,12 @@ fn create_bounds_predicate(
 pub(crate) struct SharedBuildAccumulator {
     /// Build-side data protected by a single mutex to avoid ordering concerns
     inner: Mutex<AccumulatorState>,
+    /// Wakes every partition that is parked in [`Self::wait_for_completion`]
+    /// once [`AccumulatorState::completion`] transitions to
+    /// [`CompletionState::Ready`]. Notifications are fired once per
+    /// accumulator lifetime (the elected finalizer publishes the terminal
+    /// result, then broadcasts), so late subscribers simply re-check the
+    /// state under the mutex and return immediately.
     completion_notify: Notify,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
