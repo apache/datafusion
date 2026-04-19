@@ -42,7 +42,7 @@ use datafusion_physical_expr::expressions::{
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
 use parking_lot::Mutex;
-use tokio::sync::watch;
+use tokio::sync::Notify;
 
 /// Represents the minimum and maximum values for a specific column.
 /// Used in dynamic filter pushdown to establish value boundaries.
@@ -216,9 +216,7 @@ fn create_bounds_predicate(
 pub(crate) struct SharedBuildAccumulator {
     /// Build-side data protected by a single mutex to avoid ordering concerns
     inner: Mutex<AccumulatorState>,
-    /// Broadcasts the finalized filter-build result to every waiting partition.
-    /// `None` means finalization hasn't run yet; `Some(result)` is the terminal state.
-    completion_tx: watch::Sender<Option<SharedResult<()>>>,
+    completion_notify: Notify,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter expressions
@@ -274,12 +272,15 @@ enum AccumulatedBuildData {
     },
 }
 
+enum CompletionState {
+    Pending,
+    Finalizing,
+    Ready(SharedResult<()>),
+}
+
 struct AccumulatorState {
     data: AccumulatedBuildData,
-    /// Set once a caller has been elected to run finalization. Prevents a
-    /// second caller from repeating the filter-build work when extra reports
-    /// arrive after the terminal condition was reached.
-    finalizing: bool,
+    completion: CompletionState,
 }
 
 #[derive(Clone)]
@@ -364,13 +365,12 @@ impl SharedBuildAccumulator {
             ),
         };
 
-        let (completion_tx, _) = watch::channel(None);
         Self {
             inner: Mutex::new(AccumulatorState {
                 data: mode_data,
-                finalizing: false,
+                completion: CompletionState::Pending,
             }),
-            completion_tx,
+            completion_notify: Notify::new(),
             dynamic_filter,
             on_right,
             repartition_random_state,
@@ -481,7 +481,7 @@ impl SharedBuildAccumulator {
         &self,
         guard: &mut AccumulatorState,
     ) -> Option<FinalizeInput> {
-        if guard.finalizing {
+        if !matches!(guard.completion, CompletionState::Pending) {
             return None;
         }
 
@@ -502,27 +502,35 @@ impl SharedBuildAccumulator {
             _ => None,
         }?;
 
-        guard.finalizing = true;
+        guard.completion = CompletionState::Finalizing;
         Some(finalize_input)
     }
 
     fn finish(&self, finalize_input: FinalizeInput) {
         let result = self.build_filter(finalize_input).map_err(Arc::new);
         self.dynamic_filter.mark_complete();
-        // `send_replace` unconditionally publishes even if no receivers are
-        // currently subscribed (e.g. every partition was canceled).
-        self.completion_tx.send_replace(Some(result));
+
+        let mut guard = self.inner.lock();
+        guard.completion = CompletionState::Ready(result);
+        drop(guard);
+        self.completion_notify.notify_waiters();
     }
 
     async fn wait_for_completion(&self) -> Result<()> {
-        let mut rx = self.completion_tx.subscribe();
-        let guard = rx
-            .wait_for(|v| v.is_some())
-            .await
-            .expect("completion sender is held by the accumulator");
-        match guard.as_ref().expect("wait_for filtered out None") {
-            Ok(()) => Ok(()),
-            Err(err) => Err(DataFusionError::Shared(Arc::clone(err))),
+        loop {
+            let notified = {
+                let guard = self.inner.lock();
+                match &guard.completion {
+                    CompletionState::Ready(Ok(())) => return Ok(()),
+                    CompletionState::Ready(Err(err)) => {
+                        return Err(DataFusionError::Shared(Arc::clone(err)));
+                    }
+                    CompletionState::Pending | CompletionState::Finalizing => {
+                        self.completion_notify.notified()
+                    }
+                }
+            };
+            notified.await;
         }
     }
 
