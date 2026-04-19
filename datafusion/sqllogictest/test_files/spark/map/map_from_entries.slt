@@ -154,9 +154,25 @@ SELECT
 # Test with duplicate keys: raises DUPLICATED_MAP_KEY under Spark's default policy
 query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key true was found
 SELECT map_from_entries(array(
-    struct(true, 'a'),
-    struct(false, 'b'),
+    struct(true, 'a'), 
+    struct(false, 'b'), 
     struct(true, 'c'),
-    struct(false, cast(NULL as string)),
+    struct(false, cast(NULL as string)), 
     struct(true, 'd')
 ));
+
+# Integer keys with a duplicate also raise DUPLICATED_MAP_KEY.
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key 1 was found
+SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b'), struct(1, 'c')));
+
+# String keys with triple occurrence also raise DUPLICATED_MAP_KEY.
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key k was found
+SELECT map_from_entries(array(struct('k', 1), struct('k', 2), struct('k', 3)));
+
+# Multi-row: a clean row followed by a duplicate row still errors.
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key 1 was found
+SELECT map_from_entries(data)
+FROM values
+    (array[struct(1, 'a'), struct(2, 'b')]),
+    (array[struct(1, 'x'), struct(1, 'y')])
+AS tab(data);

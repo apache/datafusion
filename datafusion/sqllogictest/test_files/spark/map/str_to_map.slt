@@ -69,6 +69,21 @@ statement error
 Duplicate map key
 SELECT str_to_map('a:1,b:2,a:3');
 
+# Triple+ occurrences of the same key still raise DUPLICATED_MAP_KEY.
+statement error
+Duplicate map key 'a'
+SELECT str_to_map('a:1,a:2,a:3');
+
+# Duplicate where one occurrence is missing the kv_delim (value = NULL) still errors.
+statement error
+Duplicate map key 'a'
+SELECT str_to_map('a,b:2,a:3');
+
+# Multi-row input: a clean row followed by a duplicate row fails on the duplicate row.
+statement error
+Duplicate map key 'a'
+SELECT str_to_map(col) FROM (VALUES ('a:1,b:2'), ('a:3,a:4')) AS t(col);
+
 # Additional tests (DataFusion-specific)
 
 # NULL input returns NULL
