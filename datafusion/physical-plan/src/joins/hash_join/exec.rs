@@ -1319,22 +1319,22 @@ impl ExecutionPlan for HashJoinExec {
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
-        let on_right_exprs = self
-            .on
-            .iter()
-            .map(|(_, right_expr)| Arc::clone(right_expr))
-            .collect::<Vec<_>>();
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
                     let filter = Arc::clone(&df.filter);
+                    let on_right = self
+                        .on
+                        .iter()
+                        .map(|(_, right_expr)| Arc::clone(right_expr))
+                        .collect::<Vec<_>>();
                     Some(Arc::clone(df.build_accumulator.get_or_init(|| {
                         Arc::new(SharedBuildAccumulator::new_from_partition_mode(
                             self.mode,
                             self.left.as_ref(),
                             self.right.as_ref(),
                             filter,
-                            on_right_exprs.clone(),
+                            on_right,
                             repartition_random_state,
                         ))
                     })))
@@ -1407,10 +1407,16 @@ impl ExecutionPlan for HashJoinExec {
             None => self.column_indices.clone(),
         };
 
+        let on_right = self
+            .on
+            .iter()
+            .map(|(_, right_expr)| Arc::clone(right_expr))
+            .collect::<Vec<_>>();
+
         Ok(Box::pin(HashJoinStream::new(
             partition,
             self.schema(),
-            on_right_exprs,
+            on_right,
             self.filter.clone(),
             self.join_type,
             right_stream,
