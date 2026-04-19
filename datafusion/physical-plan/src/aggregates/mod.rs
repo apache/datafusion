@@ -1547,8 +1547,24 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, &context)
-            .map(|stream| stream.into())
+        let stream: SendableRecordBatchStream =
+            self.execute_typed(partition, &context)?.into();
+        // Pin every aggregation output stream to a single thread so
+        // its state (hash map, accumulators, scratch buffers) never
+        // migrates across cache lines between polls. The measurement
+        // probe `measure_partial_agg_thread_migration` shows that in
+        // a `RepartitionExec`-fed partial-agg plan the task migrates
+        // on ~2 of every 3 polls on the default MT runtime, so
+        // Partial / PartialReduce benefit from the same treatment as
+        // Final / FinalPartitioned.
+        match self.mode {
+            AggregateMode::Partial
+            | AggregateMode::PartialReduce
+            | AggregateMode::Final
+            | AggregateMode::FinalPartitioned
+            | AggregateMode::Single
+            | AggregateMode::SinglePartitioned => Ok(pin_stream_to_thread(stream)),
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -2166,6 +2182,55 @@ pub fn evaluate_group_by(
             Ok(group_values)
         })
         .collect()
+}
+
+/// Drive `stream` on a dedicated thread so its future state — in
+/// particular the aggregation hash map and accumulators — is polled
+/// from a single thread for the partition's lifetime. Batches are
+/// forwarded back to the caller through a bounded channel; the
+/// caller sees a normal `SendableRecordBatchStream`.
+///
+/// The stream is spawned via `tokio::task::spawn_blocking`, so the
+/// thread comes from the blocking pool of whatever Tokio runtime is
+/// currently active. The `current_thread` runtime built inside
+/// `block_on` ensures the stream's inner `.await`s stay on that
+/// thread rather than being migrated by the multi-threaded runtime.
+fn pin_stream_to_thread(
+    mut stream: SendableRecordBatchStream,
+) -> SendableRecordBatchStream {
+    use crate::stream::RecordBatchReceiverStreamBuilder;
+    use datafusion_common::DataFusionError;
+    use futures::StreamExt;
+
+    // Hand a dedicated blocking-pool thread a `current_thread`
+    // runtime; every `.await` on the inner stream stays on that
+    // thread for the partition's lifetime, keeping the aggregation
+    // hash map and accumulators pinned to one CPU cache.
+    //
+    // `RecordBatchReceiverStreamBuilder` owns the task handle, so it
+    // is aborted if the stream is dropped before it starts and
+    // allowed to complete naturally otherwise.
+    let mut builder = RecordBatchReceiverStreamBuilder::new(stream.schema(), 2);
+    let tx = builder.tx();
+    builder.spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                DataFusionError::External(
+                    format!("pin_stream_to_thread: rt build failed: {e}").into(),
+                )
+            })?;
+        rt.block_on(async move {
+            while let Some(batch) = stream.next().await {
+                if tx.send(batch).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(())
+    });
+    builder.build()
 }
 
 #[cfg(test)]
@@ -4780,5 +4845,218 @@ mod tests {
         ");
 
         Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // Probe: does a partial-aggregation task stay on one tokio worker
+    // thread, or does the runtime migrate it? We wrap each partition's
+    // output stream with a `ThreadProbe` that records
+    // `thread::current().id()` on every `poll_next`, then drive each
+    // partition as its own tokio task on a 4-worker MT runtime.
+    //
+    // To create migration opportunities we (a) use more partitions
+    // than workers and (b) `yield_now().await` in the driver between
+    // batches, so tokio has a chance to steal.
+    // ---------------------------------------------------------------
+
+    use std::sync::Mutex as StdMutex;
+    use std::thread::ThreadId;
+
+    struct ThreadProbe {
+        inner: SendableRecordBatchStream,
+        threads: Arc<StdMutex<Vec<ThreadId>>>,
+    }
+
+    impl Stream for ThreadProbe {
+        type Item = Result<RecordBatch>;
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            let this = self.get_mut();
+            this.threads
+                .lock()
+                .unwrap()
+                .push(std::thread::current().id());
+            std::pin::Pin::new(&mut this.inner).poll_next(cx)
+        }
+    }
+
+    impl RecordBatchStream for ThreadProbe {
+        fn schema(&self) -> SchemaRef {
+            self.inner.schema()
+        }
+    }
+
+    // Ignored by default — this is a measurement probe, not a
+    // correctness test. Run with:
+    //   cargo test -p datafusion-physical-plan --lib
+    //     aggregates::tests::measure_partial_agg_thread_migration
+    //     -- --ignored --nocapture
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn measure_partial_agg_thread_migration() {
+        use crate::repartition::RepartitionExec;
+        use futures::StreamExt;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+
+        // 16 input partitions on 4 workers. Half are "heavy" so
+        // workers that finish light partitions become idle and can
+        // steal — the classic case where migration would be visible.
+        let n_partitions = 16usize;
+        let light_batches = 4usize;
+        let heavy_batches = 40usize;
+        let rows_per_batch = 200usize;
+        let keys = 10i32;
+
+        let mut input_partitions: Vec<Vec<RecordBatch>> =
+            Vec::with_capacity(n_partitions);
+        for p in 0..n_partitions {
+            let n_batches = if p < n_partitions / 2 {
+                light_batches
+            } else {
+                heavy_batches
+            };
+            let mut batches = Vec::with_capacity(n_batches);
+            for b in 0..n_batches {
+                let ks: Vec<i32> =
+                    (0..rows_per_batch).map(|i| (i as i32) % keys).collect();
+                let vs: Vec<i64> = (0..rows_per_batch)
+                    .map(|i| (b * rows_per_batch + i) as i64)
+                    .collect();
+                batches.push(
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(Int32Array::from(ks)),
+                            Arc::new(Int64Array::from(vs)),
+                        ],
+                    )
+                    .unwrap(),
+                );
+            }
+            input_partitions.push(batches);
+        }
+
+        let memory =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)
+                .unwrap();
+        // Hash-repartition to introduce real `tokio::mpsc` yield
+        // points — closer to a ClickBench shape than raw in-memory.
+        let input: Arc<dyn ExecutionPlan> = Arc::new(
+            RepartitionExec::try_new(
+                memory,
+                Partitioning::Hash(vec![col("k", &schema).unwrap()], n_partitions),
+            )
+            .unwrap(),
+        );
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(
+                col("k", &schema).unwrap(),
+                "k".to_string(),
+            )]);
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema).unwrap()])
+                .schema(Arc::clone(&schema))
+                .alias("s")
+                .build()
+                .unwrap(),
+        )];
+
+        let partial = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by,
+                aggregates,
+                vec![None],
+                input,
+                Arc::clone(&schema),
+            )
+            .unwrap(),
+        );
+
+        let ctx = Arc::new(TaskContext::default());
+
+        // Two probes per partition:
+        //  * `inner` wraps the raw partial-agg output BEFORE
+        //    `pin_stream_to_thread` — it records the thread actually
+        //    running the hash-map build.
+        //  * `outer` wraps the pinned forwarding stream — it records
+        //    which MT worker ends up polling the forwarding side.
+        let mut handles = Vec::with_capacity(n_partitions);
+        for p in 0..n_partitions {
+            let raw: SendableRecordBatchStream =
+                partial.execute_typed(p, &ctx).unwrap().into();
+            let inner_threads = Arc::new(StdMutex::new(Vec::<ThreadId>::new()));
+            let inner_probe: SendableRecordBatchStream = Box::pin(ThreadProbe {
+                inner: raw,
+                threads: Arc::clone(&inner_threads),
+            });
+            let pinned = pin_stream_to_thread(inner_probe);
+            let outer_threads = Arc::new(StdMutex::new(Vec::<ThreadId>::new()));
+            let outer_probe: SendableRecordBatchStream = Box::pin(ThreadProbe {
+                inner: pinned,
+                threads: Arc::clone(&outer_threads),
+            });
+            let handle = tokio::spawn(async move {
+                let mut stream = outer_probe;
+                let mut rows = 0usize;
+                while let Some(batch) = stream.next().await {
+                    rows += batch.unwrap().num_rows();
+                    tokio::task::yield_now().await;
+                }
+                (rows, inner_threads, outer_threads)
+            });
+            handles.push((p, handle));
+        }
+
+        let mut inner_migrated = 0;
+        let mut inner_switches = 0;
+        let mut inner_polls = 0;
+        let mut outer_migrated = 0;
+        let mut outer_switches = 0;
+        let mut outer_polls = 0;
+        for (p, handle) in handles {
+            let (_rows, inner_threads, outer_threads) = handle.await.unwrap();
+            let i = inner_threads.lock().unwrap();
+            let o = outer_threads.lock().unwrap();
+            let i_unique: HashSet<_> = i.iter().collect();
+            let o_unique: HashSet<_> = o.iter().collect();
+            let i_switches = i.windows(2).filter(|w| w[0] != w[1]).count();
+            let o_switches = o.windows(2).filter(|w| w[0] != w[1]).count();
+            inner_polls += i.len();
+            outer_polls += o.len();
+            inner_switches += i_switches;
+            outer_switches += o_switches;
+            if i_unique.len() > 1 {
+                inner_migrated += 1;
+            }
+            if o_unique.len() > 1 {
+                outer_migrated += 1;
+            }
+            eprintln!(
+                "partition {p:2}: inner {:>3} polls, {:>2} unique, {:>3} switches | \
+                 outer {:>3} polls, {:>2} unique, {:>3} switches",
+                i.len(),
+                i_unique.len(),
+                i_switches,
+                o.len(),
+                o_unique.len(),
+                o_switches
+            );
+        }
+        eprintln!(
+            "== inner (partial-agg build): {inner_migrated}/{n_partitions} partitions \
+             migrated; {inner_switches} switches across {inner_polls} polls"
+        );
+        eprintln!(
+            "== outer (mpsc receiver): {outer_migrated}/{n_partitions} partitions \
+             migrated; {outer_switches} switches across {outer_polls} polls"
+        );
     }
 }
