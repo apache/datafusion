@@ -401,22 +401,21 @@ OPTIONS ('format.has_header' 'true', 'format.quote_style' 'Always');
 ----
 3
 
+# Read the file back using a delimiter that doesn't appear in the data,
+# so each line is a single column and we can verify the actual quoting
 statement ok
 CREATE EXTERNAL TABLE stored_quote_style_always (
-  int_col TEXT,
-  string_col TEXT,
-  float_col TEXT
+  whole_file TEXT
 ) STORED AS CSV
 LOCATION 'test_files/scratch/csv_files/quote_style_always.csv'
-OPTIONS ('format.has_header' 'true');
+OPTIONS ('format.has_header' 'true', 'format.delimiter' '@', 'format.quote' '~');
 
-# All values should have been quoted, but reading them back strips the quotes
-query TTT
+query T
 select * from stored_quote_style_always;
 ----
-1 hello 1.1
-2 world 2.2
-3 comma,value 3.3
+"1","hello","1.1"
+"2","world","2.2"
+"3","comma,value","3.3"
 
 statement ok
 DROP TABLE stored_quote_style_always;
@@ -429,21 +428,20 @@ OPTIONS ('format.has_header' 'true', 'format.quote_style' 'NonNumeric');
 ----
 3
 
+# Read as a single column with a non-matching delimiter/quote to see raw output
 statement ok
 CREATE EXTERNAL TABLE stored_quote_style_nonnumeric (
-  int_col TEXT,
-  string_col TEXT,
-  float_col TEXT
+  whole_file TEXT
 ) STORED AS CSV
 LOCATION 'test_files/scratch/csv_files/quote_style_nonnumeric.csv'
-OPTIONS ('format.has_header' 'true');
+OPTIONS ('format.has_header' 'true', 'format.delimiter' '@', 'format.quote' '~');
 
-query TTT
+query T
 select * from stored_quote_style_nonnumeric;
 ----
-1 hello 1.1
-2 world 2.2
-3 comma,value 3.3
+1,"hello",1.1
+2,"world",2.2
+3,"comma,value",3.3
 
 statement ok
 DROP TABLE stored_quote_style_nonnumeric;
@@ -458,25 +456,21 @@ OPTIONS ('format.has_header' 'true', 'format.quote_style' 'Never');
 ----
 3
 
+# Read as a single column with a non-matching delimiter/quote to see raw output
 statement ok
 CREATE EXTERNAL TABLE stored_quote_style_never (
-  int_col TEXT,
-  string_col TEXT,
-  float_col TEXT,
-  extra TEXT
+  whole_file TEXT
 ) STORED AS CSV
 LOCATION 'test_files/scratch/csv_files/quote_style_never.csv'
-OPTIONS ('format.has_header' 'false', 'format.truncated_rows' 'true');
+OPTIONS ('format.has_header' 'true', 'format.delimiter' '@', 'format.quote' '~');
 
-# Rows without commas in data parse normally (extra column is NULL),
-# while the row with 'comma,value' splits across columns
-query TTTT
-select * from stored_quote_style_never order by int_col;
+# No fields are quoted - note the comma in 'comma,value' is unescaped
+query T
+select * from stored_quote_style_never;
 ----
-1 hello 1.1 NULL
-2 world 2.2 NULL
-3 comma value 3.3
-int_col string_col float_col NULL
+1,hello,1.1
+2,world,2.2
+3,comma,value,3.3
 
 statement ok
 DROP TABLE stored_quote_style_never;
