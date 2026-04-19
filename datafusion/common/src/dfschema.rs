@@ -1346,7 +1346,7 @@ pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String 
         None => return name.to_string(),
         Some(q) => q,
     };
-    let (a, b, c) = match qualifier {
+    let (first, second, third) = match qualifier {
         TableReference::Bare { table } => (table.as_ref(), None, None),
         TableReference::Partial { schema, table } => {
             (schema.as_ref(), Some(table.as_ref()), None)
@@ -1362,16 +1362,16 @@ pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String 
         ),
     };
 
-    let extra = b.unwrap_or("").len() + c.unwrap_or("").len();
-    let mut s = String::with_capacity(a.len() + extra + 3 + name.len());
-    s.push_str(a);
-    if let Some(b) = b {
+    let extra = second.map_or(0, str::len) + third.map_or(0, str::len);
+    let mut s = String::with_capacity(first.len() + extra + 3 + name.len());
+    s.push_str(first);
+    if let Some(second) = second {
         s.push('.');
-        s.push_str(b);
+        s.push_str(second);
     }
-    if let Some(c) = c {
+    if let Some(third) = third {
         s.push('.');
-        s.push_str(c);
+        s.push_str(third);
     }
     s.push('.');
     s.push_str(name);
