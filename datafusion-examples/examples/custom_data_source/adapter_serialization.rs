@@ -318,8 +318,7 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
     ) -> Result<PhysicalPlanNode> {
         // Check if this is a DataSourceExec with adapter
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>()
-            && let Some(config) =
-                exec.data_source().as_any().downcast_ref::<FileScanConfig>()
+            && let Some(config) = exec.data_source().downcast_ref::<FileScanConfig>()
             && let Some(adapter_factory) = &config.expr_adapter_factory
             && let Some(tag) = extract_adapter_tag(adapter_factory.as_ref())
         {
@@ -482,7 +481,7 @@ fn inject_adapter_into_plan(
     adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(exec) = plan.downcast_ref::<DataSourceExec>()
-        && let Some(config) = exec.data_source().as_any().downcast_ref::<FileScanConfig>()
+        && let Some(config) = exec.data_source().downcast_ref::<FileScanConfig>()
     {
         let new_config = FileScanConfigBuilder::from(config.clone())
             .with_expr_adapter(Some(adapter_factory))
@@ -498,8 +497,7 @@ fn verify_adapter_in_plan(plan: &Arc<dyn ExecutionPlan>, label: &str) -> bool {
     // Walk the plan tree to find DataSourceExec with adapter
     fn check_plan(plan: &dyn ExecutionPlan) -> bool {
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>()
-            && let Some(config) =
-                exec.data_source().as_any().downcast_ref::<FileScanConfig>()
+            && let Some(config) = exec.data_source().downcast_ref::<FileScanConfig>()
             && config.expr_adapter_factory.is_some()
         {
             return true;

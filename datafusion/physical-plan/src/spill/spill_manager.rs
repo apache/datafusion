@@ -20,10 +20,9 @@
 use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
-use arrow::array::StringViewArray;
-use arrow::datatypes::SchemaRef;
+use arrow::array::{BinaryViewArray, GenericByteViewArray, StringViewArray};
+use arrow::datatypes::{ByteViewType, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -127,10 +126,8 @@ impl SpillManager {
             if borrowed.num_rows() == 0 {
                 return Ok(());
             }
-            in_progress_file.append_batch(borrowed)?;
-
-            max_record_batch_size =
-                max_record_batch_size.max(get_record_batch_memory_size(borrowed));
+            let gc_sliced_size = in_progress_file.append_batch(borrowed)?;
+            max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
             Result::<_, DataFusionError>::Ok(())
         })?;
 
@@ -153,9 +150,9 @@ impl SpillManager {
 
         while let Some(batch) = stream.next().await {
             let batch = batch?;
-            in_progress_file.append_batch(&batch)?;
+            let gc_sliced_size = in_progress_file.append_batch(&batch)?;
 
-            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size()?);
+            max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
         }
 
         let file = in_progress_file.finish()?;
@@ -197,7 +194,7 @@ impl SpillManager {
 pub(crate) trait GetSlicedSize {
     /// Returns the size of the `RecordBatch` when sliced.
     /// Note: if multiple arrays or even a single array share the same data buffers, we may double count each buffer.
-    /// Therefore, make sure we call gc() or organize_stringview_arrays() before using this method.
+    /// Therefore, make sure we call gc() or gc_view_arrays() before using this method.
     fn get_sliced_size(&self) -> Result<usize>;
 }
 
@@ -217,13 +214,22 @@ impl GetSlicedSize for RecordBatch {
             // "bytes needed if we materialized exactly this slice into fresh buffers".
             // This is a workaround until https://github.com/apache/arrow-rs/issues/8230
             if let Some(sv) = array.as_any().downcast_ref::<StringViewArray>() {
-                for buffer in sv.data_buffers() {
-                    total += buffer.capacity();
-                }
+                total += byte_view_data_buffer_size(sv);
+            }
+            if let Some(bv) = array.as_any().downcast_ref::<BinaryViewArray>() {
+                total += byte_view_data_buffer_size(bv);
             }
         }
         Ok(total)
     }
+}
+
+fn byte_view_data_buffer_size<T: ByteViewType>(array: &GenericByteViewArray<T>) -> usize {
+    array
+        .data_buffers()
+        .iter()
+        .map(|buffer| buffer.capacity())
+        .sum()
 }
 
 #[cfg(test)]

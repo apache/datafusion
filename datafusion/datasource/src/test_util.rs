@@ -86,10 +86,6 @@ impl FileSource for MockSource {
         })
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.filter.clone()
     }

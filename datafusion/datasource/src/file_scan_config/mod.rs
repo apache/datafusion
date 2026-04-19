@@ -57,7 +57,8 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
-use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
+use std::any::Any;
+use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// [`FileScanConfig`] represents scanning data from a group of files
 ///
@@ -77,7 +78,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 ///
 /// # Example
 /// ```
-/// # use std::any::Any;
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
@@ -108,7 +108,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
-/// #  fn as_any(&self) -> &dyn Any { self  }
 /// #  fn table_schema(&self) -> &TableSchema { &self.table_schema }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
@@ -615,10 +614,6 @@ impl DataSource for FileScanConfig {
             .with_metrics(source.metrics())
             .build()?;
         Ok(Box::pin(cooperative(stream)))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
@@ -1453,10 +1448,6 @@ mod tests {
             _partition: usize,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             unimplemented!()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn table_schema(&self) -> &TableSchema {
@@ -2547,7 +2538,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let pushed_files = pushed_config.file_groups[0].files();
@@ -2560,7 +2550,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let pushed_files = pushed_config.file_groups[0].files();
@@ -2608,10 +2597,6 @@ mod tests {
             _partition: usize,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             unimplemented!()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn table_schema(&self) -> &TableSchema {
@@ -2672,7 +2657,6 @@ mod tests {
             panic!("Expected Inexact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2737,7 +2721,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2775,7 +2758,6 @@ mod tests {
             panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(!pushed_config.output_ordering.is_empty());
@@ -2810,7 +2792,6 @@ mod tests {
             panic!("Expected Inexact (downgraded), got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(pushed_config.output_ordering.is_empty());
@@ -2845,7 +2826,6 @@ mod tests {
             panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2911,7 +2891,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files0 = pushed_config.file_groups[0].files();
@@ -2952,7 +2931,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files0 = pushed_config.file_groups[0].files();
@@ -2987,7 +2965,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -3038,7 +3015,6 @@ mod tests {
             panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
 
@@ -3091,7 +3067,6 @@ mod tests {
             panic!("Expected Inexact for reverse scan, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
 

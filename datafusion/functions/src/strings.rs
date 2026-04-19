@@ -424,7 +424,7 @@ impl LargeStringArrayBuilder {
 /// - start_offset: The start offset of the substring in the view
 ///
 /// LLVM is apparently overly eager to inline this function into some hot loops,
-/// which bloats them and regresses performance, so we disable inling for now.
+/// which bloats them and regresses performance, so we disable inlining for now.
 #[inline(never)]
 pub fn append_view(
     views_buffer: &mut Vec<u128>,
