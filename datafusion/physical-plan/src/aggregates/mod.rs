@@ -46,7 +46,8 @@ use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
+    Constraint, Constraints, DataFusionError, Result, ScalarValue,
+    assert_eq_or_internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
@@ -2187,50 +2188,106 @@ pub fn evaluate_group_by(
 /// Drive `stream` on a dedicated thread so its future state — in
 /// particular the aggregation hash map and accumulators — is polled
 /// from a single thread for the partition's lifetime. Batches are
-/// forwarded back to the caller through a bounded channel; the
-/// caller sees a normal `SendableRecordBatchStream`.
+/// forwarded back to the caller through a small crossbeam SPSC
+/// ring; the caller sees a normal `SendableRecordBatchStream`.
 ///
-/// The stream is spawned via `tokio::task::spawn_blocking`, so the
-/// thread comes from the blocking pool of whatever Tokio runtime is
-/// currently active. The `current_thread` runtime built inside
-/// `block_on` ensures the stream's inner `.await`s stay on that
-/// thread rather than being migrated by the multi-threaded runtime.
+/// The pinned thread hosts a `current_thread` tokio runtime and
+/// uses `rt.block_on(stream.next())` to pull each batch, so every
+/// `.await` inside the aggregation body stays on this thread rather
+/// than being migrated by the multi-threaded runtime. Crossbeam's
+/// SPSC (one producer, one consumer) replaces `tokio::mpsc` so the
+/// per-batch handoff is a single sync operation instead of two
+/// async awaits — there's no multi-producer bookkeeping and no
+/// second waker roundtrip for the send side.
 fn pin_stream_to_thread(
     mut stream: SendableRecordBatchStream,
 ) -> SendableRecordBatchStream {
-    use crate::stream::RecordBatchReceiverStreamBuilder;
-    use datafusion_common::DataFusionError;
+    use datafusion_common_runtime::SpawnedTask;
     use futures::StreamExt;
+    use futures::task::AtomicWaker;
 
-    // Hand a dedicated blocking-pool thread a `current_thread`
-    // runtime; every `.await` on the inner stream stays on that
-    // thread for the partition's lifetime, keeping the aggregation
-    // hash map and accumulators pinned to one CPU cache.
-    //
-    // `RecordBatchReceiverStreamBuilder` owns the task handle, so it
-    // is aborted if the stream is dropped before it starts and
-    // allowed to complete naturally otherwise.
-    let mut builder = RecordBatchReceiverStreamBuilder::new(stream.schema(), 2);
-    let tx = builder.tx();
-    builder.spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
+    let schema = stream.schema();
+    // Buffer of 2 lets the producer stay one batch ahead of the
+    // consumer without letting it run away; anything larger just
+    // adds latency and memory without improving throughput here.
+    let (tx, rx) = crossbeam_channel::bounded::<Result<RecordBatch>>(2);
+    let waker = Arc::new(AtomicWaker::new());
+
+    let waker_inner = Arc::clone(&waker);
+    // `SpawnedTask::spawn_blocking` is the cancel-safe wrapper.
+    // The handle is deliberately dropped — the blocking task runs
+    // to the end of the upstream stream (or until the consumer
+    // drops `rx`, which makes `tx.send` fail and breaks the loop).
+    drop(SpawnedTask::spawn_blocking(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| {
-                DataFusionError::External(
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = tx.send(Err(DataFusionError::External(
                     format!("pin_stream_to_thread: rt build failed: {e}").into(),
-                )
-            })?;
-        rt.block_on(async move {
-            while let Some(batch) = stream.next().await {
-                if tx.send(batch).await.is_err() {
-                    break;
+                )));
+                waker_inner.wake();
+                return;
+            }
+        };
+        // One `block_on` per batch: the current-thread runtime
+        // drives upstream's `.await` points here, then we hand the
+        // batch off through crossbeam synchronously. A failed send
+        // means the consumer dropped — stop pulling.
+        while let Some(batch) = rt.block_on(stream.next()) {
+            if tx.send(batch).is_err() {
+                break;
+            }
+            waker_inner.wake();
+        }
+        drop(tx);
+        waker_inner.wake();
+    }));
+
+    Box::pin(PinnedStream { rx, waker, schema })
+}
+
+struct PinnedStream {
+    rx: crossbeam_channel::Receiver<Result<RecordBatch>>,
+    waker: Arc<futures::task::AtomicWaker>,
+    schema: SchemaRef,
+}
+
+impl futures::Stream for PinnedStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use crossbeam_channel::TryRecvError;
+        use std::task::Poll;
+
+        let this = self.get_mut();
+        match this.rx.try_recv() {
+            Ok(item) => Poll::Ready(Some(item)),
+            Err(TryRecvError::Disconnected) => Poll::Ready(None),
+            Err(TryRecvError::Empty) => {
+                this.waker.register(cx.waker());
+                // Recheck after registering to close the race where
+                // the producer enqueued and woke between our first
+                // try_recv and the register.
+                match this.rx.try_recv() {
+                    Ok(item) => Poll::Ready(Some(item)),
+                    Err(TryRecvError::Disconnected) => Poll::Ready(None),
+                    Err(TryRecvError::Empty) => Poll::Pending,
                 }
             }
-        });
-        Ok(())
-    });
-    builder.build()
+        }
+    }
+}
+
+impl crate::RecordBatchStream for PinnedStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
 }
 
 #[cfg(test)]
@@ -4955,11 +5012,10 @@ mod tests {
             .unwrap(),
         );
 
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(
-                col("k", &schema).unwrap(),
-                "k".to_string(),
-            )]);
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("k", &schema).unwrap(),
+            "k".to_string(),
+        )]);
         let aggregates = vec![Arc::new(
             AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema).unwrap()])
                 .schema(Arc::clone(&schema))
@@ -5003,7 +5059,7 @@ mod tests {
                 inner: pinned,
                 threads: Arc::clone(&outer_threads),
             });
-            let handle = tokio::spawn(async move {
+            let handle = datafusion_common_runtime::SpawnedTask::spawn(async move {
                 let mut stream = outer_probe;
                 let mut rows = 0usize;
                 while let Some(batch) = stream.next().await {
@@ -5022,7 +5078,7 @@ mod tests {
         let mut outer_switches = 0;
         let mut outer_polls = 0;
         for (p, handle) in handles {
-            let (_rows, inner_threads, outer_threads) = handle.await.unwrap();
+            let (_rows, inner_threads, outer_threads) = handle.join().await.unwrap();
             let i = inner_threads.lock().unwrap();
             let o = outer_threads.lock().unwrap();
             let i_unique: HashSet<_> = i.iter().collect();
