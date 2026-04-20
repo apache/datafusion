@@ -1856,6 +1856,7 @@ version = "53.0.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "chrono",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-datasource",
