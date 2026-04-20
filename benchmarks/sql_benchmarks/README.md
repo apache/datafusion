@@ -241,9 +241,9 @@ using `CREATE TABLE AS (..)` or similar.
 <td>
 
 The result directive declares the expected result file used during verification. A path to a file is required on the
-same line as the result directive. The file is parsed when the benchmark file is loaded, and must be a pipe-delimited
-CSV file with a header row. During verification, these expected rows are compared with the rows produced by the last
-saved `SELECT` or `WITH` statement from the `run` directive. <br/><br/>Example:<br/>
+same line as the result directive. The file is parsed only during verification, and must be a pipe-delimited CSV file
+with a header row. During verification, these expected rows are compared with the rows produced by the last saved
+`SELECT` or `WITH` statement from the `run` directive. <br/><br/>Example:<br/>
 <blockquote>
 result sql_benchmarks/imdb/results/${QUERY_NUMBER_PADDED}.csv  
 </blockquote>

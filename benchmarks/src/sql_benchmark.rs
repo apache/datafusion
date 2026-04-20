@@ -344,14 +344,15 @@ impl SqlBenchmark {
             return Ok(());
         }
 
-        // Get the stored results from the last run
-        let Some(actual_results) = self.last_results.as_ref() else {
+        if self.last_results.is_none() {
             return Err(exec_datafusion_err!(
                 "No results available for verification. Run the benchmark first."
             ));
-        };
+        }
 
         info!("Verifying results...");
+
+        self.load_expected_result_files(ctx).await?;
 
         // Get the first result query (assuming only one for now)
         let query = &self.result_queries[0];
@@ -359,6 +360,10 @@ impl SqlBenchmark {
             let results = ctx.sql(&query.query).await?.collect().await?;
             format_record_batches(&results)
         } else {
+            let actual_results = self
+                .last_results
+                .as_ref()
+                .expect("last_results should be present after successful run");
             format_record_batches(actual_results)
         }?;
 
@@ -374,6 +379,23 @@ impl SqlBenchmark {
         if let Some(queries) = cleanup_queries {
             for query in queries {
                 let _ = ctx.sql(query).await?.collect().await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn load_expected_result_files(&mut self, ctx: &SessionContext) -> Result<()> {
+        for query in &mut self.result_queries {
+            if query.query.trim().is_empty() {
+                let Some(path) = query.path.clone() else {
+                    continue;
+                };
+
+                let loaded_query =
+                    read_query_from_file(ctx, path, &HashMap::new()).await?;
+                query.column_count = loaded_query.column_count;
+                query.expected_result = loaded_query.expected_result;
             }
         }
 
@@ -743,9 +765,7 @@ impl BenchmarkDirective {
             BenchmarkDirective::ResultQuery => {
                 Self::process_result_query(bench, reader, line, splits)
             }
-            BenchmarkDirective::Results => {
-                Self::process_results(ctx, bench, reader, splits).await
-            }
+            BenchmarkDirective::Results => Self::process_results(bench, reader, splits),
             BenchmarkDirective::Template => {
                 Self::process_template(ctx, bench, reader, line, splits).await
             }
@@ -940,8 +960,7 @@ impl BenchmarkDirective {
         Ok(())
     }
 
-    async fn process_results(
-        ctx: &SessionContext,
+    fn process_results(
         bench: &mut SqlBenchmark,
         reader: &BenchmarkFileReader,
         splits: &[&str],
@@ -955,8 +974,6 @@ impl BenchmarkDirective {
             ));
         }
 
-        let bq = read_query_from_file(ctx, splits[1], &bench.replacement_mapping).await?;
-
         if !bench.result_queries.is_empty() {
             return Err(exec_datafusion_err!(
                 "{}",
@@ -964,7 +981,14 @@ impl BenchmarkDirective {
             ));
         }
 
-        bench.result_queries.push(bq);
+        let path = process_replacements(splits[1], &bench.replacement_mapping)?;
+
+        bench.result_queries.push(BenchmarkQuery {
+            path: Some(path),
+            query: String::new(),
+            column_count: 0,
+            expected_result: vec![],
+        });
 
         Ok(())
     }
@@ -1893,7 +1917,7 @@ NULL|(empty)
     }
 
     #[tokio::test]
-    async fn parser_accepts_result_file() {
+    async fn parser_records_result_file_without_parsing_contents() {
         let temp_dir = tempdir().expect("failed to create benchmark test directory");
         let result_path =
             write_test_file(&temp_dir, "result.csv", "col_a|col_b\n1|one\nNULL|two\n");
@@ -1913,14 +1937,8 @@ NULL|(empty)
             .expect("result file should be parsed");
 
         assert_eq!(query.path, Some(result_path.to_string_lossy().into_owned()));
-        assert_eq!(query.column_count, 2);
-        assert_eq!(
-            query.expected_result,
-            vec![
-                vec!["1".to_string(), "one".to_string()],
-                vec!["NULL".to_string(), "two".to_string()]
-            ]
-        );
+        assert_eq!(query.column_count, 0);
+        assert!(query.expected_result.is_empty());
     }
 
     #[tokio::test]
@@ -2521,7 +2539,8 @@ SELECT '${BENCH_NAME}', '${BENCH_GROUP}', '${BENCH_SUBGROUP}'
             .first()
             .expect("result query should be parsed");
         assert_eq!(query.path, Some(result_path.to_string_lossy().into_owned()));
-        assert_eq!(query.expected_result, vec![vec!["1".to_string()]]);
+        assert_eq!(query.column_count, 0);
+        assert!(query.expected_result.is_empty());
     }
 
     #[tokio::test]
@@ -2531,7 +2550,7 @@ SELECT '${BENCH_NAME}', '${BENCH_GROUP}', '${BENCH_SUBGROUP}'
     }
 
     #[tokio::test]
-    async fn parser_rejects_missing_result_file() {
+    async fn parser_accepts_missing_result_file() {
         let temp_dir = tempdir().expect("failed to create benchmark test directory");
         let missing_path = temp_dir.path().join("missing_result.csv");
         let benchmark_path = write_test_file(
@@ -2540,13 +2559,23 @@ SELECT '${BENCH_NAME}', '${BENCH_GROUP}', '${BENCH_SUBGROUP}'
             &format!("result {}\n", missing_path.display()),
         );
 
-        let result = parse_benchmark_file(&benchmark_path).await;
+        let benchmark = parse_benchmark_file(&benchmark_path)
+            .await
+            .expect("benchmark should parse");
 
-        assert_result_error_contains(result, "missing_result.csv");
+        let query = benchmark
+            .result_queries()
+            .first()
+            .expect("result file should be parsed");
+        assert_eq!(
+            query.path,
+            Some(missing_path.to_string_lossy().into_owned())
+        );
+        assert!(query.expected_result.is_empty());
     }
 
     #[tokio::test]
-    async fn parser_rejects_malformed_result_file() {
+    async fn parser_accepts_malformed_result_file() {
         let temp_dir = tempdir().expect("failed to create benchmark test directory");
         let result_path = temp_dir.path().join("malformed_result.csv");
         fs::write(&result_path, [0xff]).expect("failed to write malformed result file");
@@ -2556,9 +2585,16 @@ SELECT '${BENCH_NAME}', '${BENCH_GROUP}', '${BENCH_SUBGROUP}'
             &format!("result {}\n", result_path.display()),
         );
 
-        let result = parse_benchmark_file(&benchmark_path).await;
+        let benchmark = parse_benchmark_file(&benchmark_path)
+            .await
+            .expect("benchmark should parse");
 
-        assert_result_error_contains(result, "CSV");
+        let query = benchmark
+            .result_queries()
+            .first()
+            .expect("result file should be parsed");
+        assert_eq!(query.path, Some(result_path.to_string_lossy().into_owned()));
+        assert!(query.expected_result.is_empty());
     }
 
     // Lifecycle tests cover initialization, assertions, and cleanup execution.
@@ -3089,15 +3125,14 @@ SELECT 1;
 
     #[tokio::test]
     async fn verify_uses_last_results_for_result_file_entries() {
-        let mut benchmark = parse_benchmark("run\nSELECT 1 AS value\n")
-            .await
-            .expect("benchmark should parse");
-        benchmark.result_queries.push(BenchmarkQuery {
-            path: Some("unused.csv".to_string()),
-            query: String::new(),
-            column_count: 1,
-            expected_result: vec![vec!["1".to_string()]],
-        });
+        let temp_dir = tempdir().expect("failed to create benchmark test directory");
+        let result_path = write_test_file(&temp_dir, "result.csv", "value\n1\n");
+        let mut benchmark = parse_benchmark(&format!(
+            "result {}\n\nrun\nSELECT 1 AS value\n",
+            result_path.display()
+        ))
+        .await
+        .expect("benchmark should parse");
         let ctx = SessionContext::new();
 
         benchmark.run(&ctx, true).await.expect("run should succeed");
@@ -3106,19 +3141,53 @@ SELECT 1;
 
     #[tokio::test]
     async fn verify_uses_last_results_for_zero_row_result_file_entries() {
-        let mut benchmark = parse_benchmark("run\nSELECT 1 AS value WHERE false\n")
-            .await
-            .expect("benchmark should parse");
-        benchmark.result_queries.push(BenchmarkQuery {
-            path: Some("unused.csv".to_string()),
-            query: String::new(),
-            column_count: 1,
-            expected_result: vec![],
-        });
+        let temp_dir = tempdir().expect("failed to create benchmark test directory");
+        let result_path = write_test_file(&temp_dir, "result.csv", "value\n");
+        let mut benchmark = parse_benchmark(&format!(
+            "result {}\n\nrun\nSELECT 1 AS value WHERE false\n",
+            result_path.display()
+        ))
+        .await
+        .expect("benchmark should parse");
         let ctx = SessionContext::new();
 
         benchmark.run(&ctx, true).await.expect("run should succeed");
         benchmark.verify(&ctx).await.expect("verify should pass");
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_missing_result_file() {
+        let temp_dir = tempdir().expect("failed to create benchmark test directory");
+        let missing_path = temp_dir.path().join("missing_result.csv");
+        let mut benchmark = parse_benchmark(&format!(
+            "result {}\n\nrun\nSELECT 1 AS value\n",
+            missing_path.display()
+        ))
+        .await
+        .expect("benchmark should parse");
+        let ctx = SessionContext::new();
+
+        benchmark.run(&ctx, true).await.expect("run should succeed");
+
+        assert_result_error_contains(benchmark.verify(&ctx).await, "missing_result.csv");
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_malformed_result_file() {
+        let temp_dir = tempdir().expect("failed to create benchmark test directory");
+        let result_path = temp_dir.path().join("malformed_result.csv");
+        fs::write(&result_path, [0xff]).expect("failed to write malformed result file");
+        let mut benchmark = parse_benchmark(&format!(
+            "result {}\n\nrun\nSELECT 1 AS value\n",
+            result_path.display()
+        ))
+        .await
+        .expect("benchmark should parse");
+        let ctx = SessionContext::new();
+
+        benchmark.run(&ctx, true).await.expect("run should succeed");
+
+        assert_result_error_contains(benchmark.verify(&ctx).await, "CSV");
     }
 
     #[tokio::test]
