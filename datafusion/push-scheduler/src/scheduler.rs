@@ -22,7 +22,10 @@ use std::sync::Arc;
 
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use tokio::runtime::Handle;
 
 use crate::plan::{PipelinePlan, PipelinePlanner};
@@ -75,6 +78,24 @@ pub(crate) fn spawn_local_fifo(task: Task) {
 /// Re-export for convenience.
 pub use crate::worker_pool::is_worker;
 
+/// Returns `true` if `plan`'s tree contains any operator the planner
+/// would cut into a separate pipeline. Mirrors the predicates in
+/// [`PipelinePlanner::visit_operator`](crate::plan::PipelinePlanner).
+fn has_cut(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    if plan.downcast_ref::<RepartitionExec>().is_some()
+        || plan.downcast_ref::<CoalescePartitionsExec>().is_some()
+    {
+        return true;
+    }
+    if let Some(sort) = plan.downcast_ref::<SortExec>() {
+        let input_parts = sort.input().output_partitioning().partition_count();
+        if sort.preserve_partitioning() || input_parts == 1 {
+            return true;
+        }
+    }
+    plan.children().iter().any(|c| has_cut(c))
+}
+
 /// Public, high-level scheduler handle.
 ///
 /// Owns a [`WorkerPool`]. Queries are submitted via [`Scheduler::schedule`]
@@ -106,11 +127,26 @@ impl Scheduler {
     }
 
     /// Compile and schedule an [`ExecutionPlan`].
+    ///
+    /// If the plan contains no breakers (`RepartitionExec`,
+    /// `CoalescePartitionsExec`, or a cuttable non-merging `SortExec`)
+    /// the scheduler short-circuits and returns the raw
+    /// `plan.execute(p)` streams unchanged — no task queue, no channels,
+    /// no worker dispatch. This avoids pure-overhead runs on simple
+    /// scan/filter/project queries where cutting buys nothing.
     pub fn schedule(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
     ) -> Result<ExecutionResults> {
+        if !has_cut(&plan) {
+            let num_partitions = plan.output_partitioning().partition_count();
+            let schema = plan.schema();
+            let streams = (0..num_partitions)
+                .map(|p| plan.execute(p, Arc::clone(&context)))
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(ExecutionResults::direct(schema, streams));
+        }
         let pipeline_plan = PipelinePlanner::new(plan, context).build()?;
         Ok(self.schedule_plan(pipeline_plan))
     }

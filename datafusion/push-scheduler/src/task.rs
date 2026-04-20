@@ -81,7 +81,10 @@ pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> ExecutionResults {
         })
         .collect();
 
-    ExecutionResults { streams, context }
+    ExecutionResults {
+        schema: Arc::clone(&context.schema),
+        kind: ExecutionResultsKind::Scheduled(streams),
+    }
 }
 
 /// One schedulable unit — an output partition of a pipeline that *may* be
@@ -289,29 +292,72 @@ impl ArcWake for TaskWaker {
 // Caller-facing result streams.
 // ---------------------------------------------------------------------------
 
-/// Results of scheduling a [`PipelinePlan`]. Drop to cancel.
+/// Results of scheduling a plan. Drop to cancel.
+///
+/// Two shapes:
+///
+/// * **Scheduled** — a [`PipelinePlan`] with ≥1 breaker cut is driving
+///   execution on the scheduler's worker pool. Each output partition is
+///   fed by its own mpsc channel from a `Task`.
+/// * **Direct** — the plan had no breakers (no `RepartitionExec`,
+///   `CoalescePartitionsExec`, or cuttable `SortExec`), so the scheduler
+///   is a no-op: we hand back the raw `ExecutionPlan::execute(p)` streams
+///   unchanged. Avoids all scheduler overhead for trivially simple
+///   queries.
 pub struct ExecutionResults {
-    streams: Vec<ExecutionResultStream>,
-    /// Anchor for the shared execution state. Each
-    /// [`ExecutionResultStream`] carries its own `Arc`, but we hold an
-    /// extra reference here so [`Self::stream`] can move it into the
-    /// adapter wrapping the merged stream.
-    context: Arc<ExecutionContext>,
+    schema: SchemaRef,
+    kind: ExecutionResultsKind,
+}
+
+enum ExecutionResultsKind {
+    Scheduled(Vec<ExecutionResultStream>),
+    Direct(Vec<SendableRecordBatchStream>),
 }
 
 impl ExecutionResults {
+    pub(crate) fn direct(
+        schema: SchemaRef,
+        streams: Vec<SendableRecordBatchStream>,
+    ) -> Self {
+        Self {
+            schema,
+            kind: ExecutionResultsKind::Direct(streams),
+        }
+    }
+
     /// Merge all partitions into one [`SendableRecordBatchStream`].
     pub fn stream(self) -> SendableRecordBatchStream {
-        let schema = Arc::clone(&self.context.schema);
-        Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            futures::stream::select_all(self.streams),
-        ))
+        match self.kind {
+            ExecutionResultsKind::Scheduled(streams) => {
+                // Each `ExecutionResultStream` already holds its own
+                // `Arc<ExecutionContext>`, so the task state stays alive
+                // until all partitions are drained.
+                Box::pin(RecordBatchStreamAdapter::new(
+                    self.schema,
+                    futures::stream::select_all(streams),
+                ))
+            }
+            ExecutionResultsKind::Direct(mut streams) => {
+                if streams.len() == 1 {
+                    streams.remove(0)
+                } else {
+                    Box::pin(RecordBatchStreamAdapter::new(
+                        self.schema,
+                        futures::stream::select_all(streams),
+                    ))
+                }
+            }
+        }
     }
 
     /// Return one [`SendableRecordBatchStream`] per output partition.
     pub fn stream_partitioned(self) -> Vec<SendableRecordBatchStream> {
-        self.streams.into_iter().map(|s| Box::pin(s) as _).collect()
+        match self.kind {
+            ExecutionResultsKind::Scheduled(streams) => {
+                streams.into_iter().map(|s| Box::pin(s) as _).collect()
+            }
+            ExecutionResultsKind::Direct(streams) => streams,
+        }
     }
 }
 

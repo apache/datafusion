@@ -16,21 +16,28 @@
 // under the License.
 
 //! [`InboxExec`] — leaf `ExecutionPlan` whose per-partition streams are
-//! fed by channels the scheduler fills from an upstream breaker's output.
+//! fed by an upstream breaker's output via [`ExecutionPipeline::push`].
 //!
 //! PR apache/datafusion#2226 calls these "inboxes". When
 //! [`PipelinePlanner`](crate::plan::PipelinePlanner) cuts at a breaker,
 //! the surrounding pull-based subtree is rewritten to replace the breaker
-//! position (or, for multi-child nodes, each of the original children)
-//! with an `InboxExec`. The breaker's output is then *pushed* into the
-//! corresponding channels via [`ExecutionPipeline::push`], and the wrapped
-//! subtree's ordinary `plan.execute(partition)` call pulls from the
-//! `InboxExec` stream as if nothing had changed.
+//! position (or each of a multi-child node's children) with an
+//! `InboxExec`. The breaker's output is then *pushed* into the
+//! corresponding inbox; the wrapped subtree's ordinary
+//! `plan.execute(partition)` call pulls from the inbox stream as if
+//! nothing had changed.
+//!
+//! The per-partition channel is a plain [`Mutex<VecDeque<RecordBatch>>`]
+//! plus a stored [`Waker`] — not a `tokio::sync::mpsc`. For our exactly
+//! single-producer / single-consumer use case this is materially cheaper
+//! than tokio mpsc (no atomic ref counting on every send, no linked-list
+//! management).
 
-use std::any::Any;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll, Waker};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -44,47 +51,97 @@ use datafusion_physical_plan::{
 use futures::Stream;
 use parking_lot::Mutex;
 
-/// Sender side of an [`InboxExec`]'s per-partition channels. One
-/// `InboxSendGroup` corresponds to one child of the ExecutionPipeline's
-/// wrapped plan.
+/// Per-partition state shared between the push side (scheduler) and the
+/// pull side (wrapped `plan.execute(p)` stream).
+struct InboxPartition {
+    queue: Mutex<VecDeque<RecordBatch>>,
+    waker: Mutex<Option<Waker>>,
+    closed: AtomicBool,
+    /// Set to true once the stream's `poll_next` sees an EOS so we don't
+    /// have to keep touching the closed atomic after we've observed it.
+    drained: AtomicBool,
+}
+
+impl InboxPartition {
+    fn new() -> Self {
+        Self {
+            queue: Mutex::new(VecDeque::new()),
+            waker: Mutex::new(None),
+            closed: AtomicBool::new(false),
+            drained: AtomicBool::new(false),
+        }
+    }
+
+    #[inline]
+    fn wake(&self) {
+        let waker = self.waker.lock().take();
+        if let Some(w) = waker {
+            w.wake();
+        }
+    }
+}
+
+/// Sender side of an [`InboxExec`]'s per-partition queues. One
+/// `InboxSendGroup` corresponds to one child of the surrounding
+/// `ExecutionPipeline`'s rewritten plan.
 #[derive(Debug)]
 pub(crate) struct InboxSendGroup {
-    senders: Vec<Mutex<Option<tokio::sync::mpsc::UnboundedSender<Result<RecordBatch>>>>>,
+    partitions: Vec<Arc<InboxPartition>>,
+}
+
+impl std::fmt::Debug for InboxPartition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InboxPartition")
+            .field("queue_len", &self.queue.lock().len())
+            .field("closed", &self.closed.load(Ordering::Relaxed))
+            .finish()
+    }
 }
 
 impl InboxSendGroup {
-    /// Push a batch into `partition`. Ignores the send if the receiver
-    /// was dropped (query cancelled) — the outer pipeline will observe
-    /// cancellation through its own output channel.
+    /// Push a batch into `partition`. Wakes the consumer only on the
+    /// empty→non-empty transition.
     pub(crate) fn push(&self, partition: usize, batch: RecordBatch) -> Result<()> {
-        if let Some(sender) = &*self.senders[partition].lock() {
-            let _ = sender.send(Ok(batch));
+        let p = &self.partitions[partition];
+        if p.drained.load(Ordering::Relaxed) {
+            // Consumer dropped its stream (query cancelled). Nothing to do.
+            return Ok(());
+        }
+        let was_empty = {
+            let mut q = p.queue.lock();
+            let was_empty = q.is_empty();
+            q.push_back(batch);
+            was_empty
+        };
+        if was_empty {
+            p.wake();
         }
         Ok(())
     }
 
-    /// Drop the sender for `partition` so the receiver's stream yields
-    /// `Ready(None)`.
+    /// Close the sender for `partition` — the consumer's stream will
+    /// yield `Ready(None)` once its queue is drained.
     pub(crate) fn close(&self, partition: usize) {
-        let _ = self.senders[partition].lock().take();
+        let p = &self.partitions[partition];
+        p.closed.store(true, Ordering::SeqCst);
+        p.wake();
     }
 }
 
-/// Leaf `ExecutionPlan` backed by N tokio mpsc channels — one per output
-/// partition. `execute(p, _)` claims the receiver for partition `p` and
-/// returns a stream that drains it. A given partition may only be
-/// executed once.
+/// Leaf `ExecutionPlan` backed by N push-side queues — one per output
+/// partition. `execute(p, _)` claims the stream for partition `p`; a
+/// given partition may only be executed once.
 pub struct InboxExec {
     schema: SchemaRef,
     properties: Arc<PlanProperties>,
-    receivers:
-        Vec<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Result<RecordBatch>>>>>,
+    partitions: Vec<Arc<InboxPartition>>,
+    executed: Mutex<Vec<bool>>,
 }
 
 impl std::fmt::Debug for InboxExec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InboxExec")
-            .field("partitions", &self.receivers.len())
+            .field("partitions", &self.partitions.len())
             .finish()
     }
 }
@@ -97,20 +154,19 @@ impl InboxExec {
         schema: SchemaRef,
         properties: Arc<PlanProperties>,
     ) -> (Arc<Self>, InboxSendGroup) {
-        let partitions = properties.partitioning.partition_count();
-        let mut senders = Vec::with_capacity(partitions);
-        let mut receivers = Vec::with_capacity(partitions);
-        for _ in 0..partitions {
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            senders.push(Mutex::new(Some(tx)));
-            receivers.push(Mutex::new(Some(rx)));
-        }
+        let n = properties.partitioning.partition_count();
+        let partitions: Vec<_> =
+            (0..n).map(|_| Arc::new(InboxPartition::new())).collect();
+        let sender_handles = partitions.iter().map(Arc::clone).collect();
         let inbox = Arc::new(Self {
             schema,
             properties,
-            receivers,
+            partitions,
+            executed: Mutex::new(vec![false; n]),
         });
-        let group = InboxSendGroup { senders };
+        let group = InboxSendGroup {
+            partitions: sender_handles,
+        };
         (inbox, group)
     }
 }
@@ -121,7 +177,7 @@ impl DisplayAs for InboxExec {
         _t: DisplayFormatType,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        write!(f, "InboxExec(partitions={})", self.receivers.len())
+        write!(f, "InboxExec(partitions={})", self.partitions.len())
     }
 }
 
@@ -165,39 +221,73 @@ impl ExecutionPlan for InboxExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let receiver = self.receivers[partition].lock().take().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "InboxExec partition {partition} executed twice",
-            ))
-        })?;
+        {
+            let mut executed = self.executed.lock();
+            if executed[partition] {
+                return Err(DataFusionError::Internal(format!(
+                    "InboxExec partition {partition} executed twice",
+                )));
+            }
+            executed[partition] = true;
+        }
         Ok(Box::pin(InboxStream {
             schema: Arc::clone(&self.schema),
-            receiver,
+            state: Arc::clone(&self.partitions[partition]),
         }))
     }
 }
 
-/// Trait bound helper — `ExecutionPlan: Any + Debug + DisplayAs + Send + Sync`.
-/// We derive `Any` via the blanket impl in `std::any::Any` because
-/// `InboxExec: 'static`.
-const _: fn() = || {
-    fn assert_any<T: Any + ?Sized>() {}
-    assert_any::<dyn ExecutionPlan>();
-};
-
 struct InboxStream {
     schema: SchemaRef,
-    receiver: tokio::sync::mpsc::UnboundedReceiver<Result<RecordBatch>>,
+    state: Arc<InboxPartition>,
+}
+
+impl Drop for InboxStream {
+    fn drop(&mut self) {
+        // Tell the producer it can stop pushing on this partition.
+        self.state.drained.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Stream for InboxStream {
     type Item = Result<RecordBatch>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.receiver.poll_recv(cx)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Fast path: take a batch if one is queued.
+        {
+            let mut q = self.state.queue.lock();
+            if let Some(batch) = q.pop_front() {
+                return Poll::Ready(Some(Ok(batch)));
+            }
+        }
+        // Closed? Drain done.
+        if self.state.closed.load(Ordering::SeqCst) {
+            // Race: a push could have raced between our pop attempt and
+            // this check. Re-check the queue.
+            let mut q = self.state.queue.lock();
+            if let Some(batch) = q.pop_front() {
+                return Poll::Ready(Some(Ok(batch)));
+            }
+            return Poll::Ready(None);
+        }
+        // Park. Ordering matters: install waker FIRST, then recheck the
+        // queue + closed flag to avoid losing a wake that slipped in
+        // between the initial check and waker install.
+        *self.state.waker.lock() = Some(cx.waker().clone());
+        {
+            let mut q = self.state.queue.lock();
+            if let Some(batch) = q.pop_front() {
+                // Wake-up from our own installed waker is harmless; drop
+                // it explicitly to avoid a redundant re-poll.
+                let _ = self.state.waker.lock().take();
+                return Poll::Ready(Some(Ok(batch)));
+            }
+        }
+        if self.state.closed.load(Ordering::SeqCst) {
+            let _ = self.state.waker.lock().take();
+            return Poll::Ready(None);
+        }
+        Poll::Pending
     }
 }
 
