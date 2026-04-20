@@ -55,9 +55,10 @@ Variables are supported in two forms:
 
 * string substitution based on environment variables (with default values if unset): \${ENV_VAR} and
   \${ENV_VAR:-default}.
-* if / else based on whether an environment variable is true or not (\${ENV_VAR|true value|false value}). In this
-  form only the value `true` (case-insensitive) selects the true branch; any other set value selects the false branch.
-  If ENV_VAR is unset the benchmark will return an error.
+* if / else based on whether an environment variable is true or not
+  (\${ENV_VAR:-default|true value|false value}). In this form only the value `true` (case-insensitive) selects the
+  true branch; any other set value selects the false branch. If ENV_VAR is unset, `default` is used to select the
+  branch.
 
 Comments in files are supported with lines starting with # or --.
 

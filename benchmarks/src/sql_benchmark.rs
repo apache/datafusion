@@ -1310,7 +1310,8 @@ fn replace_all<E>(
 }
 
 static TRUE_FALSE_REPLACEMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\$\{(\w+)\|([^|]+)\|([^}]+)}").expect("Regex failed to compile")
+    Regex::new(r"\$\{(\w+)(?::-([^|}]+))?\|([^|]+)\|([^}]+)}")
+        .expect("Regex failed to compile")
 });
 
 static VARIABLE_REPLACEMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -1318,7 +1319,7 @@ static VARIABLE_REPLACEMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Replace all `${KEY}` or `${KEY:-default}` placeholders in a string according to the mapping.
-/// Also handles `${KEY|True value|false value}` syntax.
+/// Also handles `${KEY:-default|True value|false value}` syntax.
 fn process_replacements(
     input: &str,
     replacement_map: &HashMap<String, String>,
@@ -1333,13 +1334,14 @@ fn process_replacements_with_env(
 ) -> Result<String> {
     debug!("processing replacements for line '{input}'");
 
-    // handle ${VAR|true value|false value} syntax
+    // handle ${VAR:-default|true value|false value} syntax
     let replacement = |caps: &regex::Captures| -> Result<String> {
         let key = &caps[1];
-        let true_val = &caps[2];
-        let false_val = &caps[3];
+        let default = caps.get(2).map(|m| m.as_str().to_string());
+        let true_val = &caps[3];
+        let false_val = &caps[4];
 
-        let value = lookup_replacement_value(key, replacement_map, &get_env);
+        let value = lookup_replacement_value(key, replacement_map, &get_env).or(default);
 
         match value {
             Some(v) if v.eq_ignore_ascii_case("true") => Ok(true_val.to_string()),
@@ -1690,7 +1692,7 @@ mod tests {
         let env = replacement_map(&[("USE_PARQUET", "TrUe")]);
 
         let actual = process_replacements_with_env(
-            "load_${USE_PARQUET|parquet|csv}.sql",
+            "load_${USE_PARQUET:-false|parquet|csv}.sql",
             &replacements,
             |key| env.get(key).cloned(),
         )
@@ -1705,7 +1707,7 @@ mod tests {
         let env = replacement_map(&[("USE_PARQUET", "false")]);
 
         let actual = process_replacements_with_env(
-            "load_${USE_PARQUET|parquet|csv}.sql",
+            "load_${USE_PARQUET:-true|parquet|csv}.sql",
             &replacements,
             |key| env.get(key).cloned(),
         )
@@ -1719,7 +1721,7 @@ mod tests {
         let replacements = replacement_map(&[("USE_PARQUET", "true")]);
 
         let actual = process_replacements_with_env(
-            "load_${USE_PARQUET|parquet|csv}.sql",
+            "load_${USE_PARQUET:-false|parquet|csv}.sql",
             &replacements,
             |_| None,
         )
@@ -1734,7 +1736,7 @@ mod tests {
         let env = replacement_map(&[("USE_PARQUET", "true")]);
 
         let actual = process_replacements_with_env(
-            "load_${USE_PARQUET|parquet|csv}.sql",
+            "load_${USE_PARQUET:-true|parquet|csv}.sql",
             &replacements,
             |key| env.get(key).cloned(),
         )
@@ -1744,7 +1746,35 @@ mod tests {
     }
 
     #[test]
-    fn process_replacements_reports_missing_true_false_env_variable() {
+    fn process_replacements_uses_true_false_default_for_missing_true_value() {
+        let replacements = HashMap::new();
+
+        let actual = process_replacements_with_env(
+            "load_${USE_PARQUET:-true|parquet|csv}.sql",
+            &replacements,
+            |_| None,
+        )
+        .expect("replacement should succeed");
+
+        assert_eq!(actual, "load_parquet.sql");
+    }
+
+    #[test]
+    fn process_replacements_uses_true_false_default_for_missing_false_value() {
+        let replacements = HashMap::new();
+
+        let actual = process_replacements_with_env(
+            "load_${USE_PARQUET:-false|parquet|csv}.sql",
+            &replacements,
+            |_| None,
+        )
+        .expect("replacement should succeed");
+
+        assert_eq!(actual, "load_csv.sql");
+    }
+
+    #[test]
+    fn process_replacements_reports_missing_true_false_variable_without_default() {
         let replacements = HashMap::new();
 
         let error = process_replacements_with_env(
@@ -1768,7 +1798,7 @@ mod tests {
         let env = replacement_map(&[("USE_TYPED_PATH", "true")]);
 
         let actual = process_replacements_with_env(
-            "${USE_TYPED_PATH|data.${FILE_TYPE}|data.csv}",
+            "${USE_TYPED_PATH:-false|data.${FILE_TYPE}|data.csv}",
             &replacements,
             |key| env.get(key).cloned(),
         )
