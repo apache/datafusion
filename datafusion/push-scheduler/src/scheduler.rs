@@ -24,7 +24,7 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::ExecutionPlan;
 use tokio::runtime::Handle;
 
 use crate::plan::{PipelinePlan, PipelinePlanner};
@@ -133,12 +133,8 @@ impl Scheduler {
         context: Arc<TaskContext>,
     ) -> Result<ExecutionResults> {
         if !has_cut(&plan) {
-            let num_partitions = plan.output_partitioning().partition_count();
             let schema = plan.schema();
-            let streams = (0..num_partitions)
-                .map(|p| plan.execute(p, Arc::clone(&context)))
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(ExecutionResults::direct(schema, streams));
+            return Ok(ExecutionResults::direct(schema, plan, context));
         }
         let pipeline_plan = PipelinePlanner::new(plan, context).build()?;
         Ok(self.schedule_plan(pipeline_plan))

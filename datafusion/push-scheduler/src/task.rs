@@ -27,8 +27,9 @@ use std::task::{Context, Poll};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::{ExecutionPlan, execute_stream, execute_stream_partitioned};
 use futures::channel::mpsc;
 use futures::task::ArcWake;
 use futures::{Stream, StreamExt, ready};
@@ -311,17 +312,26 @@ pub struct ExecutionResults {
 
 enum ExecutionResultsKind {
     Scheduled(Vec<ExecutionResultStream>),
-    Direct(Vec<SendableRecordBatchStream>),
+    /// No breakers — defer execution to the wrapped plan so `stream()`
+    /// and `stream_partitioned()` match the default path's
+    /// `execute_stream` / `execute_stream_partitioned` behaviour
+    /// (including wrapping multi-partition plans in
+    /// `CoalescePartitionsExec` for concurrent per-partition reads).
+    Direct {
+        plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+    },
 }
 
 impl ExecutionResults {
     pub(crate) fn direct(
         schema: SchemaRef,
-        streams: Vec<SendableRecordBatchStream>,
+        plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
     ) -> Self {
         Self {
             schema,
-            kind: ExecutionResultsKind::Direct(streams),
+            kind: ExecutionResultsKind::Direct { plan, context },
         }
     }
 
@@ -337,15 +347,14 @@ impl ExecutionResults {
                     futures::stream::select_all(streams),
                 ))
             }
-            ExecutionResultsKind::Direct(mut streams) => {
-                if streams.len() == 1 {
-                    streams.remove(0)
-                } else {
+            ExecutionResultsKind::Direct { plan, context } => {
+                let schema = Arc::clone(&self.schema);
+                execute_stream(plan, context).unwrap_or_else(|e| {
                     Box::pin(RecordBatchStreamAdapter::new(
-                        self.schema,
-                        futures::stream::select_all(streams),
+                        schema,
+                        futures::stream::once(async move { Err(e) }),
                     ))
-                }
+                })
             }
         }
     }
@@ -356,7 +365,9 @@ impl ExecutionResults {
             ExecutionResultsKind::Scheduled(streams) => {
                 streams.into_iter().map(|s| Box::pin(s) as _).collect()
             }
-            ExecutionResultsKind::Direct(streams) => streams,
+            ExecutionResultsKind::Direct { plan, context } => {
+                execute_stream_partitioned(plan, context).unwrap_or_default()
+            }
         }
     }
 }
