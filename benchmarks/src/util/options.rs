@@ -71,12 +71,17 @@ pub struct CommonOpt {
     #[arg(long = "simulate-latency")]
     pub simulate_latency: bool,
 
-    /// Execute queries via `datafusion-push-scheduler` (the push-based
-    /// morsel-driven scheduler ported from apache/datafusion#2226) instead
-    /// of the default pull-based path. Work is dispatched across a
-    /// crossbeam-deque work-stealing pool of OS threads attached to the
-    /// ambient tokio runtime.
-    #[arg(long = "push-scheduler")]
+    /// Execute queries via `datafusion-push-scheduler` — the push-based
+    /// morsel-driven scheduler ported from apache/datafusion#2226. On by
+    /// default; pass `--push-scheduler=false` to fall back to the
+    /// pull-based path.
+    #[arg(
+        long = "push-scheduler",
+        default_value_t = true,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        action = clap::ArgAction::Set,
+    )]
     pub push_scheduler: bool,
 }
 
@@ -198,7 +203,7 @@ mod tests {
             sort_spill_reservation_bytes: None,
             debug: false,
             simulate_latency: false,
-            push_scheduler: false,
+            push_scheduler: true,
         };
 
         // With env var set, builder should succeed and have a memory pool
