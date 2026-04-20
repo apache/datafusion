@@ -29,7 +29,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::Result;
-use datafusion_push_scheduler::Scheduler;
+use datafusion_push_scheduler::{PipelinePlanner, Scheduler};
 use futures::StreamExt;
 
 /// Build a small test dataset with multiple partitions so repartition /
@@ -157,5 +157,23 @@ async fn aggregate_with_where_and_order_by_matches_default() -> Result<()> {
     let a = collect_default(&ctx, sql).await?;
     let b = collect_scheduler(&ctx, sql).await?;
     assert_eq!(normalise(&a), normalise(&b));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn planner_cuts_at_repartition_for_group_by() -> Result<()> {
+    // Confirm that the planner actually produces multiple pipelines for
+    // a query with a RepartitionExec — i.e. that Inbox rewiring is on.
+    let ctx = sample_context()?;
+    let sql = "SELECT grp, COUNT(*) FROM t GROUP BY grp";
+    let df = ctx.sql(sql).await?;
+    let plan = df.create_physical_plan().await?;
+    let pipeline_plan = PipelinePlanner::new(plan, ctx.task_ctx()).build()?;
+    assert!(
+        pipeline_plan.pipelines.len() >= 2,
+        "expected the group-by plan to be split into >=2 pipelines \
+         (breaker cut at RepartitionExec), got {}",
+        pipeline_plan.pipelines.len(),
+    );
     Ok(())
 }
