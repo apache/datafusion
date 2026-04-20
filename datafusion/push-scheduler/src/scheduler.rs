@@ -24,7 +24,6 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use tokio::runtime::Handle;
 
@@ -87,12 +86,6 @@ fn has_cut(plan: &Arc<dyn ExecutionPlan>) -> bool {
     {
         return true;
     }
-    if let Some(sort) = plan.downcast_ref::<SortExec>() {
-        let input_parts = sort.input().output_partitioning().partition_count();
-        if sort.preserve_partitioning() || input_parts == 1 {
-            return true;
-        }
-    }
     plan.children().iter().any(|c| has_cut(c))
 }
 
@@ -128,12 +121,12 @@ impl Scheduler {
 
     /// Compile and schedule an [`ExecutionPlan`].
     ///
-    /// If the plan contains no breakers (`RepartitionExec`,
-    /// `CoalescePartitionsExec`, or a cuttable non-merging `SortExec`)
-    /// the scheduler short-circuits and returns the raw
-    /// `plan.execute(p)` streams unchanged — no task queue, no channels,
-    /// no worker dispatch. This avoids pure-overhead runs on simple
-    /// scan/filter/project queries where cutting buys nothing.
+    /// If the plan contains no breakers (`RepartitionExec` or
+    /// `CoalescePartitionsExec`) the scheduler short-circuits and
+    /// returns the raw `plan.execute(p)` streams unchanged — no task
+    /// queue, no channels, no worker dispatch. This avoids pure-overhead
+    /// runs on simple scan/filter/project queries where cutting buys
+    /// nothing.
     pub fn schedule(
         &self,
         plan: Arc<dyn ExecutionPlan>,

@@ -20,18 +20,22 @@
 //! Follows PR apache/datafusion#2226 `plan.rs`: a depth-first walk that
 //! groups runs of pull-based operators into a single
 //! [`ExecutionPipeline`](crate::pipelines::execution::ExecutionPipeline)
-//! and cuts at:
-//!
-//! * [`RepartitionExec`] and [`CoalescePartitionsExec`] →
-//!   [`RepartitionPipeline`](crate::pipelines::repartition::RepartitionPipeline),
-//! * [`SortExec`] when not a merge-from-multiple-partitions →
-//!   [`SortPipeline`](crate::pipelines::sort::SortPipeline).
+//! and cuts at [`RepartitionExec`] and [`CoalescePartitionsExec`] —
+//! replacing them with [`RepartitionPipeline`](crate::pipelines::repartition::RepartitionPipeline).
 //!
 //! At each cut the surrounding `ExecutionPipeline` is rewritten so the
 //! breaker's position in the plan tree becomes an
 //! [`InboxExec`](crate::pipelines::inbox::InboxExec). The scheduler
 //! pushes the breaker's output into those inboxes; the wrapped subtree
 //! pulls from them as usual.
+//!
+//! `SortExec` is intentionally **not** cut. The in-tree `SortExec`
+//! participates in TopK dynamic-filter pushdown (sort bounds get
+//! published back to the scan through a shared
+//! `Arc<DynamicFilterPhysicalExpr>`), which a native push
+//! implementation would silently drop. Keeping `SortExec` inside an
+//! `ExecutionPipeline` preserves that pushdown and the default path's
+//! spill support.
 
 use std::sync::Arc;
 
@@ -41,13 +45,11 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use crate::pipeline::Pipeline;
 use crate::pipelines::execution::ExecutionPipeline;
 use crate::pipelines::repartition::RepartitionPipeline;
-use crate::pipelines::sort::SortPipeline;
 
 /// Points a pipeline's output at a specific input of another pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,29 +277,6 @@ impl PipelinePlanner {
                 parent,
                 plan.children().into_iter().cloned().collect(),
             )
-        } else if let Some(sort) = plan.downcast_ref::<SortExec>() {
-            // Merging-sort (single-output) with multiple input partitions
-            // is a gather + sort — keep it pull-based via ExecutionPipeline
-            // so the merge logic in SortExec stays in charge.
-            let input = sort.input();
-            let input_parts = input.output_partitioning().partition_count();
-            let preserve = sort.preserve_partitioning();
-            if preserve || input_parts == 1 {
-                let pipeline = Box::new(SortPipeline::try_new(
-                    sort.expr().clone(),
-                    sort.fetch(),
-                    input.schema(),
-                    input_parts,
-                    &self.task_context,
-                )?);
-                self.push_breaker(
-                    pipeline,
-                    parent,
-                    plan.children().into_iter().cloned().collect(),
-                )
-            } else {
-                self.visit_exec(plan, parent)
-            }
         } else {
             self.visit_exec(plan, parent)
         }

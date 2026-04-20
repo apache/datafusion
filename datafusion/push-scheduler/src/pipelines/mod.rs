@@ -20,4 +20,3 @@
 pub mod execution;
 pub mod inbox;
 pub mod repartition;
-pub mod sort;
