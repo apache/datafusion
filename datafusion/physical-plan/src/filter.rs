@@ -348,7 +348,6 @@ impl FilterExec {
         } else if !check_support(predicate, schema) {
             // Interval analysis is not applicable. Use ExpressionAnalyzer for
             // better selectivity when available, fall back to default_selectivity.
-            // Still pin NDV=1 for every `col = literal` column.
             let selectivity = expression_analyzer_registry
                 .and_then(|r| r.get_selectivity(predicate, &input_stats))
                 .unwrap_or(default_selectivity as f64 / 100.0);
