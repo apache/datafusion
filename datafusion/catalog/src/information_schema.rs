@@ -433,7 +433,7 @@ fn get_data_type_for_schema(native_type: &NativeType) -> Option<DataType> {
         NativeType::Binary => Some(DataType::Binary), // A tie
         NativeType::String => Some(DataType::Utf8), // A tie
         NativeType::Decimal(precision, scale) => {
-            Some(DataType::Decimal256(*precision, *scale)) // A tie, use the widest type
+            Some(DataType::Decimal128(*precision, *scale)) // A tie
         }
         NativeType::Timestamp(time_unit, timezone) => {
             Some(DataType::Timestamp(*time_unit, timezone.to_owned()))

@@ -21,7 +21,7 @@ use std::fmt::Display;
 use std::hash::Hash;
 
 use arrow::datatypes::{
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, IntervalUnit, TimeUnit,
+    DECIMAL_DEFAULT_SCALE, DECIMAL128_MAX_PRECISION, DataType, IntervalUnit, TimeUnit,
 };
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::utils::ListCoercion;
@@ -590,9 +590,9 @@ impl Display for ArrayFunctionArgument {
 }
 
 /// Constant that is used as a Decimal type for `get_example_types`
-/// Use Decimal256 precision as a reasonable default
+/// Use Decimal128 precision as a reasonable default
 const NATIVE_TYPE_DECIMAL: NativeType =
-    NativeType::Decimal(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+    NativeType::Decimal(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 
 /// Native types for `get_example_types`
 static EXAMPLE_NUMERIC_TYPES: &[NativeType] = &[
