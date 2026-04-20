@@ -19,7 +19,10 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
+use crate::util::{
+    BenchmarkRun, CommonOpt, QueryResult, collect_sql_via_push_scheduler,
+    print_memory_stats,
+};
 use clap::Args;
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{
@@ -255,7 +258,11 @@ impl RunOpt {
         let mut query_results = vec![];
         for i in 0..self.iterations() {
             let start = Instant::now();
-            let results = ctx.sql(sql).await?.collect().await?;
+            let results = if self.common.push_scheduler {
+                collect_sql_via_push_scheduler(ctx, sql).await?
+            } else {
+                ctx.sql(sql).await?.collect().await?
+            };
             let elapsed = start.elapsed();
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);

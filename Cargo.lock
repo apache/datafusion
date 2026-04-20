@@ -1811,6 +1811,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-proto",
+ "datafusion-push-scheduler",
  "env_logger",
  "futures",
  "libmimalloc-sys",
@@ -2571,6 +2572,24 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "log",
+]
+
+[[package]]
+name = "datafusion-push-scheduler"
+version = "53.0.0"
+dependencies = [
+ "ahash",
+ "arrow",
+ "crossbeam-deque",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-physical-expr",
+ "datafusion-physical-plan",
+ "futures",
+ "log",
+ "parking_lot",
+ "tokio",
 ]
 
 [[package]]

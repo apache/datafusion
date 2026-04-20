@@ -15,14 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Shared benchmark utilities
-pub mod latency_object_store;
-mod memory;
-mod options;
-pub mod push_scheduler;
-mod run;
+//! Concrete [`Pipeline`](crate::pipeline::Pipeline) implementations.
 
-pub use memory::print_memory_stats;
-pub use options::CommonOpt;
-pub use push_scheduler::collect_sql_via_push_scheduler;
-pub use run::{BenchQuery, BenchmarkRun, QueryResult};
+pub mod execution;
+pub mod repartition;
+pub mod sort;

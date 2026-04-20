@@ -70,6 +70,14 @@ pub struct CommonOpt {
     /// Adds random latency in the range 20-200ms to each object store operation.
     #[arg(long = "simulate-latency")]
     pub simulate_latency: bool,
+
+    /// Execute queries via `datafusion-push-scheduler` (the push-based
+    /// morsel-driven scheduler ported from apache/datafusion#2226) instead
+    /// of the default pull-based path. Work is dispatched across a
+    /// crossbeam-deque work-stealing pool of OS threads attached to the
+    /// ambient tokio runtime.
+    #[arg(long = "push-scheduler")]
+    pub push_scheduler: bool,
 }
 
 impl CommonOpt {
@@ -190,6 +198,7 @@ mod tests {
             sort_spill_reservation_bytes: None,
             debug: false,
             simulate_latency: false,
+            push_scheduler: false,
         };
 
         // With env var set, builder should succeed and have a memory pool
