@@ -22,16 +22,18 @@ use arrow::array::{Array, ArrayRef, Float64Array, OffsetSizeTrait};
 use arrow::datatypes::{
     DataType,
     DataType::{FixedSizeList, LargeList, List, Null},
+    Field,
 };
 use datafusion_common::cast::{as_float64_array, as_generic_list_array};
 use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
-use datafusion_common::{Result, exec_err, plan_err, utils::take_function_args};
+use datafusion_common::{
+    Result, exec_err, internal_err, plan_err, utils::take_function_args,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
 use datafusion_macros::user_doc;
-use itertools::Itertools;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -66,7 +68,6 @@ make_udf_expr_and_func!(
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CosineDistance {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for CosineDistance {
@@ -79,7 +80,6 @@ impl CosineDistance {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec!["list_cosine_distance".to_string()],
         }
     }
 }
@@ -100,27 +100,46 @@ impl ScalarUDFImpl for CosineDistance {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [_, _] = take_function_args(self.name(), arg_types)?;
         let coercion = Some(&ListCoercion::FixedSizedListToList);
-        let arg_types = arg_types.iter().map(|arg_type| {
-            if matches!(arg_type, Null | List(_) | LargeList(_) | FixedSizeList(..)) {
-                Ok(coerced_type_with_base_type_only(
+
+        for arg_type in arg_types {
+            if !matches!(arg_type, Null | List(_) | LargeList(_) | FixedSizeList(..)) {
+                return plan_err!("{} does not support type {arg_type}", self.name());
+            }
+        }
+
+        // If any input is `LargeList`, both sides must be widened to `LargeList`
+        // so the runtime dispatch in `cosine_distance_inner` sees a homogeneous
+        // pair. Follows the pattern in `ArrayConcat::coerce_types`.
+        let any_large_list = arg_types.iter().any(|t| matches!(t, LargeList(_)));
+
+        let coerced = arg_types
+            .iter()
+            .map(|arg_type| {
+                if matches!(arg_type, Null) {
+                    let field = Arc::new(Field::new_list_field(DataType::Float64, true));
+                    return if any_large_list {
+                        LargeList(field)
+                    } else {
+                        List(field)
+                    };
+                }
+                let coerced = coerced_type_with_base_type_only(
                     arg_type,
                     &DataType::Float64,
                     coercion,
-                ))
-            } else {
-                plan_err!("{} does not support type {arg_type}", self.name())
-            }
-        });
+                );
+                match coerced {
+                    List(field) if any_large_list => LargeList(field),
+                    other => other,
+                }
+            })
+            .collect();
 
-        arg_types.try_collect()
+        Ok(coerced)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(cosine_distance_inner)(&args.args)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -133,11 +152,9 @@ fn cosine_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match (array1.data_type(), array2.data_type()) {
         (List(_), List(_)) => general_cosine_distance::<i32>(args),
         (LargeList(_), LargeList(_)) => general_cosine_distance::<i64>(args),
-        (arg_type1, arg_type2) => {
-            exec_err!(
-                "cosine_distance does not support types {arg_type1} and {arg_type2}"
-            )
-        }
+        (arg_type1, arg_type2) => internal_err!(
+            "cosine_distance received unexpected types after coercion: {arg_type1} and {arg_type2}"
+        ),
     }
 }
 

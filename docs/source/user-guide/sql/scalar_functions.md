@@ -3288,7 +3288,6 @@ _Alias of [current_date](#current_date)._
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_contains](#list_contains)
-- [list_cosine_distance](#list_cosine_distance)
 - [list_dims](#list_dims)
 - [list_distance](#list_distance)
 - [list_distinct](#list_distinct)
@@ -4467,10 +4466,6 @@ cosine_distance(array1, array2)
 +-----------------------------------------------+
 ```
 
-#### Aliases
-
-- list_cosine_distance
-
 ### `empty`
 
 Returns 1 for an empty array or 0 for a non-empty array.
@@ -4572,10 +4567,6 @@ _Alias of [array_concat](#array_concat)._
 ### `list_contains`
 
 _Alias of [array_has](#array_has)._
-
-### `list_cosine_distance`
-
-_Alias of [cosine_distance](#cosine_distance)._
 
 ### `list_dims`
 

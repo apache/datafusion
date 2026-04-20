@@ -41,13 +41,23 @@ select round(cosine_distance([1.0, 0.0], [1.0, 1.0]), 3);
 ----
 0.293
 
-# NULL input (bare NULL is not a list type, errors at planning)
-query error cosine_distance does not support type
+# Bare NULL input returns NULL
+query R
 select cosine_distance(NULL, [1.0, 2.0]);
+----
+NULL
 
-# NULL in second position
-query error cosine_distance does not support type
+# NULL in second position returns NULL
+query R
 select cosine_distance([1.0, 2.0], NULL);
+----
+NULL
+
+# Both NULL returns NULL
+query R
+select cosine_distance(NULL, NULL);
+----
+NULL
 
 # Zero vector returns NULL (undefined cosine similarity)
 query R
@@ -74,29 +84,71 @@ select cosine_distance(
 ----
 1
 
-# Integer arrays (coerced to Float64)
+# Mixed List + LargeList: widens to LargeList
+query R
+select cosine_distance([1.0, 0.0], arrow_cast([0.0, 1.0], 'LargeList(Float64)'));
+----
+1
+
+# Reverse order: LargeList + List also widens
+query R
+select cosine_distance(arrow_cast([1.0, 0.0], 'LargeList(Float64)'), [0.0, 1.0]);
+----
+1
+
+# FixedSizeList inputs (coerced to List)
+query R
+select cosine_distance(
+    arrow_cast([1.0, 0.0], 'FixedSizeList(2, Float64)'),
+    arrow_cast([0.0, 1.0], 'FixedSizeList(2, Float64)')
+);
+----
+1
+
+# FixedSizeList + LargeList: widens to LargeList
+query R
+select cosine_distance(
+    arrow_cast([1.0, 0.0], 'FixedSizeList(2, Float64)'),
+    arrow_cast([0.0, 1.0], 'LargeList(Float64)')
+);
+----
+1
+
+# Float32 inner type (coerced to Float64)
+query R
+select cosine_distance(arrow_cast([1.0, 0.0], 'List(Float32)'), [0.0, 1.0]);
+----
+1
+
+# Int64 inner type (coerced to Float64)
+query R
+select cosine_distance(arrow_cast([1, 0], 'List(Int64)'), arrow_cast([0, 1], 'List(Int64)'));
+----
+1
+
+# Integer literals (coerced to Float64)
 query R
 select cosine_distance([1, 0], [0, 1]);
 ----
 1
 
-# Multi-row query
+# Unsupported non-list input (plan error)
+query error cosine_distance does not support type
+select cosine_distance(1, 2);
+
+# Multi-row query with NULL row propagation
 query R
 select cosine_distance(column1, column2) from (values
     (make_array(1.0, 0.0), make_array(0.0, 1.0)),
     (make_array(1.0, 1.0), make_array(1.0, 1.0)),
-    (make_array(1.0, 0.0), make_array(-1.0, 0.0))
+    (make_array(1.0, 0.0), make_array(-1.0, 0.0)),
+    (make_array(1.0, 0.0), NULL)
 ) as t(column1, column2);
 ----
 1
 0
 2
-
-# list_cosine_distance alias
-query R
-select list_cosine_distance([1.0, 0.0], [0.0, 1.0]);
-----
-1
+NULL
 
 # Empty arrays return NULL (magnitude = 0)
 query R
