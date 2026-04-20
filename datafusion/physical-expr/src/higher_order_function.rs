@@ -41,7 +41,8 @@ use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::utils::remove_list_null_values;
 use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_datafusion_err, internal_err,
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
+    internal_err, plan_err,
 };
 use datafusion_expr::type_coercion::functions::value_fields_with_higher_order_udf;
 use datafusion_expr::{
@@ -51,11 +52,36 @@ use datafusion_expr::{
 
 /// Physical expression of a higher order function
 pub struct HigherOrderFunctionExpr {
+    /// A shared instance of the higher-order function
     fun: Arc<dyn HigherOrderUDF>,
+    /// The name of the higher-order function
     name: String,
+    /// List of expressions to feed to the function as arguments
+    ///
+    /// For example, for `array_transform([2, 3], v -> v != 2)`, this will be:
+    ///
+    /// ```text
+    /// ListExpression [2,3]
+    /// LambdaExpression
+    ///     parameters: ["v"]
+    ///     body:
+    ///         BinaryExpression (!=)
+    ///             left:
+    ///                 LambdaVariableExpression("v", Field::new("", Int32, false))
+    ///             right:
+    ///                 LiteralExpression("2")
+    /// ```
     args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Positions in `args` where lambdas can be found, either wrapped or not
+    ///
+    /// For example, for `array_transform([2, 3], v -> v != 2)`, this will be `vec![1]`
     lambda_positions: Vec<usize>,
+    /// The output field associated this expression
+    ///
+    /// For example, for `array_transform([2, 3], v -> v != 2)`, this will be
+    /// `Field::new("", DataType::new_list(DataType::Boolean, true), true)`
     return_field: FieldRef,
+    /// The config options at execution time
     config_options: Arc<ConfigOptions>,
 }
 
@@ -74,34 +100,8 @@ impl Debug for HigherOrderFunctionExpr {
 impl HigherOrderFunctionExpr {
     /// Create a new Higher Order function
     ///
-    /// `lambda_positions` should contain the positions at `args` where
-    /// lambda arguments can be found, wrapped or not. Note that any lambda wrapper
-    /// [PhysicalExpr::evaluate] will not be called. The lambda *body* should be wrapped instead
-    /// If any arg referenced by `lambda_positions` does not contain a lambda or contains a wrapper
-    /// with multiple children before finding the lambda, the function evaluation will error
-    pub fn new(
-        name: impl Into<String>,
-        fun: Arc<dyn HigherOrderUDF>,
-        args: Vec<Arc<dyn PhysicalExpr>>,
-        lambda_positions: Vec<usize>,
-        return_field: FieldRef,
-        config_options: Arc<ConfigOptions>,
-    ) -> Self {
-        Self {
-            fun,
-            name: name.into(),
-            args,
-            lambda_positions,
-            return_field,
-            config_options,
-        }
-    }
-
-    /// Create a new Higher Order function
-    ///
     /// Note that lambda arguments must be present directly in args as [LambdaExpr],
-    /// and not as a wrapped child of any arg. Use [HigherOrderFunctionExpr::new] to provide
-    /// wrapped lambdas
+    /// and not as a wrapped child of any arg
     pub fn try_new(
         fun: Arc<dyn HigherOrderUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
@@ -166,13 +166,6 @@ impl HigherOrderFunctionExpr {
     /// Data type produced by this expression
     pub fn return_type(&self) -> &DataType {
         self.return_field.data_type()
-    }
-
-    pub fn with_nullable(mut self, nullable: bool) -> Self {
-        if self.return_field.is_nullable() != nullable {
-            Arc::make_mut(&mut self.return_field).set_nullable(nullable);
-        }
-        self
     }
 
     pub fn nullable(&self) -> bool {
@@ -244,14 +237,6 @@ fn sorted_config_entries(config_options: &ConfigOptions) -> Vec<ConfigEntry> {
 }
 
 impl PhysicalExpr for HigherOrderFunctionExpr {
-    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.return_field.data_type().clone())
-    }
-
-    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(self.return_field.is_nullable())
-    }
-
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let arg_fields = self
             .args
@@ -259,7 +244,9 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             .enumerate()
             .map(|(i, e)| {
                 if self.lambda_positions.contains(&i) {
-                    let lambda = wrapped_lambda(e)?;
+                    let lambda = wrapped_lambda(e).ok_or_else(|| {
+                        exec_datafusion_err!("unable to unwrap lambda from {e}")
+                    })?;
 
                     Ok(ValueOrLambda::Lambda(
                         lambda.body().return_field(batch.schema_ref())?,
@@ -306,7 +293,9 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             .enumerate()
             .map(|(i, arg)| {
                 if self.lambda_positions.contains(&i) {
-                    let lambda = wrapped_lambda(arg)?;
+                    let lambda = wrapped_lambda(arg).ok_or_else(|| {
+                        exec_datafusion_err!("unable to unwrap lambda from {arg}")
+                    })?;
 
                     let lambda_params = lambda_parameters.next().ok_or_else(|| {
                         internal_datafusion_err!(
@@ -393,14 +382,28 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(HigherOrderFunctionExpr::new(
-            &self.name,
-            Arc::clone(&self.fun),
-            children,
-            self.lambda_positions.clone(),
-            Arc::clone(&self.return_field),
-            Arc::clone(&self.config_options),
-        )))
+        if children.len() != self.args.len() {
+            return internal_err!(
+                "HigherOrderFunctionExpr expects exactly {} child, got {}",
+                self.args.len(),
+                children.len()
+            );
+        }
+
+        for i in &self.lambda_positions {
+            if wrapped_lambda(&children[*i]).is_none() {
+                return plan_err!("unable to unwrap lambda from {}", &children[*i]);
+            }
+        }
+
+        Ok(Arc::new(HigherOrderFunctionExpr {
+            name: self.name.clone(),
+            fun: Arc::clone(&self.fun),
+            args: children,
+            lambda_positions: self.lambda_positions.clone(),
+            return_field: Arc::clone(&self.return_field),
+            config_options: Arc::clone(&self.config_options),
+        }))
     }
 
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -419,17 +422,17 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
     }
 }
 
-fn wrapped_lambda(expr: &Arc<dyn PhysicalExpr>) -> Result<&LambdaExpr> {
+fn wrapped_lambda(expr: &Arc<dyn PhysicalExpr>) -> Option<&LambdaExpr> {
     let mut current = expr;
 
     loop {
         if let Some(lambda) = current.downcast_ref::<LambdaExpr>() {
-            return Ok(lambda);
+            return Some(lambda);
         }
 
         match current.children().as_slice() {
             [single_child] => current = *single_child,
-            _ => return exec_err!("unable to unwrap lambda from {expr}"),
+            _ => return None,
         }
     }
 }
@@ -556,14 +559,8 @@ mod tests {
         )
         .unwrap();
 
-        let wrapped = HigherOrderFunctionExpr::new(
-            hof.name,
-            hof.fun,
-            vec![not(Arc::clone(&hof.args[0])).unwrap()],
-            hof.lambda_positions,
-            hof.return_field,
-            hof.config_options,
-        );
+        let new_children = vec![not(Arc::clone(&hof.args[0])).unwrap()];
+        let wrapped = Arc::new(hof).with_new_children(new_children).unwrap();
 
         let result = wrapped
             .evaluate(
