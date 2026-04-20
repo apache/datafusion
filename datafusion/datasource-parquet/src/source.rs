@@ -486,6 +486,70 @@ impl ParquetSource {
         self.reverse_row_groups
     }
 
+    /// Extract TopK sort column name and direction from available sources.
+    ///
+    /// Tries two sources in order:
+    /// 1. DynamicFilterPhysicalExpr in the predicate (works for ALL TopK queries)
+    /// 2. sort_order_for_reorder (only set in Inexact sort pushdown path)
+    fn extract_topk_sort_info(&self) -> Option<(String, bool)> {
+        // Try 1: from predicate's DynamicFilterPhysicalExpr
+        if let Some(predicate) = &self.predicate
+            && let Some(info) = Self::sort_info_from_dynamic_filter(predicate)
+        {
+            return Some(info);
+        }
+
+        // Try 2: fallback to sort_order_for_reorder (Inexact path)
+        if let Some(sort_order) = &self.sort_order_for_reorder
+            && !sort_order.is_empty()
+        {
+            let first = sort_order.first();
+            if let Some(col) = first
+                .expr
+                .downcast_ref::<datafusion_physical_expr::expressions::Column>()
+            {
+                return Some((col.name().to_string(), self.reverse_row_groups));
+            }
+        }
+
+        None
+    }
+
+    /// Try to extract sort column name and direction from a DynamicFilterPhysicalExpr
+    /// in the predicate tree.
+    fn sort_info_from_dynamic_filter(
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Option<(String, bool)> {
+        // Try downcast to DynamicFilterPhysicalExpr
+        let cloned = Arc::clone(expr);
+        let any_arc: Arc<dyn std::any::Any + Send + Sync> = cloned;
+        if let Ok(df) = Arc::downcast::<
+            datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr,
+        >(any_arc)
+        {
+            let sort_options = df.sort_options()?;
+            if sort_options.len() != 1 {
+                return None;
+            }
+            let children = df.children();
+            if children.is_empty() {
+                return None;
+            }
+            let col = children[0]
+                .downcast_ref::<datafusion_physical_expr::expressions::Column>()?;
+            return Some((col.name().to_string(), sort_options[0].descending));
+        }
+
+        // Recursively check children
+        for child in expr.children() {
+            if let Some(info) = Self::sort_info_from_dynamic_filter(child) {
+                return Some(info);
+            }
+        }
+
+        None
+    }
+
     /// Extract the sort key from a file's statistics for reordering.
     ///
     /// For DESC sorts, returns the column's min_value (we want highest min first).
@@ -609,27 +673,17 @@ impl FileSource for ParquetSource {
         &self,
         mut files: Vec<datafusion_datasource::PartitionedFile>,
     ) -> Vec<datafusion_datasource::PartitionedFile> {
-        let sort_order = match &self.sort_order_for_reorder {
-            Some(order) if !order.is_empty() => order,
-            _ => return files,
+        // Extract sort column and direction from either:
+        // 1. The DynamicFilterPhysicalExpr in the predicate (works for ALL TopK)
+        // 2. Fallback to sort_order_for_reorder (Inexact path only)
+        let (col_name, descending) = match self.extract_topk_sort_info() {
+            Some(info) => info,
+            None => return files,
         };
-
-        // We only handle single-column sort for now
-        let first_expr = sort_order.first();
-
-        // The sort expression must be a Column so we can look up statistics
-        let col: &datafusion_physical_expr::expressions::Column =
-            match first_expr.expr.downcast_ref() {
-                Some(col) => col,
-                None => return files,
-            };
-
-        let col_name = col.name();
-        let descending = self.reverse_row_groups;
 
         // Find the column index in the table schema
         let table_schema = self.table_schema.table_schema();
-        let col_idx = match table_schema.index_of(col_name) {
+        let col_idx = match table_schema.index_of(&col_name) {
             Ok(idx) => idx,
             Err(_) => return files,
         };
