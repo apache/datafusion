@@ -1429,10 +1429,9 @@ mod tests {
 
         // 1. Setup bloated data (large buffers)
         let num_rows = 1000;
-        let strings: Vec<String> = (0..num_rows)
-            .map(|i| format!("this_is_a_long_string_to_ensure_it_is_not_inlined_and_causes_waste_{i}"))
+        let string_array: StringViewArray = (0..num_rows)
+            .map(|i| Some(format!("this_is_a_long_string_to_ensure_it_is_not_inlined_and_causes_waste_{i}")))
             .collect();
-        let string_array = StringViewArray::from(strings);
         let schema = Arc::new(Schema::new(vec![Field::new(
             "s",
             DataType::Utf8View,
@@ -1475,9 +1474,9 @@ mod tests {
 
         // 1. Setup bloated data (large buffers)
         let num_rows = 1000;
-        let binaries: Vec<Vec<u8>> = (0..num_rows).map(|i| vec![i as u8; 100]).collect();
-        let binary_array =
-            BinaryViewArray::from_iter(binaries.iter().map(|b| Some(b.as_slice())));
+        let binary_array: BinaryViewArray = (0..num_rows)
+            .map(|i| Some(vec![i as u8; 100]))
+            .collect();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "b",
             DataType::BinaryView,
