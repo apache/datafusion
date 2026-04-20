@@ -32,10 +32,10 @@ use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    OptimizationTest, coalesce_partitions_exec, parquet_exec, parquet_exec_with_sort,
-    projection_exec, projection_exec_with_alias, repartition_exec, schema,
-    simple_projection_exec, sort_exec, sort_exec_with_fetch, sort_expr, sort_expr_named,
-    test_scan_with_ordering,
+    OptimizationTest, TestScan, coalesce_partitions_exec, parquet_exec,
+    parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
+    repartition_exec, schema, simple_projection_exec, sort_exec, sort_exec_with_fetch,
+    sort_expr, sort_expr_named, test_scan_with_ordering,
 };
 
 #[test]
@@ -993,6 +993,94 @@ fn test_sort_pushdown_with_test_scan_arbitrary_ordering() {
         Ok:
           - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
           -   TestScan: output_ordering=[a@0 ASC, b@1 ASC], requested_ordering=[a@0 ASC, b@1 DESC NULLS LAST]
+    "
+    );
+}
+
+// ============================================================================
+// EXACT PUSHDOWN TESTS (source guarantees ordering, SortExec removed)
+// ============================================================================
+
+#[test]
+fn test_sort_pushdown_exact_no_fetch_no_limit() {
+    // When a source returns Exact (without fetch), the SortExec should be
+    // removed entirely with no GlobalLimitExec wrapper.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let b = sort_expr("b", &schema);
+    let source =
+        Arc::new(TestScan::new(schema.clone(), vec![]).with_exact_pushdown(true));
+
+    let ordering = LexOrdering::new(vec![a, b.reverse()]).unwrap();
+    let plan = sort_exec(ordering, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
+        -   TestScan
+      output:
+        Ok:
+          - TestScan: requested_ordering=[a@0 ASC, b@1 DESC NULLS LAST]
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_exact_preserves_fetch_with_global_limit() {
+    // When a source returns Exact but does NOT support with_fetch(),
+    // the optimizer must wrap the result with GlobalLimitExec to preserve
+    // the LIMIT from the eliminated SortExec.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let source =
+        Arc::new(TestScan::new(schema.clone(), vec![]).with_exact_pushdown(true));
+
+    let ordering = LexOrdering::new(vec![a]).unwrap();
+    let plan = sort_exec_with_fetch(ordering, Some(10), source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
+        -   TestScan
+      output:
+        Ok:
+          - GlobalLimitExec: skip=0, fetch=10
+          -   TestScan: requested_ordering=[a@0 ASC]
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_exact_preserves_fetch_with_source_support() {
+    // When a source returns Exact AND supports with_fetch(),
+    // the limit should be pushed into the source directly (no GlobalLimitExec).
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let source = Arc::new(
+        TestScan::new(schema.clone(), vec![])
+            .with_exact_pushdown(true)
+            .with_supports_fetch(true),
+    );
+
+    let ordering = LexOrdering::new(vec![a]).unwrap();
+    let plan = sort_exec_with_fetch(ordering, Some(10), source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
+        -   TestScan
+      output:
+        Ok:
+          - TestScan: requested_ordering=[a@0 ASC], fetch=10
     "
     );
 }

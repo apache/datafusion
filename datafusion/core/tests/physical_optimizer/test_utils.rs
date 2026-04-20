@@ -830,8 +830,17 @@ pub fn sort_expr_named(name: &str, index: usize) -> PhysicalSortExpr {
     }
 }
 
-/// A test data source that can display any requested ordering
-/// This is useful for testing sort pushdown behavior
+/// A test data source that can display any requested ordering.
+/// This is useful for testing sort pushdown behavior.
+///
+/// ## Configuration
+///
+/// - `exact_pushdown`: if `true`, `try_pushdown_sort` returns `Exact`
+///   (source guarantees ordering, SortExec can be removed); if `false`
+///   (default), returns `Inexact` (SortExec kept).
+/// - `supports_fetch`: if `true`, `with_fetch()` returns `Some` so the
+///   optimizer can push a LIMIT into the source; if `false` (default),
+///   `with_fetch()` returns `None`, forcing a `GlobalLimitExec` wrapper.
 #[derive(Debug, Clone)]
 pub struct TestScan {
     schema: SchemaRef,
@@ -839,6 +848,12 @@ pub struct TestScan {
     plan_properties: Arc<PlanProperties>,
     // Store the requested ordering for display
     requested_ordering: Option<LexOrdering>,
+    /// If true, `try_pushdown_sort` returns `Exact` instead of `Inexact`.
+    exact_pushdown: bool,
+    /// If true, `with_fetch()` returns `Some(...)` (source absorbs the limit).
+    supports_fetch: bool,
+    /// The fetch (LIMIT) value pushed into this scan via `with_fetch()`.
+    fetch: Option<usize>,
 }
 
 impl TestScan {
@@ -872,12 +887,27 @@ impl TestScan {
             output_ordering,
             plan_properties: Arc::new(plan_properties),
             requested_ordering: None,
+            exact_pushdown: false,
+            supports_fetch: false,
+            fetch: None,
         }
     }
 
     /// Create a TestScan with a single output ordering
     pub fn with_ordering(schema: SchemaRef, ordering: LexOrdering) -> Self {
         Self::new(schema, vec![ordering])
+    }
+
+    /// Set whether `try_pushdown_sort` returns `Exact` (true) or `Inexact` (false).
+    pub fn with_exact_pushdown(mut self, exact: bool) -> Self {
+        self.exact_pushdown = exact;
+        self
+    }
+
+    /// Set whether `with_fetch()` returns `Some` (true) or `None` (false).
+    pub fn with_supports_fetch(mut self, supports: bool) -> Self {
+        self.supports_fetch = supports;
+        self
     }
 }
 
@@ -886,9 +916,9 @@ impl DisplayAs for TestScan {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "TestScan")?;
+                let mut sep = ": ";
                 if !self.output_ordering.is_empty() {
-                    write!(f, ": output_ordering=[")?;
-                    // Format the ordering in a readable way
+                    write!(f, "{sep}output_ordering=[")?;
                     for (i, sort_expr) in self.output_ordering[0].iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;
@@ -896,10 +926,10 @@ impl DisplayAs for TestScan {
                         write!(f, "{sort_expr}")?;
                     }
                     write!(f, "]")?;
+                    sep = ", ";
                 }
-                // This is the key part - show what ordering was requested
                 if let Some(ref req) = self.requested_ordering {
-                    write!(f, ", requested_ordering=[")?;
+                    write!(f, "{sep}requested_ordering=[")?;
                     for (i, sort_expr) in req.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;
@@ -907,6 +937,10 @@ impl DisplayAs for TestScan {
                         write!(f, "{sort_expr}")?;
                     }
                     write!(f, "]")?;
+                    sep = ", ";
+                }
+                if let Some(fetch) = self.fetch {
+                    write!(f, "{sep}fetch={fetch}")?;
                 }
                 Ok(())
             }
@@ -953,6 +987,20 @@ impl ExecutionPlan for TestScan {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 
+    fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.supports_fetch {
+            let mut new_scan = self.clone();
+            new_scan.fetch = fetch;
+            Some(Arc::new(new_scan))
+        } else {
+            None
+        }
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
     // This is the key method - implement sort pushdown
     fn try_pushdown_sort(
         &self,
@@ -965,10 +1013,27 @@ impl ExecutionPlan for TestScan {
         let mut new_scan = self.clone();
         new_scan.requested_ordering = requested_ordering;
 
-        // Always return Inexact to keep the Sort node (like Phase 1 behavior)
-        Ok(SortOrderPushdownResult::Inexact {
-            inner: Arc::new(new_scan),
-        })
+        if self.exact_pushdown {
+            // Update plan properties to reflect the guaranteed ordering
+            let orderings: Vec<Vec<PhysicalSortExpr>> = vec![order.to_vec()];
+            let eq_properties = EquivalenceProperties::new_with_orderings(
+                Arc::clone(&self.schema),
+                orderings,
+            );
+            new_scan.plan_properties = Arc::new(PlanProperties::new(
+                eq_properties,
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            ));
+            Ok(SortOrderPushdownResult::Exact {
+                inner: Arc::new(new_scan),
+            })
+        } else {
+            Ok(SortOrderPushdownResult::Inexact {
+                inner: Arc::new(new_scan),
+            })
+        }
     }
 
     fn apply_expressions(
