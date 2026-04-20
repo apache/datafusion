@@ -1168,37 +1168,21 @@ impl RowGroupsPrunedParquetOpen {
         // or from DynamicFilterPhysicalExpr sort_options (any TopK query).
         let reorder_optimizer: Option<
             Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
-        > = if let Some(sort_order) = &prepared.sort_order_for_reorder {
-            Some(
-                Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
-                    sort_order.clone(),
-                ))
-                    as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
-            )
-        } else if let Some(predicate) = &prepared.predicate {
-            // For non-Inexact TopK queries: extract sort info from the
-            // DynamicFilterPhysicalExpr to enable RG reorder.
-            extract_sort_order_from_predicate(predicate).map(|sort_order| {
-                Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
-                    sort_order,
-                ))
-                    as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
-            })
-        } else {
-            None
-        };
+            // RG reorder only in sort pushdown path (sort_order_for_reorder set).
+            // Reordering RGs without sort pushdown changes tie-breaking for equal
+            // values, which can cause non-deterministic results.
+        > = prepared.sort_order_for_reorder.as_ref().map(|sort_order| {
+            Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                sort_order.clone(),
+            )) as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
+        });
 
-        // Reverse for DESC queries. Triggered by sort pushdown (reverse_row_groups)
-        // or by DynamicFilterPhysicalExpr sort_options indicating DESC.
-        let is_descending = prepared.reverse_row_groups
-            || prepared
-                .predicate
-                .as_ref()
-                .and_then(extract_descending_from_predicate)
-                .unwrap_or(false);
+        // Reverse for DESC queries. ONLY triggered by sort pushdown
+        // (reverse_row_groups=true), which means the file is declared WITH ORDER
+        // and data is sorted. Reversing unsorted data would produce wrong results.
         let reverse_optimizer: Option<
             Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
-        > = if is_descending {
+        > = if prepared.reverse_row_groups {
             Some(Box::new(crate::access_plan_optimizer::ReverseRowGroups))
         } else {
             None
@@ -1501,46 +1485,6 @@ fn compute_best_threshold_from_stats(
     }
 
     Ok(best)
-}
-
-/// Extract a [`LexOrdering`] from a [`DynamicFilterPhysicalExpr`] in the predicate.
-///
-/// Returns a single-column ASC sort order if a DynamicFilterPhysicalExpr with
-/// sort_options is found. The sort direction in the returned LexOrdering is
-/// always ASC because `ReorderByStatistics` always sorts by min ASC; the
-/// caller handles DESC via `ReverseRowGroups`.
-fn extract_sort_order_from_predicate(
-    predicate: &Arc<dyn PhysicalExpr>,
-) -> Option<LexOrdering> {
-    let df = find_dynamic_filter(predicate)?;
-    let sort_options = df.sort_options()?;
-    if sort_options.len() != 1 {
-        return None;
-    }
-    let children = df.children();
-    if children.is_empty() {
-        return None;
-    }
-    // Build ASC sort order (reorder always sorts ASC, reverse handles DESC)
-    let sort_expr = datafusion_physical_expr_common::sort_expr::PhysicalSortExpr {
-        expr: Arc::clone(children[0]),
-        options: arrow::compute::SortOptions {
-            descending: false,
-            nulls_first: sort_options[0].nulls_first,
-        },
-    };
-    LexOrdering::new(vec![sort_expr])
-}
-
-/// Check if a [`DynamicFilterPhysicalExpr`] in the predicate indicates DESC sort.
-fn extract_descending_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Option<bool> {
-    let df = find_dynamic_filter(predicate)?;
-    let sort_options = df.sort_options()?;
-    if sort_options.len() == 1 {
-        Some(sort_options[0].descending)
-    } else {
-        None
-    }
 }
 
 /// State for a stream that decodes a single Parquet file using a push-based decoder.
