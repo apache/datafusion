@@ -525,7 +525,7 @@ fn get_data_type_for_schema(native_type: &NativeType) -> Option<DataType> {
     }
 }
 
-pub fn resolve_informational_field(idx: usize, t: &NativeType) -> Result<FieldRef> {
+fn resolve_informational_field(idx: usize, t: &NativeType) -> Result<FieldRef> {
     if let Some(data_type) = get_data_type_for_schema(t) {
         Ok(Arc::new(Field::new(format!("arg_{idx}"), data_type, true)))
     } else {
