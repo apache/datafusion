@@ -25,7 +25,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use super::common::SharedMemoryReservation;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -58,7 +57,7 @@ use datafusion_common::{
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -143,10 +142,15 @@ type MaybeBatch = Option<Result<RepartitionBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
 type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
 
-/// Output channel with its associated memory reservation and spill writer
+/// Output channel with its associated memory reservation and spill writer.
+///
+/// Every method on [`MemoryReservation`] takes `&self` and mutates atomic
+/// counters internally, so the shared reservation needs no extra lock on the
+/// hot path — both the producer (`try_grow`) and the consumer (`shrink`)
+/// operate concurrently via atomics.
 struct OutputChannel {
     sender: DistributionSender<MaybeBatch>,
-    reservation: SharedMemoryReservation,
+    reservation: Arc<MemoryReservation>,
     spill_writer: SpillPoolWriter,
 }
 
@@ -177,7 +181,7 @@ struct PartitionChannels {
     /// Receivers for each input partition sending data to this output partition
     rx: InputPartitionsToCurrentPartitionReceiver,
     /// Memory reservation for this output partition
-    reservation: SharedMemoryReservation,
+    reservation: Arc<MemoryReservation>,
     /// Spill writers for writing spilled data.
     /// SpillPoolWriter is Clone, so multiple writers can share state in non-preserve-order mode.
     spill_writers: Vec<SpillPoolWriter>,
@@ -322,11 +326,11 @@ impl RepartitionExecState {
 
         let mut channels = HashMap::with_capacity(txs.len());
         for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
-            let reservation = Arc::new(Mutex::new(
+            let reservation = Arc::new(
                 MemoryConsumer::new(format!("{name}[{partition}]"))
                     .with_can_spill(true)
                     .register(context.memory_pool()),
-            ));
+            );
 
             // Create spill channels based on mode:
             // - preserve_order: one spill channel per (input, output) pair for proper FIFO ordering
@@ -1393,15 +1397,18 @@ impl RepartitionExec {
                 continue;
             }
 
+            // Track per-partition send time by advancing a single `Instant`
+            // through the inner loop — one `Instant::now()` per sub-batch,
+            // instead of two via `ScopedTimerGuard::{timer, done}`.
+            let mut last = datafusion_common::instant::Instant::now();
             for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
                 let size = batch.get_array_memory_size();
 
-                let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
                 if let Some(channel) = output_channels.get_mut(&partition) {
                     let (batch_to_send, is_memory_batch) =
-                        match channel.reservation.lock().try_grow(size) {
+                        match channel.reservation.try_grow(size) {
                             Ok(_) => {
                                 // Memory available - send in-memory batch
                                 (RepartitionBatch::Memory(batch), true)
@@ -1419,12 +1426,14 @@ impl RepartitionExec {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         // Only shrink memory if it was a memory batch
                         if is_memory_batch {
-                            channel.reservation.lock().shrink(size);
+                            channel.reservation.shrink(size);
                         }
                         output_channels.remove(&partition);
                     }
                 }
-                timer.done();
+                let now = datafusion_common::instant::Instant::now();
+                metrics.send_time[partition].add_duration(now - last);
+                last = now;
             }
 
             // If the input stream is endless, we may spin forever and
@@ -1567,7 +1576,7 @@ struct PerPartitionStream {
     _drop_helper: Arc<Vec<SpawnedTask<()>>>,
 
     /// Memory reservation.
-    reservation: SharedMemoryReservation,
+    reservation: Arc<MemoryReservation>,
 
     /// Infinite stream for reading from the spill pool
     spill_stream: SendableRecordBatchStream,
@@ -1593,7 +1602,7 @@ impl PerPartitionStream {
         schema: SchemaRef,
         receiver: DistributionReceiver<MaybeBatch>,
         drop_helper: Arc<Vec<SpawnedTask<()>>>,
-        reservation: SharedMemoryReservation,
+        reservation: Arc<MemoryReservation>,
         spill_stream: SendableRecordBatchStream,
         num_input_partitions: usize,
         baseline_metrics: BaselineMetrics,
@@ -1638,9 +1647,7 @@ impl PerPartitionStream {
                         Some(Some(v)) => match v {
                             Ok(RepartitionBatch::Memory(batch)) => {
                                 // Release memory and return batch
-                                self.reservation
-                                    .lock()
-                                    .shrink(batch.get_array_memory_size());
+                                self.reservation.shrink(batch.get_array_memory_size());
                                 return Poll::Ready(Some(Ok(batch)));
                             }
                             Ok(RepartitionBatch::Spilled) => {

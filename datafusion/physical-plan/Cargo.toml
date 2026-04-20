@@ -93,6 +93,10 @@ name = "partial_ordering"
 
 [[bench]]
 harness = false
+name = "repartition"
+
+[[bench]]
+harness = false
 name = "spill_io"
 
 [[bench]]
