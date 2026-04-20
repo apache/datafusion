@@ -664,6 +664,51 @@ impl Dialect for BigQueryDialect {
     fn unnest_as_table_factor(&self) -> bool {
         true
     }
+
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        false
+    }
+
+    fn float64_ast_dtype(&self) -> ast::DataType {
+        ast::DataType::Float64
+    }
+
+    fn utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::String(None)
+    }
+
+    fn large_utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::String(None)
+    }
+
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        _tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        ast::DataType::Timestamp(None, TimezoneInfo::None)
+    }
+
+    fn date_field_extract_style(&self) -> DateFieldExtractStyle {
+        DateFieldExtractStyle::Extract
+    }
+
+    fn interval_style(&self) -> IntervalStyle {
+        IntervalStyle::SQLStandard
+    }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        if func_name == "date_part" {
+            return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        Ok(None)
+    }
 }
 
 impl BigQueryDialect {

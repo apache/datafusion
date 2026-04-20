@@ -17,8 +17,7 @@
 
 //! [`RequiredIndices`] helper for OptimizeProjection
 
-use crate::optimize_projections::outer_columns;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan};
 
@@ -105,44 +104,59 @@ impl RequiredIndices {
     /// Adds the indices of the fields referred to by the given expression
     /// `expr` within the given schema (`input_schema`).
     ///
-    /// Self is NOT compacted (and thus this method is not pub)
+    /// Self is NOT compacted (duplicate indices are removed by a subsequent
+    /// [`Self::compact`] call), and thus this method is not pub.
     ///
     /// # Parameters
     ///
     /// * `input_schema`: The input schema to analyze for index requirements.
     /// * `expr`: An expression for which we want to find necessary field indices.
     fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) {
-        // TODO could remove these clones (and visit the expression directly)
-        let mut cols = expr.column_refs();
-        // Get outer-referenced (subquery) columns:
-        outer_columns(expr, &mut cols);
-        self.indices.reserve(cols.len());
-        for col in cols {
-            if let Some(idx) = input_schema.maybe_index_of_column(col) {
-                self.indices.push(idx);
+        // `apply` does not descend into subqueries, so recurse manually to
+        // handle those cases.
+        expr.apply(|e| {
+            match e {
+                Expr::Column(c) | Expr::OuterReferenceColumn(_, c) => {
+                    if let Some(idx) = input_schema.maybe_index_of_column(c) {
+                        self.indices.push(idx);
+                    }
+                }
+                Expr::ScalarSubquery(sub) => {
+                    self.add_exprs(input_schema, &sub.outer_ref_columns);
+                }
+                Expr::Exists(ex) => {
+                    self.add_exprs(input_schema, &ex.subquery.outer_ref_columns);
+                }
+                Expr::InSubquery(isq) => {
+                    self.add_exprs(input_schema, &isq.subquery.outer_ref_columns);
+                }
+                _ => {}
             }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("traversal is infallible");
+    }
+
+    /// Like [`Self::add_expr`], but for multiple expressions.
+    fn add_exprs<'a>(
+        &mut self,
+        input_schema: &DFSchemaRef,
+        exprs: impl IntoIterator<Item = &'a Expr>,
+    ) {
+        for expr in exprs {
+            self.add_expr(input_schema, expr);
         }
     }
 
     /// Adds the indices of the fields referred to by the given expressions
-    /// `within the given schema.
-    ///
-    /// # Parameters
-    ///
-    /// * `input_schema`: The input schema to analyze for index requirements.
-    /// * `exprs`: the expressions for which we want to find field indices.
+    /// within the given schema.
     pub fn with_exprs<'a>(
-        self,
+        mut self,
         schema: &DFSchemaRef,
         exprs: impl IntoIterator<Item = &'a Expr>,
     ) -> Self {
-        exprs
-            .into_iter()
-            .fold(self, |mut acc, expr| {
-                acc.add_expr(schema, expr);
-                acc
-            })
-            .compact()
+        self.add_exprs(schema, exprs);
+        self.compact()
     }
 
     /// Adds all `indices` into this instance.

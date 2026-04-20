@@ -1970,6 +1970,7 @@ dependencies = [
  "liblzma",
  "log",
  "object_store",
+ "parking_lot",
  "rand 0.9.2",
  "tempfile",
  "tokio",

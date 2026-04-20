@@ -40,7 +40,9 @@ use datafusion_expr::{
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_functions_nested::expr_fn::{array_has, array_max, array_min};
+use datafusion_functions_nested::expr_fn::{
+    array_has, array_max, array_min, array_position, cardinality,
+};
 
 mod binary_op;
 mod function;
@@ -635,7 +637,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     schema,
                     planner_context,
                 ),
-                _ => not_impl_err!("ALL only supports subquery comparison currently"),
+                _ => {
+                    let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
+                    let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
+                    plan_all_op(&left_expr, &right_expr, &compare_op)
+                }
             },
             #[expect(deprecated)]
             SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
@@ -1295,6 +1301,64 @@ fn plan_any_op(
             "Unsupported AnyOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
         ),
     }
+}
+
+/// Plans `needle <compare_op> ALL(haystack)` with proper SQL NULL semantics.
+///
+/// CASE/WHEN structure:
+///   WHEN arr IS NULL        → NULL
+///   WHEN empty              → TRUE
+///   WHEN lhs IS NULL        → NULL
+///   WHEN decisive_condition → FALSE
+///   WHEN has_nulls          → NULL
+///   ELSE                    → TRUE
+fn plan_all_op(
+    needle: &Expr,
+    haystack: &Expr,
+    compare_op: &BinaryOperator,
+) -> Result<Expr> {
+    let null_arr_check = haystack.clone().is_null();
+    let empty_check = cardinality(haystack.clone()).eq(lit(0u64));
+    let null_lhs_check = needle.clone().is_null();
+    // DataFusion's array_position uses is_null() checks internally (not equality),
+    // so it can locate NULL elements even though NULL = NULL is NULL in standard SQL.
+    let has_nulls =
+        array_position(haystack.clone(), lit(ScalarValue::Null), lit(1i64)).is_not_null();
+
+    let decisive_condition = match compare_op {
+        BinaryOperator::NotEq => array_has(haystack.clone(), needle.clone()),
+        BinaryOperator::Eq => {
+            let all_equal = array_min(haystack.clone())
+                .eq(needle.clone())
+                .and(array_max(haystack.clone()).eq(needle.clone()));
+            Expr::Not(Box::new(all_equal))
+        }
+        BinaryOperator::Gt => {
+            Expr::Not(Box::new(needle.clone().gt(array_max(haystack.clone()))))
+        }
+        BinaryOperator::Lt => {
+            Expr::Not(Box::new(needle.clone().lt(array_min(haystack.clone()))))
+        }
+        BinaryOperator::GtEq => {
+            Expr::Not(Box::new(needle.clone().gt_eq(array_max(haystack.clone()))))
+        }
+        BinaryOperator::LtEq => {
+            Expr::Not(Box::new(needle.clone().lt_eq(array_min(haystack.clone()))))
+        }
+        _ => {
+            return plan_err!(
+                "Unsupported AllOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
+            );
+        }
+    };
+
+    let null_bool = lit(ScalarValue::Boolean(None));
+    when(null_arr_check, null_bool.clone())
+        .when(empty_check, lit(true))
+        .when(null_lhs_check, null_bool.clone())
+        .when(decisive_condition, lit(false))
+        .when(has_nulls, null_bool)
+        .otherwise(lit(true))
 }
 
 #[cfg(test)]
