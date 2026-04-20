@@ -185,9 +185,329 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[(NULL as id), (id@0 as id)], aggr=[max(agg_dyn_test.id)]
 05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 < 10, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 < 10, required_guarantees=[]
 
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_aggregate_dynamic_filter_parquet_e2e
+#
+# End-to-end: `select max(id) from t where id > 1` should pick up a dynamic
+# filter from the partial aggregate that prunes at least one file range
+# (files_ranges_pruned_statistics must report < 4 matched out of 4 total).
+#
+# Build a self-contained fixture of 4 single-row parquet files, one per
+# `id` value. With target_partitions=2, files are split into 2 groups of 2.
+# Writing the files in decreasing-id order ensures the first file in each
+# group has the larger id, so after reading it the dynamic filter tightens
+# (e.g. to `id > 4` in group 1) and prunes the second file in the group.
+
+statement ok
+COPY (VALUES (4)) TO 'test_files/scratch/push_down_filter_regression/agg_dyn/file_0.parquet' STORED AS PARQUET;
+
+statement ok
+COPY (VALUES (3)) TO 'test_files/scratch/push_down_filter_regression/agg_dyn/file_1.parquet' STORED AS PARQUET;
+
+statement ok
+COPY (VALUES (2)) TO 'test_files/scratch/push_down_filter_regression/agg_dyn/file_2.parquet' STORED AS PARQUET;
+
+statement ok
+COPY (VALUES (1)) TO 'test_files/scratch/push_down_filter_regression/agg_dyn/file_3.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE agg_dyn_e2e (column1 INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn/';
+
+statement ok
+set datafusion.execution.collect_statistics = true;
+
+# Suppress metrics: pruning counts are nondeterministic under parallel
+# execution (the order in which Partial aggregates publish dynamic filter
+# updates races against when the scan reads each partition). The original
+# Rust test only asserted matched < 4; the important invariant here is
+# that the DynamicFilter text is correct.
+statement ok
+set datafusion.explain.analyze_level = summary;
+
+statement ok
+set datafusion.explain.analyze_categories = 'none';
+
+query TT
+EXPLAIN ANALYZE select max(column1) from agg_dyn_e2e where column1 > 1;
+----
+Plan with Metrics
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
+02)--CoalescePartitionsExec, metrics=[]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_3.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 > 1 AND DynamicFilter [ column1@0 > 4 ], pruning_predicate=column1_null_count@1 != row_count@2 AND column1_max@0 > 1 AND column1_null_count@1 != row_count@2 AND column1_max@0 > 4, required_guarantees=[], metrics=[]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+reset datafusion.explain.analyze_level;
+
+statement ok
+reset datafusion.execution.collect_statistics;
+
+statement ok
+drop table agg_dyn_e2e;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs:
+#   test_aggregate_dynamic_filter_min_simple
+#   test_aggregate_dynamic_filter_max_simple
+#   test_aggregate_dynamic_filter_min_expression_not_supported
+#   test_aggregate_dynamic_filter_min_max_same_column
+#   test_aggregate_dynamic_filter_min_max_different_columns
+#   test_aggregate_dynamic_filter_multiple_mixed_expressions
+#   test_aggregate_dynamic_filter_min_all_nulls
+#
+# Baseline behavior of aggregate dynamic filter emission:
+#   MIN(a)      -> filter `a < <min_seen>`
+#   MAX(a)      -> filter `a > <max_seen>`
+#   MIN + MAX   -> filter `a < <min> OR a > <max>` (or across columns)
+#   MIN(a+1)    -> no dynamic filter (expression input is unsupported)
+#   all-NULLs   -> filter stays `true` (no meaningful bound to propagate)
+#
+# Dynamic aggregate filters are only emitted in Partial+Final mode, not
+# Single mode, so each fixture is written to 2 files and runs with
+# target_partitions=2 to force a multi-partition aggregate plan.
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+# --- single-column fixture ([5, 1, 3, 8]) split across 2 files ---
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (5), (1)) AS v(a)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_single/file_0.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (3), (8)) AS v(a)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_single/file_1.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE agg_dyn_single (a INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_single/';
+
+# Use `analyze_level = summary` + `analyze_categories = 'none'` so metrics
+# render empty; we only care that the `predicate=DynamicFilter [ ... ]` text
+# matches. Pruning metrics here are subject to a parallel-execution race
+# (the order in which Partial aggregates publish filter updates vs. when the
+# scan reads each partition), so the filter *content* is deterministic but
+# the pruning counts are not.
+statement ok
+set datafusion.explain.analyze_level = summary;
+
+statement ok
+set datafusion.explain.analyze_categories = 'none';
+
+# MIN(a) -> DynamicFilter [ a < 1 ]
+query TT
+EXPLAIN ANALYZE SELECT MIN(a) FROM agg_dyn_single;
+----
+Plan with Metrics
+01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_single.a)], metrics=[]
+02)--CoalescePartitionsExec, metrics=[]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_single.a)], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_1.parquet]]}, projection=[a], file_type=parquet, predicate=DynamicFilter [ a@0 < 1 ], pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 1, required_guarantees=[], metrics=[]
+
+# MAX(a) -> DynamicFilter [ a > 8 ]
+query TT
+EXPLAIN ANALYZE SELECT MAX(a) FROM agg_dyn_single;
+----
+Plan with Metrics
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_single.a)], metrics=[]
+02)--CoalescePartitionsExec, metrics=[]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_single.a)], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_1.parquet]]}, projection=[a], file_type=parquet, predicate=DynamicFilter [ a@0 > 8 ], pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 > 8, required_guarantees=[], metrics=[]
+
+# MIN(a), MAX(a) -> DynamicFilter [ a < 1 OR a > 8 ]
+query TT
+EXPLAIN ANALYZE SELECT MIN(a), MAX(a) FROM agg_dyn_single;
+----
+Plan with Metrics
+01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_single.a), max(agg_dyn_single.a)], metrics=[]
+02)--CoalescePartitionsExec, metrics=[]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_single.a), max(agg_dyn_single.a)], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_1.parquet]]}, projection=[a], file_type=parquet, predicate=DynamicFilter [ a@0 < 1 OR a@0 > 8 ], pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 1 OR a_null_count@1 != row_count@2 AND a_max@3 > 8, required_guarantees=[], metrics=[]
+
+# MIN(a+1) -> no dynamic filter (expression input is not a plain column)
+query TT
+EXPLAIN ANALYZE SELECT MIN(a + 1) FROM agg_dyn_single;
+----
+Plan with Metrics
+01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_single.a + Int64(1))], metrics=[]
+02)--CoalescePartitionsExec, metrics=[]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_single.a + Int64(1))], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_single/file_1.parquet]]}, projection=[a], file_type=parquet, metrics=[]
+
+statement ok
+drop table agg_dyn_single;
+
+# --- two-column fixture: MIN(a) + MAX(b) across columns ---
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (5, 7), (1, 2)) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_two_col/file_0.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (3, 4), (8, 9)) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_two_col/file_1.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE agg_dyn_two_col (a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_two_col/';
+
+# MIN(a), MAX(b) -> DynamicFilter [ a < 1 OR b > 9 ]
+query TT
+EXPLAIN ANALYZE SELECT MIN(a), MAX(b) FROM agg_dyn_two_col;
+----
+Plan with Metrics
+01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_two_col.a), max(agg_dyn_two_col.b)], metrics=[]
+02)--CoalescePartitionsExec, metrics=[]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_two_col.a), max(agg_dyn_two_col.b)], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_two_col/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_two_col/file_1.parquet]]}, projection=[a, b], file_type=parquet, predicate=DynamicFilter [ a@0 < 1 OR b@1 > 9 ], pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 1 OR b_null_count@4 != row_count@2 AND b_max@3 > 9, required_guarantees=[], metrics=[]
+
+statement ok
+drop table agg_dyn_two_col;
+
+# --- mixed expressions: MIN(a), MAX(a), MAX(b), MIN(c+1) ---
+# Supported aggregates (MIN(a), MAX(a), MAX(b)) should drive a filter;
+# MIN(c+1) is unsupported and must not contribute.
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (5, 10, 100), (1, 4, 70)) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (3, 6, 90), (8, 12, 110)) AS v(a, b, c)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE agg_dyn_mixed (a INT, b INT, c INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/';
+
+# -> DynamicFilter [ a < 1 OR a > 8 OR b > 12 ] (MIN(c+1) dropped as unsupported)
+query TT
+EXPLAIN ANALYZE SELECT MIN(a), MAX(a), MAX(b), MIN(c + 1) FROM agg_dyn_mixed;
+----
+Plan with Metrics
+01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_mixed.a), max(agg_dyn_mixed.a), max(agg_dyn_mixed.b), min(agg_dyn_mixed.c + Int64(1))], metrics=[]
+02)--CoalescePartitionsExec, metrics=[]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_mixed.a), max(agg_dyn_mixed.a), max(agg_dyn_mixed.b), min(agg_dyn_mixed.c + Int64(1))], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet]]}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilter [ a@0 < 1 OR a@0 > 8 OR b@1 > 12 ], pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 1 OR a_null_count@1 != row_count@2 AND a_max@3 > 8 OR b_null_count@5 != row_count@2 AND b_max@4 > 12, required_guarantees=[], metrics=[]
+
+statement ok
+drop table agg_dyn_mixed;
+
+# --- all-NULLs input: filter should stay `true` (no meaningful bound) ---
+
+statement ok
+COPY (
+  SELECT CAST(NULL AS INT) AS a FROM (VALUES (1), (2)) AS v(n)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_nulls/file_0.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT CAST(NULL AS INT) AS a FROM (VALUES (3), (4)) AS v(n)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_nulls/file_1.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE agg_dyn_nulls (a INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_nulls/';
+
+# MIN(a) over all-NULL input -> DynamicFilter [ true ]
+query TT
+EXPLAIN ANALYZE SELECT MIN(a) FROM agg_dyn_nulls;
+----
+Plan with Metrics
+01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_nulls.a)], metrics=[]
+02)--CoalescePartitionsExec, metrics=[]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_nulls.a)], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_nulls/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_nulls/file_1.parquet]]}, projection=[a], file_type=parquet, predicate=DynamicFilter [ true ], metrics=[]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+reset datafusion.explain.analyze_level;
+
+statement ok
+drop table agg_dyn_nulls;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+
+########
+# Ported from datafusion/core/tests/physical_optimizer/filter_pushdown.rs::
+#   test_aggregate_filter_pushdown
+#   test_no_pushdown_filter_on_aggregate_result
+#
+# - A filter that only references grouping columns (`WHERE a = 'x' GROUP BY a`)
+#   should push through the aggregate and land on the scan's predicate.
+# - A filter on an aggregate *result* (`HAVING count(b) > 5`) must NOT push
+#   through — it has to stay above the aggregate.
+########
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES ('x', 'foo'), ('y', 'bar')) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE agg_filter_pushdown (a VARCHAR, b VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet';
+
+# Filter on grouping column pushes down to the scan.
+query TT
+EXPLAIN SELECT a, count(b) FROM agg_filter_pushdown WHERE a = 'x' GROUP BY a;
+----
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)], ordering_mode=Sorted
+02)--RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)], ordering_mode=Sorted
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet, predicate=a@0 = x, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= x AND x <= a_max@1, required_guarantees=[a in (x)]
+
+# Filter on aggregate result (HAVING) stays above the aggregate.
+query TT
+EXPLAIN SELECT a, count(b) AS cnt FROM agg_filter_pushdown GROUP BY a HAVING count(b) > 5;
+----
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, count(agg_filter_pushdown.b)@1 as cnt]
+02)--FilterExec: count(agg_filter_pushdown.b)@1 > 5
+03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
+04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet
+
+statement ok
+drop table agg_filter_pushdown;
+
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

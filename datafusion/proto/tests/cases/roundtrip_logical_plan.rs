@@ -586,7 +586,6 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
             let format_factory = file_type.as_format_factory();
             let csv_factory = format_factory
                 .as_ref()
-                .as_any()
                 .downcast_ref::<CsvFormatFactory>()
                 .unwrap();
             let csv_config = csv_factory.options.as_ref().unwrap();
@@ -655,7 +654,6 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
             let format_factory = file_type.as_format_factory();
             let json_factory = format_factory
                 .as_ref()
-                .as_any()
                 .downcast_ref::<JsonFormatFactory>()
                 .unwrap();
             let json_config = json_factory.options.as_ref().unwrap();
@@ -727,7 +725,6 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
             let format_factory = file_type.as_format_factory();
             let parquet_factory = format_factory
                 .as_ref()
-                .as_any()
                 .downcast_ref::<ParquetFormatFactory>()
                 .unwrap();
             let parquet_config = parquet_factory.options.as_ref().unwrap();
@@ -781,7 +778,6 @@ async fn roundtrip_default_codec_csv() -> Result<()> {
             let csv = dt
                 .as_format_factory()
                 .as_ref()
-                .as_any()
                 .downcast_ref::<CsvFormatFactory>()
                 .unwrap();
             let decoded = csv.options.as_ref().unwrap();
@@ -833,7 +829,6 @@ async fn roundtrip_default_codec_json() -> Result<()> {
             let json = dt
                 .as_format_factory()
                 .as_ref()
-                .as_any()
                 .downcast_ref::<JsonFormatFactory>()
                 .unwrap();
             let decoded = json.options.as_ref().unwrap();
@@ -887,7 +882,6 @@ async fn roundtrip_default_codec_parquet() -> Result<()> {
             let pq = dt
                 .as_format_factory()
                 .as_ref()
-                .as_any()
                 .downcast_ref::<ParquetFormatFactory>()
                 .unwrap();
             let decoded = pq.options.as_ref().unwrap();

@@ -311,6 +311,15 @@ config_namespace! {
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
         pub default_null_ordering: String, default = "nulls_max".to_string()
+
+        /// When set to true, DataFusion may remove `ORDER BY` clauses from
+        /// subqueries or CTEs during SQL planning when their ordering cannot
+        /// affect the result, such as when no `LIMIT` or other
+        /// order-sensitive operator depends on them.
+        ///
+        /// Disable this option to preserve explicit subquery ordering in the
+        /// planned query.
+        pub enable_subquery_sort_elimination: bool, default = true
     }
 }
 
@@ -1087,6 +1096,15 @@ config_namespace! {
         /// past window functions, if possible
         pub enable_window_limits: bool, default = true
 
+        /// When set to true, the optimizer will replace
+        /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
+        /// PartitionedTopKExec that maintains per-partition heaps, avoiding
+        /// a full sort of the input.
+        /// When the window partition key has low cardinality, enabling this optimization
+        /// can improve performance. However, for high cardinality keys, it may
+        /// cause regressions in both memory usage and runtime.
+        pub enable_window_topn: bool, default = false
+
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the
         /// sort key, reducing data volume before the shuffle.
@@ -1243,6 +1261,12 @@ config_namespace! {
         /// input reordering is disabled and the original join order in the
         /// query is used.
         pub join_reordering: bool, default = true
+
+        /// When set to true, the physical plan optimizer uses the pluggable
+        /// `StatisticsRegistry` for statistics propagation across operators.
+        /// This enables more accurate cardinality estimates compared to each
+        /// operator's built-in `partition_statistics`.
+        pub use_statistics_registry: bool, default = false
 
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory

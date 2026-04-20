@@ -24,13 +24,13 @@ use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
+use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, not_impl_err, plan_err};
-use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{Centroid, TDigest};
 use datafusion_macros::user_doc;
@@ -125,26 +125,54 @@ impl Default for ApproxPercentileContWithWeight {
 impl ApproxPercentileContWithWeight {
     /// Create a new [`ApproxPercentileContWithWeight`] aggregate function.
     pub fn new() -> Self {
-        let mut variants = Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
-        // Accept any numeric value paired with weight and float64 percentile
-        for num in NUMERICS {
-            variants.push(TypeSignature::Exact(vec![
-                num.clone(),
-                num.clone(),
-                DataType::Float64,
-            ]));
-            // Additionally accept an integer number of centroids for T-Digest
-            for int in INTEGERS {
-                variants.push(TypeSignature::Exact(vec![
-                    num.clone(),
-                    num.clone(),
-                    DataType::Float64,
-                    int.clone(),
-                ]));
-            }
-        }
+        let signature = Signature::one_of(
+            vec![
+                // 3 args - numeric, weight (float), percentile (float)
+                TypeSignature::Coercible(vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                ]),
+                // 4 args - numeric, weight (float), percentile (float), centroid (integer)
+                TypeSignature::Coercible(vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Integer,
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Int64,
+                    ),
+                ]),
+            ],
+            Volatility::Immutable,
+        );
         Self {
-            signature: Signature::one_of(variants, Immutable),
+            signature,
             approx_percentile_cont: ApproxPercentileCont::new(),
         }
     }

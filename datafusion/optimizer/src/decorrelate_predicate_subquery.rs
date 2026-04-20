@@ -89,6 +89,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 
         // iterate through all exists clauses in predicate, turning each into a join
         let mut cur_input = Arc::unwrap_or_clone(filter.input);
+        let original_schema = cur_input.schema().columns();
         for subquery_expr in with_subqueries {
             match extract_subquery_info(subquery_expr) {
                 // The subquery expression is at the top level of the filter
@@ -115,6 +116,13 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
             cur_input = LogicalPlan::Filter(new_filter);
         }
+
+        if cur_input.schema().fields().len() != original_schema.len() {
+            cur_input = LogicalPlanBuilder::from(cur_input)
+                .project(original_schema.into_iter().map(Expr::from))?
+                .build()?;
+        }
+
         Ok(Transformed::yes(cur_input))
     }
 
@@ -1736,13 +1744,14 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          Filter: __correlated_sq_1.mark OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
-            LeftMark Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
-              TableScan: customer [c_custkey:Int64, c_name:Utf8]
-              SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
-                Projection: orders.o_custkey [o_custkey:Int64]
-                  Filter: customer.c_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-                    TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+          Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
+            Filter: __correlated_sq_1.mark OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
+              LeftMark Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
+                TableScan: customer [c_custkey:Int64, c_name:Utf8]
+                SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
+                  Projection: orders.o_custkey [o_custkey:Int64]
+                    Filter: customer.c_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+                      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
         "
         )
     }

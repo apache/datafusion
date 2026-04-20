@@ -604,7 +604,7 @@ impl Unparser<'_> {
             .collect::<Result<Vec<_>>>()?;
         Ok(ast::Expr::Array(Array {
             elem: args,
-            named: false,
+            named: self.dialect.use_array_keyword_for_array_literals(),
         }))
     }
 
@@ -615,7 +615,10 @@ impl Unparser<'_> {
             elem.push(self.scalar_to_sql(&value)?);
         }
 
-        Ok(ast::Expr::Array(Array { elem, named: false }))
+        Ok(ast::Expr::Array(Array {
+            elem,
+            named: self.dialect.use_array_keyword_for_array_literals(),
+        }))
     }
 
     fn array_element_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
@@ -3043,6 +3046,61 @@ mod tests {
     }
 
     #[test]
+    fn test_array_literal_scalar_value_to_sql_postgres() -> Result<()> {
+        let dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+        let unparser = Unparser::new(dialect.as_ref());
+
+        let expr = Expr::Literal(
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(2)),
+                    ScalarValue::Int32(Some(3)),
+                ],
+                &DataType::Int32,
+            )),
+            None,
+        );
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(ast.to_string(), "ARRAY[1, 2, 3]");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_array_literal_scalar_value_to_sql_postgres() -> Result<()> {
+        let dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+        let unparser = Unparser::new(dialect.as_ref());
+
+        let inner_type = DataType::Int32;
+        let nested_type =
+            DataType::List(Arc::new(Field::new_list_field(inner_type.clone(), true)));
+
+        let expr = Expr::Literal(
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))],
+                        &inner_type,
+                    )),
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(4))],
+                        &inner_type,
+                    )),
+                ],
+                &nested_type,
+            )),
+            None,
+        );
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(ast.to_string(), "ARRAY[ARRAY[1, 2], ARRAY[3, 4]]");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_round_scalar_fn_to_expr() -> Result<()> {
         let default_dialect: Arc<dyn Dialect> = Arc::new(
             CustomDialectBuilder::new()
@@ -3466,6 +3524,55 @@ mod tests {
             let actual = format!("{}", unparser.expr_to_sql(&expr)?);
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_bigquery_dialect_overrides() -> Result<()> {
+        let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
+        let unparser = Unparser::new(bigquery_dialect.as_ref());
+
+        // date_field_extract_style: EXTRACT instead of date_part
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::new_from_impl(
+                datafusion_functions::datetime::date_part::DatePartFunc::new(),
+            )),
+            args: vec![lit("YEAR"), col("date_col")],
+        });
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "EXTRACT(YEAR FROM `date_col`)");
+
+        // interval_style: SQL standard instead of PostgresVerbose
+        let expr = interval_year_month_lit("3 months");
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "INTERVAL '3' MONTH");
+
+        // float64_ast_dtype: FLOAT64 instead of DOUBLE
+        let expr = cast(col("a"), DataType::Float64);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS FLOAT64)");
+
+        // supports_column_alias_in_table_alias: false
+        assert!(!bigquery_dialect.supports_column_alias_in_table_alias());
+
+        // utf8_cast_dtype: STRING instead of VARCHAR
+        let expr = cast(col("a"), DataType::Utf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // large_utf8_cast_dtype: STRING instead of TEXT
+        let expr = cast(col("a"), DataType::LargeUtf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // timestamp_cast_dtype: TIMESTAMP (no WITH TIME ZONE)
+        let expr = cast(
+            col("a"),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+        );
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS TIMESTAMP)");
+
         Ok(())
     }
 }

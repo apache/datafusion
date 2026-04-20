@@ -52,7 +52,7 @@ pub fn simplify_not_expr(
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     // Check if this is a NOT expression
-    let not_expr = match expr.as_any().downcast_ref::<NotExpr>() {
+    let not_expr = match expr.downcast_ref::<NotExpr>() {
         Some(not_expr) => not_expr,
         None => return Ok(Transformed::no(expr)),
     };
@@ -60,12 +60,12 @@ pub fn simplify_not_expr(
     let inner_expr = not_expr.arg();
 
     // Handle NOT(NOT(expr)) -> expr (double negation elimination)
-    if let Some(inner_not) = inner_expr.as_any().downcast_ref::<NotExpr>() {
+    if let Some(inner_not) = inner_expr.downcast_ref::<NotExpr>() {
         return Ok(Transformed::yes(Arc::clone(inner_not.arg())));
     }
 
     // Handle NOT(literal) -> !literal
-    if let Some(literal) = inner_expr.as_any().downcast_ref::<Literal>() {
+    if let Some(literal) = inner_expr.downcast_ref::<Literal>() {
         if let ScalarValue::Boolean(Some(val)) = literal.value() {
             return Ok(Transformed::yes(lit(ScalarValue::Boolean(Some(!val)))));
         }
@@ -75,7 +75,7 @@ pub fn simplify_not_expr(
     }
 
     // Handle NOT(IN list) -> NOT IN list
-    if let Some(in_list_expr) = inner_expr.as_any().downcast_ref::<InListExpr>() {
+    if let Some(in_list_expr) = inner_expr.downcast_ref::<InListExpr>() {
         let negated = !in_list_expr.negated();
         let new_in_list = in_list(
             Arc::clone(in_list_expr.expr()),
@@ -87,7 +87,7 @@ pub fn simplify_not_expr(
     }
 
     // Handle NOT(binary_expr)
-    if let Some(binary_expr) = inner_expr.as_any().downcast_ref::<BinaryExpr>() {
+    if let Some(binary_expr) = inner_expr.downcast_ref::<BinaryExpr>() {
         if let Some(negated_op) = binary_expr.op().negate() {
             let new_binary = Arc::new(BinaryExpr::new(
                 Arc::clone(binary_expr.left()),

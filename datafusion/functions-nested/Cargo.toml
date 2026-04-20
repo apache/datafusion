@@ -64,6 +64,7 @@ log = { workspace = true }
 memchr = { workspace = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true, features = ["async_tokio"] }
 rand = { workspace = true }
 
@@ -126,3 +127,7 @@ name = "array_sort"
 [[bench]]
 harness = false
 name = "string_to_array"
+
+[[bench]]
+harness = false
+name = "array_resize"

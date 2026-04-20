@@ -19,7 +19,6 @@
 //! datafusion-functions crate.
 
 use insta::assert_snapshot;
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -251,10 +250,6 @@ struct MyTableSource {
 }
 
 impl TableSource for MyTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

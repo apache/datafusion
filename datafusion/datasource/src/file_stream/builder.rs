@@ -18,6 +18,9 @@
 use std::sync::Arc;
 
 use crate::file_scan_config::FileScanConfig;
+use crate::file_stream::scan_state::ScanState;
+use crate::file_stream::work_source::{SharedWorkSource, WorkSource};
+use crate::morsel::{FileOpenerMorselizer, Morselizer};
 use datafusion_common::{Result, internal_err};
 use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 
@@ -28,20 +31,22 @@ use super::{FileOpener, FileStream, FileStreamState, OnError};
 pub struct FileStreamBuilder<'a> {
     config: &'a FileScanConfig,
     partition: Option<usize>,
-    file_opener: Option<Arc<dyn FileOpener>>,
+    morselizer: Option<Box<dyn Morselizer>>,
     metrics: Option<&'a ExecutionPlanMetricsSet>,
     on_error: OnError,
+    shared_work_source: Option<SharedWorkSource>,
 }
 
 impl<'a> FileStreamBuilder<'a> {
-    /// Create a new builder.
+    /// Create a new builder for [`FileStream`].
     pub fn new(config: &'a FileScanConfig) -> Self {
         Self {
             config,
             partition: None,
-            file_opener: None,
+            morselizer: None,
             metrics: None,
             on_error: OnError::Fail,
+            shared_work_source: None,
         }
     }
 
@@ -52,8 +57,18 @@ impl<'a> FileStreamBuilder<'a> {
     }
 
     /// Configure the [`FileOpener`] used to open files.
+    ///
+    /// This will overwrite any setting from [`Self::with_morselizer`]
     pub fn with_file_opener(mut self, file_opener: Arc<dyn FileOpener>) -> Self {
-        self.file_opener = Some(file_opener);
+        self.morselizer = Some(Box::new(FileOpenerMorselizer::new(file_opener)));
+        self
+    }
+
+    /// Configure the [`Morselizer`] used to open files.
+    ///
+    /// This will overwrite any setting from [`Self::with_file_opener`]
+    pub fn with_morselizer(mut self, morselizer: Box<dyn Morselizer>) -> Self {
+        self.morselizer = Some(morselizer);
         self
     }
 
@@ -69,21 +84,31 @@ impl<'a> FileStreamBuilder<'a> {
         self
     }
 
+    /// Configure the [`SharedWorkSource`] for sibling work stealing.
+    pub(crate) fn with_shared_work_source(
+        mut self,
+        shared_work_source: Option<SharedWorkSource>,
+    ) -> Self {
+        self.shared_work_source = shared_work_source;
+        self
+    }
+
     /// Build the configured [`FileStream`].
     pub fn build(self) -> Result<FileStream> {
         let Self {
             config,
             partition,
-            file_opener,
+            morselizer,
             metrics,
             on_error,
+            shared_work_source,
         } = self;
 
         let Some(partition) = partition else {
             return internal_err!("FileStreamBuilder missing required partition");
         };
-        let Some(file_opener) = file_opener else {
-            return internal_err!("FileStreamBuilder missing required file_opener");
+        let Some(morselizer) = morselizer else {
+            return internal_err!("FileStreamBuilder missing required morselizer");
         };
         let Some(metrics) = metrics else {
             return internal_err!("FileStreamBuilder missing required metrics");
@@ -94,16 +119,24 @@ impl<'a> FileStreamBuilder<'a> {
                 "FileStreamBuilder invalid partition index: {partition}"
             );
         };
+        let work_source = match shared_work_source {
+            Some(shared) => WorkSource::Shared(shared),
+            None => WorkSource::Local(file_group.into_inner().into()),
+        };
+
+        let file_stream_metrics = FileStreamMetrics::new(metrics, partition);
+        let scan_state = Box::new(ScanState::new(
+            work_source,
+            config.limit,
+            morselizer,
+            on_error,
+            file_stream_metrics,
+        ));
 
         Ok(FileStream {
-            file_iter: file_group.into_inner().into_iter().collect(),
             projected_schema,
-            remain: config.limit,
-            file_opener,
-            state: FileStreamState::Idle,
-            file_stream_metrics: FileStreamMetrics::new(metrics, partition),
+            state: FileStreamState::Scan { scan_state },
             baseline_metrics: BaselineMetrics::new(metrics, partition),
-            on_error,
         })
     }
 }
