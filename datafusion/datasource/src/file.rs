@@ -280,6 +280,19 @@ pub trait FileSource: Any + Send + Sync {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
+    /// Reorder files in the shared work queue to optimize query performance.
+    ///
+    /// For example, TopK queries benefit from reading files with the best
+    /// statistics first, so the dynamic filter threshold tightens quickly.
+    ///
+    /// The default implementation returns files unchanged (no reordering).
+    fn reorder_files(
+        &self,
+        files: Vec<crate::PartitionedFile>,
+    ) -> Vec<crate::PartitionedFile> {
+        files
+    }
+
     /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should

@@ -485,6 +485,24 @@ impl ParquetSource {
     pub(crate) fn reverse_row_groups(&self) -> bool {
         self.reverse_row_groups
     }
+
+    /// Extract the sort key from a file's statistics for reordering.
+    ///
+    /// For DESC sorts, returns the column's min_value (we want highest min first).
+    /// For ASC sorts, returns the column's max_value (we want lowest max first).
+    fn sort_key_for_file(
+        file: &datafusion_datasource::PartitionedFile,
+        col_idx: usize,
+        descending: bool,
+    ) -> Option<datafusion_common::ScalarValue> {
+        let stats = file.statistics.as_ref()?;
+        let col_stats = stats.column_statistics.get(col_idx)?;
+        if descending {
+            col_stats.min_value.get_value().cloned()
+        } else {
+            col_stats.max_value.get_value().cloned()
+        }
+    }
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
@@ -585,6 +603,67 @@ impl FileSource for ParquetSource {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
         }))
+    }
+
+    fn reorder_files(
+        &self,
+        mut files: Vec<datafusion_datasource::PartitionedFile>,
+    ) -> Vec<datafusion_datasource::PartitionedFile> {
+        let sort_order = match &self.sort_order_for_reorder {
+            Some(order) if !order.is_empty() => order,
+            _ => return files,
+        };
+
+        // We only handle single-column sort for now
+        let first_expr = sort_order.first();
+
+        // The sort expression must be a Column so we can look up statistics
+        let col: &datafusion_physical_expr::expressions::Column =
+            match first_expr.expr.downcast_ref() {
+                Some(col) => col,
+                None => return files,
+            };
+
+        let col_name = col.name();
+        let descending = self.reverse_row_groups;
+
+        // Find the column index in the table schema
+        let table_schema = self.table_schema.table_schema();
+        let col_idx = match table_schema.index_of(col_name) {
+            Ok(idx) => idx,
+            Err(_) => return files,
+        };
+
+        // Stable sort: files with usable stats first, ordered by the
+        // relevant bound; files without stats go to the end.
+        files.sort_by(|a, b| {
+            let key_a = Self::sort_key_for_file(a, col_idx, descending);
+            let key_b = Self::sort_key_for_file(b, col_idx, descending);
+            match (key_a, key_b) {
+                (Some(va), Some(vb)) => {
+                    if descending {
+                        // DESC: highest min first (reverse order)
+                        vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+                    } else {
+                        // ASC: lowest max first
+                        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                }
+                // Files without stats go to the end
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
+
+        log::debug!(
+            "Reordered {} files by {} {} for TopK optimization",
+            files.len(),
+            col_name,
+            if descending { "DESC" } else { "ASC" }
+        );
+
+        files
     }
 
     fn table_schema(&self) -> &TableSchema {
