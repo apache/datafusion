@@ -1474,9 +1474,8 @@ mod tests {
 
         // 1. Setup bloated data (large buffers)
         let num_rows = 1000;
-        let binary_array: BinaryViewArray = (0..num_rows)
-            .map(|i| Some(vec![i as u8; 100]))
-            .collect();
+        let binary_array: BinaryViewArray =
+            (0..num_rows).map(|i| Some(vec![i as u8; 100])).collect();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "b",
             DataType::BinaryView,
