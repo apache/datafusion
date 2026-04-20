@@ -952,6 +952,7 @@ pub(crate) struct NestedLoopJoinStream {
     /// type of the join
     pub(crate) join_type: JoinType,
     /// the probe-side(right) table data of the nested loop join
+    /// `Option` is used becuase memory-limited path requires resetting it.
     pub(crate) right_data: Option<SendableRecordBatchStream>,
     /// the build-side table data of the nested loop join
     pub(crate) left_data: OnceFut<JoinLeftData>,
