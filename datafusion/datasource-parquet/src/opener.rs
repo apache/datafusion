@@ -905,6 +905,22 @@ impl FiltersPreparedParquetOpen {
             row_groups.prune_by_range(rg_metadata, range);
         }
 
+        // Initialize TopK dynamic filter threshold from row group statistics
+        // BEFORE row group pruning, so that this file's own RGs can be pruned
+        // by the threshold. For the first file, this sets the initial threshold;
+        // for subsequent files, the threshold is already set by earlier files.
+        if let (Some(predicate), Some(limit)) = (&prepared.predicate, prepared.limit)
+            && let Err(e) = try_init_topk_threshold(
+                predicate,
+                limit,
+                rg_metadata,
+                &prepared.physical_file_schema,
+                loaded.reader_metadata.parquet_schema(),
+            )
+        {
+            debug!("Skipping TopK threshold initialization from statistics: {e}");
+        }
+
         // If there is a predicate that can be evaluated against the metadata
         if let Some(predicate) = self.pruning_predicate.as_ref().map(|p| p.as_ref()) {
             if prepared.enable_row_group_stats_pruning {
@@ -1086,23 +1102,6 @@ impl RowGroupsPrunedParquetOpen {
 
         let file_metadata = Arc::clone(reader_metadata.metadata());
         let rg_metadata = file_metadata.row_groups();
-
-        // Initialize TopK dynamic filter from row group statistics.
-        // This sets an initial threshold before any data is read, so that
-        // subsequent row filtering can benefit immediately.
-        // Sort direction is read from the DynamicFilterPhysicalExpr's
-        // sort_options (set by SortExec for TopK queries).
-        if let (Some(predicate), Some(limit)) = (&prepared.predicate, prepared.limit)
-            && let Err(e) = try_init_topk_threshold(
-                predicate,
-                limit,
-                rg_metadata,
-                &prepared.physical_file_schema,
-                reader_metadata.parquet_schema(),
-            )
-        {
-            debug!("Skipping TopK threshold initialization from statistics: {e}");
-        }
 
         // Filter pushdown: evaluate predicates during scan
         let row_filter = if let Some(predicate) = prepared
