@@ -257,7 +257,7 @@ If the release is not approved or urgent backports requested, please start over 
 
 #### If the Vote Passes: Announce the Result
 
-Call the vote on the Apache Datafusion dev list by replying to the RC voting thread. The
+Call the vote on the Datafusion dev list by replying to the RC voting thread. The
 reply should have a new subject constructed by adding the `[RESULT]` prefix to the
 old subject line.
 
@@ -364,7 +364,6 @@ Caused by:
   candidate versions found which didn't match: 53.0.0, 52.5.0, 52.4.0, ...
   location searched: crates.io index
   required by package `datafusion-ffi v53.1.0 (/private/tmp/apache-datafusion-53.1.0/datafusion/ffi)`
-MacBook-Pro-135:apache-datafusion-53.1.0 ovoievodin$ (cd datafusion/proto && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew
