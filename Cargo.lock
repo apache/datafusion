@@ -2282,7 +2282,7 @@ dependencies = [
  "hex",
  "itertools 0.14.0",
  "log",
- "md-5 0.10.6",
+ "md-5 0.11.0",
  "memchr",
  "num-traits",
  "rand 0.9.4",
