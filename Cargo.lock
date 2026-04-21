@@ -1925,6 +1925,7 @@ dependencies = [
  "regex",
  "rstest",
  "rustyline",
+ "serde_json",
  "testcontainers-modules",
  "tokio",
  "url",

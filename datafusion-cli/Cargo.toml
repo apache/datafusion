@@ -78,3 +78,6 @@ insta = { workspace = true }
 insta-cmd = "0.6.0"
 rstest = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["minio"] }
+# Makes sure `test_display_pg_json` behaves in a consistent way regardless of
+# feature unification with dependencies
+serde_json = { workspace = true, features = ["preserve_order"] }
