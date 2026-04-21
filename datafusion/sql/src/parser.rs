@@ -825,7 +825,7 @@ impl<'a> DFParser<'a> {
     /// option list and the next non-whitespace token is `(`, we must
     /// disambiguate between an option list (`EXPLAIN (ANALYZE) SELECT ...`)
     /// and a parenthesized query (`EXPLAIN (SELECT ...)` or
-    /// `EXPLAIN (q1 EXCEPT q2) UNION ALL ...`). See [`token_starts_query`].
+    /// `EXPLAIN (q1 EXCEPT q2) UNION ALL ...`).
     pub fn parse_explain(&mut self) -> Result<Statement, DataFusionError> {
         if self.supports_explain_with_utility_options
             && self.parser.peek_token().token == Token::LParen
