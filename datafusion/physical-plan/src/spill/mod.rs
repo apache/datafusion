@@ -1421,4 +1421,92 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_spill_file_size_gc_verification_string_view() -> Result<()> {
+        use arrow::array::StringViewArray;
+        use std::fs;
+
+        // 1. Setup bloated data (large buffers)
+        let num_rows = 1000;
+        let string_array: StringViewArray = (0..num_rows)
+            .map(|i| Some(format!("this_is_a_long_string_to_ensure_it_is_not_inlined_and_causes_waste_{i}")))
+            .collect();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(string_array.clone()) as ArrayRef],
+        )?;
+
+        // 2. Slice it heavily (1% of the data)
+        let sliced_batch = batch.slice(0, 10);
+
+        // 3. Spill to disk using SpillManager
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, schema);
+        let spill_file = spill_manager
+            .spill_record_batch_and_finish(&[sliced_batch], "TestGC")?
+            .unwrap();
+
+        // 4. Check file size on disk
+        let file_size = fs::metadata(spill_file.path())?.len();
+
+        // The original buffer size is around 70KB.
+        // Without GC, the spill file would be > 70KB.
+        // With GC, it should be much smaller (only 10 rows of ~70 bytes each + metadata).
+        assert!(
+            file_size < 10 * 1024,
+            "Spill file is too large ({file_size} bytes)! GC might not be working."
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_file_size_gc_verification_binary_view() -> Result<()> {
+        use arrow::array::BinaryViewArray;
+        use std::fs;
+
+        // 1. Setup bloated data (large buffers)
+        let num_rows = 1000;
+        let binary_array: BinaryViewArray =
+            (0..num_rows).map(|i| Some(vec![i as u8; 100])).collect();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "b",
+            DataType::BinaryView,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(binary_array.clone()) as ArrayRef],
+        )?;
+
+        // 2. Slice it heavily (1% of the data)
+        let sliced_batch = batch.slice(0, 10);
+
+        // 3. Spill to disk using SpillManager
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, schema);
+        let spill_file = spill_manager
+            .spill_record_batch_and_finish(&[sliced_batch], "TestGCBinary")?
+            .unwrap();
+
+        // 4. Check file size on disk
+        let file_size = fs::metadata(spill_file.path())?.len();
+
+        // Original buffer is 100KB.
+        // With GC, it should be much smaller.
+        assert!(
+            file_size < 10 * 1024,
+            "Spill file is too large ({file_size} bytes)! GC might not be working."
+        );
+
+        Ok(())
+    }
 }

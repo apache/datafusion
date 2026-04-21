@@ -24,7 +24,8 @@ use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
     file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
-    source::DataSource, statistics::MinMaxStatistics,
+    file_stream::work_source::SharedWorkSource, source::DataSource,
+    statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -38,6 +39,7 @@ use datafusion_execution::{
 };
 use datafusion_expr::Operator;
 
+use crate::source::OpenArgs;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -55,6 +57,7 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
+use std::any::Any;
 use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// [`FileScanConfig`] represents scanning data from a group of files
@@ -578,6 +581,15 @@ impl DataSource for FileScanConfig {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        self.open_with_args(OpenArgs::new(partition, context))
+    }
+
+    fn open_with_args(&self, args: OpenArgs) -> Result<SendableRecordBatchStream> {
+        let OpenArgs {
+            partition,
+            context,
+            sibling_state,
+        } = args;
         let object_store = context.runtime_env().object_store(&self.object_store_url)?;
         let batch_size = self
             .batch_size
@@ -587,8 +599,17 @@ impl DataSource for FileScanConfig {
 
         let morselizer = source.create_morselizer(object_store, self, partition)?;
 
+        // Extract the shared work source from the sibling state if it exists.
+        // This allows multiple sibling streams to steal work from a single
+        // shared queue of unopened files.
+        let shared_work_source = sibling_state
+            .as_ref()
+            .and_then(|state| state.downcast_ref::<SharedWorkSource>())
+            .cloned();
+
         let stream = FileStreamBuilder::new(self)
             .with_partition(partition)
+            .with_shared_work_source(shared_work_source)
             .with_morselizer(morselizer)
             .with_metrics(source.metrics())
             .build()?;
@@ -985,6 +1006,20 @@ impl DataSource for FileScanConfig {
         // Delegate to the file source
         self.file_source.apply_expressions(f)
     }
+
+    /// Create any shared state that should be passed between sibling streams
+    /// during one execution.
+    ///
+    /// This returns `None` when sibling streams must not share work, such as
+    /// when file order must be preserved or the file groups define the output
+    /// partitioning needed for the rest of the plan
+    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        if self.preserve_order || self.partitioned_by_file_group {
+            return None;
+        }
+
+        Some(Arc::new(SharedWorkSource::from_config(self)) as Arc<dyn Any + Send + Sync>)
+    }
 }
 
 impl FileScanConfig {
@@ -1362,19 +1397,33 @@ mod tests {
 
     use super::*;
     use crate::TableSchema;
+    use crate::source::DataSourceExec;
     use crate::test_util::col;
     use crate::{
         generate_test_files, test_util::MockSource, tests::aggr_test_schema,
         verify_sort_integrity,
     };
 
+    use arrow::array::{Int32Array, RecordBatch};
     use arrow::datatypes::Field;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::stats::Precision;
+    use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_common::{Result, assert_batches_eq, internal_err};
+    use datafusion_execution::TaskContext;
     use datafusion_expr::SortExpr;
+    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
+    use datafusion_physical_expr::projection::ProjectionExprs;
+    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::execution_plan::collect;
+    use futures::FutureExt as _;
+    use futures::StreamExt as _;
+    use futures::stream;
+    use object_store::ObjectStore;
+    use std::fmt::Debug;
 
     #[derive(Clone)]
     struct InexactSortPushdownSource {
@@ -1394,7 +1443,7 @@ mod tests {
     impl FileSource for InexactSortPushdownSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn object_store::ObjectStore>,
+            _object_store: Arc<dyn ObjectStore>,
             _base_config: &FileScanConfig,
             _partition: usize,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
@@ -2278,6 +2327,88 @@ mod tests {
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
     }
 
+    /// Regression test for reusing a `DataSourceExec` after its execution-local
+    /// shared work queue has been drained.
+    ///
+    /// This test uses a single file group with two files so the scan creates a
+    /// shared unopened-file queue. Executing after `reset_state` must recreate
+    /// the shared queue and return the same rows again.
+    #[tokio::test]
+    async fn reset_state_recreates_shared_work_source() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let file_source = Arc::new(
+            MockSource::new(Arc::clone(&schema))
+                .with_file_opener(Arc::new(ResetStateTestFileOpener { schema })),
+        );
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_group(FileGroup::new(vec![
+                    PartitionedFile::new("file1.parquet", 100),
+                    PartitionedFile::new("file2.parquet", 100),
+                ]))
+                .build();
+
+        let exec: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Running the same scan after resetting the state, should
+        // produce the same answer.
+        let first_run = collect(Arc::clone(&exec), Arc::clone(&task_ctx)).await?;
+        let reset_exec = exec.reset_state()?;
+        let second_run = collect(reset_exec, task_ctx).await?;
+
+        let expected = [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 1     |",
+            "| 2     |",
+            "+-------+",
+        ];
+        assert_batches_eq!(expected, &first_run);
+        assert_batches_eq!(expected, &second_run);
+
+        Ok(())
+    }
+
+    /// Test-only `FileOpener` that turns file names like `file1.parquet` into a
+    /// single-batch stream containing that numeric value
+    #[derive(Debug)]
+    struct ResetStateTestFileOpener {
+        schema: SchemaRef,
+    }
+
+    impl crate::file_stream::FileOpener for ResetStateTestFileOpener {
+        fn open(
+            &self,
+            file: PartitionedFile,
+        ) -> Result<crate::file_stream::FileOpenFuture> {
+            let value = file
+                .object_meta
+                .location
+                .as_ref()
+                .trim_start_matches("file")
+                .trim_end_matches(".parquet")
+                .parse::<i32>()
+                .expect("invalid test file name");
+            let schema = Arc::clone(&self.schema);
+            Ok(async move {
+                let batch = RecordBatch::try_new(
+                    schema,
+                    vec![Arc::new(Int32Array::from(vec![value]))],
+                )
+                .expect("test batch should be valid");
+                Ok(stream::iter(vec![Ok(batch)]).boxed())
+            }
+            .boxed())
+        }
+    }
+
     #[test]
     fn test_output_partitioning_not_partitioned_by_file_group() {
         let file_schema = aggr_test_schema();
@@ -2461,7 +2592,7 @@ mod tests {
     impl FileSource for ExactSortPushdownSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn object_store::ObjectStore>,
+            _object_store: Arc<dyn ObjectStore>,
             _base_config: &FileScanConfig,
             _partition: usize,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {

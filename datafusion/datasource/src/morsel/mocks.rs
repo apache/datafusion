@@ -295,8 +295,11 @@ impl MockPlanBuilder {
     }
 
     /// Add a ready child planner
-    pub(crate) fn with_ready_planner(self, ready_planners: MockPlanner) -> Self {
-        self.with_ready_planners(vec![ready_planners])
+    pub(crate) fn with_ready_planner(
+        self,
+        ready_planner: impl Into<MockPlanner>,
+    ) -> Self {
+        self.with_ready_planners(vec![ready_planner.into()])
     }
 
     /// Add ready child planners produced by this planning step.
@@ -430,8 +433,9 @@ impl MockMorselizer {
         &self.observer
     }
 
-    /// Associates a file path with the planner spec used to open it.
-    pub(crate) fn with_file(mut self, planner: MockPlanner) -> Self {
+    /// Specify the return planner for the specified file_path
+    pub(crate) fn with_planner(mut self, planner: impl Into<MockPlanner>) -> Self {
+        let planner = planner.into();
         self.files.insert(planner.file_path.clone(), planner);
         self
     }

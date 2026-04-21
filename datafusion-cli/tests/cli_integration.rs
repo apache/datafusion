@@ -261,11 +261,11 @@ fn bind_to_settings(snapshot_name: &str) -> SettingsBindDropGuard {
         "Consumer(can spill: bool) consumed XB, peak XB",
     );
     settings.add_filter(
-        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total memory pool: '.*?'",
         "Error: Failed to allocate ",
     );
     settings.add_filter(
-        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total memory pool: '.*?'",
         "Resources exhausted: Failed to allocate",
     );
 

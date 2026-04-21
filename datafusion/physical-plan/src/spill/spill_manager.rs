@@ -160,9 +160,22 @@ impl SpillManager {
         Ok(file.map(|f| (f, max_record_batch_size)))
     }
 
-    /// Reads a spill file as a stream. The file must be created by the current `SpillManager`.
-    /// This method will generate output in FIFO order: the batch appended first
-    /// will be read first.
+    /// Reads a spill file as a stream. The file must be created by the current
+    /// `SpillManager`; otherwise behavior is undefined.
+    ///
+    /// Output is produced in FIFO order: the batch appended first is read first.
+    ///
+    /// # Arg `max_record_batch_memory`
+    ///
+    /// Most callers should pass `None`. This is mainly useful for the
+    /// memory-limited sort-preserving merge path.
+    ///
+    /// When provided, this value is used only as a validation hint. If a
+    /// decoded batch exceeds this threshold, a debug-level log message is
+    /// emitted.
+    ///
+    /// That path uses the maximum spilled batch size to conservatively estimate
+    /// the merge degree when merging multiple sorted runs.
     pub fn read_spill_as_stream(
         &self,
         spill_file_path: RefCountedTempFile,
