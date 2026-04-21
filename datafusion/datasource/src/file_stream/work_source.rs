@@ -55,14 +55,20 @@ impl WorkSource {
     }
 }
 
-/// Shared source of work for sibling `FileStream`s
+/// Shared source of work for sibling `FileStream`s.
 ///
-/// The queue is created once per execution and shared by all reorderable
-/// sibling streams for that execution. Whichever stream becomes idle first may
-/// take the next unopened file from the front of the queue.
+/// Created once per execution and shared by all reorderable sibling streams.
+/// Holds two queues:
 ///
-/// It uses a [`Mutex`] internally to provide thread-safe access
-/// to the shared file queue.
+/// - **morsels**: pre-prepared sub-file work items (e.g. parquet row-group
+///   chunks donated mid-open by a sibling). Always popped first.
+/// - **files**: whole unopened files — the initial scan units.
+///
+/// A FileStream that picks up a morsel has finalized state attached to it
+/// (via `PartitionedFile::extensions`) and can skip most of the per-file
+/// state machine. Draining morsels first keeps their latency low and
+/// prevents siblings from starting fresh whole files while half-processed
+/// sub-file work sits idle.
 #[derive(Debug, Clone)]
 pub struct SharedWorkSource {
     inner: Arc<SharedWorkSourceInner>,
@@ -70,6 +76,7 @@ pub struct SharedWorkSource {
 
 #[derive(Debug, Default)]
 pub(super) struct SharedWorkSourceInner {
+    morsels: Mutex<VecDeque<PartitionedFile>>,
     files: Mutex<VecDeque<PartitionedFile>>,
 }
 
@@ -82,9 +89,10 @@ impl Default for SharedWorkSource {
 impl SharedWorkSource {
     /// Create a shared work source containing the provided unopened files.
     pub(crate) fn new(files: impl IntoIterator<Item = PartitionedFile>) -> Self {
-        let files = files.into_iter().collect();
+        let files: VecDeque<PartitionedFile> = files.into_iter().collect();
         Self {
             inner: Arc::new(SharedWorkSourceInner {
+                morsels: Mutex::new(VecDeque::new()),
                 files: Mutex::new(files),
             }),
         }
@@ -95,25 +103,25 @@ impl SharedWorkSource {
         Self::new(config.file_groups.iter().flat_map(FileGroup::iter).cloned())
     }
 
-    /// Pop the next file from the shared work queue.
+    /// Pop the next item of work — morsels (pre-prepared sub-file chunks)
+    /// first, then whole files.
     ///
-    /// Returns `None` if the queue is empty.
+    /// Returns `None` if both queues are empty.
     pub fn pop_front(&self) -> Option<PartitionedFile> {
+        if let Some(morsel) = self.inner.morsels.lock().pop_front() {
+            return Some(morsel);
+        }
         self.inner.files.lock().pop_front()
     }
 
-    /// Push files to the front of the shared work queue.
+    /// Push pre-prepared morsels onto the morsel queue.
     ///
-    /// Used when an in-flight file is sub-divided (e.g. into row-group-sized
-    /// chunks): the donor keeps one chunk and pushes the rest to the front so
-    /// any idle sibling picks them up before starting work on an unrelated
-    /// whole file. Items preserve their order: the first element of `items`
-    /// ends up at the very front of the queue.
-    pub fn push_front(&self, items: impl IntoIterator<Item = PartitionedFile>) {
-        let items: Vec<PartitionedFile> = items.into_iter().collect();
-        let mut queue = self.inner.files.lock();
-        for file in items.into_iter().rev() {
-            queue.push_front(file);
-        }
+    /// Used when an in-flight file is sub-divided (e.g. parquet row-group
+    /// splitting): each donated chunk carries its finalized state via
+    /// `PartitionedFile::extensions` so the stealer can skip most of the
+    /// per-file state machine. Items preserve their order.
+    pub fn push_morsels(&self, items: impl IntoIterator<Item = PartitionedFile>) {
+        let mut queue = self.inner.morsels.lock();
+        queue.extend(items);
     }
 }

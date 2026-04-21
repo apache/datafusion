@@ -19,9 +19,7 @@
 
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_filter::build_projection_read_plan;
-use crate::row_group_filter::{
-    BloomFilterStatistics, RowGroupAccessPlanFilter, row_group_start_offset,
-};
+use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
@@ -183,9 +181,6 @@ impl Morselizer for ParquetMorselizer {
 ///   LoadMetadata
 ///        |
 ///        v
-///  SplitAndDonate
-///        |
-///        v
 ///  PrepareFilters
 ///        |
 ///        v
@@ -199,6 +194,9 @@ impl Morselizer for ParquetMorselizer {
 ///        |
 ///        v
 /// PruneWithBloomFilters
+///        |
+///        v
+///  SplitAndDonate
 ///        |
 ///        v
 ///   BuildStream
@@ -224,11 +222,6 @@ enum ParquetOpenState {
     PruneFile(Box<PreparedParquetOpen>),
     /// Loading Parquet metadata (in footer)
     LoadMetadata(BoxFuture<'static, Result<MetadataLoadedParquetOpen>>),
-    /// Optionally donate row-group chunks of this file back to the shared
-    /// work queue so idle sibling streams can scan them in parallel. CPU-only;
-    /// the donated chunks carry the already-loaded `ArrowReaderMetadata` so
-    /// stealers skip the footer round-trip.
-    SplitAndDonate(Box<MetadataLoadedParquetOpen>),
     /// Specialize any filters for the actual file schema (only known after
     /// metadata is loaded)
     PrepareFilters(Box<MetadataLoadedParquetOpen>),
@@ -240,6 +233,11 @@ enum ParquetOpenState {
     LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
     /// Pruning with preloaded Bloom Filters
     PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
+    /// Apply file-level LIMIT pruning (runs after range/stats/bloom so it
+    /// sees which row groups are still in scope) and donate the survivors
+    /// in 1-RG chunks back to the shared work queue. Stealers pop a chunk
+    /// with a finalized access plan and skip every earlier pruning stage.
+    SplitAndDonate(Box<RowGroupsPrunedParquetOpen>),
     /// Builds the final reader stream
     ///
     /// TODO: split state as this currently does both I/O and CPU work.
@@ -258,12 +256,12 @@ impl fmt::Debug for ParquetOpenState {
             ParquetOpenState::LoadEncryption(_) => "LoadEncryption",
             ParquetOpenState::PruneFile(_) => "PruneFile",
             ParquetOpenState::LoadMetadata(_) => "LoadMetadata",
-            ParquetOpenState::SplitAndDonate(_) => "SplitAndDonate",
             ParquetOpenState::PrepareFilters(_) => "PrepareFilters",
             ParquetOpenState::LoadPageIndex(_) => "LoadPageIndex",
             ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
             ParquetOpenState::LoadBloomFilters(_) => "LoadBloomFilters",
             ParquetOpenState::PruneWithBloomFilters(_) => "PruneWithBloomFilters",
+            ParquetOpenState::SplitAndDonate(_) => "SplitAndDonate",
             ParquetOpenState::BuildStream(_) => "BuildStream",
             ParquetOpenState::Ready(_) => "Ready",
             ParquetOpenState::Done => "Done",
@@ -307,9 +305,35 @@ struct PreparedParquetOpen {
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Shared work queue used to donate row-group chunks of this file to
-    /// sibling streams. `None` when the file was already donated (re-donation
-    /// is intentionally disabled) or when sibling stealing is disabled.
+    /// sibling streams. `None` when sibling stealing is disabled.
     shared_work_source: Option<SharedWorkSource>,
+}
+
+/// Extension carried on a donated `PartitionedFile`.
+///
+/// Donation happens after the donor has already run every pre-scan stage
+/// (file-level pruning, metadata load, filter preparation, page index
+/// load, stats / bloom / limit pruning). The chunk packages the full
+/// result so the stealer's state machine can start directly at
+/// `BuildStream` — no footer round-trip, no pruning, no predicate build.
+#[derive(Clone)]
+pub(crate) struct ParquetOpenChunk {
+    pub access_plan: ParquetAccessPlan,
+    pub reader_metadata: ArrowReaderMetadata,
+    pub options: ArrowReaderOptions,
+    pub physical_file_schema: SchemaRef,
+    pub predicate: Option<Arc<dyn PhysicalExpr>>,
+    pub projection: ProjectionExprs,
+    pub pruning_predicate: Option<Arc<PruningPredicate>>,
+    pub page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
+}
+
+impl fmt::Debug for ParquetOpenChunk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetOpenChunk")
+            .field("access_plan", &self.access_plan)
+            .finish_non_exhaustive()
+    }
 }
 
 /// State of [`ParquetOpenState`]
@@ -396,10 +420,6 @@ impl ParquetOpenState {
             ParquetOpenState::LoadMetadata(future) => {
                 Ok(ParquetOpenState::LoadMetadata(future))
             }
-            ParquetOpenState::SplitAndDonate(loaded) => {
-                let next = loaded.split_and_donate()?;
-                Ok(ParquetOpenState::PrepareFilters(Box::new(next)))
-            }
             ParquetOpenState::PrepareFilters(loaded) => {
                 let prepared_filters = loaded.prepare_filters()?;
                 Ok(ParquetOpenState::LoadPageIndex(
@@ -419,8 +439,12 @@ impl ParquetOpenState {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
             }
             ParquetOpenState::PruneWithBloomFilters(loaded) => Ok(
-                ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
+                ParquetOpenState::SplitAndDonate(Box::new(loaded.prune_bloom_filters())),
             ),
+            ParquetOpenState::SplitAndDonate(prepared) => {
+                let next = prepared.split_and_donate()?;
+                Ok(ParquetOpenState::BuildStream(Box::new(next)))
+            }
             ParquetOpenState::BuildStream(prepared) => {
                 Ok(ParquetOpenState::Ready(prepared.build_stream()?))
             }
@@ -472,6 +496,20 @@ impl fmt::Debug for ParquetMorselPlanner {
 
 impl ParquetMorselPlanner {
     fn try_new(morselizer: &ParquetMorselizer, file: PartitionedFile) -> Result<Self> {
+        // A donated chunk carries the full handoff state: jump straight
+        // to `BuildStream` and skip every pruning stage.
+        if let Some(chunk) = file
+            .extensions
+            .as_ref()
+            .and_then(|ext| ext.downcast_ref::<ParquetOpenChunk>())
+            .cloned()
+        {
+            let built = morselizer.build_stealer_state(file, chunk)?;
+            return Ok(Self {
+                state: ParquetOpenState::BuildStream(Box::new(built)),
+            });
+        }
+
         let prepared = morselizer.prepare_open_file(file)?;
         #[cfg(feature = "parquet_encryption")]
         let state = ParquetOpenState::Start {
@@ -523,7 +561,7 @@ impl MorselPlanner for ParquetMorselPlanner {
             }
             ParquetOpenState::LoadMetadata(future) => {
                 Ok(Some(Self::schedule_io(async move {
-                    Ok(ParquetOpenState::SplitAndDonate(Box::new(future.await?)))
+                    Ok(ParquetOpenState::PrepareFilters(Box::new(future.await?)))
                 })))
             }
             ParquetOpenState::LoadPageIndex(future) => {
@@ -687,6 +725,101 @@ impl ParquetMorselizer {
             shared_work_source,
         })
     }
+
+    /// Construct the state for a donated row-group chunk: the stealer
+    /// starts directly at [`ParquetOpenState::BuildStream`]. We skip the
+    /// entire pre-scan pipeline (file-level pruning, metadata load,
+    /// filter preparation, page-index load, stats / bloom / limit
+    /// pruning) by reusing the donor's already-computed state carried
+    /// on the `PartitionedFile`.
+    fn build_stealer_state(
+        &self,
+        partitioned_file: PartitionedFile,
+        chunk: ParquetOpenChunk,
+    ) -> Result<RowGroupsPrunedParquetOpen> {
+        let file_name = partitioned_file.object_meta.location.to_string();
+        let file_metrics =
+            ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, self.partition_index);
+        let metadata_size_hint = partitioned_file
+            .metadata_size_hint
+            .or(self.metadata_size_hint);
+        let async_file_reader: Box<dyn AsyncFileReader> =
+            self.parquet_file_reader_factory.create_reader(
+                self.partition_index,
+                partitioned_file.clone(),
+                metadata_size_hint,
+                &self.metrics,
+            )?;
+        let predicate_creation_errors = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
+            .global_counter("num_predicate_creation_errors");
+        let logical_file_schema = Arc::clone(self.table_schema.file_schema());
+        let output_schema = Arc::new(
+            self.projection
+                .project_schema(self.table_schema.table_schema())?,
+        );
+
+        let ParquetOpenChunk {
+            access_plan,
+            reader_metadata,
+            options,
+            physical_file_schema,
+            predicate,
+            projection,
+            pruning_predicate,
+            page_pruning_predicate,
+        } = chunk;
+
+        let prepared = PreparedParquetOpen {
+            partition_index: self.partition_index,
+            partitioned_file,
+            file_range: None,
+            extensions: None,
+            file_name,
+            file_metrics,
+            baseline_metrics,
+            file_pruner: None,
+            metadata_size_hint,
+            metrics: self.metrics.clone(),
+            parquet_file_reader_factory: Arc::clone(&self.parquet_file_reader_factory),
+            async_file_reader,
+            batch_size: self.batch_size,
+            logical_file_schema,
+            physical_file_schema,
+            output_schema,
+            projection,
+            predicate,
+            reorder_predicates: self.reorder_filters,
+            pushdown_filters: self.pushdown_filters,
+            force_filter_selections: self.force_filter_selections,
+            enable_page_index: self.enable_page_index,
+            enable_bloom_filter: self.enable_bloom_filter,
+            enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+            limit: self.limit,
+            coerce_int96: self.coerce_int96,
+            expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
+            predicate_creation_errors,
+            max_predicate_cache_size: self.max_predicate_cache_size,
+            reverse_row_groups: self.reverse_row_groups,
+            preserve_order: self.preserve_order,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            shared_work_source: None,
+        };
+        Ok(RowGroupsPrunedParquetOpen {
+            prepared: FiltersPreparedParquetOpen {
+                loaded: MetadataLoadedParquetOpen {
+                    prepared,
+                    reader_metadata,
+                    options,
+                },
+                pruning_predicate,
+                page_pruning_predicate,
+            },
+            row_groups: RowGroupAccessPlanFilter::new(access_plan),
+        })
+    }
 }
 
 impl PreparedParquetOpen {
@@ -770,75 +903,6 @@ impl PreparedParquetOpen {
 }
 
 impl MetadataLoadedParquetOpen {
-    /// Donate row-group chunks of this file back to the shared work queue
-    /// so idle sibling FileStreams steal them.
-    ///
-    /// The donor keeps the first eligible row group; each remaining one is
-    /// pushed to the front of the shared queue as a `PartitionedFile` clone
-    /// whose `range` is a one-byte `FileRange` at the row group's starting
-    /// offset. The existing `prune_by_range` path on the stealer matches
-    /// that offset and keeps only the targeted row group. Stealers re-load
-    /// the parquet footer; object stores typically cache it so this is
-    /// cheap.
-    ///
-    /// When the caller pre-narrowed the scan with a `file_range` spanning
-    /// multiple row groups, splitting stays inside that range.
-    ///
-    /// Returns `self` unchanged if any guard fails (no shared queue,
-    /// caller-supplied access plan, or fewer than two row groups in scope).
-    fn split_and_donate(mut self) -> Result<Self> {
-        let Some(shared) = self.prepared.shared_work_source.take() else {
-            return Ok(self);
-        };
-        // Caller-supplied `ParquetAccessPlan` is respected as-is.
-        if let Some(ext) = self.prepared.extensions.as_ref()
-            && ext.is::<ParquetAccessPlan>()
-        {
-            return Ok(self);
-        }
-
-        let rgs = self.reader_metadata.metadata().row_groups();
-        if rgs.len() < 2 {
-            return Ok(self);
-        }
-
-        // One-byte `FileRange` at `start` selects exactly one row group via
-        // `prune_by_range`'s `contains(offset)` check.
-        let point_range = |start: i64| datafusion_datasource::FileRange {
-            start,
-            end: start + 1,
-        };
-
-        // Row groups in scope, paired with their starting offset so we only
-        // walk the metadata once.
-        let caller_range = self.prepared.file_range.as_ref();
-        let eligible: Vec<(usize, i64)> = rgs
-            .iter()
-            .enumerate()
-            .map(|(idx, md)| (idx, row_group_start_offset(md)))
-            .filter(|(_, offset)| caller_range.is_none_or(|r| r.contains(*offset)))
-            .collect();
-        if eligible.len() < 2 {
-            return Ok(self);
-        }
-
-        let (_keep_idx, keep_offset) = eligible[0];
-        let donated_files: Vec<PartitionedFile> = eligible[1..]
-            .iter()
-            .map(|&(_, offset)| {
-                let mut file = self.prepared.partitioned_file.clone();
-                file.range = Some(point_range(offset));
-                file
-            })
-            .collect();
-        shared.push_front(donated_files);
-
-        // Donor takes only the kept row group. Safe to override the caller's
-        // wider range: donated chunks cover every other in-scope row group.
-        self.prepared.file_range = Some(point_range(keep_offset));
-        Ok(self)
-    }
-
     /// Prepare file-schema coercions and pruning predicates once metadata is
     /// loaded.
     fn prepare_filters(self) -> Result<FiltersPreparedParquetOpen> {
@@ -1151,6 +1215,102 @@ impl BloomFiltersLoadedParquetOpen {
 }
 
 impl RowGroupsPrunedParquetOpen {
+    /// File-level LIMIT pruning + row-group donation.
+    ///
+    /// Runs after stats + bloom pruning so the access plan reflects every
+    /// pruning decision before `prune_by_limit` picks fully-matched row
+    /// groups (which requires the whole-file view). Once limit pruning is
+    /// done, the donor keeps the first surviving row group and pushes
+    /// each remaining one to the front of the shared queue as a
+    /// `PartitionedFile` clone whose `extensions` carry a
+    /// `ParquetOpenChunk` (finalized access plan + pre-loaded metadata).
+    /// Stealers pop a chunk and skip every pruning stage on the way to
+    /// `BuildStream`.
+    ///
+    /// No-op for stealers (`is_donated_chunk`) and when there are fewer
+    /// than two row groups left in scope.
+    fn split_and_donate(mut self) -> Result<Self> {
+        // File-level LIMIT pruning — a separate pass that needs the
+        // whole file's row-group picture. Only the donor reaches this
+        // code (stealers start at `BuildStream` directly).
+        if let (Some(limit), false) = (
+            self.prepared.loaded.prepared.limit,
+            self.prepared.loaded.prepared.preserve_order,
+        ) {
+            let rg_metadata = self
+                .prepared
+                .loaded
+                .reader_metadata
+                .metadata()
+                .row_groups()
+                .to_vec();
+            self.row_groups.prune_by_limit(
+                limit,
+                &rg_metadata,
+                &self.prepared.loaded.prepared.file_metrics,
+            );
+        }
+
+        let Some(shared) = self.prepared.loaded.prepared.shared_work_source.take() else {
+            return Ok(self);
+        };
+        // Respect a caller-supplied `ParquetAccessPlan`.
+        if let Some(ext) = self.prepared.loaded.prepared.extensions.as_ref()
+            && ext.is::<ParquetAccessPlan>()
+        {
+            return Ok(self);
+        }
+
+        let eligible: Vec<usize> = self.row_groups.row_group_indexes().collect();
+        if eligible.len() < 2 {
+            return Ok(self);
+        }
+
+        let num_rgs = self
+            .prepared
+            .loaded
+            .reader_metadata
+            .metadata()
+            .num_row_groups();
+        let single_rg_plan = |idx: usize| -> ParquetAccessPlan {
+            let mut plan = ParquetAccessPlan::new_none(num_rgs);
+            plan.scan(idx);
+            plan
+        };
+
+        // Bundle everything the stealer needs to jump straight to
+        // `BuildStream`: metadata, access plan, reader options, and the
+        // already-built predicates / projection / schema.
+        let make_chunk = |idx: usize| ParquetOpenChunk {
+            access_plan: single_rg_plan(idx),
+            reader_metadata: self.prepared.loaded.reader_metadata.clone(),
+            options: self.prepared.loaded.options.clone(),
+            physical_file_schema: Arc::clone(
+                &self.prepared.loaded.prepared.physical_file_schema,
+            ),
+            predicate: self.prepared.loaded.prepared.predicate.clone(),
+            projection: self.prepared.loaded.prepared.projection.clone(),
+            pruning_predicate: self.prepared.pruning_predicate.clone(),
+            page_pruning_predicate: self.prepared.page_pruning_predicate.clone(),
+        };
+
+        let keep_idx = eligible[0];
+        let donated_files: Vec<PartitionedFile> = eligible[1..]
+            .iter()
+            .map(|&idx| {
+                let mut file = self.prepared.loaded.prepared.partitioned_file.clone();
+                file.range = None;
+                file.extensions = Some(Arc::new(make_chunk(idx)));
+                file
+            })
+            .collect();
+        shared.push_morsels(donated_files);
+
+        // Narrow the donor's access plan to just the kept row group.
+        self.row_groups = RowGroupAccessPlanFilter::new(single_rg_plan(keep_idx));
+        Ok(self)
+    }
+
     /// Build the final parquet stream once all pruning work is complete.
     fn build_stream(self) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         let RowGroupsPrunedParquetOpen {
@@ -1640,15 +1800,21 @@ fn create_initial_plan(
     row_group_count: usize,
 ) -> Result<ParquetAccessPlan> {
     if let Some(extensions) = extensions {
-        if let Some(access_plan) = extensions.downcast_ref::<ParquetAccessPlan>() {
+        let access_plan =
+            if let Some(plan) = extensions.downcast_ref::<ParquetAccessPlan>() {
+                Some(plan)
+            } else {
+                extensions
+                    .downcast_ref::<ParquetOpenChunk>()
+                    .map(|c| &c.access_plan)
+            };
+        if let Some(access_plan) = access_plan {
             let plan_len = access_plan.len();
             if plan_len != row_group_count {
                 return exec_err!(
                     "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
                 );
             }
-
-            // check row group count matches the plan
             return Ok(access_plan.clone());
         } else {
             debug!("DataSourceExec Ignoring unknown extension specified for {file_name}");
@@ -1720,6 +1886,7 @@ async fn load_page_index<T: AsyncFileReader>(
 mod test {
     use super::*;
     use super::{ConstantColumns, ParquetMorselizer, constant_columns_from_stats};
+    use crate::row_group_filter::row_group_start_offset;
     use crate::{DefaultParquetFileReaderFactory, RowGroupAccess};
     use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -2895,12 +3062,15 @@ mod test {
         let mut stolen: Vec<Vec<i32>> = Vec::new();
         while let Some(donated) = shared.pop_front() {
             assert!(
-                donated.range.is_some(),
-                "donated chunk must carry a FileRange"
+                donated.range.is_none(),
+                "donated chunk should not use byte range — the access plan specifies the row group"
             );
             assert!(
-                donated.extensions.is_none(),
-                "donated chunk must not carry an extensions payload"
+                donated
+                    .extensions
+                    .as_ref()
+                    .is_some_and(|ext| ext.is::<ParquetOpenChunk>()),
+                "donated chunk must carry ParquetOpenChunk"
             );
             let stealer = split_test_morselizer(&store, &schema, None);
             let stream = open_file(&stealer, donated).await.unwrap();
@@ -2990,20 +3160,19 @@ mod test {
         let mut donated_count = 0;
         let mut all_stolen: Vec<i32> = Vec::new();
         while let Some(donated) = shared.pop_front() {
-            let donated_range = donated
-                .range
-                .clone()
-                .expect("donated chunk needs FileRange");
             assert!(
-                donated_range.start >= caller_range.start
-                    && donated_range.end <= caller_range.end,
-                "donated range must stay inside caller's range"
+                donated
+                    .extensions
+                    .as_ref()
+                    .is_some_and(|ext| ext.is::<ParquetOpenChunk>()),
+                "donated chunk must carry ParquetOpenChunk"
             );
             donated_count += 1;
             let stealer = split_test_morselizer(&store, &schema, None);
             let stream = open_file(&stealer, donated).await.unwrap();
             all_stolen.extend(collect_int32_values(stream).await);
         }
+        let _ = caller_range;
         assert_eq!(donated_count, 3);
         assert_eq!(all_stolen, vec![4, 5, 6, 7, 8, 9, 10, 11, 12]);
     }
