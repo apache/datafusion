@@ -482,6 +482,27 @@ impl<'a, 'b> DFParserBuilder<'a, 'b> {
     }
 }
 
+/// Returns true when `tok` is the start of a query / parenthesized query
+/// group. Used to disambiguate `EXPLAIN (SELECT ...)` (a parenthesized query)
+/// from `EXPLAIN (ANALYZE) SELECT ...` (a Postgres-style option list).
+fn token_starts_query(tok: &Token) -> bool {
+    match tok {
+        Token::LParen => true,
+        Token::Word(Word { keyword, .. }) => matches!(
+            keyword,
+            Keyword::SELECT
+                | Keyword::WITH
+                | Keyword::VALUES
+                | Keyword::TABLE
+                | Keyword::INSERT
+                | Keyword::UPDATE
+                | Keyword::DELETE
+                | Keyword::MERGE
+        ),
+        _ => false,
+    }
+}
+
 impl<'a> DFParser<'a> {
     #[deprecated(since = "46.0.0", note = "DFParserBuilder")]
     pub fn new(sql: &'a str) -> Result<Self, DataFusionError> {
@@ -799,11 +820,16 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse a SQL `EXPLAIN`
+    ///
+    /// After the `EXPLAIN` keyword, if the dialect supports the Postgres-style
+    /// option list and the next non-whitespace token is `(`, we must
+    /// disambiguate between an option list (`EXPLAIN (ANALYZE) SELECT ...`)
+    /// and a parenthesized query (`EXPLAIN (SELECT ...)` or
+    /// `EXPLAIN (q1 EXCEPT q2) UNION ALL ...`). See [`token_starts_query`].
     pub fn parse_explain(&mut self) -> Result<Statement, DataFusionError> {
-        // Dialects that support Postgres-style `EXPLAIN (opt, ...)` may use a
-        // leading left-paren instead of the keyword form.
         if self.supports_explain_with_utility_options
             && self.parser.peek_token().token == Token::LParen
+            && !token_starts_query(&self.parser.peek_nth_token(1).token)
         {
             let raw = self.parser.parse_utility_options()?;
             let options = ExplainStatementOptions::from_utility_options(&raw)?;
@@ -2328,6 +2354,30 @@ mod tests {
             res.is_err(),
             "expected parse error under non-supporting dialect"
         );
+    }
+
+    #[test]
+    fn explain_paren_grouping_query_is_not_mistaken_for_options() {
+        // Historic DataFusion behavior allows parentheses around the
+        // query after EXPLAIN (e.g. `EXPLAIN (SELECT ...)` or
+        // `EXPLAIN (q1 EXCEPT q2) UNION ALL (q3 EXCEPT q4)`). The dialect
+        // gate for Postgres-style options must not swallow these.
+        for sql in [
+            "EXPLAIN (SELECT 1)",
+            "EXPLAIN (WITH t AS (SELECT 1) SELECT * FROM t)",
+            "EXPLAIN (VALUES (1), (2))",
+            "EXPLAIN ((SELECT 1))",
+        ] {
+            let stmt = parse_with_pg(sql).unwrap_or_else(|e| {
+                panic!("{sql} failed under PG dialect: {e}");
+            });
+            let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+                panic!("Expected Statement::Explain for {sql}");
+            };
+            assert!(!options.analyze, "{sql} should not be ANALYZE");
+            assert!(!options.verbose, "{sql} should not be VERBOSE");
+            assert!(options.format.is_none(), "{sql} should have no FORMAT");
+        }
     }
 
     #[test]

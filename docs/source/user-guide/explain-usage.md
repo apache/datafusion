@@ -256,16 +256,16 @@ SELECT ... ;
 
 The recognized options are:
 
-| Option    | Argument          | Effect                                                                                                                     |
-| --------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `ANALYZE` | boolean, optional | Execute the plan and collect metrics. Defaults to `TRUE` when bare. Equivalent to the `ANALYZE` keyword.                   |
-| `VERBOSE` | boolean, optional | Show per-partition metrics and additional detail. Equivalent to the `VERBOSE` keyword.                                     |
-| `FORMAT`  | identifier/string | One of `indent`, `tree`, `pgjson`, `graphviz`. Equivalent to the `FORMAT <format>` clause.                                 |
+| Option    | Argument          | Effect                                                                                                                               |
+| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `ANALYZE` | boolean, optional | Execute the plan and collect metrics. Defaults to `TRUE` when bare. Equivalent to the `ANALYZE` keyword.                             |
+| `VERBOSE` | boolean, optional | Show per-partition metrics and additional detail. Equivalent to the `VERBOSE` keyword.                                               |
+| `FORMAT`  | identifier/string | One of `indent`, `tree`, `pgjson`, `graphviz`. Equivalent to the `FORMAT <format>` clause.                                           |
 | `METRICS` | string            | Filter `ANALYZE` metrics by category. Accepts `'all'`, `'none'`, or any comma-separated subset of `rows,bytes,timing,uncategorized`. |
-| `LEVEL`   | identifier/string | `summary` or `dev`. Controls metric verbosity for `ANALYZE`.                                                               |
-| `TIMING`  | boolean           | Sugar over `METRICS`: toggles inclusion of the `timing` category.                                                          |
-| `SUMMARY` | boolean           | Sugar over `LEVEL`: `TRUE` → `summary`, `FALSE` → `dev`.                                                                   |
-| `COSTS`   | boolean           | Include statistics in plain `EXPLAIN` output (equivalent to `SET datafusion.explain.show_statistics`). Not valid with `ANALYZE`. |
+| `LEVEL`   | identifier/string | `summary` or `dev`. Controls metric verbosity for `ANALYZE`.                                                                         |
+| `TIMING`  | boolean           | Sugar over `METRICS`: toggles inclusion of the `timing` category.                                                                    |
+| `SUMMARY` | boolean           | Sugar over `LEVEL`: `TRUE` → `summary`, `FALSE` → `dev`.                                                                             |
+| `COSTS`   | boolean           | Include statistics in plain `EXPLAIN` output (equivalent to `SET datafusion.explain.show_statistics`). Not valid with `ANALYZE`.     |
 
 Boolean arguments can be written bare (`ANALYZE` → `true`), as `TRUE`/`FALSE`,
 `ON`/`OFF`, or `0`/`1`.
