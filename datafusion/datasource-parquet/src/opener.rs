@@ -1221,17 +1221,17 @@ impl RowGroupsPrunedParquetOpen {
             None
         };
 
-        // Reverse for DESC queries. Triggered by sort pushdown OR by
-        // DynamicFilter indicating DESC. For non-sort-pushdown TopK, reverse
-        // ensures cumulative pruning keeps the highest-value RGs. TopK
-        // handles final row-level sorting regardless.
+        // Reverse for DESC queries. Only when reorder is active (the sort
+        // column exists in parquet stats). Without reorder, reversing RGs
+        // randomly changes I/O patterns with no benefit.
         let is_descending = prepared.reverse_row_groups
-            || prepared
-                .predicate
-                .as_ref()
-                .and_then(find_dynamic_filter)
-                .and_then(|df| df.sort_options().map(|opts| opts[0].descending))
-                .unwrap_or(false);
+            || (reorder_optimizer.is_some()
+                && prepared
+                    .predicate
+                    .as_ref()
+                    .and_then(find_dynamic_filter)
+                    .and_then(|df| df.sort_options().map(|opts| opts[0].descending))
+                    .unwrap_or(false));
         let reverse_optimizer: Option<
             Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
         > = if is_descending {
