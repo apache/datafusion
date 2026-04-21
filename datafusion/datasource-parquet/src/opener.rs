@@ -838,10 +838,10 @@ impl MetadataLoadedParquetOpen {
         // BEFORE building the pruning predicate. The PruningPredicate compiles
         // the expression at build time, so the DynamicFilterPhysicalExpr must
         // already have the threshold set for pruning to be effective.
-        // Works for ALL TopK queries. The filter is null-aware (NULLS FIRST
-        // adds `col IS NULL OR ...`) to avoid incorrectly pruning RGs with
-        // NULL values that belong in the result.
-        {
+        // Only when sort pushdown is active (sort_order_for_reorder set).
+        // Stats init threshold may over-prune for non-sorted data where
+        // max(min) across RGs can exceed the actual Kth value.
+        if prepared.sort_order_for_reorder.is_some() {
             let file_metadata = reader_metadata.metadata();
             let rg_metadata = file_metadata.row_groups();
             let topk_limit = prepared.limit.unwrap_or(1);
