@@ -458,7 +458,7 @@ macro_rules! min_max {
 /// This path is required for dictionary arrays because comparing
 /// `dictionary.values()` is not semantically correct: it can include
 /// unreferenced values and ignore null key positions.
-fn scalar_row_extreme(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
+fn min_max_batch_generic(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
     let mut index = 0;
     let mut extreme = loop {
         if index == values.len() {
@@ -492,19 +492,6 @@ fn dictionary_scalar_parts(value: &ScalarValue) -> (&ScalarValue, Option<&DataTy
         }
         other => (other, None),
     }
-}
-
-// Primitive, string, and binary types use specialized Arrow min/max kernels.
-// These remaining types fall back to scalar row-by-row logical comparison.
-fn requires_logical_row_scan(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Struct(_)
-            | DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::Dictionary(_, _)
-    )
 }
 
 /// An accumulator to compute the maximum value
@@ -844,9 +831,11 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
-        data_type if requires_logical_row_scan(data_type) => {
-            scalar_row_extreme(values, Ordering::Greater)?
-        }
+        DataType::Struct(_)
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Dictionary(_, _) => min_max_batch_generic(values, Ordering::Greater)?,
         _ => min_max_batch!(values, min),
     })
 }
@@ -896,9 +885,11 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
             let value = value.map(|e| e.to_vec());
             ScalarValue::FixedSizeBinary(*size, value)
         }
-        data_type if requires_logical_row_scan(data_type) => {
-            scalar_row_extreme(values, Ordering::Less)?
-        }
+        DataType::Struct(_)
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Dictionary(_, _) => min_max_batch_generic(values, Ordering::Less)?,
         _ => min_max_batch!(values, max),
     })
 }
