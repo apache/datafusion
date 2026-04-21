@@ -145,9 +145,9 @@ macro_rules! min_max_generic {
 // Dictionary scalars participate by comparing their inner logical values.
 // When both inputs are dictionaries, matching key types are preserved in the
 // result; differing key types remain an unexpected invariant violation.
-macro_rules! min_max {
+macro_rules! min_max_scalar_impl {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
-        Ok(match ($VALUE, $DELTA) {
+        match ($VALUE, $DELTA) {
             (ScalarValue::Null, ScalarValue::Null) => ScalarValue::Null,
             (
                 lhs @ ScalarValue::Decimal32(lhsv, lhsp, lhss),
@@ -456,7 +456,25 @@ macro_rules! min_max {
                     e
                 )
             }
-        })
+        }
+    }};
+}
+
+fn min_max_scalar(
+    lhs: &ScalarValue,
+    rhs: &ScalarValue,
+    ordering: Ordering,
+) -> Result<ScalarValue> {
+    match ordering {
+        Ordering::Greater => Ok(min_max_scalar_impl!(lhs, rhs, min)),
+        Ordering::Less => Ok(min_max_scalar_impl!(lhs, rhs, max)),
+        Ordering::Equal => unreachable!("min/max comparisons do not use equal ordering"),
+    }
+}
+
+macro_rules! min_max {
+    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
+        min_max_scalar($VALUE, $DELTA, choose_min_max!($OP))
     }};
 }
 
@@ -497,11 +515,7 @@ fn dictionary_inner_scalar_min_max(
     rhs: &ScalarValue,
     ordering: Ordering,
 ) -> Result<ScalarValue> {
-    match ordering {
-        Ordering::Greater => min_max!(lhs, rhs, min),
-        Ordering::Less => min_max!(lhs, rhs, max),
-        Ordering::Equal => unreachable!("min/max comparisons do not use equal ordering"),
-    }
+    min_max_scalar(lhs, rhs, ordering)
 }
 
 /// An accumulator to compute the maximum value
@@ -916,9 +930,7 @@ mod tests {
         );
         let scalar = ScalarValue::Float32(Some(2.0));
 
-        let result: Result<ScalarValue, DataFusionError> =
-            min_max!(&dictionary, &scalar, max);
-        let result = result?;
+        let result = min_max_scalar(&dictionary, &scalar, Ordering::Less)?;
 
         assert_eq!(result, ScalarValue::Float32(Some(2.0)));
         Ok(())
@@ -935,8 +947,7 @@ mod tests {
             Box::new(ScalarValue::Float32(Some(2.0))),
         );
 
-        let result: Result<ScalarValue, DataFusionError> = min_max!(&lhs, &rhs, max);
-        let result = result?;
+        let result = min_max_scalar(&lhs, &rhs, Ordering::Less)?;
 
         assert_eq!(
             result,
@@ -959,7 +970,8 @@ mod tests {
             Box::new(ScalarValue::Float32(Some(2.0))),
         );
 
-        let error: DataFusionError = min_max!(&lhs, &rhs, max).unwrap_err();
+        let error: DataFusionError =
+            min_max_scalar(&lhs, &rhs, Ordering::Less).unwrap_err();
 
         assert!(
             error
@@ -978,7 +990,7 @@ mod tests {
         let scalar = ScalarValue::Int32(Some(2));
 
         let error: DataFusionError =
-            min_max!(&dictionary, &scalar, max).unwrap_err();
+            min_max_scalar(&dictionary, &scalar, Ordering::Less).unwrap_err();
 
         assert!(
             error
