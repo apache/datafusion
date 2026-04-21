@@ -834,13 +834,9 @@ impl MetadataLoadedParquetOpen {
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
 
-        // Initialize TopK dynamic filter threshold from row group statistics
-        // BEFORE building the pruning predicate. The PruningPredicate compiles
-        // the expression at build time, so the DynamicFilterPhysicalExpr must
-        // already have the threshold set for pruning to be effective.
-        // Only when sort pushdown is active (sort_order_for_reorder set).
-        // Stats init threshold may over-prune for non-sorted data where
-        // max(min) across RGs can exceed the actual Kth value.
+        // For sort pushdown path: initialize TopK threshold BEFORE building
+        // PruningPredicate so that the compiled predicate includes the threshold.
+        // This is safe because sort pushdown data is sorted and non-overlapping.
         if prepared.sort_order_for_reorder.is_some() {
             let file_metadata = reader_metadata.metadata();
             let rg_metadata = file_metadata.row_groups();
@@ -968,6 +964,12 @@ impl FiltersPreparedParquetOpen {
                 .row_groups_pruned_bloom_filter
                 .add_matched(remaining);
         }
+
+        // Note: stats init for non-sort-pushdown TopK is not safe because
+        // max(min)/min(max) is only a valid threshold bound when RGs are
+        // non-overlapping (sorted data). For overlapping RGs, the top-K
+        // values may span multiple RGs and the threshold can over-prune.
+        // Future: use a safer algorithm (e.g. sum of qualifying rows).
 
         Ok(RowGroupsPrunedParquetOpen {
             prepared: self,
