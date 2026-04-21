@@ -476,38 +476,6 @@ fn min_max_scalar(
     }
 }
 
-/// Finds the min/max by scanning logical rows via `ScalarValue::try_from_array`.
-///
-/// This path is required for dictionary arrays because comparing
-/// `dictionary.values()` is not semantically correct: it can include
-/// unreferenced values and ignore null key positions.
-fn min_max_batch_generic(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
-    let mut index = 0;
-    let mut extreme = loop {
-        if index == values.len() {
-            return ScalarValue::try_from(values.data_type());
-        }
-
-        let current = ScalarValue::try_from_array(values, index)?;
-        index += 1;
-
-        if !current.is_null() {
-            break current;
-        }
-    };
-
-    while index < values.len() {
-        let current = ScalarValue::try_from_array(values, index)?;
-        index += 1;
-
-        if !current.is_null() && extreme.try_cmp(&current)? == ordering {
-            extreme = current;
-        }
-    }
-
-    Ok(extreme)
-}
-
 /// An accumulator to compute the maximum value
 #[derive(Debug, Clone)]
 pub struct MaxAccumulator {
@@ -852,6 +820,38 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         | DataType::Dictionary(_, _) => min_max_batch_generic(values, Ordering::Greater)?,
         _ => min_max_batch!(values, min),
     })
+}
+
+/// Finds the min/max by scanning logical rows via `ScalarValue::try_from_array`.
+///
+/// This path is required for dictionary arrays because comparing
+/// `dictionary.values()` is not semantically correct: it can include
+/// unreferenced values and ignore null key positions.
+fn min_max_batch_generic(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
+    let mut index = 0;
+    let mut extreme = loop {
+        if index == values.len() {
+            return ScalarValue::try_from(values.data_type());
+        }
+
+        let current = ScalarValue::try_from_array(values, index)?;
+        index += 1;
+
+        if !current.is_null() {
+            break current;
+        }
+    };
+
+    while index < values.len() {
+        let current = ScalarValue::try_from_array(values, index)?;
+        index += 1;
+
+        if !current.is_null() && extreme.try_cmp(&current)? == ordering {
+            extreme = current;
+        }
+    }
+
+    Ok(extreme)
 }
 
 /// dynamically-typed max(array) -> ScalarValue
