@@ -317,10 +317,23 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let base_type = base_type(&self.return_type(arg_types)?);
+        let return_type = self.return_type(arg_types)?;
+        let base_type = base_type(&return_type);
         let coercion = Some(&ListCoercion::FixedSizedListToList);
+        // When the return type is a `LargeList`, the outer container of every
+        // input must be widened to `LargeList` as well. Otherwise
+        // `array_concat_inner` would later try to downcast a `List` argument
+        // to `GenericListArray<i64>` and fail.
+        let promote_to_large_list = matches!(return_type, DataType::LargeList(_));
         let arg_types = arg_types.iter().map(|arg_type| {
-            coerced_type_with_base_type_only(arg_type, &base_type, coercion)
+            let coerced =
+                coerced_type_with_base_type_only(arg_type, &base_type, coercion);
+            match coerced {
+                DataType::List(field) if promote_to_large_list => {
+                    DataType::LargeList(field)
+                }
+                other => other,
+            }
         });
 
         Ok(arg_types.collect())
