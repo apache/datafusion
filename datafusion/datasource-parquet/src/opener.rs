@@ -835,13 +835,19 @@ impl MetadataLoadedParquetOpen {
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
 
         // Initialize TopK threshold from RG statistics BEFORE building
-        // PruningPredicate. Safe when:
-        // 1. Sort pushdown path (sorted, non-overlapping RGs), OR
-        // 2. Predicate is ONLY the DynamicFilter (no WHERE clause that
-        //    could narrow qualifying rows below what raw stats suggest).
-        // The surviving-rows check prevents over-pruning for overlapping RGs.
+        // PruningPredicate. Only for sort pushdown path where data is sorted
+        // and RGs are non-overlapping, making max(min)/min(max) a safe bound.
+        // Extending to all TopK requires handling type coercion (CastExpr),
+        // WHERE clause interaction, and overlapping RG edge cases.
+        // Also require predicate to be DynamicFilter-only (no WHERE clause).
+        // WHERE narrows qualifying rows, making raw stats-based threshold unsafe.
         if prepared.sort_order_for_reorder.is_some()
-            || is_dynamic_filter_only_predicate(&prepared.predicate)
+            && prepared.predicate.as_ref().is_some_and(|p| {
+                let any_ref: &dyn std::any::Any = p.as_ref();
+                any_ref
+                    .downcast_ref::<DynamicFilterPhysicalExpr>()
+                    .is_some()
+            })
         {
             let file_metadata = reader_metadata.metadata();
             let rg_metadata = file_metadata.row_groups();
@@ -1468,10 +1474,15 @@ fn try_init_topk_threshold(
         Operator::Lt
     };
 
+    // Cast threshold to match column data type (parquet stats may use a
+    // different type than the table schema, e.g. Int32 stats vs Int64 column).
+    let col_data_type = col_expr.data_type(arrow_schema)?;
+    let threshold_casted = threshold.cast_to(&col_data_type)?;
+
     let comparison: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
         Arc::clone(&col_expr),
         op,
-        lit(threshold.clone()),
+        lit(threshold_casted),
     ));
 
     let filter_expr: Arc<dyn PhysicalExpr> = if nulls_first {
@@ -1493,20 +1504,6 @@ fn try_init_topk_threshold(
     dynamic_filter.update(filter_expr)?;
 
     Ok(())
-}
-
-/// Check if the predicate consists ONLY of a [`DynamicFilterPhysicalExpr`]
-/// (no WHERE clause filters combined with it).
-fn is_dynamic_filter_only_predicate(predicate: &Option<Arc<dyn PhysicalExpr>>) -> bool {
-    match predicate {
-        Some(pred) => {
-            let any_ref: &dyn std::any::Any = pred.as_ref();
-            any_ref
-                .downcast_ref::<DynamicFilterPhysicalExpr>()
-                .is_some()
-        }
-        None => false,
-    }
 }
 
 /// Find a [`DynamicFilterPhysicalExpr`] in the predicate tree.
