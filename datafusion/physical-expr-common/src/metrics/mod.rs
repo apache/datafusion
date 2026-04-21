@@ -26,6 +26,7 @@ mod value;
 use datafusion_common::HashMap;
 pub use datafusion_common::format::{MetricCategory, MetricType};
 use parking_lot::Mutex;
+use std::vec::IntoIter;
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display},
@@ -223,6 +224,11 @@ impl MetricsSet {
     /// Add the specified metric
     pub fn push(&mut self, metric: Arc<Metric>) {
         self.metrics.push(metric)
+    }
+
+    /// Extends the current list of metrics with the provided ones
+    pub fn extend(&mut self, metrics: impl Iterator<Item = Arc<Metric>>) {
+        self.metrics.extend(metrics)
     }
 
     /// Returns an iterator across all metrics
@@ -432,6 +438,15 @@ impl Display for MetricsSet {
     }
 }
 
+impl IntoIterator for MetricsSet {
+    type Item = Arc<Metric>;
+    type IntoIter = IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.metrics.into_iter()
+    }
+}
+
 /// A set of [`Metric`]s for an individual operator.
 ///
 /// This structure is intended as a convenience for execution plan
@@ -462,6 +477,14 @@ impl ExecutionPlanMetricsSet {
     pub fn clone_inner(&self) -> MetricsSet {
         let guard = self.inner.lock();
         (*guard).clone()
+    }
+}
+
+impl From<MetricsSet> for ExecutionPlanMetricsSet {
+    fn from(metrics: MetricsSet) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(metrics)),
+        }
     }
 }
 
