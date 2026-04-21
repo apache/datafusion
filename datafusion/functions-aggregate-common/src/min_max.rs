@@ -141,6 +141,18 @@ macro_rules! min_max_generic {
     }};
 }
 
+macro_rules! min_max {
+    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
+        match choose_min_max!($OP) {
+            Ordering::Greater => Ok(min_max_scalar_impl!($VALUE, $DELTA, min)),
+            Ordering::Less => Ok(min_max_scalar_impl!($VALUE, $DELTA, max)),
+            Ordering::Equal => {
+                unreachable!("min/max comparisons do not use equal ordering")
+            }
+        }
+    }};
+}
+
 // min/max of two logically compatible scalar values.
 // Dictionary scalars participate by comparing their inner logical values.
 // When both inputs are dictionaries, matching key types are preserved in the
@@ -462,10 +474,6 @@ fn min_max_scalar(
         Ordering::Less => Ok(min_max_scalar_impl!(lhs, rhs, max)),
         Ordering::Equal => unreachable!("min/max comparisons do not use equal ordering"),
     }
-}
-
-macro_rules! min_max {
-    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{ min_max_scalar($VALUE, $DELTA, choose_min_max!($OP)) }};
 }
 
 /// Finds the min/max by scanning logical rows via `ScalarValue::try_from_array`.
