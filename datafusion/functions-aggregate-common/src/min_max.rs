@@ -428,26 +428,15 @@ macro_rules! min_max_scalar_impl {
                     );
                 }
 
-                let result = dictionary_inner_scalar_min_max(
-                    lhs.as_ref(),
-                    rhs.as_ref(),
-                    choose_min_max!($OP),
-                )?;
+                let result =
+                    min_max_scalar(lhs.as_ref(), rhs.as_ref(), choose_min_max!($OP))?;
                 ScalarValue::Dictionary(lhs_key_type.clone(), Box::new(result))
             }
             (ScalarValue::Dictionary(_, lhs), rhs) => {
-                dictionary_inner_scalar_min_max(
-                    lhs.as_ref(),
-                    rhs,
-                    choose_min_max!($OP),
-                )?
+                min_max_scalar(lhs.as_ref(), rhs, choose_min_max!($OP))?
             }
             (lhs, ScalarValue::Dictionary(_, rhs)) => {
-                dictionary_inner_scalar_min_max(
-                    lhs,
-                    rhs.as_ref(),
-                    choose_min_max!($OP),
-                )?
+                min_max_scalar(lhs, rhs.as_ref(), choose_min_max!($OP))?
             }
 
             e => {
@@ -508,14 +497,6 @@ fn min_max_batch_generic(values: &ArrayRef, ordering: Ordering) -> Result<Scalar
     }
 
     Ok(extreme)
-}
-
-fn dictionary_inner_scalar_min_max(
-    lhs: &ScalarValue,
-    rhs: &ScalarValue,
-    ordering: Ordering,
-) -> Result<ScalarValue> {
-    min_max_scalar(lhs, rhs, ordering)
 }
 
 /// An accumulator to compute the maximum value

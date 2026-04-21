@@ -1004,12 +1004,13 @@ mod tests {
     use super::*;
     use arrow::{
         array::{
-            DictionaryArray, Float32Array, Int32Array, IntervalDayTimeArray,
-            IntervalMonthDayNanoArray, IntervalYearMonthArray, StringArray,
+            Array, DictionaryArray, Float32Array, Int32Array, Int8Array,
+            IntervalDayTimeArray, IntervalMonthDayNanoArray, PrimitiveArray,
+            IntervalYearMonthArray, StringArray,
         },
         datatypes::{
-            IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-            IntervalYearMonthType,
+            ArrowDictionaryKeyType, IntervalDayTimeType, IntervalMonthDayNanoType,
+            IntervalUnit, IntervalYearMonthType,
         },
     };
     use std::sync::Arc;
@@ -1272,10 +1273,18 @@ mod tests {
     }
 
     fn string_dictionary_batch(values: &[&str], keys: &[Option<i32>]) -> ArrayRef {
+        string_dictionary_batch_with_keys(Int32Array::from(keys.to_vec()), values)
+    }
+
+    fn string_dictionary_batch_with_keys<K>(
+        keys: PrimitiveArray<K>,
+        values: &[&str],
+    ) -> ArrayRef
+    where
+        K: ArrowDictionaryKeyType,
+    {
         let values = Arc::new(StringArray::from(values.to_vec())) as ArrayRef;
-        Arc::new(
-            DictionaryArray::try_new(Int32Array::from(keys.to_vec()), values).unwrap(),
-        ) as ArrayRef
+        Arc::new(DictionaryArray::try_new(keys, values).unwrap()) as ArrayRef
     }
 
     fn optional_string_dictionary_batch(
@@ -1381,6 +1390,18 @@ mod tests {
         let batch2 = string_dictionary_batch(&["a", "d"], &[Some(0), Some(1)]);
 
         assert_dictionary_min_max(&dict_type, &[batch1, batch2], "a", "d")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_int8_keys() -> Result<()> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+        let dict_array_ref = string_dictionary_batch_with_keys(
+            Int8Array::from(vec![Some(0), Some(1), Some(2), Some(3)]),
+            &["b", "c", "a", "d"],
+        );
+
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "a", "d")
     }
 
     #[test]
