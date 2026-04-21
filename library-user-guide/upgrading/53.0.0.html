@@ -27,17 +27,17 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="../../_static/styles/theme.css?digest=7f76b32a3354e82990f2" rel="stylesheet" />
-<link href="../../_static/styles/pydata-sphinx-theme.css?digest=7f76b32a3354e82990f2" rel="stylesheet" />
+  <link href="../../_static/styles/theme.css?digest=55c26ed414f5f8a31ebb" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=55c26ed414f5f8a31ebb" rel="stylesheet" />
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=d08b24aa" />
   
   <!-- So that users can add custom icons -->
-  <script defer src="../../_static/scripts/fontawesome.js?digest=7f76b32a3354e82990f2"></script>
+  <script defer src="../../_static/scripts/fontawesome.js?digest=55c26ed414f5f8a31ebb"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=7f76b32a3354e82990f2" />
-<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=7f76b32a3354e82990f2" />
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=55c26ed414f5f8a31ebb" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=55c26ed414f5f8a31ebb" />
 
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
@@ -69,7 +69,9 @@
   
   <button type="button" class="btn rounded-pill" id="pst-back-to-top">
     <i class="fa-solid fa-arrow-up"></i>Back to top</button>
-
+  
+  
+  
   
   <dialog id="pst-search-dialog">
     
@@ -832,6 +834,62 @@ This behavior is consistent with systems like PostgreSQL.</p>
 </pre></div>
 </div>
 </section>
+<section id="array-remove-array-remove-n-array-remove-all-now-return-null-when-the-element-argument-is-null">
+<h3><code class="docutils literal notranslate"><span class="pre">array_remove</span></code>, <code class="docutils literal notranslate"><span class="pre">array_remove_n</span></code>, <code class="docutils literal notranslate"><span class="pre">array_remove_all</span></code> now return NULL when the element argument is NULL<a class="headerlink" href="#array-remove-array-remove-n-array-remove-all-now-return-null-when-the-element-argument-is-null" title="Link to this heading">#</a></h3>
+<p>Previously, calling <code class="docutils literal notranslate"><span class="pre">array_remove(array,</span> <span class="pre">NULL)</span></code> would attempt to match and
+remove NULL entries from the array, returning the array with NULLs stripped.
+Now, passing NULL as the element to remove causes the function to return NULL,
+which is consistent with standard SQL NULL propagation semantics.</p>
+<p>The same change applies to <code class="docutils literal notranslate"><span class="pre">array_remove_n</span></code> (aliases: <code class="docutils literal notranslate"><span class="pre">list_remove_n</span></code>) and
+<code class="docutils literal notranslate"><span class="pre">array_remove_all</span></code> (aliases: <code class="docutils literal notranslate"><span class="pre">list_remove_all</span></code>).</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Queries that call <code class="docutils literal notranslate"><span class="pre">array_remove</span></code>, <code class="docutils literal notranslate"><span class="pre">array_remove_n</span></code>, or <code class="docutils literal notranslate"><span class="pre">array_remove_all</span></code>
+with a NULL element argument (literal or column-derived).</p></li>
+</ul>
+<p><strong>Behavioral changes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Expression</p></th>
+<th class="head"><p>Old result</p></th>
+<th class="head"><p>New result</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">array_remove(make_array(1,</span> <span class="pre">NULL,</span> <span class="pre">2),</span> <span class="pre">NULL)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">2]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">NULL</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">array_remove(make_array(1,</span> <span class="pre">NULL,</span> <span class="pre">2,</span> <span class="pre">NULL),</span> <span class="pre">NULL)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">NULL]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">NULL</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">array_remove_n(make_array(1,</span> <span class="pre">2,</span> <span class="pre">2,</span> <span class="pre">1,</span> <span class="pre">1),</span> <span class="pre">NULL,</span> <span class="pre">2)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">2,</span> <span class="pre">1,</span> <span class="pre">1]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">NULL</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">array_remove_all(make_array(1,</span> <span class="pre">2,</span> <span class="pre">2,</span> <span class="pre">1,</span> <span class="pre">1),</span> <span class="pre">NULL)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">2,</span> <span class="pre">1,</span> <span class="pre">1]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">NULL</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>Migration guide:</strong></p>
+<p>If your queries relied on the old behavior to strip NULLs from arrays, use
+<code class="docutils literal notranslate"><span class="pre">array_remove_all</span></code> with a non-NULL sentinel or use <code class="docutils literal notranslate"><span class="pre">array_filter</span></code> instead:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Before (removed NULLs from array):</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">array_remove</span><span class="p">(</span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">),</span><span class="w"> </span><span class="k">NULL</span><span class="p">);</span>
+<span class="c1">-- Old result: [1, 2]</span>
+
+<span class="c1">-- After (returns NULL due to NULL propagation):</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">array_remove</span><span class="p">(</span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">),</span><span class="w"> </span><span class="k">NULL</span><span class="p">);</span>
+<span class="c1">-- New result: NULL</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/21011">#21011</a> and
+<a class="reference external" href="https://github.com/apache/datafusion/pull/21013">PR #21013</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -894,6 +952,7 @@ This behavior is consistent with systems like PostgreSQL.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filterexec-builder-methods-deprecated"><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#protobuf-conversion-trait-added">Protobuf conversion trait added</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generate-series-and-range-table-functions-changed"><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-remove-array-remove-n-array-remove-all-now-return-null-when-the-element-argument-is-null"><code class="docutils literal notranslate"><span class="pre">array_remove</span></code>, <code class="docutils literal notranslate"><span class="pre">array_remove_n</span></code>, <code class="docutils literal notranslate"><span class="pre">array_remove_all</span></code> now return NULL when the element argument is NULL</a></li>
 </ul>
 </li>
 </ul>
@@ -937,8 +996,8 @@ This behavior is consistent with systems like PostgreSQL.</p>
   </div>
   
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="../../_static/scripts/bootstrap.js?digest=7f76b32a3354e82990f2"></script>
-<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=7f76b32a3354e82990f2"></script>
+  <script defer src="../../_static/scripts/bootstrap.js?digest=55c26ed414f5f8a31ebb"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=55c26ed414f5f8a31ebb"></script>
 
 <!-- Based on pydata_sphinx_theme/footer.html -->
 <footer class="footer mt-5 mt-md-0">
