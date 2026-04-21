@@ -838,9 +838,10 @@ impl MetadataLoadedParquetOpen {
         // BEFORE building the pruning predicate. The PruningPredicate compiles
         // the expression at build time, so the DynamicFilterPhysicalExpr must
         // already have the threshold set for pruning to be effective.
-        // Only initialize TopK threshold when sort pushdown is active.
-        // For non-sort-pushdown TopK, pruning changes which RGs are read,
-        // altering tie-breaking for equal values (e.g. NULLs).
+        // Only when sort pushdown is active (sort_order_for_reorder set).
+        // For non-sort-pushdown TopK, pruning may change tie-breaking for
+        // equal values across RGs. Future: extend to all TopK once
+        // tie-breaking is handled or fuzz tests are updated.
         if prepared.sort_order_for_reorder.is_some() {
             let file_metadata = reader_metadata.metadata();
             let rg_metadata = file_metadata.row_groups();
@@ -1400,18 +1401,33 @@ fn try_init_topk_threshold(
         }
     };
 
-    // Build the filter expression: col > threshold (DESC) or col < threshold (ASC)
+    // Build the filter expression with null-awareness.
+    // For NULLS FIRST: NULLs sort before all values, so the filter must
+    // preserve NULL rows: `col IS NULL OR col > threshold` (DESC) or
+    // `col IS NULL OR col < threshold` (ASC).
+    // For NULLS LAST: NULLs sort after all values, so a simple comparison
+    // suffices: `col > threshold` (DESC) or `col < threshold` (ASC).
+    let nulls_first = sort_options[0].nulls_first;
     let op = if is_descending {
         Operator::Gt
     } else {
         Operator::Lt
     };
 
-    let filter_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+    let comparison: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
         Arc::clone(&col_expr),
         op,
         lit(threshold.clone()),
     ));
+
+    let filter_expr: Arc<dyn PhysicalExpr> = if nulls_first {
+        // NULLS FIRST: preserve NULL rows (they sort before threshold)
+        use datafusion_physical_expr::expressions::is_null;
+        let null_check = is_null(Arc::clone(&col_expr))?;
+        Arc::new(BinaryExpr::new(null_check, Operator::Or, comparison))
+    } else {
+        comparison
+    };
 
     debug!(
         "Initializing TopK dynamic filter from statistics: {} {} {}",
