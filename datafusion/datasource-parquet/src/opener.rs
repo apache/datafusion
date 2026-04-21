@@ -1585,7 +1585,7 @@ fn try_init_topk_threshold(
 /// Returns the first `DynamicFilterPhysicalExpr` found (as an `Arc`) by
 /// checking the predicate itself and recursively walking its children.
 /// Check if row groups in the prepared plan are non-overlapping on the
-/// sort column. Adjacent RGs must satisfy max[i] <= min[i+1].
+/// sort column. Adjacent RGs must satisfy `max(i) <= min(i+1)`.
 fn rgs_are_non_overlapping(
     plan: &crate::access_plan::PreparedAccessPlan,
     file_metadata: &parquet::file::metadata::ParquetMetaData,
