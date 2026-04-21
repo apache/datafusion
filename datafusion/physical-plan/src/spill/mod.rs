@@ -136,12 +136,12 @@ impl SpillReaderStream {
                     let actual_schema = reader.schema();
 
                     if actual_schema != expected_schema {
-                        return Err(exec_datafusion_err!(
+                        return exec_err!(
                             "Spill file schema mismatch: expected {}, got {}. \
                             The caller must use the same SpillManager that created the spill file to read it.",
                             expected_schema,
                             actual_schema
-                        ));
+                        );
                     }
 
                     // TODO: Same-schema reads from a different SpillManager still pass today.
