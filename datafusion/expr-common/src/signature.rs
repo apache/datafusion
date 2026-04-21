@@ -19,9 +19,12 @@
 
 use std::fmt::Display;
 use std::hash::Hash;
+use std::sync::Arc;
 
 use arrow::datatypes::{
-    DECIMAL_DEFAULT_SCALE, DECIMAL128_MAX_PRECISION, DataType, IntervalUnit, TimeUnit,
+    DECIMAL_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    DECIMAL128_MAX_PRECISION, DataType, Decimal128Type, DecimalType, Field, IntervalUnit,
+    TimeUnit,
 };
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::utils::ListCoercion;
@@ -414,7 +417,52 @@ impl TypeSignatureClass {
     ///
     /// This is used for `information_schema` and can be used to generate
     /// documentation or error messages.
-    fn get_example_types(&self) -> Vec<NativeType> {
+    /// Remove with `get_example_types`
+    #[deprecated(since = "53.0.0", note = "See get_representative_types instead")]
+    fn get_example_types(&self) -> Vec<DataType> {
+        match self {
+            TypeSignatureClass::Any => vec![],
+            #[expect(deprecated)]
+            TypeSignatureClass::Native(l) => get_data_types(l.native()),
+            TypeSignatureClass::Timestamp => {
+                vec![
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(
+                        TimeUnit::Nanosecond,
+                        Some(TIMEZONE_WILDCARD.into()),
+                    ),
+                ]
+            }
+            TypeSignatureClass::Time => {
+                vec![DataType::Time64(TimeUnit::Nanosecond)]
+            }
+            TypeSignatureClass::Interval => {
+                vec![DataType::Interval(IntervalUnit::DayTime)]
+            }
+            TypeSignatureClass::Duration => {
+                vec![DataType::Duration(TimeUnit::Nanosecond)]
+            }
+            TypeSignatureClass::Integer => {
+                vec![DataType::Int64]
+            }
+            TypeSignatureClass::Binary => {
+                vec![DataType::Binary]
+            }
+            TypeSignatureClass::Decimal => vec![Decimal128Type::DEFAULT_TYPE],
+            TypeSignatureClass::Float => vec![DataType::Float64],
+            TypeSignatureClass::Numeric => vec![
+                DataType::Float64,
+                DataType::Int64,
+                Decimal128Type::DEFAULT_TYPE,
+            ],
+        }
+    }
+
+    /// Get example acceptable types for this `TypeSignatureClass`
+    ///
+    /// This is used for `information_schema` and can be used to generate
+    /// documentation or error messages.
+    fn get_representative_types(&self) -> Vec<NativeType> {
         match self {
             TypeSignatureClass::Any => vec![],
             TypeSignatureClass::Native(l) => vec![l.native().clone()],
@@ -608,6 +656,21 @@ static EXAMPLE_NUMERIC_TYPES: &[NativeType] = &[
     NativeType::Float32,
     NativeType::Float64,
     NATIVE_TYPE_DECIMAL,
+];
+
+#[deprecated(since = "53.0.0", note = "See get_representative_types instead")]
+static NUMERICS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+    DataType::Float16,
+    DataType::Float32,
+    DataType::Float64,
 ];
 
 impl TypeSignature {
@@ -881,6 +944,68 @@ impl TypeSignature {
         }
     }
 
+    /// Return example acceptable types for this `TypeSignature`'
+    ///
+    /// Returns a `Vec<DataType>` for each argument to the function
+    ///
+    /// This is used for `information_schema` and can be used to generate
+    /// documentation or error messages.
+    #[deprecated(since = "53.0.0", note = "See get_representative_types instead")]
+    pub fn get_example_types(&self) -> Vec<Vec<DataType>> {
+        #[expect(deprecated)]
+        match self {
+            TypeSignature::Exact(types) => vec![types.clone()],
+            TypeSignature::OneOf(types) => types
+                .iter()
+                .flat_map(|type_sig| type_sig.get_example_types())
+                .collect(),
+            TypeSignature::Uniform(arg_count, types) => types
+                .iter()
+                .cloned()
+                .map(|data_type| vec![data_type; *arg_count])
+                .collect(),
+            TypeSignature::Coercible(coercions) => coercions
+                .iter()
+                .map(|c| {
+                    let mut all_types: IndexSet<DataType> =
+                        c.desired_type().get_example_types().into_iter().collect();
+
+                    if let Some(implicit_coercion) = c.implicit_coercion() {
+                        let allowed_casts: Vec<DataType> = implicit_coercion
+                            .allowed_source_types
+                            .iter()
+                            .flat_map(|t| t.get_example_types())
+                            .collect();
+                        all_types.extend(allowed_casts);
+                    }
+
+                    all_types.into_iter().collect::<Vec<_>>()
+                })
+                .multi_cartesian_product()
+                .collect(),
+            TypeSignature::Variadic(types) => types
+                .iter()
+                .cloned()
+                .map(|data_type| vec![data_type])
+                .collect(),
+            TypeSignature::Numeric(arg_count) => NUMERICS
+                .iter()
+                .cloned()
+                .map(|numeric_type| vec![numeric_type; *arg_count])
+                .collect(),
+            TypeSignature::String(arg_count) => get_data_types(&NativeType::String)
+                .into_iter()
+                .map(|dt| vec![dt; *arg_count])
+                .collect::<Vec<_>>(),
+            // TODO: Implement for other types
+            TypeSignature::Any(_)
+            | TypeSignature::Comparable(_)
+            | TypeSignature::Nullary
+            | TypeSignature::VariadicAny
+            | TypeSignature::ArraySignature(_)
+            | TypeSignature::UserDefined => vec![],
+        }
+    }
 
     /// Return example acceptable types for this `TypeSignature`'
     ///
@@ -888,7 +1013,7 @@ impl TypeSignature {
     ///
     /// This is used for `information_schema` and can be used to generate
     /// documentation or error messages.
-    pub fn get_example_types(&self) -> Vec<Vec<NativeType>> {
+    pub fn get_representative_types(&self) -> Vec<Vec<NativeType>> {
         match self {
             TypeSignature::Exact(types) => vec![
                 types
@@ -898,7 +1023,7 @@ impl TypeSignature {
             ],
             TypeSignature::OneOf(types) => types
                 .iter()
-                .flat_map(|type_sig| type_sig.get_example_types())
+                .flat_map(|type_sig| type_sig.get_representative_types())
                 .collect(),
             TypeSignature::Uniform(arg_count, types) => types
                 .iter()
@@ -908,14 +1033,17 @@ impl TypeSignature {
             TypeSignature::Coercible(coercions) => coercions
                 .iter()
                 .map(|c| {
-                    let mut all_types: IndexSet<NativeType> =
-                        c.desired_type().get_example_types().into_iter().collect();
+                    let mut all_types: IndexSet<NativeType> = c
+                        .desired_type()
+                        .get_representative_types()
+                        .into_iter()
+                        .collect();
 
                     if let Some(implicit_coercion) = c.implicit_coercion() {
                         let allowed_casts: Vec<NativeType> = implicit_coercion
                             .allowed_source_types
                             .iter()
-                            .flat_map(|t| t.get_example_types())
+                            .flat_map(|t| t.get_representative_types())
                             .collect();
                         all_types.extend(allowed_casts);
                     }
@@ -944,6 +1072,84 @@ impl TypeSignature {
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
             | TypeSignature::UserDefined => vec![],
+        }
+    }
+}
+
+#[deprecated(since = "53.0.0", note = "See get_representative_types instead")]
+fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
+    match native_type {
+        NativeType::Null => vec![DataType::Null],
+        NativeType::Boolean => vec![DataType::Boolean],
+        NativeType::Int8 => vec![DataType::Int8],
+        NativeType::Int16 => vec![DataType::Int16],
+        NativeType::Int32 => vec![DataType::Int32],
+        NativeType::Int64 => vec![DataType::Int64],
+        NativeType::UInt8 => vec![DataType::UInt8],
+        NativeType::UInt16 => vec![DataType::UInt16],
+        NativeType::UInt32 => vec![DataType::UInt32],
+        NativeType::UInt64 => vec![DataType::UInt64],
+        NativeType::Float16 => vec![DataType::Float16],
+        NativeType::Float32 => vec![DataType::Float32],
+        NativeType::Float64 => vec![DataType::Float64],
+        NativeType::Date => vec![DataType::Date32, DataType::Date64],
+        NativeType::Binary => vec![
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+        ],
+        NativeType::String => {
+            vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View]
+        }
+        NativeType::Decimal(precision, scale) => {
+            // We assume incoming NativeType is valid already, in terms of precision & scale
+            let mut types = vec![DataType::Decimal256(*precision, *scale)];
+            if *precision <= DECIMAL32_MAX_PRECISION {
+                types.push(DataType::Decimal32(*precision, *scale));
+            }
+            if *precision <= DECIMAL64_MAX_PRECISION {
+                types.push(DataType::Decimal64(*precision, *scale));
+            }
+            if *precision <= DECIMAL128_MAX_PRECISION {
+                types.push(DataType::Decimal128(*precision, *scale));
+            }
+            types
+        }
+        NativeType::Timestamp(time_unit, timezone) => {
+            vec![DataType::Timestamp(*time_unit, timezone.to_owned())]
+        }
+        NativeType::Time(TimeUnit::Second) => vec![DataType::Time32(TimeUnit::Second)],
+        NativeType::Time(TimeUnit::Millisecond) => {
+            vec![DataType::Time32(TimeUnit::Millisecond)]
+        }
+        NativeType::Time(TimeUnit::Microsecond) => {
+            vec![DataType::Time64(TimeUnit::Microsecond)]
+        }
+        NativeType::Time(TimeUnit::Nanosecond) => {
+            vec![DataType::Time64(TimeUnit::Nanosecond)]
+        }
+        NativeType::Duration(time_unit) => vec![DataType::Duration(*time_unit)],
+        NativeType::Interval(interval_unit) => vec![DataType::Interval(*interval_unit)],
+        NativeType::FixedSizeBinary(size) => vec![DataType::FixedSizeBinary(*size)],
+        NativeType::FixedSizeList(logical_field, size) => {
+            get_data_types(logical_field.logical_type.native())
+                .iter()
+                .map(|child_dt| {
+                    let field = Field::new(
+                        logical_field.name.clone(),
+                        child_dt.clone(),
+                        logical_field.nullable,
+                    );
+                    DataType::FixedSizeList(Arc::new(field), *size)
+                })
+                .collect()
+        }
+        // TODO: implement for nested types
+        NativeType::List(_)
+        | NativeType::Struct(_)
+        | NativeType::Union(_)
+        | NativeType::Map(_) => {
+            vec![]
         }
     }
 }
@@ -1492,14 +1698,13 @@ mod tests {
         );
     }
 
+    // Remove with get_example_types
     #[test]
-    fn test_get_possible_types() {
+    #[expect(deprecated)]
+    fn test_get_example_types() {
         let type_signature = TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]);
         let possible_types = type_signature.get_example_types();
-        assert_eq!(
-            possible_types,
-            vec![vec![NativeType::Int32, NativeType::Int64]]
-        );
+        assert_eq!(possible_types, vec![vec![DataType::Int32, DataType::Int64]]);
 
         let type_signature = TypeSignature::OneOf(vec![
             TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
@@ -1509,8 +1714,8 @@ mod tests {
         assert_eq!(
             possible_types,
             vec![
-                vec![NativeType::Int32, NativeType::Int64],
-                vec![NativeType::Float32, NativeType::Float64]
+                vec![DataType::Int32, DataType::Int64],
+                vec![DataType::Float32, DataType::Float64]
             ]
         );
 
@@ -1523,9 +1728,9 @@ mod tests {
         assert_eq!(
             possible_types,
             vec![
-                vec![NativeType::Int32, NativeType::Int64],
-                vec![NativeType::Float32, NativeType::Float64],
-                vec![NativeType::String]
+                vec![DataType::Int32, DataType::Int64],
+                vec![DataType::Float32, DataType::Float64],
+                vec![DataType::Utf8]
             ]
         );
 
@@ -1535,8 +1740,8 @@ mod tests {
         assert_eq!(
             possible_types,
             vec![
-                vec![NativeType::Float32, NativeType::Float32],
-                vec![NativeType::Int64, NativeType::Int64]
+                vec![DataType::Float32, DataType::Float32],
+                vec![DataType::Int64, DataType::Int64]
             ]
         );
 
@@ -1547,7 +1752,11 @@ mod tests {
         let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
-            vec![vec![NativeType::String, NativeType::Int64]]
+            vec![
+                vec![DataType::Utf8, DataType::Int64],
+                vec![DataType::LargeUtf8, DataType::Int64],
+                vec![DataType::Utf8View, DataType::Int64]
+            ]
         );
 
         let type_signature =
@@ -1555,13 +1764,104 @@ mod tests {
         let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
-            vec![vec![NativeType::Int32], vec![NativeType::Int64]]
+            vec![vec![DataType::Int32], vec![DataType::Int64]]
         );
 
         let type_signature = TypeSignature::Numeric(2);
         let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
+            vec![
+                vec![DataType::Int8, DataType::Int8],
+                vec![DataType::Int16, DataType::Int16],
+                vec![DataType::Int32, DataType::Int32],
+                vec![DataType::Int64, DataType::Int64],
+                vec![DataType::UInt8, DataType::UInt8],
+                vec![DataType::UInt16, DataType::UInt16],
+                vec![DataType::UInt32, DataType::UInt32],
+                vec![DataType::UInt64, DataType::UInt64],
+                vec![DataType::Float16, DataType::Float16],
+                vec![DataType::Float32, DataType::Float32],
+                vec![DataType::Float64, DataType::Float64]
+            ]
+        );
+
+        let type_signature = TypeSignature::String(2);
+        let possible_types = type_signature.get_example_types();
+        assert_eq!(
+            possible_types,
+            vec![
+                vec![DataType::Utf8, DataType::Utf8],
+                vec![DataType::LargeUtf8, DataType::LargeUtf8],
+                vec![DataType::Utf8View, DataType::Utf8View]
+            ]
+        );
+    }
+
+    #[test]
+    fn test_get_representative_types() {
+        let type_signature = TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]);
+        let types = type_signature.get_representative_types();
+        assert_eq!(types, vec![vec![NativeType::Int32, NativeType::Int64]]);
+
+        let type_signature = TypeSignature::OneOf(vec![
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
+            TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
+        ]);
+        let types = type_signature.get_representative_types();
+        assert_eq!(
+            types,
+            vec![
+                vec![NativeType::Int32, NativeType::Int64],
+                vec![NativeType::Float32, NativeType::Float64]
+            ]
+        );
+
+        let type_signature = TypeSignature::OneOf(vec![
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
+            TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
+            TypeSignature::Exact(vec![DataType::Utf8]),
+        ]);
+        let types = type_signature.get_representative_types();
+        assert_eq!(
+            types,
+            vec![
+                vec![NativeType::Int32, NativeType::Int64],
+                vec![NativeType::Float32, NativeType::Float64],
+                vec![NativeType::String]
+            ]
+        );
+
+        let type_signature =
+            TypeSignature::Uniform(2, vec![DataType::Float32, DataType::Int64]);
+        let types = type_signature.get_representative_types();
+        assert_eq!(
+            types,
+            vec![
+                vec![NativeType::Float32, NativeType::Float32],
+                vec![NativeType::Int64, NativeType::Int64]
+            ]
+        );
+
+        let type_signature = TypeSignature::Coercible(vec![
+            Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int64())),
+        ]);
+        let types = type_signature.get_representative_types();
+        assert_eq!(types, vec![vec![NativeType::String, NativeType::Int64]]);
+
+        let type_signature =
+            TypeSignature::Variadic(vec![DataType::Int32, DataType::Int64]);
+        let types = type_signature.get_representative_types();
+        assert_eq!(
+            types,
+            vec![vec![NativeType::Int32], vec![NativeType::Int64]]
+        );
+
+        let type_signature = TypeSignature::Numeric(2);
+        let types = type_signature.get_representative_types();
+        assert_eq!(
+            types,
             vec![
                 vec![NativeType::Int8, NativeType::Int8],
                 vec![NativeType::Int16, NativeType::Int16],
@@ -1579,7 +1879,7 @@ mod tests {
         );
 
         let type_signature = TypeSignature::String(2);
-        let possible_types = type_signature.get_example_types();
+        let possible_types = type_signature.get_representative_types();
         assert_eq!(
             possible_types,
             vec![vec![NativeType::String, NativeType::String],]

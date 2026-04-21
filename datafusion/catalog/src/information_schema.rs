@@ -530,7 +530,7 @@ fn get_udf_args_and_return_types(
     udf: &Arc<ScalarUDF>,
 ) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udf.signature();
-    let arg_types = signature.type_signature.get_example_types();
+    let arg_types = signature.type_signature.get_representative_types();
     if arg_types.is_empty() {
         Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
@@ -568,7 +568,7 @@ fn get_udaf_args_and_return_types(
     udaf: &Arc<AggregateUDF>,
 ) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udaf.signature();
-    let arg_types = signature.type_signature.get_example_types();
+    let arg_types = signature.type_signature.get_representative_types();
     if arg_types.is_empty() {
         Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
@@ -602,7 +602,7 @@ fn get_udwf_args_and_return_types(
     udwf: &Arc<WindowUDF>,
 ) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udwf.signature();
-    let arg_types = signature.type_signature.get_example_types();
+    let arg_types = signature.type_signature.get_representative_types();
     if arg_types.is_empty() {
         Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
