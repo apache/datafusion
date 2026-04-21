@@ -17,7 +17,6 @@
 
 //! Execution plan for reading JSON files (line-delimited and array formats)
 
-use std::any::Any;
 use std::io::BufReader;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -199,10 +198,6 @@ impl FileSource for JsonSource {
         )?;
 
         Ok(opener)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn table_schema(&self) -> &datafusion_datasource::TableSchema {

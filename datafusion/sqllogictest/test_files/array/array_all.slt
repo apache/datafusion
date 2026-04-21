@@ -1,0 +1,221 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## all operator
+
+# = ALL: true when all elements equal val
+query B
+select 5 = ALL(make_array(5, 5, 5));
+----
+true
+
+query B
+select 5 = ALL(make_array(5, 5, 3));
+----
+false
+
+# <> ALL: true when val differs from every element
+query B
+select 5 <> ALL(make_array(1, 2, 3));
+----
+true
+
+query B
+select 5 <> ALL(make_array(1, 2, 5));
+----
+false
+
+# > ALL: true when val greater than all elements
+query B
+select 10 > ALL(make_array(1, 2, 3));
+----
+true
+
+query B
+select 3 > ALL(make_array(1, 2, 3));
+----
+false
+
+# < ALL: true when val less than all elements
+query B
+select 0 < ALL(make_array(1, 2, 3));
+----
+true
+
+query B
+select 2 < ALL(make_array(1, 2, 3));
+----
+false
+
+# >= ALL: true when val >= all elements
+query B
+select 5 >= ALL(make_array(1, 2, 5));
+----
+true
+
+query B
+select 4 >= ALL(make_array(1, 2, 5));
+----
+false
+
+# <= ALL: true when val <= all elements
+query B
+select 1 <= ALL(make_array(1, 2, 5));
+----
+true
+
+query B
+select 2 <= ALL(make_array(1, 2, 5));
+----
+false
+
+# Empty arrays: all operators return TRUE (vacuous truth)
+query B
+select 5 = ALL(arrow_cast(make_array(), 'List(Int64)'));
+----
+true
+
+query B
+select 5 <> ALL(arrow_cast(make_array(), 'List(Int64)'));
+----
+true
+
+query B
+select 5 > ALL(arrow_cast(make_array(), 'List(Int64)'));
+----
+true
+
+query B
+select 5 < ALL(arrow_cast(make_array(), 'List(Int64)'));
+----
+true
+
+query B
+select 5 >= ALL(arrow_cast(make_array(), 'List(Int64)'));
+----
+true
+
+query B
+select 5 <= ALL(arrow_cast(make_array(), 'List(Int64)'));
+----
+true
+
+# NULL LHS with empty array returns TRUE (vacuous truth)
+query B
+select NULL = ALL(arrow_cast(make_array(), 'List(Int64)'));
+----
+true
+
+# NULL LHS with non-empty array returns NULL
+query B
+select NULL = ALL(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL > ALL(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL <> ALL(make_array(1, 2, 3));
+----
+NULL
+
+# All-NULL arrays: returns NULL
+query B
+select 5 = ALL(make_array(NULL::INT, NULL::INT));
+----
+NULL
+
+query B
+select 5 <> ALL(make_array(NULL::INT, NULL::INT));
+----
+NULL
+
+query B
+select 5 > ALL(make_array(NULL::INT, NULL::INT));
+----
+NULL
+
+query B
+select 5 < ALL(make_array(NULL::INT, NULL::INT));
+----
+NULL
+
+query B
+select 5 >= ALL(make_array(NULL::INT, NULL::INT));
+----
+NULL
+
+query B
+select 5 <= ALL(make_array(NULL::INT, NULL::INT));
+----
+NULL
+
+# Mixed NULL + non-NULL (non-NULL elements satisfy, but NULLs present → NULL)
+query B
+select 5 > ALL(make_array(3, NULL));
+----
+NULL
+
+query B
+select 5 >= ALL(make_array(5, NULL));
+----
+NULL
+
+query B
+select 1 < ALL(make_array(3, NULL));
+----
+NULL
+
+query B
+select 1 <= ALL(make_array(1, NULL));
+----
+NULL
+
+# Mixed NULL + non-NULL (not satisfying condition → FALSE wins over NULL)
+query B
+select 5 > ALL(make_array(6, NULL));
+----
+false
+
+query B
+select 5 < ALL(make_array(3, NULL));
+----
+false
+
+query B
+select 5 = ALL(make_array(5, 3, NULL));
+----
+false
+
+# NULL array input returns NULL
+query B
+select 5 = ALL(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 > ALL(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 < ALL(NULL::INT[]);
+----
+NULL

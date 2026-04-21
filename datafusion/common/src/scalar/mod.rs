@@ -2526,6 +2526,25 @@ impl ScalarValue {
             (Self::Float64(Some(l)), Self::Float64(Some(r))) => {
                 Some((l - r).abs().round() as _)
             }
+            (Self::Date32(Some(l)), Self::Date32(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::Date64(Some(l)), Self::Date64(Some(r))) => Some(l.abs_diff(*r) as _),
+            // Timestamp values are stored as epoch ticks regardless of timezone
+            // annotation, so the distance is tz-independent (tz is display metadata).
+            (Self::TimestampSecond(Some(l), _), Self::TimestampSecond(Some(r), _)) => {
+                Some(l.abs_diff(*r) as _)
+            }
+            (
+                Self::TimestampMillisecond(Some(l), _),
+                Self::TimestampMillisecond(Some(r), _),
+            ) => Some(l.abs_diff(*r) as _),
+            (
+                Self::TimestampMicrosecond(Some(l), _),
+                Self::TimestampMicrosecond(Some(r), _),
+            ) => Some(l.abs_diff(*r) as _),
+            (
+                Self::TimestampNanosecond(Some(l), _),
+                Self::TimestampNanosecond(Some(r), _),
+            ) => Some(l.abs_diff(*r) as _),
             (
                 Self::Decimal128(Some(l), lprecision, lscale),
                 Self::Decimal128(Some(r), rprecision, rscale),
@@ -8766,6 +8785,42 @@ mod tests {
                 ScalarValue::Decimal256(Some(10.into()), 1, 0),
                 5,
             ),
+            // Temporal types
+            (
+                ScalarValue::Date32(Some(0)),
+                ScalarValue::Date32(Some(10)),
+                10,
+            ),
+            (
+                ScalarValue::Date32(Some(10)),
+                ScalarValue::Date32(Some(0)),
+                10,
+            ),
+            (
+                ScalarValue::Date64(Some(1000)),
+                ScalarValue::Date64(Some(5000)),
+                4000,
+            ),
+            (
+                ScalarValue::TimestampSecond(Some(100), None),
+                ScalarValue::TimestampSecond(Some(200), None),
+                100,
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(1000), None),
+                ScalarValue::TimestampMillisecond(Some(5000), None),
+                4000,
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(0), None),
+                ScalarValue::TimestampMicrosecond(Some(1_000_000), None),
+                1_000_000,
+            ),
+            (
+                ScalarValue::TimestampNanosecond(Some(1_000_000_000), None),
+                ScalarValue::TimestampNanosecond(Some(2_000_000_000), None),
+                1_000_000_000,
+            ),
         ];
         for (lhs, rhs, expected) in cases.iter() {
             let distance = lhs.distance(rhs).unwrap();
@@ -8828,8 +8883,6 @@ mod tests {
                 ScalarValue::Boolean(Some(true)),
                 ScalarValue::Boolean(Some(false)),
             ),
-            (ScalarValue::Date32(Some(0)), ScalarValue::Date32(Some(1))),
-            (ScalarValue::Date64(Some(0)), ScalarValue::Date64(Some(1))),
             (
                 ScalarValue::Decimal128(Some(123), 5, 5),
                 ScalarValue::Decimal128(Some(120), 5, 3),

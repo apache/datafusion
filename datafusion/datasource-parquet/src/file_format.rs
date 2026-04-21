@@ -17,7 +17,6 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -151,10 +150,6 @@ impl FileFormatFactory for ParquetFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ParquetFormat::default())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -340,10 +335,6 @@ async fn get_file_decryption_properties(
 
 #[async_trait]
 impl FileFormat for ParquetFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         ParquetFormatFactory::new().get_ext()
     }
@@ -516,7 +507,6 @@ impl FileFormat for ParquetFormat {
 
         let mut source = conf
             .file_source()
-            .as_any()
             .downcast_ref::<ParquetSource>()
             .cloned()
             .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
@@ -1474,10 +1464,6 @@ impl FileSink for ParquetSink {
 
 #[async_trait]
 impl DataSink for ParquetSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }

@@ -260,6 +260,64 @@ physical_plan
 02)--SortExec: expr=[c2@1 ASC NULLS LAST, c3@2 ASC NULLS LAST], preserve_partitioning=[false]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
 
+
+# eliminate redundant fd sort expr
+query TT
+explain SELECT c2, SUM(c3) AS total_sal FROM aggregate_test_100 GROUP BY c2 ORDER BY c2, total_sal
+----
+logical_plan
+01)Sort: aggregate_test_100.c2 ASC NULLS LAST
+02)--Projection: aggregate_test_100.c2, sum(aggregate_test_100.c3) AS total_sal
+03)----Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[sum(CAST(aggregate_test_100.c3 AS Int64))]]
+04)------TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan
+01)SortPreservingMergeExec: [c2@0 ASC NULLS LAST]
+02)--SortExec: expr=[c2@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+
+# keep order by when dependency comes later
+query TT
+explain SELECT c2, SUM(c3) AS total_sal FROM aggregate_test_100 GROUP BY c2 ORDER BY total_sal, c2
+----
+logical_plan
+01)Sort: total_sal ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST
+02)--Projection: aggregate_test_100.c2, sum(aggregate_test_100.c3) AS total_sal
+03)----Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[sum(CAST(aggregate_test_100.c3 AS Int64))]]
+04)------TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan
+01)SortPreservingMergeExec: [total_sal@1 ASC NULLS LAST, c2@0 ASC NULLS LAST]
+02)--SortExec: expr=[total_sal@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+
+# eliminate redundant sort expr even with non schema expr
+query TT
+explain SELECT c2, SUM(c3) AS total_sal FROM aggregate_test_100 GROUP BY c2 ORDER BY c2, total_sal, abs(c2)
+----
+logical_plan
+01)Sort: aggregate_test_100.c2 ASC NULLS LAST, abs(aggregate_test_100.c2) ASC NULLS LAST
+02)--Projection: aggregate_test_100.c2, sum(aggregate_test_100.c3) AS total_sal
+03)----Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[sum(CAST(aggregate_test_100.c3 AS Int64))]]
+04)------TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan
+01)SortPreservingMergeExec: [c2@0 ASC NULLS LAST, abs(c2@0) ASC NULLS LAST]
+02)--SortExec: expr=[c2@0 ASC NULLS LAST, abs(c2@0) ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+
 query II
 SELECT c2, c3 FROM aggregate_test_100 ORDER BY c2, c3, c2
 ----
@@ -1521,7 +1579,7 @@ query TT
 EXPLAIN SELECT c1, c2 FROM table_with_ordered_pk ORDER BY c1, c2;
 ----
 logical_plan
-01)Sort: table_with_ordered_pk.c1 ASC NULLS LAST, table_with_ordered_pk.c2 ASC NULLS LAST
+01)Sort: table_with_ordered_pk.c1 ASC NULLS LAST
 02)--TableScan: table_with_ordered_pk projection=[c1, c2]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2], output_ordering=[c1@0 ASC NULLS LAST], constraints=[PrimaryKey([0])], file_type=csv, has_header=true
 

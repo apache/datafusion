@@ -18,11 +18,12 @@
 //! Common utilities for implementing unicode functions
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, ByteView, GenericStringArray, Int64Array,
-    OffsetSizeTrait, StringViewArray, make_view,
+    Array, ArrayRef, ByteView, GenericStringArray, Int64Array, OffsetSizeTrait,
+    StringViewArray, make_view,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
+use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
@@ -130,17 +131,17 @@ fn left_right_byte_length(string: &str, n: i64) -> usize {
 /// General implementation for `left` and `right` functions
 pub(crate) fn general_left_right<F: LeftRightSlicer>(
     args: &[ArrayRef],
-) -> datafusion_common::Result<ArrayRef> {
+) -> Result<ArrayRef> {
     let n_array = as_int64_array(&args[1])?;
 
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = as_generic_string_array::<i32>(&args[0])?;
-            general_left_right_array::<i32, _, F>(string_array, n_array)
+            general_left_right_array::<i32, F>(string_array, n_array)
         }
         DataType::LargeUtf8 => {
             let string_array = as_generic_string_array::<i64>(&args[0])?;
-            general_left_right_array::<i64, _, F>(string_array, n_array)
+            general_left_right_array::<i64, F>(string_array, n_array)
         }
         DataType::Utf8View => {
             let string_view_array = as_string_view_array(&args[0])?;
@@ -150,83 +151,125 @@ pub(crate) fn general_left_right<F: LeftRightSlicer>(
     }
 }
 
-/// `general_left_right` implementation for strings
-fn general_left_right_array<
-    'a,
-    T: OffsetSizeTrait,
-    V: ArrayAccessor<Item = &'a str>,
-    F: LeftRightSlicer,
->(
-    string_array: V,
-    n_array: &Int64Array,
-) -> datafusion_common::Result<ArrayRef> {
-    let iter = ArrayIter::new(string_array);
-    let result = iter
-        .zip(n_array.iter())
-        .map(|(string, n)| match (string, n) {
-            (Some(string), Some(n)) => {
-                let range = F::slice(string, n);
-                // Extract a given range from a byte-indexed slice
-                Some(&string[range])
-            }
-            _ => None,
-        })
-        .collect::<GenericStringArray<T>>();
-
-    Ok(Arc::new(result) as ArrayRef)
+/// Returns true if all offsets in the array fit in i32, meaning the values
+/// buffer can be referenced by StringView's offset field.
+fn values_fit_in_i32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -> bool {
+    string_array
+        .offsets()
+        .last()
+        .map(|offset| offset.as_usize() <= i32::MAX as usize)
+        .unwrap_or(true)
 }
 
-/// `general_left_right` implementation for StringViewArray
+/// `left`/`right` for Utf8/LargeUtf8 input.
+///
+/// When offsets fit in i32, produces a zero-copy `StringViewArray` with views
+/// pointing into the input values buffer. Otherwise falls back to building a
+/// `StringViewArray` by copying.
+fn general_left_right_array<T: OffsetSizeTrait, F: LeftRightSlicer>(
+    string_array: &GenericStringArray<T>,
+    n_array: &Int64Array,
+) -> Result<ArrayRef> {
+    if !values_fit_in_i32(string_array) {
+        let result = string_array
+            .iter()
+            .zip(n_array.iter())
+            .map(|(string, n)| match (string, n) {
+                (Some(string), Some(n)) => Some(&string[F::slice(string, n)]),
+                _ => None,
+            })
+            .collect::<StringViewArray>();
+        return Ok(Arc::new(result) as ArrayRef);
+    }
+
+    let len = string_array.len();
+    let offsets = string_array.value_offsets();
+    let nulls = NullBuffer::union(string_array.nulls(), n_array.nulls());
+
+    let mut views_buf = Vec::with_capacity(len);
+    let mut has_out_of_line = false;
+
+    for (i, offset) in offsets.iter().enumerate().take(len) {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            views_buf.push(0);
+            continue;
+        }
+
+        // SAFETY: we just checked validity above
+        let string = unsafe { string_array.value_unchecked(i) };
+        let n = n_array.value(i);
+        let range = F::slice(string, n);
+        let result_bytes = &string.as_bytes()[range.clone()];
+        if result_bytes.len() > 12 {
+            has_out_of_line = true;
+        }
+
+        let buf_offset = offset.as_usize() as u32 + range.start as u32;
+        views_buf.push(make_view(result_bytes, 0, buf_offset));
+    }
+
+    let views = ScalarBuffer::from(views_buf);
+    let data_buffers = if has_out_of_line {
+        vec![string_array.values().clone()]
+    } else {
+        vec![]
+    };
+
+    // SAFETY:
+    // - Each view is produced by `make_view` with correct bytes and offset
+    // - Out-of-line views reference buffer index 0, which is the original
+    //   values buffer included in data_buffers when has_out_of_line is true
+    // - values_fit_in_i32 guarantees all offsets fit in i32
+    unsafe {
+        let array = StringViewArray::new_unchecked(views, data_buffers, nulls);
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+/// `general_left_right` for StringViewArray input.
 fn general_left_right_view<F: LeftRightSlicer>(
     string_view_array: &StringViewArray,
     n_array: &Int64Array,
-) -> datafusion_common::Result<ArrayRef> {
-    let len = n_array.len();
-
+) -> Result<ArrayRef> {
     let views = string_view_array.views();
-    // Every string in StringViewArray has one corresponding view in `views`
-    debug_assert!(views.len() == string_view_array.len());
-
-    // Compose null buffer at once
-    let string_nulls = string_view_array.nulls();
-    let n_nulls = n_array.nulls();
-    let new_nulls = NullBuffer::union(string_nulls, n_nulls);
+    let new_nulls = NullBuffer::union(string_view_array.nulls(), n_array.nulls());
+    let len = n_array.len();
+    let mut has_out_of_line = false;
 
     let new_views = (0..len)
         .map(|idx| {
-            let view = views[idx];
-
-            let is_valid = match &new_nulls {
-                Some(nulls_buf) => nulls_buf.is_valid(idx),
-                None => true,
-            };
-
-            if is_valid {
-                let string: &str = string_view_array.value(idx);
-                let n = n_array.value(idx);
-
-                // Input string comes from StringViewArray, so it should fit in 32-bit length
-                let range = F::slice(string, n);
-                let result_bytes = &string.as_bytes()[range.clone()];
-
-                let byte_view = ByteView::from(view);
-                // New offset starts at 0 for left, and at `range.start` for right,
-                // which is encoded in the given range
-                let new_offset = byte_view.offset + (range.start as u32);
-                // Reuse buffer
-                make_view(result_bytes, byte_view.buffer_index, new_offset)
-            } else {
-                // For nulls, keep the original view
-                view
+            if new_nulls.as_ref().is_some_and(|n| n.is_null(idx)) {
+                return 0;
             }
+
+            // SAFETY: we just checked validity above
+            let string: &str = unsafe { string_view_array.value_unchecked(idx) };
+            let n = n_array.value(idx);
+
+            let range = F::slice(string, n);
+            let result_bytes = &string.as_bytes()[range.clone()];
+            if result_bytes.len() > 12 {
+                has_out_of_line = true;
+            }
+
+            let byte_view = ByteView::from(views[idx]);
+            let new_offset = byte_view.offset + (range.start as u32);
+            make_view(result_bytes, byte_view.buffer_index, new_offset)
         })
         .collect::<Vec<u128>>();
 
-    // Buffers are unchanged
-    let result = StringViewArray::try_new(
-        ScalarBuffer::from(new_views),
-        Vec::from(string_view_array.data_buffers()),
-        new_nulls,
-    )?;
-    Ok(Arc::new(result) as ArrayRef)
+    let views = ScalarBuffer::from(new_views);
+    let data_buffers = if has_out_of_line {
+        string_view_array.data_buffers().to_vec()
+    } else {
+        vec![]
+    };
+
+    // SAFETY:
+    // - Each view is produced by `make_view` with correct bytes and offset
+    // - Out-of-line views reuse the original buffer index and adjusted offset
+    unsafe {
+        let array = StringViewArray::new_unchecked(views, data_buffers, new_nulls);
+        Ok(Arc::new(array) as ArrayRef)
+    }
 }

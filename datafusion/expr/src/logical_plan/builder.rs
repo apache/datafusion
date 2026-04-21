@@ -17,7 +17,6 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use std::any::Any;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -2216,10 +2215,6 @@ impl LogicalTableSource {
 }
 
 impl TableSource for LogicalTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
     }

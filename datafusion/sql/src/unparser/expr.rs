@@ -3526,4 +3526,53 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn test_bigquery_dialect_overrides() -> Result<()> {
+        let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
+        let unparser = Unparser::new(bigquery_dialect.as_ref());
+
+        // date_field_extract_style: EXTRACT instead of date_part
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::new_from_impl(
+                datafusion_functions::datetime::date_part::DatePartFunc::new(),
+            )),
+            args: vec![lit("YEAR"), col("date_col")],
+        });
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "EXTRACT(YEAR FROM `date_col`)");
+
+        // interval_style: SQL standard instead of PostgresVerbose
+        let expr = interval_year_month_lit("3 months");
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "INTERVAL '3' MONTH");
+
+        // float64_ast_dtype: FLOAT64 instead of DOUBLE
+        let expr = cast(col("a"), DataType::Float64);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS FLOAT64)");
+
+        // supports_column_alias_in_table_alias: false
+        assert!(!bigquery_dialect.supports_column_alias_in_table_alias());
+
+        // utf8_cast_dtype: STRING instead of VARCHAR
+        let expr = cast(col("a"), DataType::Utf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // large_utf8_cast_dtype: STRING instead of TEXT
+        let expr = cast(col("a"), DataType::LargeUtf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // timestamp_cast_dtype: TIMESTAMP (no WITH TIME ZONE)
+        let expr = cast(
+            col("a"),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+        );
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS TIMESTAMP)");
+
+        Ok(())
+    }
 }

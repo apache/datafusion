@@ -257,7 +257,7 @@ impl IdentNormalizer {
 pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
     /// in `PREPARE` statement
-    prepare_param_data_types: Arc<Vec<FieldRef>>,
+    prepare_param_data_types: Arc<Vec<Option<FieldRef>>>,
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
@@ -298,7 +298,7 @@ impl PlannerContext {
     /// Update the PlannerContext with provided prepare_param_data_types
     pub fn with_prepare_param_data_types(
         mut self,
-        prepare_param_data_types: Vec<FieldRef>,
+        prepare_param_data_types: Vec<Option<FieldRef>>,
     ) -> Self {
         self.prepare_param_data_types = prepare_param_data_types.into();
         self
@@ -378,7 +378,7 @@ impl PlannerContext {
     }
 
     /// Return the types of parameters (`$1`, `$2`, etc) if known
-    pub fn prepare_param_data_types(&self) -> &[FieldRef] {
+    pub fn prepare_param_data_types(&self) -> &[Option<FieldRef>] {
         &self.prepare_param_data_types
     }
 

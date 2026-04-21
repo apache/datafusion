@@ -1,0 +1,240 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+## array_union (aliases: `list_union`)
+
+# array_union scalar function #1
+query ?
+select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
+----
+[1, 2, 3, 4, 5, 6]
+
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 6, 3, 4], 'LargeList(Int64)'));
+----
+[1, 2, 3, 4, 5, 6]
+
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'FixedSizeList(4, Int64)'), arrow_cast([5, 6, 3, 4], 'FixedSizeList(4, Int64)'));
+----
+[1, 2, 3, 4, 5, 6]
+
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'FixedSizeList(4, Int64)'), arrow_cast([5, 6], 'FixedSizeList(2, Int64)'));
+----
+[1, 2, 3, 4, 5, 6]
+
+# array_union scalar function #2
+query ?
+select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
+----
+[1, 2, 3, 4, 5, 6, 7, 8]
+
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 6, 7, 8], 'LargeList(Int64)'));
+----
+[1, 2, 3, 4, 5, 6, 7, 8]
+
+# array_union scalar function #3
+query ?
+select array_union([1,2,3], []);
+----
+[1, 2, 3]
+
+query ?
+select array_union(arrow_cast([1,2,3], 'LargeList(Int64)'), arrow_cast([], 'LargeList(Int64)'));
+----
+[1, 2, 3]
+
+# array_union scalar function #4
+query ?
+select array_union([1, 2, 3, 4], [5, 4]);
+----
+[1, 2, 3, 4, 5]
+
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 4], 'LargeList(Int64)'));
+----
+[1, 2, 3, 4, 5]
+
+# array_union scalar function #5
+statement ok
+CREATE TABLE arrays_with_repeating_elements_for_union
+AS VALUES
+  ([0, 1, 1], []),
+  ([1, 1], [2]),
+  ([2, 3], [3]),
+  ([3], [3, 4])
+;
+
+query ?
+select array_union(column1, column2) from arrays_with_repeating_elements_for_union;
+----
+[0, 1]
+[1, 2]
+[2, 3]
+[3, 4]
+
+query ?
+select array_union(arrow_cast(column1, 'LargeList(Int64)'), arrow_cast(column2, 'LargeList(Int64)')) from arrays_with_repeating_elements_for_union;
+----
+[0, 1]
+[1, 2]
+[2, 3]
+[3, 4]
+
+statement ok
+drop table arrays_with_repeating_elements_for_union;
+
+# array_union scalar function #6
+query ?
+select array_union([], []);
+----
+[]
+
+query ?
+select array_union(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'LargeList(Int64)'));
+----
+[]
+
+# array_union scalar function #7
+# re-enable when https://github.com/apache/arrow-rs/issues/9227 is fixed
+# query ?
+# select array_union([[null]], []);
+# ----
+# [[]]
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'array_union' function:
+select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([], 'LargeList(Int64)'));
+
+# array_union scalar function #8
+query ?
+select array_union([null], [null]);
+----
+[NULL]
+
+query ?
+select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([[null]], 'LargeList(List(Int64))'));
+----
+[[NULL]]
+
+# array_union scalar function #9
+query ?
+select array_union(null, []);
+----
+NULL
+
+query ?
+select array_union(null, arrow_cast([], 'LargeList(Int64)'));
+----
+NULL
+
+# array_union scalar function #10
+query ?
+select array_union(null, null);
+----
+NULL
+
+# array_union scalar function #11
+query ?
+select array_union([1, 1, 2, 2, 3, 3], null);
+----
+NULL
+
+query ?
+select array_union(arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'), null);
+----
+NULL
+
+# array_union scalar function #12
+query ?
+select array_union(null, [1, 1, 2, 2, 3, 3]);
+----
+NULL
+
+query ?
+select array_union(null, arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'));
+----
+NULL
+
+# array_union scalar function #13
+query ?
+select array_union([1.2, 3.0], [1.2, 3.0, 5.7]);
+----
+[1.2, 3.0, 5.7]
+
+query ?
+select array_union(arrow_cast([1.2, 3.0], 'LargeList(Float64)'), arrow_cast([1.2, 3.0, 5.7], 'LargeList(Float64)'));
+----
+[1.2, 3.0, 5.7]
+
+# array_union scalar function #14
+query ?
+select array_union(['hello'], ['hello','datafusion']);
+----
+[hello, datafusion]
+
+query ?
+select array_union(arrow_cast(['hello'], 'LargeList(Utf8)'), arrow_cast(['hello','datafusion'], 'LargeList(Utf8)'));
+----
+[hello, datafusion]
+
+query ?
+select array_union(column1, column2)
+from array_intersect_table_1D_NULL;
+----
+[1, 2, 3, 4]
+[2, 3]
+[3, 4]
+NULL
+NULL
+NULL
+
+query ?
+select array_union(arrow_cast(null, 'List(Int64)'), [1, 2]);
+----
+NULL
+
+query ?
+select array_union([1, 2], arrow_cast(null, 'List(Int64)'));
+----
+NULL
+
+query ?
+select array_intersect(arrow_cast(null, 'List(Int64)'), [1, 2]);
+----
+NULL
+
+query ?
+select array_intersect([1, 2], arrow_cast(null, 'List(Int64)'));
+----
+NULL
+
+query ?
+select array_except(arrow_cast(null, 'List(Int64)'), [1, 2]);
+----
+NULL
+
+query ?
+select array_except([1, 2], arrow_cast(null, 'List(Int64)'));
+----
+NULL
+
+
+include ./cleanup.slt.part

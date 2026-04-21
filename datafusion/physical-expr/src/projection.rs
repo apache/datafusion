@@ -656,7 +656,7 @@ impl ProjectionExprs {
         mut stats: Statistics,
         output_schema: &Schema,
     ) -> Result<Statistics> {
-        let mut column_statistics = vec![];
+        let mut column_statistics = Vec::with_capacity(self.exprs.len());
 
         for proj_expr in self.exprs.iter() {
             let expr = &proj_expr.expr;

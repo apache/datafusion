@@ -1276,7 +1276,14 @@ fn make_staggered_batches_i32(len: usize, with_extra_column: bool) -> Vec<Record
     input12.sort_unstable();
     let input1 = Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.0));
     let input2 = Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.1));
-    let input3 = Int32Array::from_iter_values(input3);
+    let input3 = Int32Array::from_iter(input3.into_iter().map(|v| {
+        // ~10% NULLs in filter column to exercise NULL filter handling
+        if rng.random_range(0..10) == 0 {
+            None
+        } else {
+            Some(v)
+        }
+    }));
     let input4 = Int32Array::from_iter_values(input4);
 
     let mut columns = vec![
