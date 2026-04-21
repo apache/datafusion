@@ -962,14 +962,16 @@ impl SortExec {
         if fetch.is_some() && is_pipeline_friendly {
             cache = cache.with_boundedness(Boundedness::Bounded);
         }
-        let filter = fetch.is_some().then(|| {
-            // If we already have a filter, keep it. Otherwise, create a new one.
-            self.filter.clone().unwrap_or_else(|| self.create_filter())
-        });
         let mut new_sort = self.cloned();
         new_sort.fetch = fetch;
         new_sort.cache = cache.into();
-        new_sort.filter = filter;
+        new_sort.filter = fetch.is_some().then(|| {
+            // If we already have a filter, keep it. Otherwise, create a new one.
+            // Must be called after setting fetch so DynamicFilter gets the K value.
+            self.filter
+                .clone()
+                .unwrap_or_else(|| new_sort.create_filter())
+        });
         new_sort
     }
 
