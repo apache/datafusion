@@ -21,7 +21,6 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
@@ -36,9 +35,6 @@ use parking_lot::Mutex;
 use crate::EmptyRecordBatchStream;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
-
-const FIRST_PASS_ACTIVE_EPOCH: u32 = 1;
-const POISONED_EPOCH: u32 = u32::MAX;
 
 /// Spill-backed replayable stream source.
 ///
@@ -74,15 +70,29 @@ const POISONED_EPOCH: u32 = u32::MAX;
 ///   and complex pipeline.
 /// - The parent operator is under memory pressure and cannot cache the input in
 ///   memory for replay.
+/// 
+/// # Concurrency assumption
+/// Passes must be opened and consumed sequentially.
+/// Opening another pass before exhausting the current one returns an error.
 pub(crate) struct ReplayableStreamSource {
     schema: SchemaRef,
     input: Option<SendableRecordBatchStream>,
     spill_manager: SpillManager,
     request_description: String,
-    /// 0 = unopened, 1 = first pass active, 2 = replayable/empty, MAX = poisoned
-    /// on execution errors.
-    epoch: Arc<AtomicU32>,
-    spill_file: Arc<Mutex<Option<RefCountedTempFile>>>,
+    /// Inner state is owned by either the source or one active stream to ensure
+    /// sequential access; see struct docs for the concurrency contract.
+    ///
+    /// Ownership model:
+    /// - No active stream: source owns the state (`source.state = Some(state)`).
+    /// - Active stream: the stream owns the state (`source.state = None`).
+    state: Arc<Mutex<Option<StateInner>>>,
+}
+
+/// Inner state exclusively owned by either [`ReplayableStreamSource`] or one [`ReplayablePassStream`]
+enum StateInner {
+    Unopened,
+    Replayable(Option<RefCountedTempFile>),
+    Poisoned,
 }
 
 impl ReplayableStreamSource {
@@ -101,9 +111,12 @@ impl ReplayableStreamSource {
             input: Some(input),
             spill_manager,
             request_description: request_description.into(),
-            epoch: Arc::new(AtomicU32::new(0)),
-            spill_file: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(Some(StateInner::Unopened))),
         }
+    }
+
+    fn restore_state(&self, state: StateInner) {
+        *self.state.lock() = Some(state);
     }
 
     /// Opens the next pass over this input.
@@ -113,47 +126,60 @@ impl ReplayableStreamSource {
     /// from the completed spill file.
     ///
     /// # Note
-    /// Subsequent passes MUST be opened only after the initial pass is fully
+    /// Subsequent passes MUST be opened only after the previous pass is fully
     /// consumed; otherwise, an error is returned.
     pub(crate) fn open_pass(&mut self) -> Result<SendableRecordBatchStream> {
-        match self.epoch.load(Ordering::Relaxed) {
-            0 => {
+        let state = self.state.lock().take();
+        let Some(state) = state else {
+            return internal_err!("ReplayableStreamSource pass is still active");
+        };
+
+        match state {
+            StateInner::Unopened => {
                 let Some(input) = self.input.take() else {
+                    self.restore_state(StateInner::Poisoned);
                     return internal_err!(
                         "ReplayableStreamSource missing first-pass input"
                     );
                 };
-                let spill_file = self
+                let spill_file = match self
                     .spill_manager
-                    .create_in_progress_file(&self.request_description)?;
-                *self.spill_file.lock() = None;
-                self.epoch.store(FIRST_PASS_ACTIVE_EPOCH, Ordering::Relaxed);
+                    .create_in_progress_file(&self.request_description)
+                {
+                    Ok(spill_file) => spill_file,
+                    Err(e) => {
+                        self.input = Some(input);
+                        self.restore_state(StateInner::Unopened);
+                        return Err(e);
+                    }
+                };
 
-                Ok(Box::pin(SpillCachingStream::new(
+                Ok(Box::pin(ReplayablePassStream::new_first(
                     Arc::clone(&self.schema),
                     input,
-                    Arc::clone(&self.epoch),
-                    Arc::clone(&self.spill_file),
-                    FIRST_PASS_ACTIVE_EPOCH,
+                    Arc::clone(&self.state),
                     spill_file,
                 )))
             }
-            FIRST_PASS_ACTIVE_EPOCH => {
-                internal_err!("ReplayableStreamSource first pass is still active")
-            }
-            POISONED_EPOCH => {
+            StateInner::Poisoned => {
+                self.restore_state(StateInner::Poisoned);
                 internal_err!(
                     "ReplayableStreamSource first pass did not complete successfully"
                 )
             }
-            _ => {
-                let spill_file = self.spill_file.lock();
-                if let Some(file) = spill_file.as_ref() {
-                    self.spill_manager.read_spill_as_stream(file.clone(), None)
-                } else {
-                    Ok(Box::pin(EmptyRecordBatchStream::new(Arc::clone(
-                        &self.schema,
-                    ))))
+            StateInner::Replayable(spill_file) => {
+                let replay_state = spill_file.clone();
+                match ReplayablePassStream::new_replay(
+                    Arc::clone(&self.schema),
+                    &self.spill_manager,
+                    Arc::clone(&self.state),
+                    spill_file,
+                ) {
+                    Ok(stream) => Ok(Box::pin(stream)),
+                    Err(e) => {
+                        self.restore_state(StateInner::Replayable(replay_state));
+                        Err(e)
+                    }
                 }
             }
         }
@@ -162,59 +188,71 @@ impl ReplayableStreamSource {
 
 /// Evaluates and forwards the `inner` stream output while caching it to a spill file
 /// for future replays.
-struct SpillCachingStream {
+struct ReplayablePassStream {
     schema: SchemaRef,
-    epoch_state: Arc<AtomicU32>,
-    spill_file_state: Arc<Mutex<Option<RefCountedTempFile>>>,
-    epoch: u32,
+    shared_state: Arc<Mutex<Option<StateInner>>>,
+    held_state: Option<StateInner>,
     spill_file: Option<InProgressSpillFile>,
     inner: SendableRecordBatchStream,
 }
 
-impl SpillCachingStream {
-    fn new(
+impl ReplayablePassStream {
+    fn new_first(
         schema: SchemaRef,
         inner: SendableRecordBatchStream,
-        epoch_state: Arc<AtomicU32>,
-        spill_file_state: Arc<Mutex<Option<RefCountedTempFile>>>,
-        epoch: u32,
+        shared_state: Arc<Mutex<Option<StateInner>>>,
         spill_file: InProgressSpillFile,
     ) -> Self {
         Self {
             schema,
-            epoch_state,
-            spill_file_state,
-            epoch,
+            shared_state,
+            held_state: Some(StateInner::Unopened),
             spill_file: Some(spill_file),
             inner,
         }
     }
 
-    fn publish_result(
-        epoch_state: &Arc<AtomicU32>,
-        spill_file_state: &Arc<Mutex<Option<RefCountedTempFile>>>,
-        epoch: u32,
+    fn new_replay(
+        schema: SchemaRef,
+        spill_manager: &SpillManager,
+        shared_state: Arc<Mutex<Option<StateInner>>>,
         spill_file: Option<RefCountedTempFile>,
-    ) {
-        if epoch_state.load(Ordering::Relaxed) == epoch {
-            *spill_file_state.lock() = spill_file;
-            epoch_state.store(epoch.saturating_add(1), Ordering::Relaxed);
+    ) -> Result<Self> {
+        let inner = if let Some(file) = spill_file.as_ref() {
+            spill_manager.read_spill_as_stream(file.clone(), None)?
+        } else {
+            Box::pin(EmptyRecordBatchStream::new(Arc::clone(&schema)))
+        };
+
+        Ok(Self {
+            schema,
+            shared_state,
+            held_state: Some(StateInner::Replayable(spill_file)),
+            spill_file: None,
+            inner,
+        })
+    }
+
+    fn restore_held_state(&mut self) {
+        if let Some(state) = self.held_state.take() {
+            *self.shared_state.lock() = Some(state);
         }
     }
 
-    fn poison(
-        epoch_state: &Arc<AtomicU32>,
-        spill_file_state: &Arc<Mutex<Option<RefCountedTempFile>>>,
-        epoch: u32,
-    ) {
-        if epoch_state.load(Ordering::Relaxed) == epoch {
-            *spill_file_state.lock() = None;
-            epoch_state.store(POISONED_EPOCH, Ordering::Relaxed);
+    fn restore_state(&mut self, state: StateInner) {
+        if self.held_state.take().is_some() {
+            *self.shared_state.lock() = Some(state);
+        }
+    }
+
+    fn poison(&mut self) {
+        if self.held_state.take().is_some() {
+            *self.shared_state.lock() = Some(StateInner::Poisoned);
         }
     }
 }
 
-impl Stream for SpillCachingStream {
+impl Stream for ReplayablePassStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -227,7 +265,7 @@ impl Stream for SpillCachingStream {
                     && let Err(e) = spill_file.append_batch(&batch)
                 {
                     this.spill_file.take();
-                    Self::poison(&this.epoch_state, &this.spill_file_state, this.epoch);
+                    this.poison();
                     return Poll::Ready(Some(Err(e)));
                 }
 
@@ -235,35 +273,27 @@ impl Stream for SpillCachingStream {
             }
             Poll::Ready(Some(Err(e))) => {
                 this.spill_file.take();
-                Self::poison(&this.epoch_state, &this.spill_file_state, this.epoch);
+                this.poison();
                 Poll::Ready(Some(Err(e)))
             }
+            // The stream is exhausted, give the inner state ownership back to `ReplayableStreamSource`
             Poll::Ready(None) => {
-                let result = match this.spill_file.as_mut() {
-                    Some(spill_file) => spill_file.finish(),
-                    None => Ok(None),
-                };
-
-                match result {
-                    Ok(file) => {
-                        this.spill_file.take();
-                        Self::publish_result(
-                            &this.epoch_state,
-                            &this.spill_file_state,
-                            this.epoch,
-                            file,
-                        );
-                        Poll::Ready(None)
+                if let Some(spill_file) = this.spill_file.as_mut() {
+                    match spill_file.finish() {
+                        Ok(file) => {
+                            this.spill_file.take();
+                            this.restore_state(StateInner::Replayable(file));
+                            Poll::Ready(None)
+                        }
+                        Err(e) => {
+                            this.spill_file.take();
+                            this.poison();
+                            Poll::Ready(Some(Err(e)))
+                        }
                     }
-                    Err(e) => {
-                        this.spill_file.take();
-                        Self::poison(
-                            &this.epoch_state,
-                            &this.spill_file_state,
-                            this.epoch,
-                        );
-                        Poll::Ready(Some(Err(e)))
-                    }
+                } else {
+                    this.restore_held_state();
+                    Poll::Ready(None)
                 }
             }
             Poll::Pending => Poll::Pending,
@@ -271,16 +301,17 @@ impl Stream for SpillCachingStream {
     }
 }
 
-impl RecordBatchStream for SpillCachingStream {
+impl RecordBatchStream for ReplayablePassStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 }
 
-impl Drop for SpillCachingStream {
+impl Drop for ReplayablePassStream {
     fn drop(&mut self) {
-        if self.spill_file.is_some() {
-            Self::poison(&self.epoch_state, &self.spill_file_state, self.epoch);
+        if self.held_state.is_some() {
+            self.spill_file.take();
+            self.poison();
         }
     }
 }
@@ -335,6 +366,8 @@ mod tests {
         Ok(())
     }
 
+    // Try to open a new pass, when the first pass has not finished.
+    // The spill file is only partially written, so an error will be returned.
     #[tokio::test]
     async fn test_replayable_spill_input_poisoned_when_first_pass_dropped() -> Result<()>
     {
@@ -354,8 +387,6 @@ mod tests {
         let first = pass1.next().await.transpose()?;
         assert!(first.is_some());
         drop(pass1);
-        // The first pass has not finished, so the spill file is only partially
-        // written and cannot be used to open subsequent replay passes.
 
         let err = match replayable.open_pass() {
             Ok(_) => panic!("expected first pass to poison replayable spill input"),
@@ -366,6 +397,40 @@ mod tests {
                 "ReplayableStreamSource first pass did not complete successfully"
             )
         );
+
+        Ok(())
+    }
+
+    // Open a new pass, when the previous pass from spill is still in progress.
+    // An error is expected, since it requires sequential access.
+    #[tokio::test]
+    async fn test_replayable_spill_input_errors_when_replay_pass_in_progress()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let batch1 = build_batch(Arc::clone(&schema), vec![1, 2])?;
+        let batch2 = build_batch(Arc::clone(&schema), vec![3, 4])?;
+
+        let input = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter(vec![Ok(batch1.clone()), Ok(batch2.clone())]),
+        ));
+        let spill_manager = build_spill_manager(Arc::clone(&schema))?;
+        let mut replayable =
+            ReplayableStreamSource::new(input, spill_manager, "test replayable spill");
+
+        let pass1 = replayable.open_pass()?;
+        let _ = pass1.try_collect::<Vec<_>>().await?;
+
+        let pass2 = replayable.open_pass()?;
+        let err = match replayable.open_pass() {
+            Ok(_) => panic!("expected open_pass to fail while replay pass is active"),
+            Err(err) => err.strip_backtrace(),
+        };
+        assert!(
+            err.to_string()
+                .contains("ReplayableStreamSource pass is still active")
+        );
+        drop(pass2);
 
         Ok(())
     }
