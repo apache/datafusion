@@ -32,6 +32,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
+use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -83,6 +84,10 @@ impl ArrayCompact {
 impl ScalarUDFImpl for ArrayCompact {
     fn name(&self) -> &str {
         "array_compact"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn signature(&self) -> &Signature {
