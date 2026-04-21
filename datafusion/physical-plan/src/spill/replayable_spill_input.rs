@@ -70,7 +70,7 @@ use crate::spill::spill_manager::SpillManager;
 ///   and complex pipeline.
 /// - The parent operator is under memory pressure and cannot cache the input in
 ///   memory for replay.
-/// 
+///
 /// # Concurrency assumption
 /// Passes must be opened and consumed sequentially.
 /// Opening another pass before exhausting the current one returns an error.
