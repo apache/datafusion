@@ -1039,8 +1039,6 @@ impl MetadataLoadedParquetOpen {
             None
         };
 
-        // Projection read plan (ProjectionMask + projected schema) also
-        // shareable across opens.
         let read_plan = Arc::new(build_projection_read_plan(
             prepared.projection.expr_iter(),
             &physical_file_schema,
