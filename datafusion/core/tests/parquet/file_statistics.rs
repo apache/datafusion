@@ -30,7 +30,9 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::DFSchema;
 use datafusion_common::stats::Precision;
 use datafusion_execution::cache::DefaultListFilesCache;
-use datafusion_execution::cache::cache_manager::{CacheManagerConfig, FileStatisticsCache};
+use datafusion_execution::cache::cache_manager::{
+    CacheManagerConfig, FileStatisticsCache,
+};
 use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -249,7 +251,9 @@ async fn get_listing_table(
     let config1 = ListingTableConfig::new(table_path.clone())
         .with_listing_options(opt.clone())
         .with_schema(schema);
-    ListingTable::try_new(config1).unwrap().with_cache(static_cache)
+    ListingTable::try_new(config1)
+        .unwrap()
+        .with_cache(static_cache)
 }
 
 fn get_cache_runtime_state() -> (
