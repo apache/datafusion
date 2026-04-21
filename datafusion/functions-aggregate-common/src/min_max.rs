@@ -417,26 +417,29 @@ macro_rules! min_max_scalar_impl {
             }
 
             (
-                ScalarValue::Dictionary(lhs_key_type, lhs),
-                ScalarValue::Dictionary(rhs_key_type, rhs),
+                ScalarValue::Dictionary(lhs_dict_key_type, lhs_dict_value),
+                ScalarValue::Dictionary(rhs_dict_key_type, rhs_dict_value),
             ) => {
-                if lhs_key_type != rhs_key_type {
+                if lhs_dict_key_type != rhs_dict_key_type {
                     return internal_err!(
                         "MIN/MAX is not expected to receive dictionary scalars with different key types ({:?} vs {:?})",
-                        lhs_key_type,
-                        rhs_key_type
+                        lhs_dict_key_type,
+                        rhs_dict_key_type
                     );
                 }
 
-                let result =
-                    min_max_scalar(lhs.as_ref(), rhs.as_ref(), choose_min_max!($OP))?;
-                ScalarValue::Dictionary(lhs_key_type.clone(), Box::new(result))
+                let result = min_max_scalar(
+                    lhs_dict_value.as_ref(),
+                    rhs_dict_value.as_ref(),
+                    choose_min_max!($OP),
+                )?;
+                ScalarValue::Dictionary(lhs_dict_key_type.clone(), Box::new(result))
             }
-            (ScalarValue::Dictionary(_, lhs), rhs) => {
-                min_max_scalar(lhs.as_ref(), rhs, choose_min_max!($OP))?
+            (ScalarValue::Dictionary(_, lhs_dict_value), rhs_scalar) => {
+                min_max_scalar(lhs_dict_value.as_ref(), rhs_scalar, choose_min_max!($OP))?
             }
-            (lhs, ScalarValue::Dictionary(_, rhs)) => {
-                min_max_scalar(lhs, rhs.as_ref(), choose_min_max!($OP))?
+            (lhs_scalar, ScalarValue::Dictionary(_, rhs_dict_value)) => {
+                min_max_scalar(lhs_scalar, rhs_dict_value.as_ref(), choose_min_max!($OP))?
             }
 
             e => {
@@ -462,9 +465,7 @@ fn min_max_scalar(
 }
 
 macro_rules! min_max {
-    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
-        min_max_scalar($VALUE, $DELTA, choose_min_max!($OP))
-    }};
+    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{ min_max_scalar($VALUE, $DELTA, choose_min_max!($OP)) }};
 }
 
 /// Finds the min/max by scanning logical rows via `ScalarValue::try_from_array`.
