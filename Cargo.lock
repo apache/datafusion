@@ -2277,6 +2277,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-expr-common",
  "datafusion-macros",
+ "datafusion-physical-expr-common",
  "env_logger",
  "hex",
  "itertools 0.14.0",
