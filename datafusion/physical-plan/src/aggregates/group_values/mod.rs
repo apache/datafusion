@@ -18,9 +18,10 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Date64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
@@ -41,15 +42,15 @@ pub(crate) use single_group_by::primitive::HashValue;
 use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+        bytes_view::GroupValuesBytesView, dictionary::GroupValuesDictionary,
+        primitive::GroupValuesPrimitive,
     },
     order::GroupOrdering,
 };
 
 mod metrics;
-mod null_builder;
-
 pub(crate) use metrics::GroupByMetrics;
+mod null_builder;
 
 /// Stores the group values during hash aggregation.
 ///
@@ -196,6 +197,45 @@ pub fn new_group_values(
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new()));
             }
+            DataType::Dictionary(key_type, value_type) => {
+                if supported_single_dictionary_value(value_type) {
+                    return match key_type.as_ref() {
+                        DataType::Int8 => Ok(Box::new(
+                            GroupValuesDictionary::<Int8Type>::new(value_type),
+                        )),
+                        DataType::Int16 => Ok(Box::new(
+                            GroupValuesDictionary::<Int16Type>::new(value_type),
+                        )),
+                        DataType::Int32 => Ok(Box::new(
+                            GroupValuesDictionary::<Int32Type>::new(value_type),
+                        )),
+                        DataType::Int64 => Ok(Box::new(
+                            GroupValuesDictionary::<Int64Type>::new(value_type),
+                        )),
+                        DataType::UInt8 => Ok(Box::new(
+                            GroupValuesDictionary::<UInt8Type>::new(value_type),
+                        )),
+                        DataType::UInt16 => {
+                            Ok(Box::new(GroupValuesDictionary::<UInt16Type>::new(
+                                value_type,
+                            )))
+                        }
+                        DataType::UInt32 => {
+                            Ok(Box::new(GroupValuesDictionary::<UInt32Type>::new(
+                                value_type,
+                            )))
+                        }
+                        DataType::UInt64 => {
+                            Ok(Box::new(GroupValuesDictionary::<UInt64Type>::new(
+                                value_type,
+                            )))
+                        }
+                        _ => Err(datafusion_common::DataFusionError::NotImplemented(
+                            format!("Unsupported dictionary key type: {key_type:?}"),
+                        )),
+                    };
+                }
+            }
             _ => {}
         }
     }
@@ -208,5 +248,20 @@ pub fn new_group_values(
         }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
+    }
+}
+
+fn supported_single_dictionary_value(t: &DataType) -> bool {
+    match t {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => true,
+        DataType::List(field)
+            if matches!(
+                field.data_type(),
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+            ) =>
+        {
+            true
+        }
+        _ => false,
     }
 }
