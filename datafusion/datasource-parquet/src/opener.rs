@@ -18,11 +18,14 @@
 //! [`ParquetMorselizer`] state machines for opening Parquet files
 
 use crate::page_filter::PagePruningAccessPlanFilter;
-use crate::row_filter::build_projection_read_plan;
+use crate::row_filter::{
+    FilterCandidate, build_projection_read_plan, build_row_filter_candidates,
+    row_filter_from_candidates,
+};
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
-    apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
+    apply_file_schema_type_coercions, coerce_int96_to_resolution,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
@@ -326,6 +329,7 @@ pub(crate) struct ParquetOpenChunk {
     pub projection: ProjectionExprs,
     pub pruning_predicate: Option<Arc<PruningPredicate>>,
     pub page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
+    pub row_filter_candidates: Option<Arc<Vec<FilterCandidate>>>,
 }
 
 impl fmt::Debug for ParquetOpenChunk {
@@ -353,6 +357,11 @@ struct FiltersPreparedParquetOpen {
     loaded: MetadataLoadedParquetOpen,
     pruning_predicate: Option<Arc<PruningPredicate>>,
     page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
+    /// Row-filter conjunct candidates built once here and shared with
+    /// sibling stealers via `ParquetOpenChunk` so each open doesn't
+    /// redo the schema-walk + ProjectionMask build. Only the cheap
+    /// per-open metric binding happens at `build_stream` time.
+    row_filter_candidates: Option<Arc<Vec<FilterCandidate>>>,
 }
 
 /// State of [`ParquetOpenState`]
@@ -769,6 +778,7 @@ impl ParquetMorselizer {
             projection,
             pruning_predicate,
             page_pruning_predicate,
+            row_filter_candidates,
         } = chunk;
 
         let prepared = PreparedParquetOpen {
@@ -816,6 +826,7 @@ impl ParquetMorselizer {
                 },
                 pruning_predicate,
                 page_pruning_predicate,
+                row_filter_candidates,
             },
             row_groups: RowGroupAccessPlanFilter::new(access_plan),
         })
@@ -999,6 +1010,32 @@ impl MetadataLoadedParquetOpen {
             None
         };
 
+        // Build row-filter candidates once here — the expensive part of
+        // pushdown-filter construction (schema walk, ProjectionMask
+        // build, cost-based reorder). Stealers of donated chunks reuse
+        // this via `ParquetOpenChunk`.
+        let row_filter_candidates = if let Some(predicate) = prepared
+            .pushdown_filters
+            .then_some(prepared.predicate.as_ref())
+            .flatten()
+        {
+            match build_row_filter_candidates(
+                predicate,
+                &physical_file_schema,
+                reader_metadata.metadata(),
+                prepared.reorder_predicates,
+            ) {
+                Ok(Some(cs)) => Some(Arc::new(cs)),
+                Ok(None) => None,
+                Err(e) => {
+                    debug!("Ignoring error building row filter for '{predicate:?}': {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(FiltersPreparedParquetOpen {
             loaded: MetadataLoadedParquetOpen {
                 prepared,
@@ -1007,6 +1044,7 @@ impl MetadataLoadedParquetOpen {
             },
             pruning_predicate,
             page_pruning_predicate,
+            row_filter_candidates,
         })
     }
 }
@@ -1282,6 +1320,7 @@ impl RowGroupsPrunedParquetOpen {
             projection: self.prepared.loaded.prepared.projection.clone(),
             pruning_predicate: self.prepared.pruning_predicate.clone(),
             page_pruning_predicate: self.prepared.page_pruning_predicate.clone(),
+            row_filter_candidates: self.prepared.row_filter_candidates.clone(),
         };
 
         let keep_idx = eligible[0];
@@ -1309,6 +1348,7 @@ impl RowGroupsPrunedParquetOpen {
             loaded,
             pruning_predicate: _,
             page_pruning_predicate,
+            row_filter_candidates,
         } = prepared;
         let MetadataLoadedParquetOpen {
             prepared,
@@ -1319,25 +1359,16 @@ impl RowGroupsPrunedParquetOpen {
         let file_metadata = Arc::clone(reader_metadata.metadata());
         let rg_metadata = file_metadata.row_groups();
 
-        // Filter pushdown: evaluate predicates during scan
-        let row_filter = if let Some(predicate) = prepared
-            .pushdown_filters
-            .then_some(prepared.predicate.clone())
-            .flatten()
+        // Filter pushdown: evaluate predicates during scan. The
+        // expensive candidate construction ran once in `prepare_filters`;
+        // here we only do the cheap per-open metric binding.
+        let row_filter = if let Some(candidates) = row_filter_candidates.as_deref()
+            && prepared.pushdown_filters
         {
-            let row_filter = row_filter::build_row_filter(
-                &predicate,
-                &prepared.physical_file_schema,
-                file_metadata.as_ref(),
-                prepared.reorder_predicates,
-                &prepared.file_metrics,
-            );
-
-            match row_filter {
-                Ok(Some(filter)) => Some(filter),
-                Ok(None) => None,
+            match row_filter_from_candidates(candidates, &prepared.file_metrics) {
+                Ok(filter) => Some(filter),
                 Err(e) => {
-                    debug!("Ignoring error building row filter for '{predicate:?}': {e}");
+                    debug!("Ignoring error building row filter: {e}");
                     None
                 }
             }

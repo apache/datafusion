@@ -177,6 +177,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
 /// of evaluating the resulting expression.
 ///
 /// See the module level documentation for more information.
+#[derive(Clone)]
 pub(crate) struct FilterCandidate {
     expr: Arc<dyn PhysicalExpr>,
     /// Estimate for the total number of bytes that will need to be processed
@@ -1019,10 +1020,28 @@ pub fn build_row_filter(
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowFilter>> {
-    let rows_pruned = &file_metrics.pushdown_rows_pruned;
-    let rows_matched = &file_metrics.pushdown_rows_matched;
-    let time = &file_metrics.row_pushdown_eval_time;
+    let Some(candidates) =
+        build_row_filter_candidates(expr, file_schema, metadata, reorder_predicates)?
+    else {
+        return Ok(None);
+    };
+    row_filter_from_candidates(&candidates, file_metrics).map(Some)
+}
 
+/// Expensive, metrics-free first phase of row-filter construction.
+///
+/// Splits the predicate into conjuncts, resolves each one against the file
+/// schema and parquet metadata (building [`ProjectionMask`]s and cost
+/// estimates), and optionally reorders candidates by estimated cost. The
+/// result is the same for every open of a given (predicate, file_schema,
+/// file_metadata) triple, so a donor may build it once and share it with
+/// sibling stealers.
+pub(crate) fn build_row_filter_candidates(
+    expr: &Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    metadata: &ParquetMetaData,
+    reorder_predicates: bool,
+) -> Result<Option<Vec<FilterCandidate>>> {
     // Split into conjuncts:
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
     let predicates = split_conjunction(expr);
@@ -1039,7 +1058,6 @@ pub fn build_row_filter(
         .flatten()
         .collect();
 
-    // no candidates
     if candidates.is_empty() {
         return Ok(None);
     }
@@ -1047,6 +1065,22 @@ pub fn build_row_filter(
     if reorder_predicates {
         candidates.sort_unstable_by_key(|c| c.required_bytes);
     }
+    Ok(Some(candidates))
+}
+
+/// Cheap per-open second phase: wire each candidate up with the current
+/// file's row-filter metrics.
+///
+/// Called separately from [`build_row_filter_candidates`] so that the
+/// expensive candidate construction can be shared across sibling opens
+/// of the same file.
+pub(crate) fn row_filter_from_candidates(
+    candidates: &[FilterCandidate],
+    file_metrics: &ParquetFileMetrics,
+) -> Result<RowFilter> {
+    let rows_pruned = &file_metrics.pushdown_rows_pruned;
+    let rows_matched = &file_metrics.pushdown_rows_matched;
+    let time = &file_metrics.row_pushdown_eval_time;
 
     // To avoid double-counting metrics when multiple predicates are used:
     // - All predicates should count rows_pruned (cumulative pruned rows)
@@ -1055,23 +1089,18 @@ pub fn build_row_filter(
     let total_candidates = candidates.len();
 
     candidates
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(idx, candidate)| {
             let is_last = idx == total_candidates - 1;
-
-            // All predicates share the pruned counter (cumulative)
             let predicate_rows_pruned = rows_pruned.clone();
-
-            // Only the last predicate tracks matched rows (final result)
             let predicate_rows_matched = if is_last {
                 rows_matched.clone()
             } else {
                 metrics::Count::new()
             };
-
             DatafusionArrowPredicate::try_new(
-                candidate,
+                candidate.clone(),
                 predicate_rows_pruned,
                 predicate_rows_matched,
                 time.clone(),
@@ -1079,7 +1108,7 @@ pub fn build_row_filter(
             .map(|pred| Box::new(pred) as _)
         })
         .collect::<Result<Vec<_>, _>>()
-        .map(|filters| Some(RowFilter::new(filters)))
+        .map(RowFilter::new)
 }
 
 #[cfg(test)]
