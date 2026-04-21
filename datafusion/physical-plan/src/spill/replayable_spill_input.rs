@@ -115,7 +115,7 @@ impl ReplayableStreamSource {
         }
     }
 
-    fn restore_state(&self, state: StateInner) {
+    fn set_state(&self, state: StateInner) {
         *self.state.lock() = Some(state);
     }
 
@@ -137,7 +137,7 @@ impl ReplayableStreamSource {
         match state {
             StateInner::Unopened => {
                 let Some(input) = self.input.take() else {
-                    self.restore_state(StateInner::Poisoned);
+                    self.set_state(StateInner::Poisoned);
                     return internal_err!(
                         "ReplayableStreamSource missing first-pass input"
                     );
@@ -149,7 +149,7 @@ impl ReplayableStreamSource {
                     Ok(spill_file) => spill_file,
                     Err(e) => {
                         self.input = Some(input);
-                        self.restore_state(StateInner::Unopened);
+                        self.set_state(StateInner::Unopened);
                         return Err(e);
                     }
                 };
@@ -162,7 +162,6 @@ impl ReplayableStreamSource {
                 )))
             }
             StateInner::Poisoned => {
-                self.restore_state(StateInner::Poisoned);
                 internal_err!(
                     "ReplayableStreamSource first pass did not complete successfully"
                 )
@@ -177,7 +176,7 @@ impl ReplayableStreamSource {
                 ) {
                     Ok(stream) => Ok(Box::pin(stream)),
                     Err(e) => {
-                        self.restore_state(StateInner::Replayable(replay_state));
+                        self.set_state(StateInner::Replayable(replay_state));
                         Err(e)
                     }
                 }
@@ -239,16 +238,14 @@ impl ReplayablePassStream {
         }
     }
 
-    fn restore_state(&mut self, state: StateInner) {
+    fn set_state(&mut self, state: StateInner) {
         if self.held_state.take().is_some() {
             *self.shared_state.lock() = Some(state);
         }
     }
 
     fn poison(&mut self) {
-        if self.held_state.take().is_some() {
-            *self.shared_state.lock() = Some(StateInner::Poisoned);
-        }
+        self.set_state(StateInner::Poisoned);
     }
 }
 
@@ -282,7 +279,7 @@ impl Stream for ReplayablePassStream {
                     match spill_file.finish() {
                         Ok(file) => {
                             this.spill_file.take();
-                            this.restore_state(StateInner::Replayable(file));
+                            this.set_state(StateInner::Replayable(file));
                             Poll::Ready(None)
                         }
                         Err(e) => {
@@ -308,9 +305,13 @@ impl RecordBatchStream for ReplayablePassStream {
 }
 
 impl Drop for ReplayablePassStream {
+    /// If a stream is dropped before it finishes, poison the state so later
+    /// replay attempts fail.
+    ///
+    /// A partial first pass leaves the spill file incomplete, so replaying it
+    /// would be unsafe.
     fn drop(&mut self) {
         if self.held_state.is_some() {
-            self.spill_file.take();
             self.poison();
         }
     }
