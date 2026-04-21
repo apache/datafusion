@@ -1232,11 +1232,22 @@ impl RowGroupsPrunedParquetOpen {
 
         // TopK cumulative pruning: after reorder + reverse, the RGs are in
         // optimal order. Accumulate rows from the front until >= K, prune rest.
-        // For sort pushdown: always safe (sorted = non-overlapping).
-        // For non-sort-pushdown: safe only if reordered RGs are non-overlapping
-        // (verified by checking max[i] <= min[i+1] in the reordered sequence).
+        //
+        // Only safe when predicate is DynamicFilter-only (no WHERE clause).
+        // With WHERE, raw num_rows overestimates qualifying rows — cumulative
+        // prune may keep too few RGs, returning fewer than K results.
+        //
+        // Additionally requires either sort pushdown (guaranteed non-overlapping)
+        // or verified non-overlap from statistics.
+        let is_pure_dynamic_filter = prepared.predicate.as_ref().is_some_and(|p| {
+            let any_ref: &dyn std::any::Any = p.as_ref();
+            any_ref
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .is_some()
+        });
         let has_sort_pushdown = prepared.sort_order_for_reorder.is_some();
-        if let Some(predicate) = &prepared.predicate
+        if is_pure_dynamic_filter
+            && let Some(predicate) = &prepared.predicate
             && let Some(df) = find_dynamic_filter(predicate)
             && let Some(fetch) = df.fetch()
             && (has_sort_pushdown
