@@ -834,10 +834,15 @@ impl MetadataLoadedParquetOpen {
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
 
-        // For sort pushdown path: initialize TopK threshold BEFORE building
-        // PruningPredicate so that the compiled predicate includes the threshold.
-        // This is safe because sort pushdown data is sorted and non-overlapping.
-        if prepared.sort_order_for_reorder.is_some() {
+        // Initialize TopK threshold from RG statistics BEFORE building
+        // PruningPredicate. Safe when:
+        // 1. Sort pushdown path (sorted, non-overlapping RGs), OR
+        // 2. Predicate is ONLY the DynamicFilter (no WHERE clause that
+        //    could narrow qualifying rows below what raw stats suggest).
+        // The surviving-rows check prevents over-pruning for overlapping RGs.
+        if prepared.sort_order_for_reorder.is_some()
+            || is_dynamic_filter_only_predicate(&prepared.predicate)
+        {
             let file_metadata = reader_metadata.metadata();
             let rg_metadata = file_metadata.row_groups();
             let topk_limit = prepared.limit.unwrap_or(1);
@@ -964,12 +969,6 @@ impl FiltersPreparedParquetOpen {
                 .row_groups_pruned_bloom_filter
                 .add_matched(remaining);
         }
-
-        // Note: stats init for non-sort-pushdown TopK is not safe because
-        // max(min)/min(max) is only a valid threshold bound when RGs are
-        // non-overlapping (sorted data). For overlapping RGs, the top-K
-        // values may span multiple RGs and the threshold can over-prune.
-        // Future: use a safer algorithm (e.g. sum of qualifying rows).
 
         Ok(RowGroupsPrunedParquetOpen {
             prepared: self,
@@ -1402,6 +1401,60 @@ fn try_init_topk_threshold(
         }
     };
 
+    // Safety check: verify that enough rows survive after applying the
+    // threshold. Count rows in RGs that would NOT be pruned (i.e., their
+    // max >= threshold for DESC, or min <= threshold for ASC).
+    // If remaining rows < limit, the threshold is too tight — skip.
+    let converter_for_check =
+        StatisticsConverter::try_new(col_name, arrow_schema, parquet_schema)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let surviving_rows: usize = if is_descending {
+        // DESC: keep RGs where max >= threshold (they may have values > threshold)
+        let maxes = converter_for_check
+            .row_group_maxes(rg_metadata.iter())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        rg_metadata
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                if *i >= maxes.len() || maxes.is_null(*i) {
+                    return true; // keep RGs with unknown stats
+                }
+                match ScalarValue::try_from_array(maxes.as_ref(), *i) {
+                    Ok(max_val) => max_val >= threshold,
+                    Err(_) => true,
+                }
+            })
+            .map(|(_, rg)| rg.num_rows() as usize)
+            .sum()
+    } else {
+        // ASC: keep RGs where min <= threshold
+        let mins = converter_for_check
+            .row_group_mins(rg_metadata.iter())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        rg_metadata
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                if *i >= mins.len() || mins.is_null(*i) {
+                    return true;
+                }
+                match ScalarValue::try_from_array(mins.as_ref(), *i) {
+                    Ok(min_val) => min_val <= threshold,
+                    Err(_) => true,
+                }
+            })
+            .map(|(_, rg)| rg.num_rows() as usize)
+            .sum()
+    };
+
+    if surviving_rows < limit {
+        debug!(
+            "Skipping TopK threshold init: only {surviving_rows} rows would survive, need {limit}"
+        );
+        return Ok(());
+    }
+
     // Build the filter expression with null-awareness.
     // For NULLS FIRST: NULLs sort before all values, so the filter must
     // preserve NULL rows: `col IS NULL OR col > threshold` (DESC) or
@@ -1440,6 +1493,20 @@ fn try_init_topk_threshold(
     dynamic_filter.update(filter_expr)?;
 
     Ok(())
+}
+
+/// Check if the predicate consists ONLY of a [`DynamicFilterPhysicalExpr`]
+/// (no WHERE clause filters combined with it).
+fn is_dynamic_filter_only_predicate(predicate: &Option<Arc<dyn PhysicalExpr>>) -> bool {
+    match predicate {
+        Some(pred) => {
+            let any_ref: &dyn std::any::Any = pred.as_ref();
+            any_ref
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .is_some()
+        }
+        None => false,
+    }
 }
 
 /// Find a [`DynamicFilterPhysicalExpr`] in the predicate tree.
