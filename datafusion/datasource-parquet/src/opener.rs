@@ -1181,23 +1181,60 @@ impl RowGroupsPrunedParquetOpen {
         // For unsorted data: reorder fixes the order, reverse flips for DESC.
         // Build reorder optimizer from sort_order_for_reorder (Inexact path)
         // or from DynamicFilterPhysicalExpr sort_options (any TopK query).
+        // Fuzz test uses tiebreaker columns so reorder is safe for all TopK.
         let reorder_optimizer: Option<
             Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
-            // RG reorder only in sort pushdown path (sort_order_for_reorder set).
-            // Reordering RGs without sort pushdown changes tie-breaking for equal
-            // values, which can cause non-deterministic results.
-        > = prepared.sort_order_for_reorder.as_ref().map(|sort_order| {
-            Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
-                sort_order.clone(),
-            )) as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
-        });
+        > = if let Some(sort_order) = &prepared.sort_order_for_reorder {
+            Some(
+                Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                    sort_order.clone(),
+                ))
+                    as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+            )
+        } else if let Some(predicate) = &prepared.predicate
+            && let Some(df) = find_dynamic_filter(predicate)
+            && let Some(sort_options) = df.sort_options()
+            && sort_options.len() == 1
+        {
+            // Build a sort order from DynamicFilter for non-sort-pushdown TopK.
+            // Always ASC — reverse handles DESC separately.
+            let children = df.children();
+            if !children.is_empty() {
+                let sort_expr =
+                    datafusion_physical_expr_common::sort_expr::PhysicalSortExpr {
+                        expr: Arc::clone(children[0]),
+                        options: arrow::compute::SortOptions {
+                            descending: false,
+                            nulls_first: sort_options[0].nulls_first,
+                        },
+                    };
+                LexOrdering::new(vec![sort_expr]).map(|order| {
+                    Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                        order,
+                    ))
+                        as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
-        // Reverse for DESC queries. ONLY triggered by sort pushdown
-        // (reverse_row_groups=true), which means the file is declared WITH ORDER
-        // and data is sorted. Reversing unsorted data would produce wrong results.
+        // Reverse for DESC queries. Triggered by sort pushdown OR by
+        // DynamicFilter indicating DESC. For non-sort-pushdown TopK, reverse
+        // ensures cumulative pruning keeps the highest-value RGs. TopK
+        // handles final row-level sorting regardless.
+        let is_descending = prepared.reverse_row_groups
+            || prepared
+                .predicate
+                .as_ref()
+                .and_then(find_dynamic_filter)
+                .and_then(|df| df.sort_options().map(|opts| opts[0].descending))
+                .unwrap_or(false);
         let reverse_optimizer: Option<
             Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
-        > = if prepared.reverse_row_groups {
+        > = if is_descending {
             Some(Box::new(crate::access_plan_optimizer::ReverseRowGroups))
         } else {
             None
@@ -1223,14 +1260,21 @@ impl RowGroupsPrunedParquetOpen {
         }
 
         // TopK cumulative pruning: after reorder + reverse, the RGs are in
-        // optimal order for the sort. Keep accumulating rows from the front
-        // until we have enough for the TopK fetch limit (K), then prune the
-        // rest. Works for sort pushdown with or without WHERE because it only
-        // depends on row counts + ordering, not threshold values.
-        if prepared.sort_order_for_reorder.is_some()
-            && let Some(predicate) = &prepared.predicate
+        // optimal order. Accumulate rows from the front until >= K, prune rest.
+        // For sort pushdown: always safe (sorted = non-overlapping).
+        // For non-sort-pushdown: safe only if reordered RGs are non-overlapping
+        // (verified by checking max[i] <= min[i+1] in the reordered sequence).
+        let has_sort_pushdown = prepared.sort_order_for_reorder.is_some();
+        if let Some(predicate) = &prepared.predicate
             && let Some(df) = find_dynamic_filter(predicate)
             && let Some(fetch) = df.fetch()
+            && (has_sort_pushdown
+                || rgs_are_non_overlapping(
+                    &prepared_plan,
+                    file_metadata.as_ref(),
+                    &prepared.physical_file_schema,
+                    &df,
+                ))
         {
             let rg_indexes = prepared_plan.row_group_indexes();
             let mut cumulative = 0usize;
@@ -1540,6 +1584,96 @@ fn try_init_topk_threshold(
 ///
 /// Returns the first `DynamicFilterPhysicalExpr` found (as an `Arc`) by
 /// checking the predicate itself and recursively walking its children.
+/// Check if row groups in the prepared plan are non-overlapping on the
+/// sort column. Adjacent RGs must satisfy max[i] <= min[i+1].
+fn rgs_are_non_overlapping(
+    plan: &crate::access_plan::PreparedAccessPlan,
+    file_metadata: &parquet::file::metadata::ParquetMetaData,
+    arrow_schema: &Schema,
+    dynamic_filter: &DynamicFilterPhysicalExpr,
+) -> bool {
+    let sort_options = match dynamic_filter.sort_options() {
+        Some(opts) if opts.len() == 1 => opts,
+        _ => return false,
+    };
+    let children = dynamic_filter.children();
+    if children.is_empty() {
+        return false;
+    }
+    let column = match find_column_in_expr(children[0]) {
+        Some(col) => col,
+        None => return false,
+    };
+    let converter = match StatisticsConverter::try_new(
+        column.name(),
+        arrow_schema,
+        file_metadata.file_metadata().schema_descr(),
+    ) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let rg_indexes = plan.row_group_indexes();
+    if rg_indexes.len() <= 1 {
+        return true; // 0 or 1 RG is trivially non-overlapping
+    }
+
+    // Get min/max for the reordered RGs.
+    // After reorder (min ASC) + possible reverse (DESC), check adjacent pairs.
+    // For ASC order: max[i] <= min[i+1]
+    // For DESC order (reversed): min[i] >= max[i+1] (equivalently max[i+1] <= min[i])
+    let is_descending = sort_options[0].descending;
+    let rg_metadata: Vec<_> = rg_indexes
+        .iter()
+        .map(|&idx| file_metadata.row_group(idx))
+        .collect();
+    let mins = match converter.row_group_mins(rg_metadata.iter().copied()) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let maxes = match converter.row_group_maxes(rg_metadata.iter().copied()) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+
+    for i in 0..rg_indexes.len() - 1 {
+        if i >= mins.len() || i + 1 >= mins.len() {
+            return false;
+        }
+        if mins.is_null(i)
+            || mins.is_null(i + 1)
+            || maxes.is_null(i)
+            || maxes.is_null(i + 1)
+        {
+            return false;
+        }
+        let (prev_max, next_min) = if is_descending {
+            // Reversed order: RG[i] has higher values than RG[i+1]
+            // Check: min[i] >= max[i+1]
+            match (
+                ScalarValue::try_from_array(mins.as_ref(), i),
+                ScalarValue::try_from_array(maxes.as_ref(), i + 1),
+            ) {
+                (Ok(min_i), Ok(max_next)) => (max_next, min_i),
+                _ => return false,
+            }
+        } else {
+            // ASC order: max[i] <= min[i+1]
+            match (
+                ScalarValue::try_from_array(maxes.as_ref(), i),
+                ScalarValue::try_from_array(mins.as_ref(), i + 1),
+            ) {
+                (Ok(max_i), Ok(min_next)) => (max_i, min_next),
+                _ => return false,
+            }
+        };
+        if prev_max > next_min {
+            return false; // overlap detected
+        }
+    }
+    true
+}
+
 fn find_dynamic_filter(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Option<Arc<DynamicFilterPhysicalExpr>> {
