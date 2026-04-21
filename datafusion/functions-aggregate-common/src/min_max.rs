@@ -142,9 +142,9 @@ macro_rules! min_max_generic {
 }
 
 // min/max of two logically compatible scalar values.
-// Dictionary scalars are unwrapped to their inner values for comparison,
-// then rewrapped with the dictionary key type when both inputs are dictionaries
-// after validating that their key types match.
+// Dictionary scalars participate by comparing their inner logical values.
+// When both inputs are dictionaries, matching key types are preserved in the
+// result; differing key types remain an unexpected invariant violation.
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
         Ok(match ($VALUE, $DELTA) {
@@ -416,31 +416,38 @@ macro_rules! min_max {
                 min_max_generic!(lhs, rhs, $OP)
             }
 
-            (lhs, rhs)
-                if matches!(lhs, ScalarValue::Dictionary(_, _))
-                    || matches!(rhs, ScalarValue::Dictionary(_, _)) =>
-            {
-                let (lhs, lhs_key_type) = dictionary_scalar_parts(lhs);
-                let (rhs, rhs_key_type) = dictionary_scalar_parts(rhs);
-                let result = min_max_generic!(lhs, rhs, $OP);
-
-                match lhs_key_type.zip(rhs_key_type) {
-                    Some((lhs_key_type, rhs_key_type)) => {
-                        if lhs_key_type != rhs_key_type {
-                            return internal_err!(
-                                "MIN/MAX is not expected to receive dictionary scalars with different key types ({:?} vs {:?})",
-                                lhs_key_type,
-                                rhs_key_type
-                            );
-                        }
-
-                        ScalarValue::Dictionary(
-                            Box::new(lhs_key_type.clone()),
-                            Box::new(result),
-                        )
-                    }
-                    None => result,
+            (
+                ScalarValue::Dictionary(lhs_key_type, lhs),
+                ScalarValue::Dictionary(rhs_key_type, rhs),
+            ) => {
+                if lhs_key_type != rhs_key_type {
+                    return internal_err!(
+                        "MIN/MAX is not expected to receive dictionary scalars with different key types ({:?} vs {:?})",
+                        lhs_key_type,
+                        rhs_key_type
+                    );
                 }
+
+                let result = dictionary_inner_scalar_min_max(
+                    lhs.as_ref(),
+                    rhs.as_ref(),
+                    choose_min_max!($OP),
+                )?;
+                ScalarValue::Dictionary(lhs_key_type.clone(), Box::new(result))
+            }
+            (ScalarValue::Dictionary(_, lhs), rhs) => {
+                dictionary_inner_scalar_min_max(
+                    lhs.as_ref(),
+                    rhs,
+                    choose_min_max!($OP),
+                )?
+            }
+            (lhs, ScalarValue::Dictionary(_, rhs)) => {
+                dictionary_inner_scalar_min_max(
+                    lhs,
+                    rhs.as_ref(),
+                    choose_min_max!($OP),
+                )?
             }
 
             e => {
@@ -485,12 +492,15 @@ fn min_max_batch_generic(values: &ArrayRef, ordering: Ordering) -> Result<Scalar
     Ok(extreme)
 }
 
-fn dictionary_scalar_parts(value: &ScalarValue) -> (&ScalarValue, Option<&DataType>) {
-    match value {
-        ScalarValue::Dictionary(key_type, inner) => {
-            (inner.as_ref(), Some(key_type.as_ref()))
-        }
-        other => (other, None),
+fn dictionary_inner_scalar_min_max(
+    lhs: &ScalarValue,
+    rhs: &ScalarValue,
+    ordering: Ordering,
+) -> Result<ScalarValue> {
+    match ordering {
+        Ordering::Greater => min_max!(lhs, rhs, min),
+        Ordering::Less => min_max!(lhs, rhs, max),
+        Ordering::Equal => unreachable!("min/max comparisons do not use equal ordering"),
     }
 }
 
@@ -892,4 +902,89 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         | DataType::Dictionary(_, _) => min_max_batch_generic(values, Ordering::Less)?,
         _ => min_max_batch!(values, max),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn min_max_dictionary_and_scalar_compare_by_inner_value() -> Result<()> {
+        let dictionary = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(1.0))),
+        );
+        let scalar = ScalarValue::Float32(Some(2.0));
+
+        let result: Result<ScalarValue, DataFusionError> =
+            min_max!(&dictionary, &scalar, max);
+        let result = result?;
+
+        assert_eq!(result, ScalarValue::Float32(Some(2.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_dictionary_same_key_type_rewraps_result() -> Result<()> {
+        let lhs = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(1.0))),
+        );
+        let rhs = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(2.0))),
+        );
+
+        let result: Result<ScalarValue, DataFusionError> = min_max!(&lhs, &rhs, max);
+        let result = result?;
+
+        assert_eq!(
+            result,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Float32(Some(2.0))),
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_dictionary_different_key_types_error() -> Result<()> {
+        let lhs = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Float32(Some(1.0))),
+        );
+        let rhs = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(2.0))),
+        );
+
+        let error: DataFusionError = min_max!(&lhs, &rhs, max).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("dictionary scalars with different key types")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_dictionary_and_incompatible_scalar_error() -> Result<()> {
+        let dictionary = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(1.0))),
+        );
+        let scalar = ScalarValue::Int32(Some(2));
+
+        let error: DataFusionError =
+            min_max!(&dictionary, &scalar, max).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("logically incompatible scalar values")
+        );
+        Ok(())
+    }
 }
