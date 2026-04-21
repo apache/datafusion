@@ -2376,6 +2376,288 @@ DROP TABLE th_mixed;
 statement ok
 DROP TABLE th_reorder;
 
+# ===========================================================
+# Test I: WITH ORDER + DESC LIMIT — stats init + cumulative prune
+# Tests the full optimization chain on sorted non-overlapping data:
+# file reorder → RG reorder → reverse → stats init → cumulative prune
+# ===========================================================
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# Create sorted data with multiple small row groups
+statement ok
+CREATE TABLE ti_data(id INT, value INT) AS VALUES
+(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),
+(7,70),(8,80),(9,90),(10,100),(11,110),(12,120);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+query I
+COPY (SELECT * FROM ti_data ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/ti_sorted/data.parquet';
+----
+12
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE ti_sorted(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/ti_sorted/data.parquet'
+WITH ORDER (id ASC);
+
+# Test I.1: DESC LIMIT with sort pushdown — EXPLAIN shows reverse_row_groups=true
+query TT
+EXPLAIN SELECT * FROM ti_sorted ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: ti_sorted.id DESC NULLS FIRST, fetch=3
+02)--TableScan: ti_sorted projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/ti_sorted/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+# Test I.2: DESC LIMIT results — should return largest values
+query II
+SELECT * FROM ti_sorted ORDER BY id DESC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Test I.3: ASC LIMIT (same direction as file order) — sort elimination, no TopK
+query TT
+EXPLAIN SELECT * FROM ti_sorted ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: ti_sorted.id ASC NULLS LAST, fetch=3
+02)--TableScan: ti_sorted projection=[id, value]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/ti_sorted/data.parquet]]}, projection=[id, value], limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+query II
+SELECT * FROM ti_sorted ORDER BY id ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+# Test I.4: DESC LIMIT with WHERE — cumulative prune works, stats init skipped
+query II
+SELECT * FROM ti_sorted WHERE value > 50 ORDER BY id DESC LIMIT 2;
+----
+12 120
+11 110
+
+# Test I.5: Larger LIMIT spanning multiple RGs (4 RGs of 3 rows each)
+query II
+SELECT * FROM ti_sorted ORDER BY id DESC LIMIT 8;
+----
+12 120
+11 110
+10 100
+9 90
+8 80
+7 70
+6 60
+5 50
+
+# Test I.6: LIMIT larger than total rows — returns all rows
+query II
+SELECT * FROM ti_sorted ORDER BY id DESC LIMIT 100;
+----
+12 120
+11 110
+10 100
+9 90
+8 80
+7 70
+6 60
+5 50
+4 40
+3 30
+2 20
+1 10
+
+# Cleanup Test I
+statement ok
+DROP TABLE ti_data;
+
+statement ok
+DROP TABLE ti_sorted;
+
+# ===========================================================
+# Test J: Non-overlapping RGs without WITH ORDER —
+# RG reorder + cumulative prune via DynamicFilter sort_options
+# ===========================================================
+
+# Create data written in scrambled order but with non-overlapping RGs
+statement ok
+CREATE TABLE tj_high(id INT, value INT) AS VALUES (10,100),(11,110),(12,120);
+
+statement ok
+CREATE TABLE tj_mid(id INT, value INT) AS VALUES (4,40),(5,50),(6,60);
+
+statement ok
+CREATE TABLE tj_low(id INT, value INT) AS VALUES (1,10),(2,20),(3,30);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+# Write in scrambled order: high, low, mid → RGs are non-overlapping but not sorted
+query I
+COPY (
+  SELECT * FROM tj_high
+  UNION ALL SELECT * FROM tj_low
+  UNION ALL SELECT * FROM tj_mid
+)
+TO 'test_files/scratch/sort_pushdown/tj_scrambled/data.parquet';
+----
+9
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+# No WITH ORDER — tests non-sort-pushdown TopK path
+statement ok
+CREATE EXTERNAL TABLE tj_scrambled(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tj_scrambled/data.parquet';
+
+# Test J.1: DESC LIMIT — RG reorder + reverse from DynamicFilter
+# EXPLAIN shows DynamicFilter but NO reverse_row_groups (not sort pushdown)
+query TT
+EXPLAIN SELECT * FROM tj_scrambled ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: tj_scrambled.id DESC NULLS FIRST, fetch=3
+02)--TableScan: tj_scrambled projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tj_scrambled/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Test J.2: Results must be correct
+query II
+SELECT * FROM tj_scrambled ORDER BY id DESC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Test J.3: ASC LIMIT
+query II
+SELECT * FROM tj_scrambled ORDER BY id ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+# Test J.4: DESC with WHERE
+query II
+SELECT * FROM tj_scrambled WHERE value >= 50 ORDER BY id DESC LIMIT 2;
+----
+12 120
+11 110
+
+# Test J.5: Full sort without LIMIT (no TopK, no reorder)
+query II
+SELECT * FROM tj_scrambled ORDER BY id ASC;
+----
+1 10
+2 20
+3 30
+4 40
+5 50
+6 60
+10 100
+11 110
+12 120
+
+# Cleanup Test J
+statement ok
+DROP TABLE tj_high;
+
+statement ok
+DROP TABLE tj_mid;
+
+statement ok
+DROP TABLE tj_low;
+
+statement ok
+DROP TABLE tj_scrambled;
+
+# ===========================================================
+# Test K: Overlapping RGs without WITH ORDER —
+# cumulative prune must NOT trigger (overlapping = unsafe)
+# ===========================================================
+
+# Create data with overlapping ranges
+statement ok
+CREATE TABLE tk_data(id INT, value INT) AS VALUES
+(1,10),(5,50),(9,90),
+(3,30),(7,70),(11,110),
+(2,20),(6,60),(10,100);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+query I
+COPY (SELECT * FROM tk_data)
+TO 'test_files/scratch/sort_pushdown/tk_overlap/data.parquet';
+----
+9
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE tk_overlap(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tk_overlap/data.parquet';
+
+# Test K.1: DESC LIMIT on overlapping RGs — results must be correct
+# (cumulative prune should not trigger due to overlap)
+query II
+SELECT * FROM tk_overlap ORDER BY id DESC LIMIT 3;
+----
+11 110
+10 100
+9 90
+
+# Test K.2: ASC LIMIT on overlapping RGs
+query II
+SELECT * FROM tk_overlap ORDER BY id ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+# Test K.3: Full sort (verify all data present)
+query II
+SELECT * FROM tk_overlap ORDER BY id ASC;
+----
+1 10
+2 20
+3 30
+5 50
+6 60
+7 70
+9 90
+10 100
+11 110
+
+# Cleanup Test K
+statement ok
+DROP TABLE tk_data;
+
+statement ok
+DROP TABLE tk_overlap;
+
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok
 SET datafusion.execution.target_partitions = 4;
