@@ -19,8 +19,8 @@
 
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_filter::{
-    FilterCandidate, build_projection_read_plan, build_row_filter_candidates,
-    row_filter_from_candidates,
+    FilterCandidate, ParquetReadPlan, build_projection_read_plan,
+    build_row_filter_candidates, row_filter_from_candidates,
 };
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
@@ -145,6 +145,9 @@ pub(super) struct ParquetMorselizer {
     /// and donate all-but-one back onto this queue so idle siblings steal
     /// them instead of sitting idle behind a single hot file.
     pub shared_work_source: Option<SharedWorkSource>,
+    /// Output schema (table schema with projection applied). Computed
+    /// once at morselizer construction so every file open reuses it.
+    pub output_schema: SchemaRef,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -330,6 +333,7 @@ pub(crate) struct ParquetOpenChunk {
     pub pruning_predicate: Option<Arc<PruningPredicate>>,
     pub page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
     pub row_filter_candidates: Option<Arc<Vec<FilterCandidate>>>,
+    pub read_plan: Arc<ParquetReadPlan>,
 }
 
 impl fmt::Debug for ParquetOpenChunk {
@@ -362,6 +366,11 @@ struct FiltersPreparedParquetOpen {
     /// redo the schema-walk + ProjectionMask build. Only the cheap
     /// per-open metric binding happens at `build_stream` time.
     row_filter_candidates: Option<Arc<Vec<FilterCandidate>>>,
+    /// Projection read plan (ProjectionMask + projected schema),
+    /// deterministic for a given (projection, physical_file_schema,
+    /// parquet_schema) triple. Built once here and reused in
+    /// `build_stream` so stealers don't redo the schema walk.
+    read_plan: Arc<ParquetReadPlan>,
 }
 
 /// State of [`ParquetOpenState`]
@@ -627,13 +636,8 @@ impl ParquetMorselizer {
                 &self.metrics,
             )?;
 
-        // Calculate the output schema from the original projection (before literal replacement)
-        // so we get correct field names from column references
         let logical_file_schema = Arc::clone(self.table_schema.file_schema());
-        let output_schema = Arc::new(
-            self.projection
-                .project_schema(self.table_schema.table_schema())?,
-        );
+        let output_schema = Arc::clone(&self.output_schema);
 
         // Build a combined map for replacing column references with literal values.
         // This includes:
@@ -764,10 +768,7 @@ impl ParquetMorselizer {
             .with_category(MetricCategory::Rows)
             .global_counter("num_predicate_creation_errors");
         let logical_file_schema = Arc::clone(self.table_schema.file_schema());
-        let output_schema = Arc::new(
-            self.projection
-                .project_schema(self.table_schema.table_schema())?,
-        );
+        let output_schema = Arc::clone(&self.output_schema);
 
         let ParquetOpenChunk {
             access_plan,
@@ -779,6 +780,7 @@ impl ParquetMorselizer {
             pruning_predicate,
             page_pruning_predicate,
             row_filter_candidates,
+            read_plan,
         } = chunk;
 
         let prepared = PreparedParquetOpen {
@@ -827,6 +829,7 @@ impl ParquetMorselizer {
                 pruning_predicate,
                 page_pruning_predicate,
                 row_filter_candidates,
+                read_plan,
             },
             row_groups: RowGroupAccessPlanFilter::new(access_plan),
         })
@@ -1036,6 +1039,14 @@ impl MetadataLoadedParquetOpen {
             None
         };
 
+        // Projection read plan (ProjectionMask + projected schema) also
+        // shareable across opens.
+        let read_plan = Arc::new(build_projection_read_plan(
+            prepared.projection.expr_iter(),
+            &physical_file_schema,
+            reader_metadata.parquet_schema(),
+        ));
+
         Ok(FiltersPreparedParquetOpen {
             loaded: MetadataLoadedParquetOpen {
                 prepared,
@@ -1045,6 +1056,7 @@ impl MetadataLoadedParquetOpen {
             pruning_predicate,
             page_pruning_predicate,
             row_filter_candidates,
+            read_plan,
         })
     }
 }
@@ -1321,6 +1333,7 @@ impl RowGroupsPrunedParquetOpen {
             pruning_predicate: self.prepared.pruning_predicate.clone(),
             page_pruning_predicate: self.prepared.page_pruning_predicate.clone(),
             row_filter_candidates: self.prepared.row_filter_candidates.clone(),
+            read_plan: Arc::clone(&self.prepared.read_plan),
         };
 
         let keep_idx = eligible[0];
@@ -1349,6 +1362,7 @@ impl RowGroupsPrunedParquetOpen {
             pruning_predicate: _,
             page_pruning_predicate,
             row_filter_candidates,
+            read_plan,
         } = prepared;
         let MetadataLoadedParquetOpen {
             prepared,
@@ -1408,15 +1422,10 @@ impl RowGroupsPrunedParquetOpen {
         }
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
-        let read_plan = build_projection_read_plan(
-            prepared.projection.expr_iter(),
-            &prepared.physical_file_schema,
-            reader_metadata.parquet_schema(),
-        );
 
         let mut decoder_builder =
             ParquetPushDecoderBuilder::new_with_metadata(reader_metadata)
-                .with_projection(read_plan.projection_mask)
+                .with_projection(read_plan.projection_mask.clone())
                 .with_batch_size(prepared.batch_size)
                 .with_metrics(arrow_reader_metrics.clone());
 
@@ -1449,7 +1458,7 @@ impl RowGroupsPrunedParquetOpen {
 
         // Check if we need to replace the schema to handle things like differing nullability or metadata.
         // See note below about file vs. output schema.
-        let stream_schema = read_plan.projected_schema;
+        let stream_schema = Arc::clone(&read_plan.projected_schema);
         let replace_schema = stream_schema != prepared.output_schema;
 
         // Rebase column indices to match the narrowed stream schema.
@@ -2080,6 +2089,11 @@ mod test {
                 ProjectionExprs::from_indices(&all_indices, &file_schema)
             };
 
+            let output_schema = Arc::new(
+                projection
+                    .project_schema(table_schema.table_schema())
+                    .expect("project_schema"),
+            );
             ParquetMorselizer {
                 partition_index: self.partition_index,
                 projection,
@@ -2108,6 +2122,7 @@ mod test {
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
                 shared_work_source: self.shared_work_source,
+                output_schema,
             }
         }
     }
