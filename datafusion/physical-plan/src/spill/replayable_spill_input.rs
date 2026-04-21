@@ -88,7 +88,7 @@ pub(crate) struct ReplayableStreamSource {
     state: Arc<Mutex<Option<StateInner>>>,
 }
 
-/// Inner state exclusively owned by either [`ReplayableStreamSource`] or one [`ReplayablePassStream`]
+/// Inner state exclusively owned by either [`ReplayableStreamSource`] or one [`ReplayableSpillStream`]
 enum StateInner {
     Unopened,
     Replayable(Option<RefCountedTempFile>),
