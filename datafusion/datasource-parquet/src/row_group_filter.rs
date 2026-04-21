@@ -33,6 +33,17 @@ use parquet::data_type::Decimal;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{bloom_filter::Sbbf, file::metadata::RowGroupMetaData};
 
+/// Starting byte offset of a row group in its parquet file.
+///
+/// Uses the first column's dictionary page offset when present, otherwise its
+/// data page offset — intentionally *not* the metadata location, per
+/// <https://github.com/apache/datafusion/issues/5995>.
+pub fn row_group_start_offset(metadata: &RowGroupMetaData) -> i64 {
+    let col = metadata.column(0);
+    col.dictionary_page_offset()
+        .unwrap_or_else(|| col.data_page_offset())
+}
+
 /// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
 ///
 /// This struct implements the various types of pruning that are applied to a
@@ -224,17 +235,7 @@ impl RowGroupAccessPlanFilter {
             if !self.access_plan.should_scan(idx) {
                 continue;
             }
-
-            // Skip the row group if the first dictionary/data page are not
-            // within the range.
-            //
-            // note don't use the location of metadata
-            // <https://github.com/apache/datafusion/issues/5995>
-            let col = metadata.column(0);
-            let offset = col
-                .dictionary_page_offset()
-                .unwrap_or_else(|| col.data_page_offset());
-            if !range.contains(offset) {
+            if !range.contains(row_group_start_offset(metadata)) {
                 self.access_plan.skip(idx);
             }
         }

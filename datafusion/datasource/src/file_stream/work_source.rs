@@ -64,13 +64,19 @@ impl WorkSource {
 /// It uses a [`Mutex`] internally to provide thread-safe access
 /// to the shared file queue.
 #[derive(Debug, Clone)]
-pub(crate) struct SharedWorkSource {
+pub struct SharedWorkSource {
     inner: Arc<SharedWorkSourceInner>,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct SharedWorkSourceInner {
     files: Mutex<VecDeque<PartitionedFile>>,
+}
+
+impl Default for SharedWorkSource {
+    fn default() -> Self {
+        Self::new(std::iter::empty())
+    }
 }
 
 impl SharedWorkSource {
@@ -91,8 +97,23 @@ impl SharedWorkSource {
 
     /// Pop the next file from the shared work queue.
     ///
-    /// Returns `None` if the queue is empty
-    fn pop_front(&self) -> Option<PartitionedFile> {
+    /// Returns `None` if the queue is empty.
+    pub fn pop_front(&self) -> Option<PartitionedFile> {
         self.inner.files.lock().pop_front()
+    }
+
+    /// Push files to the front of the shared work queue.
+    ///
+    /// Used when an in-flight file is sub-divided (e.g. into row-group-sized
+    /// chunks): the donor keeps one chunk and pushes the rest to the front so
+    /// any idle sibling picks them up before starting work on an unrelated
+    /// whole file. Items preserve their order: the first element of `items`
+    /// ends up at the very front of the queue.
+    pub fn push_front(&self, items: impl IntoIterator<Item = PartitionedFile>) {
+        let items: Vec<PartitionedFile> = items.into_iter().collect();
+        let mut queue = self.inner.files.lock();
+        for file in items.into_iter().rev() {
+            queue.push_front(file);
+        }
     }
 }

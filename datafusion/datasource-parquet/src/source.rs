@@ -29,7 +29,7 @@ use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
-use datafusion_datasource::file_stream::FileOpener;
+use datafusion_datasource::file_stream::{FileOpener, SharedWorkSource};
 use datafusion_datasource::morsel::Morselizer;
 
 use arrow::datatypes::TimeUnit;
@@ -526,6 +526,7 @@ impl FileSource for ParquetSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
+        shared_work_source: Option<SharedWorkSource>,
     ) -> datafusion_common::Result<Box<dyn Morselizer>> {
         let expr_adapter_factory = base_config
             .expr_adapter_factory
@@ -580,6 +581,7 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
+            shared_work_source,
         }))
     }
 

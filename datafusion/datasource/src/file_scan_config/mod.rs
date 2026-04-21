@@ -597,8 +597,6 @@ impl DataSource for FileScanConfig {
 
         let source = self.file_source.with_batch_size(batch_size);
 
-        let morselizer = source.create_morselizer(object_store, self, partition)?;
-
         // Extract the shared work source from the sibling state if it exists.
         // This allows multiple sibling streams to steal work from a single
         // shared queue of unopened files.
@@ -606,6 +604,13 @@ impl DataSource for FileScanConfig {
             .as_ref()
             .and_then(|state| state.downcast_ref::<SharedWorkSource>())
             .cloned();
+
+        let morselizer = source.create_morselizer(
+            object_store,
+            self,
+            partition,
+            shared_work_source.clone(),
+        )?;
 
         let stream = FileStreamBuilder::new(self)
             .with_partition(partition)

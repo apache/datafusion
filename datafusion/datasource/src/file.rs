@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
-use crate::file_stream::FileOpener;
+use crate::file_stream::{FileOpener, SharedWorkSource};
 use crate::morsel::{FileOpenerMorselizer, Morselizer};
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
@@ -82,11 +82,18 @@ pub trait FileSource: Any + Send + Sync {
     ///
     /// It is preferred to implement the [`Morselizer`] API directly by
     /// implementing this method.
+    ///
+    /// `shared_work_source`, when `Some`, is the queue of unopened files
+    /// shared across sibling streams. File sources that can sub-divide a
+    /// single file into smaller stealable work units (e.g. parquet row-group
+    /// splitting) may push donated chunks onto it; sources that cannot simply
+    /// ignore the parameter.
     fn create_morselizer(
         &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
+        _shared_work_source: Option<SharedWorkSource>,
     ) -> Result<Box<dyn Morselizer>> {
         let opener = self.create_file_opener(object_store, base_config, partition)?;
         Ok(Box::new(FileOpenerMorselizer::new(opener)))

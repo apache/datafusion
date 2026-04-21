@@ -47,6 +47,7 @@ use self::scan_state::{ScanAndReturn, ScanState};
 
 pub use builder::FileStreamBuilder;
 pub use metrics::{FileStreamMetrics, StartableTime};
+pub use work_source::SharedWorkSource;
 
 /// A stream that iterates record batch by record batch, file over file.
 pub struct FileStream {

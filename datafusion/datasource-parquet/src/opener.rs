@@ -19,13 +19,16 @@
 
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_filter::build_projection_read_plan;
-use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
+use crate::row_group_filter::{
+    BloomFilterStatistics, RowGroupAccessPlanFilter, row_group_start_offset,
+};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
+use datafusion_datasource::file_stream::SharedWorkSource;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -136,6 +139,11 @@ pub(super) struct ParquetMorselizer {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Shared work queue of sibling FileStreams, if any. When present, this
+    /// morselizer may split large parquet files into row-group-sized chunks
+    /// and donate all-but-one back onto this queue so idle siblings steal
+    /// them instead of sitting idle behind a single hot file.
+    pub shared_work_source: Option<SharedWorkSource>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -173,6 +181,9 @@ impl Morselizer for ParquetMorselizer {
 ///        |
 ///        v
 ///   LoadMetadata
+///        |
+///        v
+///  SplitAndDonate
 ///        |
 ///        v
 ///  PrepareFilters
@@ -213,6 +224,11 @@ enum ParquetOpenState {
     PruneFile(Box<PreparedParquetOpen>),
     /// Loading Parquet metadata (in footer)
     LoadMetadata(BoxFuture<'static, Result<MetadataLoadedParquetOpen>>),
+    /// Optionally donate row-group chunks of this file back to the shared
+    /// work queue so idle sibling streams can scan them in parallel. CPU-only;
+    /// the donated chunks carry the already-loaded `ArrowReaderMetadata` so
+    /// stealers skip the footer round-trip.
+    SplitAndDonate(Box<MetadataLoadedParquetOpen>),
     /// Specialize any filters for the actual file schema (only known after
     /// metadata is loaded)
     PrepareFilters(Box<MetadataLoadedParquetOpen>),
@@ -242,6 +258,7 @@ impl fmt::Debug for ParquetOpenState {
             ParquetOpenState::LoadEncryption(_) => "LoadEncryption",
             ParquetOpenState::PruneFile(_) => "PruneFile",
             ParquetOpenState::LoadMetadata(_) => "LoadMetadata",
+            ParquetOpenState::SplitAndDonate(_) => "SplitAndDonate",
             ParquetOpenState::PrepareFilters(_) => "PrepareFilters",
             ParquetOpenState::LoadPageIndex(_) => "LoadPageIndex",
             ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
@@ -289,6 +306,10 @@ struct PreparedParquetOpen {
     preserve_order: bool,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+    /// Shared work queue used to donate row-group chunks of this file to
+    /// sibling streams. `None` when the file was already donated (re-donation
+    /// is intentionally disabled) or when sibling stealing is disabled.
+    shared_work_source: Option<SharedWorkSource>,
 }
 
 /// State of [`ParquetOpenState`]
@@ -374,6 +395,10 @@ impl ParquetOpenState {
             }
             ParquetOpenState::LoadMetadata(future) => {
                 Ok(ParquetOpenState::LoadMetadata(future))
+            }
+            ParquetOpenState::SplitAndDonate(loaded) => {
+                let next = loaded.split_and_donate()?;
+                Ok(ParquetOpenState::PrepareFilters(Box::new(next)))
             }
             ParquetOpenState::PrepareFilters(loaded) => {
                 let prepared_filters = loaded.prepare_filters()?;
@@ -498,7 +523,7 @@ impl MorselPlanner for ParquetMorselPlanner {
             }
             ParquetOpenState::LoadMetadata(future) => {
                 Ok(Some(Self::schedule_io(async move {
-                    Ok(ParquetOpenState::PrepareFilters(Box::new(future.await?)))
+                    Ok(ParquetOpenState::SplitAndDonate(Box::new(future.await?)))
                 })))
             }
             ParquetOpenState::LoadPageIndex(future) => {
@@ -537,6 +562,7 @@ impl ParquetMorselizer {
     ) -> Result<PreparedParquetOpen> {
         let file_range = partitioned_file.range.clone();
         let extensions = partitioned_file.extensions.clone();
+        let shared_work_source = self.shared_work_source.clone();
         let file_name = partitioned_file.object_meta.location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
@@ -658,6 +684,7 @@ impl ParquetMorselizer {
             preserve_order: self.preserve_order,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
+            shared_work_source,
         })
     }
 }
@@ -743,6 +770,75 @@ impl PreparedParquetOpen {
 }
 
 impl MetadataLoadedParquetOpen {
+    /// Donate row-group chunks of this file back to the shared work queue
+    /// so idle sibling FileStreams steal them.
+    ///
+    /// The donor keeps the first eligible row group; each remaining one is
+    /// pushed to the front of the shared queue as a `PartitionedFile` clone
+    /// whose `range` is a one-byte `FileRange` at the row group's starting
+    /// offset. The existing `prune_by_range` path on the stealer matches
+    /// that offset and keeps only the targeted row group. Stealers re-load
+    /// the parquet footer; object stores typically cache it so this is
+    /// cheap.
+    ///
+    /// When the caller pre-narrowed the scan with a `file_range` spanning
+    /// multiple row groups, splitting stays inside that range.
+    ///
+    /// Returns `self` unchanged if any guard fails (no shared queue,
+    /// caller-supplied access plan, or fewer than two row groups in scope).
+    fn split_and_donate(mut self) -> Result<Self> {
+        let Some(shared) = self.prepared.shared_work_source.take() else {
+            return Ok(self);
+        };
+        // Caller-supplied `ParquetAccessPlan` is respected as-is.
+        if let Some(ext) = self.prepared.extensions.as_ref()
+            && ext.is::<ParquetAccessPlan>()
+        {
+            return Ok(self);
+        }
+
+        let rgs = self.reader_metadata.metadata().row_groups();
+        if rgs.len() < 2 {
+            return Ok(self);
+        }
+
+        // One-byte `FileRange` at `start` selects exactly one row group via
+        // `prune_by_range`'s `contains(offset)` check.
+        let point_range = |start: i64| datafusion_datasource::FileRange {
+            start,
+            end: start + 1,
+        };
+
+        // Row groups in scope, paired with their starting offset so we only
+        // walk the metadata once.
+        let caller_range = self.prepared.file_range.as_ref();
+        let eligible: Vec<(usize, i64)> = rgs
+            .iter()
+            .enumerate()
+            .map(|(idx, md)| (idx, row_group_start_offset(md)))
+            .filter(|(_, offset)| caller_range.is_none_or(|r| r.contains(*offset)))
+            .collect();
+        if eligible.len() < 2 {
+            return Ok(self);
+        }
+
+        let (_keep_idx, keep_offset) = eligible[0];
+        let donated_files: Vec<PartitionedFile> = eligible[1..]
+            .iter()
+            .map(|&(_, offset)| {
+                let mut file = self.prepared.partitioned_file.clone();
+                file.range = Some(point_range(offset));
+                file
+            })
+            .collect();
+        shared.push_front(donated_files);
+
+        // Donor takes only the kept row group. Safe to override the caller's
+        // wider range: donated chunks cover every other in-scope row group.
+        self.prepared.file_range = Some(point_range(keep_offset));
+        Ok(self)
+    }
+
     /// Prepare file-schema coercions and pruning predicates once metadata is
     /// loaded.
     fn prepare_filters(self) -> Result<FiltersPreparedParquetOpen> {
@@ -1676,6 +1772,7 @@ mod test {
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
         preserve_order: bool,
+        shared_work_source: Option<SharedWorkSource>,
     }
 
     impl ParquetMorselizerBuilder {
@@ -1702,7 +1799,15 @@ mod test {
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
                 preserve_order: false,
+                shared_work_source: None,
             }
+        }
+
+        /// Attach a shared work source so the built morselizer can donate
+        /// row-group chunks to sibling streams.
+        fn with_shared_work_source(mut self, shared: SharedWorkSource) -> Self {
+            self.shared_work_source = Some(shared);
+            self
         }
 
         /// Set the object store (required for building).
@@ -1816,6 +1921,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                shared_work_source: self.shared_work_source,
             }
         }
     }
@@ -2718,6 +2824,226 @@ mod test {
         assert_eq!(
             rows_without_page_index, 100,
             "without page index all rows are returned"
+        );
+    }
+
+    /// Write a 4-row-group file (3 rows per row group) and return
+    /// `(store, schema, file, data_len)`.
+    async fn write_four_row_group_file()
+    -> (Arc<dyn ObjectStore>, SchemaRef, PartitionedFile, usize) {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let batches = vec![
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap(),
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap(),
+            record_batch!(("a", Int32, vec![Some(7), Some(8), Some(9)])).unwrap(),
+            record_batch!(("a", Int32, vec![Some(10), Some(11), Some(12)])).unwrap(),
+        ];
+        let schema = batches[0].schema();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "rg_split.parquet",
+            batches,
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "rg_split.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        (store, schema, file, data_len)
+    }
+
+    /// Build a single-column morselizer, optionally attached to a shared
+    /// work source so it can donate.
+    fn split_test_morselizer(
+        store: &Arc<dyn ObjectStore>,
+        schema: &SchemaRef,
+        shared: Option<&SharedWorkSource>,
+    ) -> ParquetMorselizer {
+        let mut b = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(store))
+            .with_schema(Arc::clone(schema))
+            .with_projection_indices(&[0]);
+        if let Some(shared) = shared {
+            b = b.with_shared_work_source(shared.clone());
+        }
+        b.build()
+    }
+
+    /// Donor keeps row group 0 and pushes N-1 donated chunks to the
+    /// shared queue. Donated chunks carry a one-byte `FileRange` and
+    /// no other magic — no `extensions` payload, no new types.
+    #[tokio::test]
+    async fn row_group_split_donates_remaining_row_groups() {
+        let (store, schema, file, _) = write_four_row_group_file().await;
+        let shared = SharedWorkSource::default();
+
+        let morselizer = split_test_morselizer(&store, &schema, Some(&shared));
+
+        let stream = open_file(&morselizer, file.clone()).await.unwrap();
+        let donor_values = collect_int32_values(stream).await;
+        assert_eq!(
+            donor_values,
+            vec![1, 2, 3],
+            "donor should read only row group 0"
+        );
+
+        // Pop donated chunks off the shared queue and read each.
+        let mut stolen: Vec<Vec<i32>> = Vec::new();
+        while let Some(donated) = shared.pop_front() {
+            assert!(
+                donated.range.is_some(),
+                "donated chunk must carry a FileRange"
+            );
+            assert!(
+                donated.extensions.is_none(),
+                "donated chunk must not carry an extensions payload"
+            );
+            let stealer = split_test_morselizer(&store, &schema, None);
+            let stream = open_file(&stealer, donated).await.unwrap();
+            stolen.push(collect_int32_values(stream).await);
+        }
+        assert_eq!(
+            stolen,
+            vec![vec![4, 5, 6], vec![7, 8, 9], vec![10, 11, 12]],
+            "each stealer should get exactly one row group, in file order"
+        );
+    }
+
+    /// A single-row-group file has nothing to donate.
+    #[tokio::test]
+    async fn row_group_split_skips_single_row_group_file() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let data_len =
+            write_parquet(Arc::clone(&store), "single.parquet", batch.clone()).await;
+        let file = PartitionedFile::new(
+            "single.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        let shared = SharedWorkSource::default();
+        let schema = batch.schema();
+
+        let morselizer = split_test_morselizer(&store, &schema, Some(&shared));
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let values = collect_int32_values(stream).await;
+        assert_eq!(values, vec![1, 2, 3]);
+        assert!(
+            shared.pop_front().is_none(),
+            "single-row-group file must not donate"
+        );
+    }
+
+    /// A caller-supplied `ParquetAccessPlan` in `extensions` is respected
+    /// as-is — no donation happens even if the file has many row groups.
+    #[tokio::test]
+    async fn row_group_split_respects_caller_access_plan() {
+        let (store, schema, file, _) = write_four_row_group_file().await;
+        let mut caller_plan = ParquetAccessPlan::new_all(4);
+        caller_plan.skip(0);
+        caller_plan.skip(2);
+        let file = file.with_extensions(Arc::new(caller_plan));
+        let shared = SharedWorkSource::default();
+
+        let morselizer = split_test_morselizer(&store, &schema, Some(&shared));
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let values = collect_int32_values(stream).await;
+        assert_eq!(
+            values,
+            vec![4, 5, 6, 10, 11, 12],
+            "caller plan scans RGs 1 and 3, skipping 0 and 2"
+        );
+        assert!(
+            shared.pop_front().is_none(),
+            "caller-supplied access plan must suppress donation"
+        );
+    }
+
+    /// A caller-supplied `file_range` that spans several row groups is
+    /// still split: donated chunks' narrow ranges are subsets of the
+    /// caller's range, so caller intent (byte-range partitioning of the
+    /// file across planner-level partitions) is preserved.
+    #[tokio::test]
+    async fn row_group_split_within_caller_file_range() {
+        let (store, schema, file, data_len) = write_four_row_group_file().await;
+        let caller_range = datafusion_datasource::FileRange {
+            start: 0,
+            end: data_len as i64,
+        };
+        let file = PartitionedFile {
+            range: Some(caller_range.clone()),
+            ..file
+        };
+        let shared = SharedWorkSource::default();
+
+        let morselizer = split_test_morselizer(&store, &schema, Some(&shared));
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let donor_values = collect_int32_values(stream).await;
+        assert_eq!(donor_values, vec![1, 2, 3]);
+
+        let mut donated_count = 0;
+        let mut all_stolen: Vec<i32> = Vec::new();
+        while let Some(donated) = shared.pop_front() {
+            let donated_range = donated
+                .range
+                .clone()
+                .expect("donated chunk needs FileRange");
+            assert!(
+                donated_range.start >= caller_range.start
+                    && donated_range.end <= caller_range.end,
+                "donated range must stay inside caller's range"
+            );
+            donated_count += 1;
+            let stealer = split_test_morselizer(&store, &schema, None);
+            let stream = open_file(&stealer, donated).await.unwrap();
+            all_stolen.extend(collect_int32_values(stream).await);
+        }
+        assert_eq!(donated_count, 3);
+        assert_eq!(all_stolen, vec![4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    }
+
+    /// A caller-supplied `file_range` that contains only a single row
+    /// group has nothing to split — no donation should happen.
+    #[tokio::test]
+    async fn row_group_split_skips_when_caller_range_covers_single_row_group() {
+        let (store, schema, file, _) = write_four_row_group_file().await;
+        // Read metadata to locate row group 1's offset, then make a
+        // caller range that contains only row group 1.
+        let reader: Box<dyn AsyncFileReader> =
+            DefaultParquetFileReaderFactory::new(Arc::clone(&store))
+                .create_reader(0, file.clone(), None, &ExecutionPlanMetricsSet::new())
+                .unwrap();
+        let md = ArrowReaderMetadata::load_async(
+            &mut { reader },
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip),
+        )
+        .await
+        .unwrap();
+        let rg1_offset = row_group_start_offset(md.metadata().row_group(1));
+
+        let file = PartitionedFile {
+            range: Some(datafusion_datasource::FileRange {
+                start: rg1_offset,
+                end: rg1_offset + 1,
+            }),
+            ..file
+        };
+        let shared = SharedWorkSource::default();
+
+        let morselizer = split_test_morselizer(&store, &schema, Some(&shared));
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let values = collect_int32_values(stream).await;
+        assert_eq!(values, vec![4, 5, 6], "caller range isolates row group 1");
+        assert!(
+            shared.pop_front().is_none(),
+            "single-row-group caller range must suppress donation"
         );
     }
 }
