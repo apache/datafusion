@@ -170,6 +170,19 @@ impl ProcessProbeBatchState {
     }
 }
 
+/// Lifecycle of this partition's build-data report to the shared coordinator.
+///
+/// `ReportScheduled` means the reporting `OnceFut` has been constructed but is
+/// lazy: the coordinator has not yet observed the report. Only `ReportDelivered`
+/// guarantees the coordinator saw it, so `Drop` must still cancel the partition
+/// when the state is `ReportScheduled` — otherwise sibling partitions wait
+/// forever for a report that never runs.
+enum BuildReportState {
+    NotReported,
+    ReportScheduled,
+    ReportDelivered,
+}
+
 /// [`Stream`] for [`super::HashJoinExec`] that does the actual join.
 ///
 /// This stream:
@@ -219,8 +232,8 @@ pub(super) struct HashJoinStream {
     /// Optional future to signal when build information has been reported by all partitions
     /// and the dynamic filter has been updated
     build_waiter: Option<OnceFut<()>>,
-    /// Tracks whether this partition has already reported build information to the coordinator.
-    build_reported: bool,
+    /// Tracks where this partition is in the build-data reporting lifecycle.
+    build_report_state: BuildReportState,
     /// Partitioning mode to use
     mode: PartitionMode,
     /// Output buffer for coalescing small batches into larger ones with optional fetch limit.
@@ -402,7 +415,7 @@ impl HashJoinStream {
             right_side_ordered,
             build_accumulator,
             build_waiter: None,
-            build_reported: false,
+            build_report_state: BuildReportState::NotReported,
             mode,
             output_buffer,
             null_aware,
@@ -463,7 +476,7 @@ impl HashJoinStream {
         self.build_waiter = Some(OnceFut::new(async move {
             acc.report_build_data(build_data).await
         }));
-        self.build_reported = true;
+        self.build_report_state = BuildReportState::ReportScheduled;
         HashJoinStreamState::WaitPartitionBoundsReport
     }
 
@@ -529,6 +542,7 @@ impl HashJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         if let Some(ref mut fut) = self.build_waiter {
             ready!(fut.get_shared(cx))?;
+            self.build_report_state = BuildReportState::ReportDelivered;
         }
         let build_side = self.build_side.try_as_ready()?;
         self.state =
@@ -949,11 +963,11 @@ impl Stream for HashJoinStream {
 impl Drop for HashJoinStream {
     fn drop(&mut self) {
         if self.mode == PartitionMode::Partitioned
-            && !self.build_reported
+            && !matches!(self.build_report_state, BuildReportState::ReportDelivered)
             && let Some(build_accumulator) = &self.build_accumulator
         {
             build_accumulator.report_canceled_partition(self.partition);
-            self.build_reported = true;
+            self.build_report_state = BuildReportState::ReportDelivered;
         }
     }
 }

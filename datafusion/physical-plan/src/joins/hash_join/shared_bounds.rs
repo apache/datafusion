@@ -183,6 +183,25 @@ fn create_bounds_predicate(
     }
 }
 
+/// Combines a membership predicate and a bounds predicate with logical AND.
+///
+/// Returns `None` when neither is available; callers decide the fallback (e.g.
+/// skip updating the filter vs. emit a `lit(true)` branch inside a CASE).
+fn combine_membership_and_bounds(
+    membership_expr: Option<Arc<dyn PhysicalExpr>>,
+    bounds_expr: Option<Arc<dyn PhysicalExpr>>,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    match (membership_expr, bounds_expr) {
+        (Some(membership), Some(bounds)) => {
+            Some(Arc::new(BinaryExpr::new(bounds, Operator::And, membership))
+                as Arc<dyn PhysicalExpr>)
+        }
+        (Some(membership), None) => Some(membership),
+        (None, Some(bounds)) => Some(bounds),
+        (None, None) => None,
+    }
+}
+
 /// Coordinates build-side information collection across multiple partitions
 ///
 /// This structure collects information from the build side (hash tables and/or bounds) and
@@ -553,15 +572,9 @@ impl SharedBuildAccumulator {
                     let bounds_expr =
                         create_bounds_predicate(&self.on_right, &partition_data.bounds);
 
-                    if let Some(filter_expr) = match (membership_expr, bounds_expr) {
-                        (Some(membership), Some(bounds)) => Some(Arc::new(
-                            BinaryExpr::new(bounds, Operator::And, membership),
-                        )
-                            as Arc<dyn PhysicalExpr>),
-                        (Some(membership), None) => Some(membership),
-                        (None, Some(bounds)) => Some(bounds),
-                        (None, None) => None,
-                    } {
+                    if let Some(filter_expr) =
+                        combine_membership_and_bounds(membership_expr, bounds_expr)
+                    {
                         self.dynamic_filter.update(filter_expr)?;
                     }
                 }
@@ -612,15 +625,11 @@ impl SharedBuildAccumulator {
                                 &self.on_right,
                                 &partition.bounds,
                             );
-                            let then_expr = match (membership_expr, bounds_expr) {
-                                (Some(membership), Some(bounds)) => Arc::new(
-                                    BinaryExpr::new(bounds, Operator::And, membership),
-                                )
-                                    as Arc<dyn PhysicalExpr>,
-                                (Some(membership), None) => membership,
-                                (None, Some(bounds)) => bounds,
-                                (None, None) => lit(true),
-                            };
+                            let then_expr = combine_membership_and_bounds(
+                                membership_expr,
+                                bounds_expr,
+                            )
+                            .unwrap_or_else(|| lit(true));
                             real_branches.push((
                                 lit(ScalarValue::UInt64(Some(partition_id as u64))),
                                 then_expr,
