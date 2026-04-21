@@ -1224,29 +1224,23 @@ impl RowGroupsPrunedParquetOpen {
     /// each remaining one to the front of the shared queue as a
     /// `PartitionedFile` clone whose `extensions` carry a
     /// `ParquetOpenChunk` (finalized access plan + pre-loaded metadata).
-    /// Stealers pop a chunk and skip every pruning stage on the way to
-    /// `BuildStream`.
+    /// Stealers pop a chunk and start at `BuildStream` directly (see
+    /// [`ParquetMorselizer::build_stealer_state`]); they never reach
+    /// this function.
     ///
-    /// No-op for stealers (`is_donated_chunk`) and when there are fewer
-    /// than two row groups left in scope.
+    /// No-op when there are fewer than two row groups left in scope, no
+    /// shared queue is attached, or the caller supplied their own
+    /// `ParquetAccessPlan`.
     fn split_and_donate(mut self) -> Result<Self> {
-        // File-level LIMIT pruning — a separate pass that needs the
-        // whole file's row-group picture. Only the donor reaches this
-        // code (stealers start at `BuildStream` directly).
         if let (Some(limit), false) = (
             self.prepared.loaded.prepared.limit,
             self.prepared.loaded.prepared.preserve_order,
         ) {
-            let rg_metadata = self
-                .prepared
-                .loaded
-                .reader_metadata
-                .metadata()
-                .row_groups()
-                .to_vec();
+            let rg_metadata =
+                self.prepared.loaded.reader_metadata.metadata().row_groups();
             self.row_groups.prune_by_limit(
                 limit,
-                &rg_metadata,
+                rg_metadata,
                 &self.prepared.loaded.prepared.file_metrics,
             );
         }
@@ -1254,7 +1248,6 @@ impl RowGroupsPrunedParquetOpen {
         let Some(shared) = self.prepared.loaded.prepared.shared_work_source.take() else {
             return Ok(self);
         };
-        // Respect a caller-supplied `ParquetAccessPlan`.
         if let Some(ext) = self.prepared.loaded.prepared.extensions.as_ref()
             && ext.is::<ParquetAccessPlan>()
         {
@@ -1278,9 +1271,6 @@ impl RowGroupsPrunedParquetOpen {
             plan
         };
 
-        // Bundle everything the stealer needs to jump straight to
-        // `BuildStream`: metadata, access plan, reader options, and the
-        // already-built predicates / projection / schema.
         let make_chunk = |idx: usize| ParquetOpenChunk {
             access_plan: single_rg_plan(idx),
             reader_metadata: self.prepared.loaded.reader_metadata.clone(),
@@ -1305,8 +1295,6 @@ impl RowGroupsPrunedParquetOpen {
             })
             .collect();
         shared.push_morsels(donated_files);
-
-        // Narrow the donor's access plan to just the kept row group.
         self.row_groups = RowGroupAccessPlanFilter::new(single_rg_plan(keep_idx));
         Ok(self)
     }
@@ -3141,12 +3129,11 @@ mod test {
     #[tokio::test]
     async fn row_group_split_within_caller_file_range() {
         let (store, schema, file, data_len) = write_four_row_group_file().await;
-        let caller_range = datafusion_datasource::FileRange {
-            start: 0,
-            end: data_len as i64,
-        };
         let file = PartitionedFile {
-            range: Some(caller_range.clone()),
+            range: Some(datafusion_datasource::FileRange {
+                start: 0,
+                end: data_len as i64,
+            }),
             ..file
         };
         let shared = SharedWorkSource::default();
@@ -3172,7 +3159,6 @@ mod test {
             let stream = open_file(&stealer, donated).await.unwrap();
             all_stolen.extend(collect_int32_values(stream).await);
         }
-        let _ = caller_range;
         assert_eq!(donated_count, 3);
         assert_eq!(all_stolen, vec![4, 5, 6, 7, 8, 9, 10, 11, 12]);
     }
