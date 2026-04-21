@@ -1004,9 +1004,9 @@ mod tests {
     use super::*;
     use arrow::{
         array::{
-            Array, DictionaryArray, Float32Array, Int32Array, Int8Array,
-            IntervalDayTimeArray, IntervalMonthDayNanoArray, PrimitiveArray,
-            IntervalYearMonthArray, StringArray,
+            Array, DictionaryArray, Float32Array, Int8Array, Int32Array,
+            IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+            PrimitiveArray, StringArray,
         },
         datatypes::{
             ArrowDictionaryKeyType, IntervalDayTimeType, IntervalMonthDayNanoType,
