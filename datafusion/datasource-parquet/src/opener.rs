@@ -834,6 +834,30 @@ impl MetadataLoadedParquetOpen {
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
 
+        // Initialize TopK dynamic filter threshold from row group statistics
+        // BEFORE building the pruning predicate. The PruningPredicate compiles
+        // the expression at build time, so the DynamicFilterPhysicalExpr must
+        // already have the threshold set for pruning to be effective.
+        // Only initialize TopK threshold when sort pushdown is active.
+        // For non-sort-pushdown TopK, pruning changes which RGs are read,
+        // altering tie-breaking for equal values (e.g. NULLs).
+        if prepared.sort_order_for_reorder.is_some() {
+            let file_metadata = reader_metadata.metadata();
+            let rg_metadata = file_metadata.row_groups();
+            let topk_limit = prepared.limit.unwrap_or(1);
+            if let Some(predicate) = &prepared.predicate
+                && let Err(e) = try_init_topk_threshold(
+                    predicate,
+                    topk_limit,
+                    rg_metadata,
+                    &physical_file_schema,
+                    reader_metadata.parquet_schema(),
+                )
+            {
+                debug!("Skipping TopK threshold init from statistics: {e}");
+            }
+        }
+
         // Build predicates for this specific file
         let pruning_predicate = build_pruning_predicates(
             prepared.predicate.as_ref(),
@@ -903,22 +927,6 @@ impl FiltersPreparedParquetOpen {
         // If there is a range restricting what parts of the file to read
         if let Some(range) = prepared.file_range.as_ref() {
             row_groups.prune_by_range(rg_metadata, range);
-        }
-
-        // Initialize TopK dynamic filter threshold from row group statistics
-        // BEFORE row group pruning, so that this file's own RGs can be pruned
-        // by the threshold. For the first file, this sets the initial threshold;
-        // for subsequent files, the threshold is already set by earlier files.
-        if let (Some(predicate), Some(limit)) = (&prepared.predicate, prepared.limit)
-            && let Err(e) = try_init_topk_threshold(
-                predicate,
-                limit,
-                rg_metadata,
-                &prepared.physical_file_schema,
-                loaded.reader_metadata.parquet_schema(),
-            )
-        {
-            debug!("Skipping TopK threshold initialization from statistics: {e}");
         }
 
         // If there is a predicate that can be evaluated against the metadata
@@ -1350,15 +1358,18 @@ fn try_init_topk_threshold(
 
     let is_descending = sort_options[0].descending;
 
-    // The child must be a Column expression so we can look up statistics.
+    // The child must be a Column expression (possibly wrapped in CastExpr).
     let children = dynamic_filter.children();
     let col_expr: Arc<dyn PhysicalExpr> = Arc::clone(children[0]);
-    let col_any: &dyn std::any::Any = col_expr.as_ref();
-    let column = col_any.downcast_ref::<Column>().ok_or_else(|| {
-        DataFusionError::Internal(
-            "TopK threshold init: sort child is not a Column expression".to_string(),
-        )
-    })?;
+    let column = match find_column_in_expr(&col_expr) {
+        Some(col) => col,
+        None => {
+            debug!(
+                "Skipping TopK threshold init: cannot find Column in child expr {col_expr:?}",
+            );
+            return Ok(());
+        }
+    };
 
     let col_name = column.name();
 
@@ -1436,6 +1447,21 @@ fn find_dynamic_filter(
         }
     }
 
+    None
+}
+
+/// Find a [`Column`] expression by unwrapping wrappers like `CastExpr`.
+fn find_column_in_expr(expr: &Arc<dyn PhysicalExpr>) -> Option<Column> {
+    // Direct Column
+    let any_ref: &dyn std::any::Any = expr.as_ref();
+    if let Some(col) = any_ref.downcast_ref::<Column>() {
+        return Some(col.clone());
+    }
+    // Unwrap single-child wrappers (e.g. CastExpr)
+    let children = expr.children();
+    if children.len() == 1 {
+        return find_column_in_expr(children[0]);
+    }
     None
 }
 
