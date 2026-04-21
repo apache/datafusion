@@ -27,7 +27,10 @@ use crate::{
 use arrow::array::{Array, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
-use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr};
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, Column, DynamicFilterPhysicalExpr, lit,
+};
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
@@ -831,10 +834,36 @@ impl MetadataLoadedParquetOpen {
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
 
-        // Note: stats init (try_init_topk_threshold) was removed in favor of
-        // cumulative RG pruning which is safer and works with WHERE clauses.
-        // Stats init had issues: Gt vs GtEq boundary, type coercion, and
-        // conflicting with cumulative prune when limit spans multiple RGs.
+        // Initialize TopK threshold from RG statistics BEFORE building
+        // PruningPredicate. Uses GtEq/LtEq to include boundary values.
+        // Only for sort pushdown + no WHERE (pure DynamicFilter predicate).
+        // Uses df.fetch() as limit so stats init skips when K spans multiple
+        // RGs (no single RG has >= K rows), letting cumulative prune handle it.
+        if prepared.sort_order_for_reorder.is_some()
+            && let Some(pred) = &prepared.predicate
+            && let Some(df) = find_dynamic_filter(pred)
+            && df.sort_options().is_some_and(|opts| opts.len() == 1)
+            && let Some(fetch) = df.fetch()
+        {
+            // Only when predicate is pure DynamicFilter (no WHERE)
+            let any_ref: &dyn std::any::Any = pred.as_ref();
+            if any_ref
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .is_some()
+            {
+                let file_metadata = reader_metadata.metadata();
+                let rg_metadata = file_metadata.row_groups();
+                if let Err(e) = try_init_topk_threshold(
+                    pred,
+                    fetch,
+                    rg_metadata,
+                    &physical_file_schema,
+                    reader_metadata.parquet_schema(),
+                ) {
+                    debug!("Skipping TopK threshold init: {e}");
+                }
+            }
+        }
 
         // Build predicates for this specific file
         let pruning_predicate = build_pruning_predicates(
@@ -1370,6 +1399,130 @@ impl RowGroupsPrunedParquetOpen {
 /// checking the predicate itself and recursively walking its children.
 /// Check if row groups in the prepared plan are non-overlapping on the
 /// sort column. Adjacent RGs must satisfy `max(i) <= min(i+1)`.
+/// Initialize TopK dynamic filter threshold from row group statistics.
+///
+/// For DESC: `threshold = max(min)` across RGs with `num_rows >= fetch`.
+/// For ASC: `threshold = min(max)` across qualifying RGs.
+/// Uses GtEq/LtEq to include boundary values.
+fn try_init_topk_threshold(
+    predicate: &Arc<dyn PhysicalExpr>,
+    fetch: usize,
+    rg_metadata: &[parquet::file::metadata::RowGroupMetaData],
+    arrow_schema: &Schema,
+    parquet_schema: &parquet::schema::types::SchemaDescriptor,
+) -> Result<()> {
+    let dynamic_filter = match find_dynamic_filter(predicate) {
+        Some(df) => df,
+        None => return Ok(()),
+    };
+
+    if dynamic_filter.snapshot_generation() > 1 {
+        return Ok(()); // Already initialized
+    }
+
+    let sort_options = match dynamic_filter.sort_options() {
+        Some(opts) if opts.len() == 1 => opts,
+        _ => return Ok(()),
+    };
+
+    let is_descending = sort_options[0].descending;
+    let nulls_first = sort_options[0].nulls_first;
+
+    let column = match find_column_in_expr(dynamic_filter.children()[0]) {
+        Some(col) => col,
+        None => return Ok(()),
+    };
+
+    let col_name = column.name();
+    let converter = StatisticsConverter::try_new(col_name, arrow_schema, parquet_schema)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let threshold = if is_descending {
+        let mins = converter
+            .row_group_mins(rg_metadata.iter())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        compute_best_threshold(&mins, rg_metadata, fetch, true)?
+    } else {
+        let maxes = converter
+            .row_group_maxes(rg_metadata.iter())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        compute_best_threshold(&maxes, rg_metadata, fetch, false)?
+    };
+
+    let threshold = match threshold {
+        Some(t) => t,
+        None => return Ok(()), // No RG with >= fetch rows
+    };
+
+    // Cast threshold to column type
+    let col_expr: Arc<dyn PhysicalExpr> = Arc::clone(dynamic_filter.children()[0]);
+    let col_data_type = col_expr.data_type(arrow_schema)?;
+    let threshold_casted = threshold.cast_to(&col_data_type)?;
+
+    // GtEq/LtEq: boundary value IS a valid top-K value
+    let op = if is_descending {
+        Operator::GtEq
+    } else {
+        Operator::LtEq
+    };
+
+    let comparison: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::clone(&col_expr),
+        op,
+        lit(threshold_casted),
+    ));
+
+    let filter_expr: Arc<dyn PhysicalExpr> = if nulls_first {
+        use datafusion_physical_expr::expressions::is_null;
+        let null_check = is_null(Arc::clone(&col_expr))?;
+        Arc::new(BinaryExpr::new(null_check, Operator::Or, comparison))
+    } else {
+        comparison
+    };
+
+    debug!(
+        "TopK stats init: {col_name} {op} (fetch={fetch})",
+        op = if is_descending { ">=" } else { "<=" }
+    );
+
+    dynamic_filter.update(filter_expr)?;
+    Ok(())
+}
+
+/// Find the best threshold from RG statistics.
+/// `want_max=true`: max of values (for DESC min). `want_max=false`: min of values (for ASC max).
+fn compute_best_threshold(
+    stats: &arrow::array::ArrayRef,
+    rg_metadata: &[parquet::file::metadata::RowGroupMetaData],
+    fetch: usize,
+    want_max: bool,
+) -> Result<Option<ScalarValue>> {
+    let mut best: Option<ScalarValue> = None;
+    for (i, rg) in rg_metadata.iter().enumerate() {
+        if (rg.num_rows() as usize) < fetch {
+            continue;
+        }
+        if i >= stats.len() || stats.is_null(i) {
+            continue;
+        }
+        let value = ScalarValue::try_from_array(stats.as_ref(), i)?;
+        if value.is_null() {
+            continue;
+        }
+        best = Some(match best {
+            None => value,
+            Some(current) => {
+                if want_max {
+                    if value > current { value } else { current }
+                } else {
+                    if value < current { value } else { current }
+                }
+            }
+        });
+    }
+    Ok(best)
+}
+
 fn rgs_are_non_overlapping(
     plan: &crate::access_plan::PreparedAccessPlan,
     file_metadata: &parquet::file::metadata::ParquetMetaData,
