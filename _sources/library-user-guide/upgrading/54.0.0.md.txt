@@ -347,3 +347,28 @@ SELECT CAST(approx_percentile_cont(quantity, 0.5) AS BIGINT) FROM orders;
 ```
 
 [#21074]: https://github.com/apache/datafusion/pull/21074
+
+### `Box<C>` and `Arc<C>` `TreeNodeContainer` impls now require `C: Default`
+
+The generic `TreeNodeContainer` implementations for `Box<C>` and `Arc<C>` now
+require `C: Default`. This change was necessary as part of optimizing tree
+rewriting to reduce heap allocations.
+
+**Who is affected:**
+
+- Users that implement `TreeNodeContainer` on a custom type and wrap it in
+  `Box` or `Arc` when walking trees.
+
+**Migration guide:**
+
+Add a `Default` implementation to your type. The default value is used as a
+temporary placeholder during query optimization, so when possible, pick a cheap,
+allocation-free variant:
+
+```rust,ignore
+impl Default for MyTreeNode {
+    fn default() -> Self {
+        MyTreeNode::Leaf // or whichever variant is cheapest to construct
+    }
+}
+```

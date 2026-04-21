@@ -755,6 +755,28 @@ As a result, these functions always return a float, even when the input column i
 </pre></div>
 </div>
 </section>
+<section id="box-c-and-arc-c-treenodecontainer-impls-now-require-c-default">
+<h3><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code><a class="headerlink" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default" title="Link to this heading">#</a></h3>
+<p>The generic <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> implementations for <code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> now
+require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code>. This change was necessary as part of optimizing tree
+rewriting to reduce heap allocations.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users that implement <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> on a custom type and wrap it in
+<code class="docutils literal notranslate"><span class="pre">Box</span></code> or <code class="docutils literal notranslate"><span class="pre">Arc</span></code> when walking trees.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Add a <code class="docutils literal notranslate"><span class="pre">Default</span></code> implementation to your type. The default value is used as a
+temporary placeholder during query optimization, so when possible, pick a cheap,
+allocation-free variant:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="nb">Default</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyTreeNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">default</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">MyTreeNode</span><span class="p">::</span><span class="n">Leaf</span><span class="w"> </span><span class="c1">// or whichever variant is cheapest to construct</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -816,6 +838,7 @@ As a result, these functions always return a float, even when the input column i
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#avro-api-and-timestamp-decoding-changes">Avro API and timestamp decoding changes</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#lpad-rpad-and-translate-now-operate-on-unicode-codepoints-instead-of-grapheme-clusters"><code class="docutils literal notranslate"><span class="pre">lpad</span></code>, <code class="docutils literal notranslate"><span class="pre">rpad</span></code>, and <code class="docutils literal notranslate"><span class="pre">translate</span></code> now operate on Unicode codepoints instead of grapheme clusters</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats"><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_median</span></code> now coerce to floats</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default"><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code></a></li>
 </ul>
 </li>
 </ul>
