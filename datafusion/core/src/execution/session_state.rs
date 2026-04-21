@@ -691,6 +691,7 @@ impl SessionState {
                         stringified_plans,
                         schema: Arc::clone(&e.schema),
                         logical_optimization_succeeded: false,
+                        show_statistics: e.show_statistics,
                     }));
                 }
                 Err(e) => return Err(e),
@@ -728,6 +729,7 @@ impl SessionState {
                 stringified_plans,
                 schema: Arc::clone(&e.schema),
                 logical_optimization_succeeded,
+                show_statistics: e.show_statistics,
             }))
         } else {
             let analyzed_plan = self.analyzer.execute_and_check(

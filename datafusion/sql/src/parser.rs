@@ -22,6 +22,7 @@
 
 use datafusion_common::DataFusionError;
 use datafusion_common::config::SqlParserOptions;
+use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
 use datafusion_common::{Diagnostic, Span, sql_err};
 use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
@@ -36,6 +37,7 @@ use sqlparser::{
 };
 use std::collections::VecDeque;
 use std::fmt;
+use std::str::FromStr;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -55,18 +57,25 @@ fn parse_file_type(s: &str) -> Result<String, DataFusionError> {
 
 /// DataFusion specific `EXPLAIN`
 ///
-/// Syntax:
+/// Supports both the legacy keyword form and, on dialects whose
+/// [`Dialect::supports_explain_with_utility_options`] returns `true`
+/// (PostgreSQL, DuckDB, etc.), the Postgres-style parenthesized option list:
+///
 /// ```sql
+/// -- Legacy keyword form (any dialect)
 /// EXPLAIN <ANALYZE> <VERBOSE> [FORMAT format] statement
+///
+/// -- Postgres-style option form (dialect-gated)
+/// EXPLAIN (option [arg] [, ...]) statement
 /// ```
+///
+/// See [`ExplainStatementOptions`] for the list of supported options in the
+/// parenthesized form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplainStatement {
-    /// `EXPLAIN ANALYZE ..`
-    pub analyze: bool,
-    /// `EXPLAIN .. VERBOSE ..`
-    pub verbose: bool,
-    /// `EXPLAIN .. FORMAT `
-    pub format: Option<String>,
+    /// Normalized options parsed from either the legacy keyword form or the
+    /// parenthesized option list.
+    pub options: ExplainStatementOptions,
     /// The statement to analyze. Note this is a DataFusion [`Statement`] (not a
     /// [`sqlparser::ast::Statement`] so that we can use `EXPLAIN`, `COPY`, and other
     /// DataFusion specific statements
@@ -75,22 +84,47 @@ pub struct ExplainStatement {
 
 impl fmt::Display for ExplainStatement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            analyze,
-            verbose,
-            format,
-            statement,
-        } = self;
+        let Self { options, statement } = self;
+
+        // If only the legacy-era fields are set, print the legacy keyword
+        // form so existing round-trip tests continue to pass.
+        let uses_parenthesized = options.analyze_level.is_some()
+            || options.analyze_categories.is_some()
+            || options.show_statistics.is_some();
 
         write!(f, "EXPLAIN ")?;
-        if *analyze {
-            write!(f, "ANALYZE ")?;
-        }
-        if *verbose {
-            write!(f, "VERBOSE ")?;
-        }
-        if let Some(format) = format.as_ref() {
-            write!(f, "FORMAT {format} ")?;
+        if uses_parenthesized {
+            // Emit a parenthesized option list.
+            let mut parts: Vec<String> = Vec::new();
+            if options.analyze {
+                parts.push("ANALYZE".to_string());
+            }
+            if options.verbose {
+                parts.push("VERBOSE".to_string());
+            }
+            if let Some(format) = &options.format {
+                parts.push(format!("FORMAT {format}"));
+            }
+            if let Some(level) = options.analyze_level {
+                parts.push(format!("LEVEL {level}"));
+            }
+            if let Some(cats) = &options.analyze_categories {
+                parts.push(format!("METRICS '{cats}'"));
+            }
+            if let Some(stats) = options.show_statistics {
+                parts.push(format!("COSTS {}", if stats { "ON" } else { "OFF" }));
+            }
+            write!(f, "({}) ", parts.join(", "))?;
+        } else {
+            if options.analyze {
+                write!(f, "ANALYZE ")?;
+            }
+            if options.verbose {
+                write!(f, "VERBOSE ")?;
+            }
+            if let Some(format) = &options.format {
+                write!(f, "FORMAT {format} ")?;
+            }
         }
 
         write!(f, "{statement}")
@@ -325,6 +359,10 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionErro
 pub struct DFParser<'a> {
     pub parser: Parser<'a>,
     options: SqlParserOptions,
+    /// Whether the configured dialect supports Postgres-style
+    /// `EXPLAIN (option, ...)` utility-option syntax. Cached here because
+    /// sqlparser's [`Parser::dialect`] field is private.
+    supports_explain_with_utility_options: bool,
 }
 
 /// Same as `sqlparser`
@@ -437,6 +475,9 @@ impl<'a, 'b> DFParserBuilder<'a, 'b> {
                 recursion_limit: self.recursion_limit,
                 ..Default::default()
             },
+            supports_explain_with_utility_options: self
+                .dialect
+                .supports_explain_with_utility_options(),
         })
     }
 }
@@ -759,17 +800,40 @@ impl<'a> DFParser<'a> {
 
     /// Parse a SQL `EXPLAIN`
     pub fn parse_explain(&mut self) -> Result<Statement, DataFusionError> {
+        // Dialects that support Postgres-style `EXPLAIN (opt, ...)` may use a
+        // leading left-paren instead of the keyword form.
+        if self.supports_explain_with_utility_options
+            && self.parser.peek_token().token == Token::LParen
+        {
+            let raw = self.parser.parse_utility_options()?;
+            let options = ExplainStatementOptions::from_utility_options(&raw)?;
+            let statement = self.parse_statement()?;
+            return Ok(Statement::Explain(ExplainStatement {
+                statement: Box::new(statement),
+                options,
+            }));
+        }
+
+        // Legacy keyword form.
         let analyze = self.parser.parse_keyword(Keyword::ANALYZE);
         let verbose = self.parser.parse_keyword(Keyword::VERBOSE);
-        let format = self.parse_explain_format()?;
+        let format = self
+            .parse_explain_format()?
+            .map(|s| ExplainFormat::from_str(&s))
+            .transpose()?;
 
         let statement = self.parse_statement()?;
 
-        Ok(Statement::Explain(ExplainStatement {
-            statement: Box::new(statement),
+        let options = ExplainStatementOptions {
             analyze,
             verbose,
             format,
+            ..Default::default()
+        };
+
+        Ok(Statement::Explain(ExplainStatement {
+            statement: Box::new(statement),
+            options,
         }))
     }
 
@@ -1873,9 +1937,14 @@ mod tests {
                 options: vec![],
             });
             let expected = Statement::Explain(ExplainStatement {
-                analyze,
-                verbose,
-                format: None,
+                options: ExplainStatementOptions {
+                    analyze,
+                    verbose,
+                    format: None,
+                    analyze_level: None,
+                    analyze_categories: None,
+                    show_statistics: None,
+                },
                 statement: Box::new(expected_copy),
             });
             assert_eq!(verified_stmt(sql), expected);
@@ -2202,5 +2271,141 @@ mod tests {
             "1234 as foo    bar",
             "Expected: end of expression, found: bar",
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Postgres-style `EXPLAIN (option, ...)` tests
+    // ------------------------------------------------------------------
+
+    fn parse_with_pg(sql: &str) -> Result<Statement, DataFusionError> {
+        let dialect = sqlparser::dialect::PostgreSqlDialect {};
+        let mut statements = DFParser::parse_sql_with_dialect(sql, &dialect)?;
+        assert_eq!(statements.len(), 1, "Expected exactly one statement");
+        Ok(statements.pop_front().unwrap())
+    }
+
+    fn parse_with_generic(sql: &str) -> Result<Statement, DataFusionError> {
+        let mut statements = DFParser::parse_sql(sql)?;
+        assert_eq!(statements.len(), 1, "Expected exactly one statement");
+        Ok(statements.pop_front().unwrap())
+    }
+
+    #[test]
+    fn explain_legacy_keyword_form_postgres_dialect() {
+        // The legacy keyword form still works under PostgreSQL dialect.
+        let stmt = parse_with_pg("EXPLAIN ANALYZE VERBOSE SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert!(options.verbose);
+        assert!(options.format.is_none());
+        assert!(options.analyze_level.is_none());
+    }
+
+    #[test]
+    fn explain_paren_form_on_generic_supports_utility_options() {
+        // sqlparser's GenericDialect also declares
+        // `supports_explain_with_utility_options = true`, so DataFusion's
+        // default parser accepts the parenthesized form too.
+        let stmt = parse_with_generic("EXPLAIN (FORMAT TREE) SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert_eq!(options.format, Some(ExplainFormat::Tree));
+    }
+
+    #[test]
+    fn explain_paren_form_on_non_supporting_dialect_is_parse_error() {
+        // Dialects that do NOT declare support for utility options (e.g.
+        // Snowflake) must still error on the parenthesized form — proving
+        // the dialect gate itself works.
+        use sqlparser::dialect::SnowflakeDialect;
+        let dialect = SnowflakeDialect {};
+        let res =
+            DFParser::parse_sql_with_dialect("EXPLAIN (FORMAT TREE) SELECT 1", &dialect);
+        assert!(
+            res.is_err(),
+            "expected parse error under non-supporting dialect"
+        );
+    }
+
+    #[test]
+    fn explain_paren_form_analyze_verbose() {
+        let stmt = parse_with_pg("EXPLAIN (ANALYZE, VERBOSE) SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert!(options.verbose);
+    }
+
+    #[test]
+    fn explain_paren_form_format_tree() {
+        let stmt = parse_with_pg("EXPLAIN (FORMAT tree) SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(!options.analyze);
+        assert_eq!(options.format, Some(ExplainFormat::Tree));
+    }
+
+    #[test]
+    fn explain_paren_form_metrics_level() {
+        use datafusion_common::format::{
+            ExplainAnalyzeCategories, MetricCategory, MetricType,
+        };
+        let stmt =
+            parse_with_pg("EXPLAIN (ANALYZE, METRICS 'rows,bytes', LEVEL dev) SELECT 1")
+                .unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert_eq!(options.analyze_level, Some(MetricType::Dev));
+        assert_eq!(
+            options.analyze_categories,
+            Some(ExplainAnalyzeCategories::Only(vec![
+                MetricCategory::Rows,
+                MetricCategory::Bytes,
+            ]))
+        );
+    }
+
+    #[test]
+    fn explain_paren_form_bool_spellings() {
+        let stmt =
+            parse_with_pg("EXPLAIN (ANALYZE ON, VERBOSE OFF, COSTS TRUE) SELECT 1")
+                .unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert!(!options.verbose);
+        assert_eq!(options.show_statistics, Some(true));
+    }
+
+    #[test]
+    fn explain_paren_form_buffers_rejected() {
+        let err = parse_with_pg("EXPLAIN (BUFFERS) SELECT 1").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("BUFFERS"),
+            "error should mention BUFFERS: {msg}"
+        );
+        assert!(
+            msg.contains("not supported"),
+            "error should say not supported: {msg}"
+        );
+    }
+
+    #[test]
+    fn explain_paren_form_unknown_option_rejected() {
+        let err = parse_with_pg("EXPLAIN (ASDF) SELECT 1").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown EXPLAIN option"),
+            "error should describe unknown option: {msg}"
+        );
     }
 }

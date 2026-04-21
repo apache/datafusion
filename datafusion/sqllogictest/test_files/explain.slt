@@ -687,3 +687,69 @@ logical_plan
 
 statement ok
 drop table foo;
+
+# ------------------------------------------------------------------
+# Postgres-style `EXPLAIN (option, ...)` tests (dialect-gated).
+#
+# These require a dialect whose `supports_explain_with_utility_options()`
+# returns true. DataFusion's default Generic dialect also declares this
+# (mirroring sqlparser-rs 0.61.0), so the parenthesized form works there
+# too. We set PostgreSQL explicitly for clarity.
+# ------------------------------------------------------------------
+
+statement ok
+set datafusion.sql_parser.dialect = 'PostgreSQL';
+
+# `EXPLAIN (FORMAT tree)` matches the legacy `EXPLAIN FORMAT tree` form.
+query TT
+EXPLAIN (FORMAT tree) SELECT 1;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        Int64(1): 1        │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│     PlaceholderRowExec    │
+08)└───────────────────────────┘
+
+# Unknown options are rejected with a clear error.
+statement error DataFusion error: Error during planning: unknown EXPLAIN option: FOO
+EXPLAIN (FOO) SELECT 1;
+
+# Postgres-only options return a "not supported" message pointing at METRICS.
+statement error DataFusion error: This feature is not implemented: EXPLAIN option BUFFERS is not supported by DataFusion
+EXPLAIN (BUFFERS) SELECT 1;
+
+statement error DataFusion error: This feature is not implemented: EXPLAIN option WAL is not supported by DataFusion
+EXPLAIN (WAL) SELECT 1;
+
+# LEVEL / METRICS / TIMING / SUMMARY all require ANALYZE.
+statement error DataFusion error: Error during planning: EXPLAIN option LEVEL requires ANALYZE
+EXPLAIN (LEVEL dev) SELECT 1;
+
+statement error DataFusion error: Error during planning: EXPLAIN option METRICS requires ANALYZE
+EXPLAIN (METRICS 'rows') SELECT 1;
+
+# COSTS and ANALYZE are mutually exclusive (COSTS only applies to plan-only
+# EXPLAIN).
+statement error DataFusion error: Error during planning: EXPLAIN option COSTS cannot be combined with ANALYZE
+EXPLAIN (ANALYZE, COSTS ON) SELECT 1;
+
+# Legacy keyword form still works on PostgreSQL dialect.
+query TT
+EXPLAIN FORMAT tree SELECT 1;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        Int64(1): 1        │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│     PlaceholderRowExec    │
+08)└───────────────────────────┘
+
+statement ok
+reset datafusion.sql_parser.dialect;

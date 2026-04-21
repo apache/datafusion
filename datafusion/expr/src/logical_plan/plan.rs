@@ -53,7 +53,7 @@ use crate::{
 use crate::statistics::StatisticsRequest;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
-use datafusion_common::format::ExplainFormat;
+use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use datafusion_common::metadata::check_metadata_with_storage_equal;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -1095,6 +1095,8 @@ impl LogicalPlan {
                     verbose: a.verbose,
                     schema: Arc::clone(&a.schema),
                     input: Arc::new(input),
+                    analyze_level: a.analyze_level,
+                    analyze_categories: a.analyze_categories.clone(),
                 }))
             }
             LogicalPlan::Explain(e) => {
@@ -1107,6 +1109,7 @@ impl LogicalPlan {
                     stringified_plans: e.stringified_plans.clone(),
                     schema: Arc::clone(&e.schema),
                     logical_optimization_succeeded: e.logical_optimization_succeeded,
+                    show_statistics: e.show_statistics,
                 }))
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
@@ -3329,6 +3332,9 @@ pub struct ExplainOption {
     pub analyze: bool,
     /// Output syntax/format
     pub format: ExplainFormat,
+    /// Statement-level override for `datafusion.explain.show_statistics`.
+    /// `None` means "fall back to session config".
+    pub show_statistics: Option<bool>,
 }
 
 impl Default for ExplainOption {
@@ -3337,6 +3343,7 @@ impl Default for ExplainOption {
             verbose: false,
             analyze: false,
             format: ExplainFormat::Indent,
+            show_statistics: None,
         }
     }
 }
@@ -3357,6 +3364,13 @@ impl ExplainOption {
     /// Builder‐style setter for `format`
     pub fn with_format(mut self, format: ExplainFormat) -> Self {
         self.format = format;
+        self
+    }
+
+    /// Builder-style setter for a statement-level override of
+    /// `datafusion.explain.show_statistics`.
+    pub fn with_show_statistics(mut self, show_statistics: Option<bool>) -> Self {
+        self.show_statistics = show_statistics;
         self
     }
 }
@@ -3382,6 +3396,9 @@ pub struct Explain {
     pub schema: DFSchemaRef,
     /// Used by physical planner to check if should proceed with planning
     pub logical_optimization_succeeded: bool,
+    /// Statement-level override for `datafusion.explain.show_statistics`.
+    /// When `None`, the session-config value is used.
+    pub show_statistics: Option<bool>,
 }
 
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
@@ -3397,18 +3414,22 @@ impl PartialOrd for Explain {
             pub stringified_plans: &'a Vec<StringifiedPlan>,
             /// Used by physical planner to check if should proceed with planning
             pub logical_optimization_succeeded: &'a bool,
+            /// Statement-level override for show_statistics
+            pub show_statistics: &'a Option<bool>,
         }
         let comparable_self = ComparableExplain {
             verbose: &self.verbose,
             plan: &self.plan,
             stringified_plans: &self.stringified_plans,
             logical_optimization_succeeded: &self.logical_optimization_succeeded,
+            show_statistics: &self.show_statistics,
         };
         let comparable_other = ComparableExplain {
             verbose: &other.verbose,
             plan: &other.plan,
             stringified_plans: &other.stringified_plans,
             logical_optimization_succeeded: &other.logical_optimization_succeeded,
+            show_statistics: &other.show_statistics,
         };
         comparable_self
             .partial_cmp(&comparable_other)
@@ -3427,9 +3448,18 @@ pub struct Analyze {
     pub input: Arc<LogicalPlan>,
     /// The output schema of the explain (2 columns of text)
     pub schema: DFSchemaRef,
+    /// Statement-level override for `datafusion.explain.analyze_level`.
+    /// When `None`, the session-config value is used.
+    pub analyze_level: Option<MetricType>,
+    /// Statement-level override for `datafusion.explain.analyze_categories`.
+    /// When `None`, the session-config value is used.
+    pub analyze_categories: Option<ExplainAnalyzeCategories>,
 }
 
-// Manual implementation needed because of `schema` field. Comparison excludes this field.
+// Manual implementation needed because of `schema` field and the lack of
+// `PartialOrd` on `MetricType` / `ExplainAnalyzeCategories`. Ordering is
+// defined over `(verbose, input)` and then falls back to `==` for the
+// remaining statement-level override fields.
 impl PartialOrd for Analyze {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.verbose.partial_cmp(&other.verbose) {

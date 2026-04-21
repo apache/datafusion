@@ -1769,6 +1769,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )),
             }),
             LogicalPlan::Analyze(a) => {
+                // TODO: propagate statement-level `analyze_level` and
+                // `analyze_categories` overrides through the proto so round-trips
+                // preserve them. For now, these fields default to `None` on the
+                // other side (falling back to session config), which matches the
+                // previous behavior.
                 let input = LogicalPlanNode::try_from_logical_plan(
                     a.input.as_ref(),
                     extension_codec,
@@ -1783,6 +1788,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 })
             }
             LogicalPlan::Explain(a) => {
+                // TODO: propagate the statement-level `show_statistics` override
+                // through the proto so round-trips preserve it. For now this
+                // field defaults to `None` on the other side (falling back to
+                // session config), which matches the previous behavior.
                 let input = LogicalPlanNode::try_from_logical_plan(
                     a.plan.as_ref(),
                     extension_codec,
