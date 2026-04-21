@@ -694,3 +694,100 @@ impl fmt::Debug for SharedBuildAccumulator {
         write!(f, "SharedBuildAccumulator")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_partitioned_accumulator(num_partitions: usize) -> SharedBuildAccumulator {
+        let probe_schema = Arc::new(Schema::new(vec![Field::new(
+            "probe_key",
+            DataType::Int32,
+            false,
+        )]));
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::Partitioned {
+                    partitions: vec![PartitionStatus::Pending; num_partitions],
+                    completed_partitions: 0,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter,
+            on_right: vec![],
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema,
+        }
+    }
+
+    fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
+        let guard = acc.inner.lock();
+        let AccumulatedBuildData::Partitioned {
+            partitions,
+            completed_partitions,
+        } = &guard.data
+        else {
+            panic!("expected partitioned accumulator");
+        };
+        (partitions.clone(), *completed_partitions)
+    }
+
+    // Regression guard for the build-report lifecycle fix: on `Drop`, a stream
+    // in `BuildReportState::ReportScheduled` still calls `report_canceled_partition`
+    // because it cannot tell whether the coordinator has already observed the
+    // report (first poll of the `OnceFut` runs `store_build_data` synchronously
+    // before the future's first `.await`, but the stream doesn't learn that
+    // until `get_shared` returns `Ok`). Correctness therefore relies on
+    // `store_canceled_partition` being a no-op when the partition is already
+    // `Reported`. This test pins that invariant.
+    #[test]
+    fn report_canceled_partition_is_noop_after_report() {
+        let acc = make_partitioned_accumulator(2);
+
+        {
+            let mut guard = acc.inner.lock();
+            acc.store_build_data(
+                &mut guard,
+                PartitionBuildData::Partitioned {
+                    partition_id: 0,
+                    pushdown: PushdownStrategy::Empty,
+                    bounds: PartitionBounds::new(vec![]),
+                },
+            )
+            .unwrap();
+        }
+        let (partitions, completed) = partitioned_state(&acc);
+        assert!(matches!(partitions[0], PartitionStatus::Reported(_)));
+        assert_eq!(completed, 1);
+
+        acc.report_canceled_partition(0);
+        let (partitions, completed) = partitioned_state(&acc);
+        assert!(
+            matches!(partitions[0], PartitionStatus::Reported(_)),
+            "late cancel must not overwrite a prior Reported status"
+        );
+        assert_eq!(completed, 1, "late cancel must not double-count completion");
+    }
+
+    // Drop from the `NotReported` (or first-poll-never-ran) state must
+    // transition `Pending` -> `CanceledUnknown` and bump `completed_partitions`,
+    // which is what unblocks sibling partitions waiting on the coordinator.
+    #[test]
+    fn report_canceled_partition_marks_pending_partition_canceled() {
+        let acc = make_partitioned_accumulator(2);
+
+        acc.report_canceled_partition(0);
+        let (partitions, completed) = partitioned_state(&acc);
+        assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
+        assert_eq!(completed, 1);
+
+        // Idempotent: a second cancel (e.g. a stray double-drop) must not
+        // double-count completion.
+        acc.report_canceled_partition(0);
+        let (partitions, completed) = partitioned_state(&acc);
+        assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
+        assert_eq!(completed, 1);
+    }
+}
