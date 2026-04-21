@@ -305,21 +305,36 @@ async fn test_fuzz_topk_filter_pushdown() {
     }
 
     let mut queries = vec![];
+    let all_columns = ["id", "name", "department"];
 
     for limit in [1, 10] {
         for num_order_by_columns in [1, 2, 3] {
-            for order_columns in ["id", "name", "department"]
-                .iter()
-                .combinations(num_order_by_columns)
-            {
+            for order_columns in all_columns.iter().combinations(num_order_by_columns) {
                 for orderings in order_columns
                     .iter()
                     .map(|col| orders.get(**col).unwrap())
                     .multi_cartesian_product()
                 {
+                    // Add remaining columns as ASC tiebreakers to make
+                    // the ordering fully deterministic. Without this,
+                    // optimizations that change RG read order (e.g.
+                    // statistics-based pruning) may produce different
+                    // but equally valid tie-breaking results.
+                    let used: Vec<&str> = order_columns.iter().map(|c| **c).collect();
+                    let tiebreakers: Vec<String> = all_columns
+                        .iter()
+                        .filter(|c| !used.contains(*c))
+                        .map(|c| format!("{c} ASC NULLS LAST"))
+                        .collect();
+                    let mut all_orderings: Vec<&str> =
+                        orderings.iter().map(|s| s.as_str()).collect();
+                    let tiebreaker_refs: Vec<&str> =
+                        tiebreakers.iter().map(|s| s.as_str()).collect();
+                    all_orderings.extend(tiebreaker_refs);
+
                     let query = format!(
                         "SELECT * FROM test_table ORDER BY {} LIMIT {}",
-                        orderings.into_iter().join(", "),
+                        all_orderings.join(", "),
                         limit
                     );
                     queries.push(query);
