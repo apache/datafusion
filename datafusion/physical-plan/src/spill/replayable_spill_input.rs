@@ -154,7 +154,7 @@ impl ReplayableStreamSource {
                     }
                 };
 
-                Ok(Box::pin(ReplayablePassStream::new_first(
+                Ok(Box::pin(ReplayableSpillStream::new_first(
                     Arc::clone(&self.schema),
                     input,
                     Arc::clone(&self.state),
@@ -168,7 +168,7 @@ impl ReplayableStreamSource {
             }
             StateInner::Replayable(spill_file) => {
                 let replay_state = spill_file.clone();
-                match ReplayablePassStream::new_replay(
+                match ReplayableSpillStream::new_replay(
                     Arc::clone(&self.schema),
                     &self.spill_manager,
                     Arc::clone(&self.state),
@@ -185,9 +185,16 @@ impl ReplayableStreamSource {
     }
 }
 
-/// Evaluates and forwards the `inner` stream output while caching it to a spill file
-/// for future replays.
-struct ReplayablePassStream {
+/// Makes a one-shot stream replayable using spill caching, keeping replays fast
+/// and memory efficient.
+///
+/// On the first pass, it evaluates and forwards output from `inner` while
+/// caching it to a spill file for future replays.
+///
+/// On later passes, it replays directly from the cached spill file.
+///
+/// See also [`ReplayableStreamSource`] for details.
+struct ReplayableSpillStream {
     schema: SchemaRef,
     shared_state: Arc<Mutex<Option<StateInner>>>,
     held_state: Option<StateInner>,
@@ -195,7 +202,7 @@ struct ReplayablePassStream {
     inner: SendableRecordBatchStream,
 }
 
-impl ReplayablePassStream {
+impl ReplayableSpillStream {
     fn new_first(
         schema: SchemaRef,
         inner: SendableRecordBatchStream,
@@ -249,7 +256,7 @@ impl ReplayablePassStream {
     }
 }
 
-impl Stream for ReplayablePassStream {
+impl Stream for ReplayableSpillStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -298,13 +305,13 @@ impl Stream for ReplayablePassStream {
     }
 }
 
-impl RecordBatchStream for ReplayablePassStream {
+impl RecordBatchStream for ReplayableSpillStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 }
 
-impl Drop for ReplayablePassStream {
+impl Drop for ReplayableSpillStream {
     /// If a stream is dropped before it finishes, poison the state so later
     /// replay attempts fail.
     ///
