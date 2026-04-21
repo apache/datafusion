@@ -1,6 +1,5 @@
 ---
 source: datafusion-cli/tests/cli_integration.rs
-assertion_line: 188
 info:
   program: datafusion-cli
   args:
@@ -19,19 +18,19 @@ exit_code: 0
 | logical_plan | [                                       |
 |              |   {                                     |
 |              |     "Plan": {                           |
-|              |       "Node Type": "Projection",        |
 |              |       "Expressions": [                  |
+|              |         "Int64(123)"                    |
+|              |       ],                                |
+|              |       "Node Type": "Projection",        |
+|              |       "Output": [                       |
 |              |         "Int64(123)"                    |
 |              |       ],                                |
 |              |       "Plans": [                        |
 |              |         {                               |
 |              |           "Node Type": "EmptyRelation", |
-|              |           "Plans": [],                  |
-|              |           "Output": []                  |
+|              |           "Output": [],                 |
+|              |           "Plans": []                   |
 |              |         }                               |
-|              |       ],                                |
-|              |       "Output": [                       |
-|              |         "Int64(123)"                    |
 |              |       ]                                 |
 |              |     }                                   |
 |              |   }                                     |
