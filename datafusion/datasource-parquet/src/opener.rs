@@ -1222,6 +1222,36 @@ impl RowGroupsPrunedParquetOpen {
             )?;
         }
 
+        // TopK cumulative pruning: after reorder + reverse, the RGs are in
+        // optimal order for the sort. Keep accumulating rows from the front
+        // until we have enough for the TopK fetch limit (K), then prune the
+        // rest. Works for sort pushdown with or without WHERE because it only
+        // depends on row counts + ordering, not threshold values.
+        if prepared.sort_order_for_reorder.is_some()
+            && let Some(predicate) = &prepared.predicate
+            && let Some(df) = find_dynamic_filter(predicate)
+            && let Some(fetch) = df.fetch()
+        {
+            let rg_indexes = prepared_plan.row_group_indexes();
+            let mut cumulative = 0usize;
+            let mut keep_count = 0;
+            for &idx in rg_indexes {
+                cumulative += file_metadata.row_group(idx).num_rows() as usize;
+                keep_count += 1;
+                if cumulative >= fetch {
+                    break;
+                }
+            }
+            if keep_count < rg_indexes.len() {
+                let pruned = rg_indexes.len() - keep_count;
+                debug!(
+                    "TopK cumulative prune: keeping {keep_count} of {} RGs ({cumulative} rows >= fetch={fetch}), pruning {pruned}",
+                    rg_indexes.len()
+                );
+                prepared_plan = prepared_plan.truncate_row_groups(keep_count);
+            }
+        }
+
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
         let read_plan = build_projection_read_plan(
             prepared.projection.expr_iter(),
@@ -3343,6 +3373,7 @@ mod test {
             vec![Arc::clone(&col_expr)],
             super::lit(true),
             vec![desc_opts],
+            Some(10),
         ));
         let predicate: Arc<dyn PhysicalExpr> = dynamic_filter.clone();
 
@@ -3389,6 +3420,7 @@ mod test {
             vec![Arc::clone(&col_expr)],
             super::lit(true),
             vec![asc_opts],
+            Some(10),
         ));
         let predicate: Arc<dyn PhysicalExpr> = dynamic_filter.clone();
 
@@ -3480,6 +3512,7 @@ mod test {
             vec![col1, col2],
             super::lit(true),
             vec![opts, opts],
+            Some(10),
         ));
         let predicate: Arc<dyn PhysicalExpr> = dynamic_filter.clone();
 

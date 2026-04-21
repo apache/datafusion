@@ -381,6 +381,22 @@ impl PreparedAccessPlan {
         })
     }
 
+    /// Return a reference to the row group indexes.
+    pub(crate) fn row_group_indexes(&self) -> &[usize] {
+        &self.row_group_indexes
+    }
+
+    /// Keep only the first `count` row groups, dropping the rest.
+    /// Used for TopK cumulative pruning after reorder + reverse.
+    pub(crate) fn truncate_row_groups(mut self, count: usize) -> Self {
+        self.row_group_indexes.truncate(count);
+        // Clear row_selection since it's tied to the original RG set
+        if self.row_selection.is_some() {
+            self.row_selection = None;
+        }
+        self
+    }
+
     /// Reorder row groups by their min statistics for the given sort order.
     ///
     /// This helps TopK queries find optimal values first. For ASC sort,

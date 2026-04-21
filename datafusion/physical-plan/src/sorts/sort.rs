@@ -925,6 +925,7 @@ impl SortExec {
                 children,
                 lit(true),
                 sort_options,
+                self.fetch,
             ),
         ))))
     }

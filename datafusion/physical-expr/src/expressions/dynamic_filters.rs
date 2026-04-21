@@ -80,6 +80,9 @@ pub struct DynamicFilterPhysicalExpr {
     /// parquet reader can use these to initialize the filter threshold from
     /// column statistics before reading any data.
     sort_options: Option<Vec<SortOptions>>,
+    /// Optional TopK fetch limit (K in LIMIT K).
+    /// Used by the parquet reader for cumulative RG pruning after reorder.
+    fetch: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -184,6 +187,7 @@ impl DynamicFilterPhysicalExpr {
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
             sort_options: None,
+            fetch: None,
         }
     }
 
@@ -196,15 +200,22 @@ impl DynamicFilterPhysicalExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
         inner: Arc<dyn PhysicalExpr>,
         sort_options: Vec<SortOptions>,
+        fetch: Option<usize>,
     ) -> Self {
         let mut this = Self::new(children, inner);
         this.sort_options = Some(sort_options);
+        this.fetch = fetch;
         this
     }
 
     /// Returns the sort options for each child expression, if available.
     pub fn sort_options(&self) -> Option<&[SortOptions]> {
         self.sort_options.as_deref()
+    }
+
+    /// Returns the TopK fetch limit (K), if available.
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 
     fn remap_children(
@@ -396,6 +407,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
             sort_options: self.sort_options.clone(),
+            fetch: self.fetch,
         }))
     }
 
