@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utility for replaying a one-shot input `RecourdBatchStream` through spill.
+//! Utility for replaying a one-shot input `RecordBatchStream` through spill.
 //!
 //! See comments in [`ReplayableStreamSource`] for details.
 
