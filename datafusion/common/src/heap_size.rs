@@ -17,9 +17,7 @@
 
 use crate::stats::Precision;
 use crate::{ColumnStatistics, ScalarValue, Statistics};
-use arrow::array::{
-    Array, FixedSizeListArray, LargeListArray, ListArray, MapArray, StructArray,
-};
+use arrow::array::{Array, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray, MapArray, StructArray};
 use arrow::datatypes::{
     DataType, Field, Fields, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
     TimeUnit, UnionFields, UnionMode, i256,
@@ -122,6 +120,8 @@ impl DFHeapSize for ScalarValue {
             Union(a, b, c) => a.heap_size() + b.heap_size() + c.heap_size(),
             Dictionary(a, b) => a.heap_size() + b.heap_size(),
             RunEndEncoded(a, b, c) => a.heap_size() + b.heap_size() + c.heap_size(),
+            ListView(a) => a.heap_size(),
+            LargeListView(a) => a.heap_size(),
         }
     }
 }
@@ -258,7 +258,19 @@ impl DFHeapSize for LargeListArray {
     }
 }
 
+impl DFHeapSize for LargeListViewArray {
+    fn heap_size(&self) -> usize {
+        self.get_array_memory_size()
+    }
+}
+
 impl DFHeapSize for ListArray {
+    fn heap_size(&self) -> usize {
+        self.get_array_memory_size()
+    }
+}
+
+impl DFHeapSize for ListViewArray {
     fn heap_size(&self) -> usize {
         self.get_array_memory_size()
     }
