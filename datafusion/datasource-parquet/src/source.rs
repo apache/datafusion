@@ -528,7 +528,7 @@ impl ParquetSource {
         >(any_arc)
         {
             let sort_options = df.sort_options()?;
-            if sort_options.len() != 1 {
+            if sort_options.is_empty() {
                 return None;
             }
             let children = df.children();

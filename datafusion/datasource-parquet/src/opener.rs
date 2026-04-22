@@ -842,7 +842,7 @@ impl MetadataLoadedParquetOpen {
         if prepared.sort_order_for_reorder.is_some()
             && let Some(pred) = &prepared.predicate
             && let Some(df) = find_dynamic_filter(pred)
-            && df.sort_options().is_some_and(|opts| opts.len() == 1)
+            && df.sort_options().is_some_and(|opts| !opts.is_empty())
             && let Some(fetch) = df.fetch()
         {
             // Only when predicate is pure DynamicFilter (no WHERE)
@@ -1194,7 +1194,7 @@ impl RowGroupsPrunedParquetOpen {
         } else if let Some(predicate) = &prepared.predicate
             && let Some(df) = find_dynamic_filter(predicate)
             && let Some(sort_options) = df.sort_options()
-            && sort_options.len() == 1
+            && !sort_options.is_empty()
         {
             // Build a sort order from DynamicFilter for non-sort-pushdown TopK.
             // Quick bail: check if the sort column exists in file schema.
@@ -1433,7 +1433,7 @@ fn try_init_topk_threshold(
     }
 
     let sort_options = match dynamic_filter.sort_options() {
-        Some(opts) if opts.len() == 1 => opts,
+        Some(opts) if !opts.is_empty() => opts,
         _ => return Ok(()),
     };
 
@@ -1542,7 +1542,7 @@ fn rgs_are_non_overlapping(
     dynamic_filter: &DynamicFilterPhysicalExpr,
 ) -> bool {
     let sort_options = match dynamic_filter.sort_options() {
-        Some(opts) if opts.len() == 1 => opts,
+        Some(opts) if !opts.is_empty() => opts,
         _ => return false,
     };
     let children = dynamic_filter.children();

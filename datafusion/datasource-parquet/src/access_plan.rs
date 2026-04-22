@@ -987,3 +987,41 @@ mod test {
         assert_eq!(plan.row_group_indexes, vec![0, 1]);
     }
 }
+
+#[test]
+fn test_truncate_row_groups_basic() {
+    let plan = PreparedAccessPlan {
+        row_group_indexes: vec![5, 3, 1, 4, 2],
+        row_selection: None,
+    };
+    let plan = plan.truncate_row_groups(3);
+    assert_eq!(plan.row_group_indexes, vec![5, 3, 1]);
+    assert!(plan.row_selection.is_none());
+}
+
+#[test]
+fn test_truncate_row_groups_skips_when_row_selection_present() {
+    let selection = RowSelection::from(vec![
+        RowSelector::select(100),
+        RowSelector::skip(50),
+        RowSelector::select(100),
+    ]);
+    let plan = PreparedAccessPlan {
+        row_group_indexes: vec![5, 3, 1, 4, 2],
+        row_selection: Some(selection),
+    };
+    // Should NOT truncate because row_selection is present
+    let plan = plan.truncate_row_groups(2);
+    assert_eq!(plan.row_group_indexes, vec![5, 3, 1, 4, 2]);
+    assert!(plan.row_selection.is_some());
+}
+
+#[test]
+fn test_truncate_row_groups_no_op_when_count_exceeds_len() {
+    let plan = PreparedAccessPlan {
+        row_group_indexes: vec![1, 2],
+        row_selection: None,
+    };
+    let plan = plan.truncate_row_groups(10);
+    assert_eq!(plan.row_group_indexes, vec![1, 2]);
+}

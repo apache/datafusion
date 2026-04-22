@@ -2658,6 +2658,97 @@ DROP TABLE tk_data;
 statement ok
 DROP TABLE tk_overlap;
 
+# ===========================================================
+# Test L: Multi-key ORDER BY — uses first key for RG reorder
+# ===========================================================
+
+statement ok
+CREATE TABLE tl_data(id INT, name VARCHAR, value INT) AS VALUES
+(10, 'a', 100), (11, 'b', 110), (12, 'c', 120),
+(4, 'd', 40), (5, 'e', 50), (6, 'f', 60),
+(1, 'g', 10), (2, 'h', 20), (3, 'i', 30);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+query I
+COPY (SELECT * FROM tl_data)
+TO 'test_files/scratch/sort_pushdown/tl_multikey/data.parquet';
+----
+9
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE tl_multikey(id INT, name VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tl_multikey/data.parquet';
+
+# Test L.1: Multi-key DESC — first key determines RG reorder
+query IIT
+SELECT id, value, name FROM tl_multikey ORDER BY id DESC, name ASC LIMIT 3;
+----
+12 120 c
+11 110 b
+10 100 a
+
+# Test L.2: Multi-key ASC
+query IIT
+SELECT id, value, name FROM tl_multikey ORDER BY id ASC, name DESC LIMIT 3;
+----
+1 10 g
+2 20 h
+3 30 i
+
+# Test L.3: Multi-key with 3 sort columns
+query IIT
+SELECT id, value, name FROM tl_multikey ORDER BY id DESC, value DESC, name ASC LIMIT 5;
+----
+12 120 c
+11 110 b
+10 100 a
+6 60 f
+5 50 e
+
+# Test L.4: WITH ORDER + multi-key DESC LIMIT
+statement ok
+CREATE EXTERNAL TABLE tl_sorted(id INT, name VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tl_multikey/data.parquet'
+WITH ORDER (id ASC);
+
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# Multi-key with sort pushdown — first key triggers reverse
+query TT
+EXPLAIN SELECT id, value FROM tl_sorted ORDER BY id DESC, value ASC LIMIT 3;
+----
+logical_plan
+01)Sort: tl_sorted.id DESC NULLS FIRST, tl_sorted.value ASC NULLS LAST, fetch=3
+02)--TableScan: tl_sorted projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC, value@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tl_multikey/data.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+query II
+SELECT id, value FROM tl_sorted ORDER BY id DESC, value ASC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Cleanup Test L
+statement ok
+DROP TABLE tl_data;
+
+statement ok
+DROP TABLE tl_multikey;
+
+statement ok
+DROP TABLE tl_sorted;
+
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok
 SET datafusion.execution.target_partitions = 4;
