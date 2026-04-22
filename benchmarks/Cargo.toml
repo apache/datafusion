@@ -60,5 +60,8 @@ snmalloc-rs = { version = "0.7", optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.17" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7"
+
 [dev-dependencies]
 datafusion-proto = { workspace = true }

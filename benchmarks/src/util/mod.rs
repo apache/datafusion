@@ -21,6 +21,9 @@ mod memory;
 mod options;
 mod run;
 
+#[cfg(target_os = "linux")]
+pub mod uring_local_fs;
+
 pub use memory::print_memory_stats;
 pub use options::CommonOpt;
 pub use run::{BenchQuery, BenchmarkRun, QueryResult};

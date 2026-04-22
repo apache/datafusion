@@ -132,18 +132,54 @@ impl CommonOpt {
         Ok(rt_builder)
     }
 
-    /// Build the runtime environment, optionally wrapping the local filesystem
-    /// with a throttled object store to simulate remote storage latency.
+    /// Build the runtime environment.
+    ///
+    /// On Linux the local file:// store is replaced by an io_uring-backed
+    /// `UringLocalFileSystem` by default; opt out with `DATAFUSION_IO_URING=0`.
+    /// When `--simulate-latency` is set, the chosen base store is further
+    /// wrapped in [`LatencyObjectStore`] to mimic remote storage latency.
     pub fn build_runtime(&self) -> Result<Arc<RuntimeEnv>> {
         let rt = self.runtime_env_builder()?.build_arc()?;
-        if self.simulate_latency {
-            let store: Arc<dyn object_store::ObjectStore> =
-                Arc::new(LatencyObjectStore::new(LocalFileSystem::new()));
+
+        #[cfg(target_os = "linux")]
+        let use_uring = std::env::var_os("DATAFUSION_IO_URING")
+            .map(|v| v != "0" && !v.is_empty())
+            .unwrap_or(true);
+        #[cfg(not(target_os = "linux"))]
+        let use_uring = false;
+
+        // We register only when we actually want to override the default
+        // LocalFileSystem (uring on, or latency wrapper on). Otherwise we
+        // let DataFusion's built-in default stand.
+        if use_uring || self.simulate_latency {
+            let store: Arc<dyn object_store::ObjectStore> = {
+                #[cfg(target_os = "linux")]
+                {
+                    if use_uring {
+                        let uring = super::uring_local_fs::UringLocalFileSystem::new()
+                            .map_err(DataFusionError::IoError)?;
+                        println!("Using io_uring-backed LocalFileSystem");
+                        if self.simulate_latency {
+                            Arc::new(LatencyObjectStore::new(uring))
+                        } else {
+                            Arc::new(uring)
+                        }
+                    } else {
+                        Arc::new(LatencyObjectStore::new(LocalFileSystem::new()))
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Arc::new(LatencyObjectStore::new(LocalFileSystem::new()))
+                }
+            };
             let url = ObjectStoreUrl::parse("file:///")?;
             rt.register_object_store(url.as_ref(), store);
-            println!(
-                "Simulating S3-like object store latency (get: 25-200ms, list: 40-400ms)"
-            );
+            if self.simulate_latency {
+                println!(
+                    "Simulating S3-like object store latency (get: 25-200ms, list: 40-400ms)"
+                );
+            }
         }
         Ok(rt)
     }
