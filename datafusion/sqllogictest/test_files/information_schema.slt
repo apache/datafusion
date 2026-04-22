@@ -308,6 +308,7 @@ datafusion.optimizer.enable_sort_pushdown true
 datafusion.optimizer.enable_topk_aggregation true
 datafusion.optimizer.enable_topk_dynamic_filter_pushdown true
 datafusion.optimizer.enable_topk_repartition true
+datafusion.optimizer.enable_unions_to_filter false
 datafusion.optimizer.enable_window_limits true
 datafusion.optimizer.enable_window_topn false
 datafusion.optimizer.expand_views_at_output false
@@ -456,6 +457,7 @@ datafusion.optimizer.enable_sort_pushdown true Enable sort pushdown optimization
 datafusion.optimizer.enable_topk_aggregation true When set to true, the optimizer will attempt to perform limit operations during aggregations, if possible
 datafusion.optimizer.enable_topk_dynamic_filter_pushdown true When set to true, the optimizer will attempt to push down TopK dynamic filters into the file scan phase.
 datafusion.optimizer.enable_topk_repartition true When set to true, the optimizer will push TopK (Sort with fetch) below hash repartition when the partition key is a prefix of the sort key, reducing data volume before the shuffle.
+datafusion.optimizer.enable_unions_to_filter false When set to true, the logical optimizer will rewrite `UNION DISTINCT` branches that read from the same source and differ only by filter predicates into a single branch with a combined filter. This optimization is conservative and only applies when the branches share the same source and compatible wrapper nodes such as identical projections or aliases.
 datafusion.optimizer.enable_window_limits true When set to true, the optimizer will attempt to push limit operations past window functions, if possible
 datafusion.optimizer.enable_window_topn false When set to true, the optimizer will replace Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a PartitionedTopKExec that maintains per-partition heaps, avoiding a full sort of the input. When the window partition key has low cardinality, enabling this optimization can improve performance. However, for high cardinality keys, it may cause regressions in both memory usage and runtime.
 datafusion.optimizer.expand_views_at_output false When set to true, if the returned type is a view type then the output will be coerced to a non-view. Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
