@@ -26,7 +26,7 @@ use datafusion_physical_plan::metrics::ScopedTimerGuard;
 use futures::stream::BoxStream;
 use futures::{FutureExt as _, StreamExt as _};
 
-use super::work_source::WorkSource;
+use super::work_source::{FileLease, PopResult, WorkSource};
 use super::{FileStreamMetrics, OnError};
 
 /// State [`FileStreamState::Scan`].
@@ -81,6 +81,12 @@ pub(super) struct ScanState {
     /// Once the I/O completes, yields the next planner and is pushed back
     /// onto `ready_planners`.
     pending_planner: Option<PendingMorselPlanner>,
+    /// Lease on the current file popped from a shared work source. While
+    /// held, idle siblings will wait for potential donations from this
+    /// file instead of declaring the shared source drained. `None` for
+    /// files that came from a local work source or for pre-finalized
+    /// morsels.
+    current_file_lease: Option<FileLease>,
     /// Metrics for the active scan queues.
     metrics: FileStreamMetrics,
 }
@@ -102,6 +108,7 @@ impl ScanState {
             ready_morsels: Default::default(),
             reader: None,
             pending_planner: None,
+            current_file_lease: None,
             metrics,
         }
     }
@@ -146,6 +153,7 @@ impl ScanState {
                     return match self.on_error {
                         OnError::Skip => {
                             self.metrics.files_processed.add(1);
+                            self.current_file_lease = None;
                             ScanAndReturn::Continue
                         }
                         OnError::Fail => ScanAndReturn::Error(err),
@@ -174,6 +182,7 @@ impl ScanState {
                                 let batch = batch.slice(0, *remain);
                                 let done = 1 + self.work_source.skipped_on_limit();
                                 self.metrics.files_processed.add(done);
+                                self.current_file_lease = None;
                                 *remain = 0;
                                 (batch, true)
                             }
@@ -197,6 +206,7 @@ impl ScanState {
                     return match self.on_error {
                         OnError::Skip => {
                             self.metrics.files_processed.add(1);
+                            self.current_file_lease = None;
                             ScanAndReturn::Continue
                         }
                         OnError::Fail => ScanAndReturn::Error(err),
@@ -205,6 +215,7 @@ impl ScanState {
                 Poll::Ready(None) => {
                     self.reader = None;
                     self.metrics.files_processed.add(1);
+                    self.current_file_lease = None;
                     self.metrics.time_scanning_until_data.stop();
                     self.metrics.time_scanning_total.stop();
                     return ScanAndReturn::Continue;
@@ -218,6 +229,11 @@ impl ScanState {
             self.metrics.time_scanning_until_data.start();
             self.metrics.time_scanning_total.start();
             self.reader = Some(morsel.into_stream());
+            // A morsel is now streaming, so we're past the pre-scan window
+            // where donations happen. Release the in-flight donor slot so
+            // idle siblings can make progress (or exit) without waiting on
+            // this stream to finish its assigned row groups.
+            self.current_file_lease = None;
             return ScanAndReturn::Continue;
         }
 
@@ -248,6 +264,7 @@ impl ScanState {
                 }
                 Ok(None) => {
                     self.metrics.files_processed.add(1);
+                    self.current_file_lease = None;
                     self.metrics.time_opening.stop();
                     ScanAndReturn::Continue
                 }
@@ -257,6 +274,7 @@ impl ScanState {
                     match self.on_error {
                         OnError::Skip => {
                             self.metrics.files_processed.add(1);
+                            self.current_file_lease = None;
                             ScanAndReturn::Continue
                         }
                         OnError::Fail => ScanAndReturn::Error(err),
@@ -266,10 +284,18 @@ impl ScanState {
         }
 
         // No outstanding work remains, so begin planning the next unopened file.
-        let part_file = match self.work_source.pop_front() {
-            Some(part_file) => part_file,
-            None => return ScanAndReturn::Done(None),
+        let (part_file, lease) = match self.work_source.pop_front() {
+            PopResult::Ready(file, lease) => (file, lease),
+            PopResult::Pending => {
+                // A sibling is pre-scan on a shared file that may still
+                // donate morsels. Re-schedule ourselves so we re-check the
+                // queues as soon as the scheduler picks us up.
+                cx.waker().wake_by_ref();
+                return ScanAndReturn::Return(Poll::Pending);
+            }
+            PopResult::Done => return ScanAndReturn::Done(None),
         };
+        self.current_file_lease = lease;
 
         self.metrics.time_opening.start();
         match self.morselizer.plan_file(part_file) {
@@ -283,6 +309,7 @@ impl ScanState {
                     self.metrics.file_open_errors.add(1);
                     self.metrics.time_opening.stop();
                     self.metrics.files_processed.add(1);
+                    self.current_file_lease = None;
                     ScanAndReturn::Continue
                 }
                 OnError::Fail => ScanAndReturn::Error(err),
