@@ -823,6 +823,10 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
 }
 
 /// Finds the min/max by scanning logical rows via `ScalarValue::try_from_array`.
+///
+/// Callers are responsible for routing dictionary arrays to this helper.
+/// Passing `dictionary.values()` is semantically incorrect because it can
+/// include unreferenced dictionary entries and ignore null key positions.
 fn min_max_batch_generic(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
     let mut index = 0;
     let mut extreme = loop {
@@ -907,7 +911,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{AsArray, DictionaryArray};
+    use arrow::array::DictionaryArray;
     use std::sync::Arc;
 
     #[test]
@@ -993,12 +997,9 @@ mod tests {
         let keys = Int8Array::from(vec![Some(1), None, Some(1), Some(1)]);
         let values = Arc::new(StringArray::from(vec!["zzz", "bbb", "aaa"]));
         let array = Arc::new(DictionaryArray::new(keys, values)) as ArrayRef;
-        let raw_values = array.as_any_dictionary().values();
 
         let min = min_batch(&array)?;
         let max = max_batch(&array)?;
-        let raw_min = min_batch(raw_values)?;
-        let raw_max = max_batch(raw_values)?;
 
         let expected = ScalarValue::Dictionary(
             Box::new(DataType::Int8),
@@ -1007,8 +1008,6 @@ mod tests {
 
         assert_eq!(min, expected);
         assert_eq!(max, expected);
-        assert_eq!(raw_min, ScalarValue::Utf8(Some("aaa".to_string())));
-        assert_eq!(raw_max, ScalarValue::Utf8(Some("zzz".to_string())));
 
         Ok(())
     }
