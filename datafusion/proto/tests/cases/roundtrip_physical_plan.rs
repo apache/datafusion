@@ -3259,7 +3259,7 @@ fn test_dynamic_filter_roundtrip_dedupe() -> Result<()> {
     Ok(())
 }
 
-/// Rountrip test for an execution plan where there are multiple instances of a dynamic filter
+/// Roundtrip test for an execution plan where there are multiple instances of a dynamic filter
 /// with different children.
 #[test]
 fn test_dynamic_filter_plan_roundtrip_dedupe_shallow_expr_id() -> Result<()> {
@@ -3272,7 +3272,7 @@ fn test_dynamic_filter_plan_roundtrip_dedupe_shallow_expr_id() -> Result<()> {
 
     // Assert the filters are not modified during roundtrip.
     //
-    // There's a small technicality that `filter_expr_1` is rewritten to an eqivalent expression
+    // There's a small technicality that `filter_expr_1` is rewritten to an equivalent expression
     // during deserialization, so we capture that here by calling
     // `filter.with_new_children(filter.children)`.
     let filter_expr_1_children = Arc::clone(&filter_expr_1)

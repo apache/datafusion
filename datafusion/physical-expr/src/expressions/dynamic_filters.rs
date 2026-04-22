@@ -1018,7 +1018,6 @@ mod test {
         )
         .expect("reassign_expr_columns should succeed");
         let reassigned = reassigned
-            .as_any()
             .downcast_ref::<DynamicFilterPhysicalExpr>()
             .expect("Expected dynamic filter after reassignment");
 

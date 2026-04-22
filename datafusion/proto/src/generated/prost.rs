@@ -1306,8 +1306,12 @@ pub struct PhysicalExtensionNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalExprNode {
-    /// Unique identifier for this expression used during deserialization to restore
+    /// Unique identifiers for this expression used during deserialization to restore
     /// referential integrity across serde roundtrips.
+    ///
+    /// expr_id: if two exprs have the same expr_id, they are identical (including children)
+    /// shallow_expr_id: if two exprs have the same shallow_expr_id, they are identical but may
+    ///    have different children
     #[prost(uint64, optional, tag = "30")]
     pub expr_id: ::core::option::Option<u64>,
     #[prost(uint64, optional, tag = "31")]
