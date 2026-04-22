@@ -230,8 +230,8 @@ SET datafusion.runtime.memory_limit = '2G';
 The following runtime configuration settings are available:
 
 | key                                            | default | description                                                                                                                                                               |
-| ---------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| datafusion.runtime.file_statistics_cache_limit | 1M      | Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.                        |
+| ---------------------------------------------- |---------| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| datafusion.runtime.file_statistics_cache_limit | 20M     | Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.                        |
 | datafusion.runtime.list_files_cache_limit      | 1M      | Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.                             |
 | datafusion.runtime.list_files_cache_ttl        | NULL    | TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.                                       |
 | datafusion.runtime.max_temp_directory_size     | 100G    | Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.                                  |
