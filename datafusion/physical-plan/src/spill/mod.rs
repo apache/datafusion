@@ -49,7 +49,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_data::ArrayDataBuilder;
 
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::RecordBatchStream;
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -121,6 +121,7 @@ impl SpillReaderStream {
                     unreachable!()
                 };
 
+                let expected_schema = Arc::clone(&self.schema);
                 let task = SpawnedTask::spawn_blocking(move || {
                     let file = BufReader::new(File::open(spill_file.path())?);
                     // SAFETY: DataFusion's spill writer strictly follows Arrow IPC specifications
@@ -130,6 +131,21 @@ impl SpillReaderStream {
                         StreamReader::try_new(file, None)?.with_skip_validation(true)
                     };
 
+                    // Validate the schema read from Arrow IPC file is the same as the
+                    // schema of the current `SpillManager`
+                    let actual_schema = reader.schema();
+
+                    if actual_schema != expected_schema {
+                        return exec_err!(
+                            "Spill file schema mismatch: expected {}, got {}. \
+                            The caller must use the same SpillManager that created the spill file to read it.",
+                            expected_schema,
+                            actual_schema
+                        );
+                    }
+
+                    // TODO: Same-schema reads from a different SpillManager still pass today.
+                    // Add a SpillManager UID to IPC metadata and validate it here as well.
                     let next_batch = reader.next().transpose()?;
 
                     Ok((reader, next_batch))
