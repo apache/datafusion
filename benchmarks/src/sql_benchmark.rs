@@ -1208,8 +1208,6 @@ pub struct BenchmarkQuery {
     expected_result: Vec<Vec<String>>,
 }
 
-impl BenchmarkQuery {}
-
 // ---- utility function below
 
 fn directive_value<'a>(
