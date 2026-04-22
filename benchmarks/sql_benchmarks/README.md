@@ -21,7 +21,8 @@
 
 This directory contains a collection of benchmarks each driven by a simple '.benchmark' text file and sql queries
 that exercise the DataFusion execution engine against a variety of benchmark suites. The sql benchmark framework
-is intentionally simple so that new benchmarks and queries can be added without touching the core engine.
+is intentionally simple so that benchmarks and queries can be added or modified without touching the core
+engine or requiring recompilation.
 
 The sql benchmarks are organized in sub‑directories that correspond to the benchmark suites that are commonly used
 in the community:
@@ -41,11 +42,65 @@ in the community:
 | `tpcds`               | TPC‑DS queries                                                     |
 | `tpch`                | TPC‑H queries                                                      |
 
+# Running Benchmarks
+
+The easiest way to run a benchmark is to use the `bench.sh` shell script (up one level from this document)
+as it takes care of configuring any required environment variables and can populate any required data files.
+However, it is possible to directly run a sql benchmark using the `cargo bench` command. For example:
+
+```shell
+BENCH_NAME=tpch cargo bench --bench sql
+```
+
+# Benchmark configuration
+
+Sql benchmarks are configured via environment variables. Cargo's bench command and
+[criterion](https://github.com/criterion-rs/criterion.rs) (the underlying benchmark framework) have an unfortunate
+limitation in that custom command arguments cannot be passed into a benchmark. The alternative is to use environment
+variables to pass in arguments which is what is used here.
+
+The SQL benchmarking tool uses the following environment variables:
+
+| Environment Variable            | Description                                                                                                                                                                                       |
+|---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| BENCH_NAME                      | The name of the benchmark suite to run. For example 'imdb'. This should correspond to a directory name in the `sql_benchmarks` directory.                                                         |
+| BENCH_SUBGROUP                  | The subgroup with the benchmark suite to run. For example 'window' to run the window subgroup of the h2o benchmark.                                                                               |
+| BENCH_QUERY                     | A query number to run.                                                                                                                                                                            |
+| BENCH_PERSIST_RESULTS           | true/false to persist benchmark results. Results will be persisted in csv format so be cognizant of the size of the results.                                                                      |
+| BENCH_VALIDATE                  | true/false to validate benchmark results against persisted results or result_query's. If both `BENCH_PERSIST_RESULTS` and `BENCH_VALIDATE` are true, persist mode runs and validation is skipped. |
+| SIMULATE_LATENCY                | Simulate object store latency to mimic remote storage (e.g. S3). Adds random latency in the range 20-200ms to each object store operation.                                                        |
+| PARTITIONS                      | Number of partitions to process in parallel. Defaults to number of available cores.                                                                                                               |
+| BATCH_SIZE                      | Batch size when reading CSV or Parquet files.                                                                                                                                                     |
+| MEM_POOL_TYPE                   | The memory pool type to use, should be one of "fair" or "greedy".                                                                                                                                 |
+| MEMORY_LIMIT                    | Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query if there's any, otherwise run with no memory limit.                                       |
+| DATAFUSION_RUNTIME_MEMORY_LIMIT | Used if MEMORY_LIMIT is not set.                                                                                                                                                                  |
+| SORT_SPILL_RESERVATION_BYTES    | The amount of memory to reserve for sort spill operations. DataFusion's default value will be used if not specified.                                                                              |
+
+Example – Run the H2O window benchmarks on the 'small' sized CSV data files:
+
+``` bash
+BENCH_NAME=h2o BENCH_SUBGROUP=window H2O_BENCH_SIZE=small H20_FILE_TYPE=csv cargo bench --bench sql 
+```
+
+Some benchmarks use custom environment variables as outlined below:
+
+| Name                         | Description                                                                                                              | Default value | 
+|------------------------------|--------------------------------------------------------------------------------------------------------------------------|---------------|
+| BENCH_SIZE                   | Used in the tpch, sort-tpch and tpcds benchmarks. The size corresponds to the scale factor.                              | `1`           |
+| TPCH_FILE_TYPE               | Used in the tpch benchmark to specify which file type to query against. The valid options are `csv`, `parquet` and `mem` | `parquet`     |
+| H2O_FILE_TYPE                | Used in the h2o benchmark to specify which file type to query against. The valid options are `csv` and `parquet`         | `csv`         |
+| CLICKBENCH_TYPE              | The type of partitioning for the clickbench benchmark. Valid options are `single` and `partitioned`                      | `single`      | 
+| H2O_BENCH_SIZE               | Used in the h2o benchmark. The valid options are `small`, `medium` and `big`                                             | `small`       |                           
+| PREFER_HASH_JOIN             | Control datafusion's config option `datafusion.optimizer.prefer_hash_join`                                               | true          |
+| HASH_JOIN_BUFFERING_CAPACITY | Control datafusion's config option `datafusion.execution.hash_join_buffering_capacity`                                   | 0             |
+| BENCH_SORTED                 | Used in the sort_tpch benchmark to indicate whether the lineitem table should be sorted.                                 | false         |
+| SORTED_BY                    | Used in the clickbench_sorted benchmark to indicate the column to sort by.                                               | `EventTime`   |
+| SORTED_ORDER                 | Used in the clickbench_sorted benchmark to indicate the sort order of the column.                                        | `ASC`         |
+
 ## How it works
 
 SQL benchmarks are run via cargo's bench command using [criterion](https://docs.rs/criterion/latest/criterion/)
-for running and gathering statistics of each sql being benchmarked. For simplicity the benchmarks/bench.sh can
-be used to execute the supported benchmarks.
+for running and gathering statistics of each sql being benchmarked.
 
 Each individual benchmark is represented by a `<name>.benchmark` file that contains a number of directives instructing
 the tool on how to load data, run initializations, run assertions, run the benchmark, optionally persist and
@@ -57,8 +112,8 @@ Variables are supported in two forms:
   \${ENV_VAR:-default}.
 * if / else based on whether an environment variable is true or not
   (\${ENV_VAR:-default|true value|false value}). In this form only the value `true` (case-insensitive) selects the
-  true branch; any other set value selects the false branch. If ENV_VAR is unset, `default` is used to select the
-  branch.
+  true branch; any other set value selects the false branch. If ENV_VAR is unset, the valud of `default` is used to
+* select the branch.
 
 Comments in files are supported with lines starting with # or --.
 
@@ -284,57 +339,6 @@ echo The value for batch size is ${BATCH_SIZE:-8192}
 </td>
 </tr>
 </table>
-
-# Run a single benchmark suite
-
-```shell
-BENCH_NAME=tpch cargo bench --bench sql
-```
-
-As you can see above the actual benchmark suite to run is set via an environment variable. Cargo's bench command and
-criterion have an unfortunate limitation in that custom command arguments cannot be passed
-into a benchmark. The alternative is to use environment variables to pass in arguments which is what is used here.
-The SQL benchmarking tool uses the following environment variables:
-
-| Environment Variable            | Description                                                                                                                                                                                       |
-|---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| BENCH_NAME                      | The name of the benchmark suite to run. For example 'imdb'. This should correspond to a directory name in the `sql_benchmarks` directory.                                                         |
-| BENCH_SUBGROUP                  | The subgroup with the benchmark suite to run. For example 'window' to run the window subgroup of the h2o benchmark.                                                                               |
-| BENCH_QUERY                     | A query number to run.                                                                                                                                                                            |
-| BENCH_PERSIST_RESULTS           | true/false to persist benchmark results. Results will be persisted in csv format so be cognizant of the size of the results.                                                                      |
-| BENCH_VALIDATE                  | true/false to validate benchmark results against persisted results or result_query's. If both `BENCH_PERSIST_RESULTS` and `BENCH_VALIDATE` are true, persist mode runs and validation is skipped. |
-| SIMULATE_LATENCY                | Simulate object store latency to mimic remote storage (e.g. S3). Adds random latency in the range 20-200ms to each object store operation.                                                        |
-| PARTITIONS                      | Number of partitions to process in parallel. Defaults to number of available cores.                                                                                                               |
-| BATCH_SIZE                      | Batch size when reading CSV or Parquet files.                                                                                                                                                     |
-| MEM_POOL_TYPE                   | The memory pool type to use, should be one of "fair" or "greedy".                                                                                                                                 |
-| MEMORY_LIMIT                    | Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query if there's any, otherwise run with no memory limit.                                       |
-| DATAFUSION_RUNTIME_MEMORY_LIMIT | Used if MEMORY_LIMIT is not set.                                                                                                                                                                  |
-| SORT_SPILL_RESERVATION_BYTES    | The amount of memory to reserve for sort spill operations. DataFusion's default value will be used if not specified.                                                                              |
-
-Example – Run the H2O window benchmarks on the 'small' sized CSV data files:
-
-``` bash
-export BENCH_NAME=h2o
-export BENCH_SUBGROUP=window
-export H2O_BENCH_SIZE=small
-export H20_FILE_TYPE=csv
-cargo bench --bench sql 
-```
-
-Some benchmarks use custom environment variables as outlined below:
-
-| Name                         | Description                                                                                                              | Default value | 
-|------------------------------|--------------------------------------------------------------------------------------------------------------------------|---------------|
-| BENCH_SIZE                   | Used in the tpch, sort-tpch and tpcds benchmarks. The size corresponds to the scale factor.                              | `1`           |
-| TPCH_FILE_TYPE               | Used in the tpch benchmark to specify which file type to query against. The valid options are `csv`, `parquet` and `mem` | `parquet`     |
-| H2O_FILE_TYPE                | Used in the h2o benchmark to specify which file type to query against. The valid options are `csv` and `parquet`         | `csv`         |
-| CLICKBENCH_TYPE              | The type of partitioning for the clickbench benchmark. Valid options are `single` and `partitioned`                      | `single`      | 
-| H2O_BENCH_SIZE               | Used in the h2o benchmark. The valid options are `small`, `medium` and `big`                                             | `small`       |                           
-| PREFER_HASH_JOIN             | Control datafusion's config option `datafusion.optimizer.prefer_hash_join`                                               | true          |
-| HASH_JOIN_BUFFERING_CAPACITY | Control datafusion's config option `datafusion.execution.hash_join_buffering_capacity`                                   | 0             |
-| BENCH_SORTED                 | Used in the sort_tpch benchmark to indicate whether the lineitem table should be sorted.                                 | false         |
-| SORTED_BY                    | Used in the clickbench_sorted benchmark to indicate the column to sort by.                                               | `EventTime`   |
-| SORTED_ORDER                 | Used in the clickbench_sorted benchmark to indicate the sort order of the column.                                        | `ASC`         |
 
 # Extending an existing benchmark suite
 
