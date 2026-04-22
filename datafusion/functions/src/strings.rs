@@ -576,8 +576,8 @@ impl StringViewArrayBuilder {
     #[inline]
     pub fn append_value(&mut self, value: &str) {
         let v = value.as_bytes();
-        let length: u32 = i32::try_from(v.len())
-            .expect("value length exceeds i32::MAX") as u32;
+        let length: u32 =
+            i32::try_from(v.len()).expect("value length exceeds i32::MAX") as u32;
         if length <= 12 {
             self.views.push(make_view(v, 0, 0));
             return;
@@ -591,7 +591,8 @@ impl StringViewArrayBuilder {
         }
 
         let buffer_index: u32 = i32::try_from(self.completed.len())
-            .expect("buffer count exceeds i32::MAX") as u32;
+            .expect("buffer count exceeds i32::MAX")
+            as u32;
         let offset: u32 = i32::try_from(self.in_progress.len())
             .expect("offset exceeds i32::MAX") as u32;
         self.in_progress.extend_from_slice(v);
