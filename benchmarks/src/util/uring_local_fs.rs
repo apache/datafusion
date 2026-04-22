@@ -99,7 +99,7 @@ struct InFlight {
 }
 
 /// Shared handle to the driver thread. Cheap to clone (`Arc`).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UringSubmitter {
     tx: mpsc::UnboundedSender<Cmd>,
 }
