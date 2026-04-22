@@ -33,8 +33,8 @@
 //! - Space-Saving: Metwally, Agrawal, El Abbadi. "Efficient Computation of Frequent
 //!   and Top-k Elements in Data Streams" (ICDT 2005)
 
-use std::any::Any;
-use std::collections::HashMap;
+use std::cmp::{Ordering, max, min};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -45,12 +45,15 @@ use arrow::array::{
     UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{Result, ScalarValue};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
+use hashbrown::HashTable;
+
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, TIMEZONE_WILDCARD,
+    TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -113,30 +116,37 @@ impl Counter {
     }
 
     /// Ordering for top-k selection: highest-ranked counters sort first.
-    fn cmp_by_rank(&self, other: &Counter) -> std::cmp::Ordering {
+    fn cmp_by_rank(&self, other: &Counter) -> Ordering {
         if other.is_greater_than(self) {
-            std::cmp::Ordering::Greater
+            Ordering::Greater
         } else if self.is_greater_than(other) {
-            std::cmp::Ordering::Less
+            Ordering::Less
         } else {
-            std::cmp::Ordering::Equal
+            Ordering::Equal
         }
     }
 }
 
 /// Filtered Space-Saving algorithm summary for approximate top-k / heavy hitters.
 ///
-/// Uses a hash map for O(1) counter lookups and maintains an alpha map (filter)
-/// to remember evicted items' frequencies.
+/// Uses a [`HashTable`] that stores `(hash, index)` tuples for O(1) counter
+/// lookups without duplicating the key bytes.  The actual item data lives in
+/// `counters[index].item`.  An alpha map (filter) remembers evicted items'
+/// frequencies.
 #[derive(Debug, Clone)]
 struct SpaceSavingSummary {
     counters: Vec<Counter>,
-    counter_map: HashMap<Vec<u8>, usize>,
+    /// Maps `(cached_hash, counter_index)`.  Lookups use the cached hash for
+    /// the fast path and fall back to byte equality via the `counters` vec.
+    counter_map: HashTable<(u64, usize)>,
     alpha_map: Vec<u64>,
     requested_capacity: usize,
     /// Internal target capacity to avoid frequent truncations.
     /// Set to `max(64, requested_capacity * 2)`.
     target_capacity: usize,
+    /// Running total of heap bytes owned by counter item `Vec`s.
+    /// Updated on push / evict / clone so that [`size`] is O(1).
+    item_heap_bytes: usize,
 }
 
 impl SpaceSavingSummary {
@@ -157,10 +167,11 @@ impl SpaceSavingSummary {
     fn new(capacity: usize) -> Self {
         Self {
             counters: Vec::new(),
-            counter_map: HashMap::new(),
+            counter_map: HashTable::new(),
             alpha_map: Vec::new(),
             requested_capacity: 0,
             target_capacity: 0,
+            item_heap_bytes: 0,
         }
         .resized(capacity)
     }
@@ -171,7 +182,7 @@ impl SpaceSavingSummary {
             let alpha_map_size = Self::compute_alpha_map_size(new_capacity);
             self.alpha_map = vec![0u64; alpha_map_size];
             self.requested_capacity = new_capacity;
-            self.target_capacity = std::cmp::max(64, new_capacity * 2);
+            self.target_capacity = max(64, new_capacity.saturating_mul(2));
             self.counters.reserve(self.target_capacity);
         }
         self
@@ -191,16 +202,21 @@ impl SpaceSavingSummary {
         self.requested_capacity
     }
 
-    fn find_counter_mut(&mut self, item: &[u8]) -> Option<&mut Counter> {
+    /// Find a counter by item bytes, using the pre-computed hash for fast
+    /// lookup and falling back to byte equality for collision resolution.
+    fn find_counter_idx(&self, item: &[u8], hash: u64) -> Option<usize> {
         self.counter_map
-            .get(item)
-            .copied()
-            .map(|idx| &mut self.counters[idx])
+            .find(hash, |&(h, idx)| {
+                h == hash && self.counters[idx].item == item
+            })
+            .map(|&(_, idx)| idx)
     }
 
     #[cfg(test)]
     fn find_counter(&self, item: &[u8]) -> Option<&Counter> {
-        self.counter_map.get(item).map(|&idx| &self.counters[idx])
+        let hash = Self::hash_item(item);
+        self.find_counter_idx(item, hash)
+            .map(|idx| &self.counters[idx])
     }
 
     /// Add an item with increment 1.
@@ -213,9 +229,9 @@ impl SpaceSavingSummary {
         let hash = Self::hash_item(item);
 
         // Fast path: item already tracked.
-        if let Some(counter) = self.find_counter_mut(item) {
-            counter.count += increment;
-            counter.error += error;
+        if let Some(idx) = self.find_counter_idx(item, hash) {
+            self.counters[idx].count = self.counters[idx].count.saturating_add(increment);
+            self.counters[idx].error = self.counters[idx].error.saturating_add(error);
             return;
         }
 
@@ -230,12 +246,19 @@ impl SpaceSavingSummary {
         let alpha_idx = (hash as usize) & alpha_mask;
         let alpha = self.alpha_map[alpha_idx];
 
-        self.push_counter(item.to_vec(), hash, alpha + increment, alpha + error);
+        self.push_counter(
+            item.to_vec(),
+            hash,
+            alpha.saturating_add(increment),
+            alpha.saturating_add(error),
+        );
     }
 
     fn push_counter(&mut self, item: Vec<u8>, hash: u64, count: u64, error: u64) {
         let idx = self.counters.len();
-        self.counter_map.insert(item.clone(), idx);
+        self.item_heap_bytes += item.capacity();
+        self.counter_map
+            .insert_unique(hash, (hash, idx), |&(h, _)| h);
         self.counters.push(Counter {
             item,
             hash,
@@ -260,19 +283,29 @@ impl SpaceSavingSummary {
                 for counter in self.counters.drain(k..) {
                     let alpha_idx = (counter.hash as usize) & alpha_mask;
                     let true_count = counter.count.saturating_sub(counter.error);
-                    self.alpha_map[alpha_idx] = std::cmp::min(
-                        self.alpha_map[alpha_idx] + true_count,
+                    self.alpha_map[alpha_idx] = min(
+                        self.alpha_map[alpha_idx].saturating_add(true_count),
                         MAX_ALPHA_VALUE,
                     );
+                    self.item_heap_bytes -= counter.item.capacity();
                 }
             }
         }
 
         if need_truncate || force_rebuild {
-            self.counter_map.clear();
-            for (idx, counter) in self.counters.iter().enumerate() {
-                self.counter_map.insert(counter.item.clone(), idx);
-            }
+            self.rebuild_counter_map();
+        }
+    }
+
+    /// Rebuild the `counter_map` from the current `counters` vec.
+    fn rebuild_counter_map(&mut self) {
+        self.counter_map.clear();
+        for (idx, counter) in self.counters.iter().enumerate() {
+            self.counter_map.insert_unique(
+                counter.hash,
+                (counter.hash, idx),
+                |&(h, _)| h,
+            );
         }
     }
 
@@ -288,7 +321,7 @@ impl SpaceSavingSummary {
         }
 
         let mut sorted: Vec<_> = self.counters.iter().collect();
-        let return_size = std::cmp::min(sorted.len(), k);
+        let return_size = min(sorted.len(), k);
 
         if return_size < sorted.len() {
             sorted.select_nth_unstable_by(return_size - 1, |a, b| a.cmp_by_rank(b));
@@ -303,7 +336,9 @@ impl SpaceSavingSummary {
             .collect()
     }
 
-    /// Merge another summary into this one.
+    /// Merge another summary into this one using the Parallel Space-Saving
+    /// reduce-and-combine algorithm from <https://arxiv.org/pdf/1401.0702.pdf>,
+    /// matching ClickHouse's `SpaceSaving::merge()` implementation.
     fn merge(&mut self, other: &SpaceSavingSummary) {
         if other.is_empty() {
             return;
@@ -315,61 +350,116 @@ impl SpaceSavingSummary {
             self.alpha_map.clone_from(&other.alpha_map);
             self.requested_capacity = other.requested_capacity;
             self.target_capacity = other.target_capacity;
+            // Recompute from cloned vecs since clone may allocate exact-size
+            // (capacity == len), which can differ from the original's capacity.
+            self.item_heap_bytes = self.counters.iter().map(|c| c.item.capacity()).sum();
             return;
         }
 
+        // Compute m1/m2: the minimum counter count in each summary.
+        // Per the Parallel Space-Saving paper (Theorem 1), if a summary has
+        // reached capacity, items not in its counter list could have had at
+        // most min(counter.count) frequency.  This is the merge correction.
+        let m1 = if self.counters.len() >= self.requested_capacity {
+            self.counters.iter().map(|c| c.count).min().unwrap_or(0)
+        } else {
+            0
+        };
+        let m2 = if other.counters.len() >= other.requested_capacity {
+            other.counters.iter().map(|c| c.count).min().unwrap_or(0)
+        } else {
+            0
+        };
+
+        // Step 1: Bump all self counters by m2 (upper bound of what they
+        // could have counted in the other partition).
+        if m2 > 0 {
+            for counter in &mut self.counters {
+                counter.count = counter.count.saturating_add(m2);
+                counter.error = counter.error.saturating_add(m2);
+            }
+        }
+
+        // Step 2: Merge other's counters into self.
         for other_counter in &other.counters {
-            if let Some(idx) = self.counter_map.get(&other_counter.item).copied() {
-                self.counters[idx].count += other_counter.count;
-                self.counters[idx].error += other_counter.error;
+            if let Some(idx) =
+                self.find_counter_idx(&other_counter.item, other_counter.hash)
+            {
+                // Item exists in both: add other's count, subtract the m2 we
+                // already added in step 1 (guaranteed non-negative).
+                self.counters[idx].count = self.counters[idx]
+                    .count
+                    .saturating_add(other_counter.count.saturating_sub(m2));
+                self.counters[idx].error = self.counters[idx]
+                    .error
+                    .saturating_add(other_counter.error.saturating_sub(m2));
             } else {
+                // Item only in other: add with m1 (upper bound of what it
+                // could have counted in self's partition).
+                let item = other_counter.item.clone();
+                self.item_heap_bytes += item.capacity();
                 self.counters.push(Counter {
-                    item: other_counter.item.clone(),
+                    item,
                     hash: other_counter.hash,
-                    count: other_counter.count,
-                    error: other_counter.error,
+                    count: other_counter.count.saturating_add(m1),
+                    error: other_counter.error.saturating_add(m1),
                 });
             }
         }
 
-        // Merge alpha maps element-wise. Sizes should always match because the
-        // planner guarantees the same k (and thus the same capacity/alpha map size)
-        // across all partitions. If they differ due to a bug, we skip the merge
-        // which only degrades accuracy without affecting correctness.
+        // Merge alpha maps element-wise.
         if self.alpha_map.len() == other.alpha_map.len() {
             for (i, &other_alpha) in other.alpha_map.iter().enumerate() {
-                self.alpha_map[i] =
-                    std::cmp::min(self.alpha_map[i] + other_alpha, MAX_ALPHA_VALUE);
+                self.alpha_map[i] = min(
+                    self.alpha_map[i].saturating_add(other_alpha),
+                    MAX_ALPHA_VALUE,
+                );
             }
         }
 
         self.truncate_if_needed(true);
     }
 
-    /// Serialize the summary to bytes.
+    /// Serialize the summary to bytes (matches ClickHouse's `write()` format).
+    ///
+    /// Only the top `requested_capacity` counters are written.  The alpha map
+    /// carries evicted frequency information for the coordinator merge.
     fn serialize(&mut self) -> Vec<u8> {
-        // Ensure counters are truncated and alpha map is up to date before
-        // serializing, in case to_bytes is called without a prior truncation.
         self.truncate_if_needed(false);
 
-        let counters_to_write: Vec<_> = {
-            let mut sorted: Vec<_> = self.counters.iter().collect();
-            let return_size = std::cmp::min(sorted.len(), self.requested_capacity);
-            if return_size > 0 && return_size < sorted.len() {
-                // After select_nth_unstable_by, the top-k counters are in
-                // sorted[..return_size] but in arbitrary order. This is fine
-                // since deserialization doesn't depend on counter ordering.
-                sorted.select_nth_unstable_by(return_size - 1, |a, b| a.cmp_by_rank(b));
+        // If there are still more counters than requested_capacity (because
+        // target_capacity wasn't reached), partition out the top ones and
+        // fold the tail into the alpha map before serializing.
+        let k = self.requested_capacity;
+        if k > 0 && k < self.counters.len() {
+            self.counters
+                .select_nth_unstable_by(k - 1, |a, b| a.cmp_by_rank(b));
+
+            let alpha_mask = self.alpha_map.len() - 1;
+            for counter in self.counters.drain(k..) {
+                let alpha_idx = (counter.hash as usize) & alpha_mask;
+                let true_count = counter.count.saturating_sub(counter.error);
+                self.alpha_map[alpha_idx] = min(
+                    self.alpha_map[alpha_idx].saturating_add(true_count),
+                    MAX_ALPHA_VALUE,
+                );
+                self.item_heap_bytes -= counter.item.capacity();
             }
-            sorted.truncate(return_size);
-            sorted
-        };
+            self.rebuild_counter_map();
+        }
 
-        let mut bytes = Vec::new();
+        let num_counters = self.counters.len();
+
+        // Pre-compute total size for a single allocation.
+        let counter_bytes: usize =
+            self.counters.iter().map(|c| 4 + c.item.len() + 16).sum();
+        let total = 16 + counter_bytes + 8 + self.alpha_map.len() * 8;
+        let mut bytes = Vec::with_capacity(total);
+
         bytes.extend_from_slice(&(self.requested_capacity as u64).to_le_bytes());
-        bytes.extend_from_slice(&(counters_to_write.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&(num_counters as u64).to_le_bytes());
 
-        for counter in counters_to_write {
+        for counter in &self.counters {
             bytes.extend_from_slice(&(counter.item.len() as u32).to_le_bytes());
             bytes.extend_from_slice(&counter.item);
             bytes.extend_from_slice(&counter.count.to_le_bytes());
@@ -387,35 +477,64 @@ impl SpaceSavingSummary {
     /// Deserialize a summary from bytes.
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 16 {
-            return Err(datafusion_common::DataFusionError::Execution(
-                "Invalid Space-Saving summary bytes: too short".to_string(),
-            ));
+            return exec_err!("Invalid Space-Saving summary bytes: too short");
         }
 
         let requested_capacity =
             u64::from_le_bytes(bytes[0..8].try_into().unwrap()) as usize;
         let num_counters = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
 
+        // Validate against reasonable upper bounds to prevent OOM from
+        // malformed state.
+        if requested_capacity == 0 {
+            return exec_err!("Invalid Space-Saving summary: requested_capacity is 0");
+        }
+        let max_capacity = APPROX_TOP_K_MAX_K * CAPACITY_MULTIPLIER;
+        if requested_capacity > max_capacity {
+            return exec_err!(
+                "Invalid Space-Saving summary: requested_capacity {requested_capacity} \
+                 exceeds maximum {max_capacity}"
+            );
+        }
+        if num_counters > requested_capacity {
+            return exec_err!(
+                "Invalid Space-Saving summary: num_counters {num_counters} exceeds \
+                 requested_capacity {requested_capacity}"
+            );
+        }
+        // Each counter needs at least 20 bytes (4 len + 0 item + 8 count + 8 error).
+        let max_possible = (bytes.len().saturating_sub(16)) / 20;
+        if num_counters > max_possible {
+            return exec_err!(
+                "Invalid Space-Saving summary: num_counters {num_counters} exceeds \
+                 what fits in {} bytes",
+                bytes.len()
+            );
+        }
+
         let mut counters = Vec::with_capacity(num_counters);
-        let mut counter_map = HashMap::with_capacity(num_counters);
-        let mut offset = 16;
+        let mut counter_map = HashTable::with_capacity(num_counters);
+        let mut item_heap_bytes: usize = 0;
+        let mut offset: usize = 16;
 
         for idx in 0..num_counters {
-            if offset + 4 > bytes.len() {
-                return Err(datafusion_common::DataFusionError::Execution(
+            if offset.checked_add(4).is_none_or(|end| end > bytes.len()) {
+                return exec_err!(
                     "Invalid Space-Saving summary bytes: truncated item length"
-                        .to_string(),
-                ));
+                );
             }
             let item_len =
                 u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
                     as usize;
             offset += 4;
 
-            if offset + item_len + 16 > bytes.len() {
-                return Err(datafusion_common::DataFusionError::Execution(
-                    "Invalid Space-Saving summary bytes: truncated counter".to_string(),
-                ));
+            let needed = item_len.checked_add(16);
+            if needed
+                .is_none_or(|n| offset.checked_add(n).is_none_or(|end| end > bytes.len()))
+            {
+                return exec_err!(
+                    "Invalid Space-Saving summary bytes: truncated counter"
+                );
             }
 
             let item = bytes[offset..offset + item_len].to_vec();
@@ -428,7 +547,8 @@ impl SpaceSavingSummary {
             offset += 8;
 
             let hash = Self::hash_item(&item);
-            counter_map.insert(item.clone(), idx);
+            item_heap_bytes += item.capacity();
+            counter_map.insert_unique(hash, (hash, idx), |&(h, _)| h);
             counters.push(Counter {
                 item,
                 hash,
@@ -437,19 +557,28 @@ impl SpaceSavingSummary {
             });
         }
 
-        if offset + 8 > bytes.len() {
-            return Err(datafusion_common::DataFusionError::Execution(
-                "Invalid Space-Saving summary bytes: missing alpha map size".to_string(),
-            ));
+        if offset.checked_add(8).is_none_or(|end| end > bytes.len()) {
+            return exec_err!(
+                "Invalid Space-Saving summary bytes: missing alpha map size"
+            );
         }
         let alpha_map_size =
             u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
         offset += 8;
 
-        if offset + alpha_map_size.saturating_mul(8) > bytes.len() {
-            return Err(datafusion_common::DataFusionError::Execution(
-                "Invalid Space-Saving summary bytes: truncated alpha map".to_string(),
-            ));
+        // Validate alpha_map_size is a power of two (required for bitmask indexing).
+        if alpha_map_size == 0 || !alpha_map_size.is_power_of_two() {
+            return exec_err!(
+                "Invalid Space-Saving summary: alpha_map_size {alpha_map_size} \
+                 is not a positive power of two"
+            );
+        }
+
+        let alpha_bytes = alpha_map_size
+            .checked_mul(8)
+            .and_then(|n| offset.checked_add(n));
+        if alpha_bytes.is_none_or(|end| end > bytes.len()) {
+            return exec_err!("Invalid Space-Saving summary bytes: truncated alpha map");
         }
 
         let mut alpha_map = Vec::with_capacity(alpha_map_size);
@@ -459,7 +588,7 @@ impl SpaceSavingSummary {
             alpha_map.push(alpha);
         }
 
-        let target_capacity = std::cmp::max(64, requested_capacity * 2);
+        let target_capacity = max(64, requested_capacity.saturating_mul(2));
 
         Ok(Self {
             counters,
@@ -467,29 +596,19 @@ impl SpaceSavingSummary {
             alpha_map,
             requested_capacity,
             target_capacity,
+            item_heap_bytes,
         })
     }
 
-    /// Approximate size in bytes of this summary.
+    /// Approximate size in bytes of this summary.  O(1) thanks to
+    /// incremental `item_heap_bytes` tracking.
     fn size(&self) -> usize {
-        // Heap bytes owned by each counter's item Vec.
-        let item_heap_bytes: usize = self
-            .counters
-            .iter()
-            .map(|c| c.item.capacity())
-            .sum::<usize>();
-
         size_of::<Self>()
-            // Vec<Counter> backing storage.
             + self.counters.capacity() * size_of::<Counter>()
-            // Heap allocations for counter item bytes (owned by counters).
-            + item_heap_bytes
-            // HashMap<Vec<u8>, usize>: bucket overhead + control bytes.
+            + self.item_heap_bytes
+            // HashTable<(u64, usize)>: each bucket stores (hash, idx) + 1 control byte.
             + self.counter_map.capacity()
-                * (size_of::<(Vec<u8>, usize)>() + size_of::<u8>())
-            // HashMap keys are clones of counter items, so count their heap bytes again.
-            + item_heap_bytes
-            // Vec<u64> alpha map.
+                * (size_of::<(u64, usize)>() + size_of::<u8>())
             + self.alpha_map.capacity() * size_of::<u64>()
     }
 }
@@ -501,15 +620,15 @@ impl SpaceSavingSummary {
 /// Approximate top-k UDAF using the Filtered Space-Saving algorithm.
 #[user_doc(
     doc_section(label = "Approximate Functions"),
-    description = "Returns the approximate most frequent (top-k) values and their counts using the Filtered Space-Saving algorithm. Note: for float columns, -0.0 and +0.0 are treated as distinct values, and different NaN representations are tracked separately.",
+    description = r#"Returns the approximate most frequent (top-k) values with their estimated counts, using the Filtered Space-Saving algorithm. The returned counts are upper-bound estimates; the true frequency lies in `[count - error, count]`. NULL values are skipped; an empty or all-NULL input returns an empty list `[]`. For float columns, -0.0 and +0.0 are treated as distinct values, and different NaN representations are tracked separately."#,
     syntax_example = "approx_top_k(expression, k)",
     sql_example = r#"```sql
 > SELECT approx_top_k(column_name, 3) FROM table_name;
-+-------------------------------------------+
-| approx_top_k(column_name, 3)              |
-+-------------------------------------------+
-| [{value: foo, count: 3}, {value: bar, count: 2}, {value: baz, count: 1}] |
-+-------------------------------------------+
++-----------------------------------------------------------------------------+
+| approx_top_k(column_name,Int64(3))                                          |
++-----------------------------------------------------------------------------+
+| [{value: foo, count: 3}, {value: bar, count: 2}, {value: baz, count: 1}]    |
++-----------------------------------------------------------------------------+
 ```"#,
     standard_argument(name = "expression",),
     argument(
@@ -548,10 +667,14 @@ impl ApproxTopK {
             DataType::Float64,
             DataType::Date32,
             DataType::Date64,
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Second, Some(TIMEZONE_WILDCARD.into())),
+            DataType::Timestamp(TimeUnit::Millisecond, Some(TIMEZONE_WILDCARD.into())),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(TIMEZONE_WILDCARD.into())),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
         ];
         // k must be a literal integer; accept any integer type for convenience.
         let k_types = &[
@@ -579,10 +702,6 @@ impl ApproxTopK {
 }
 
 impl AggregateUDFImpl for ApproxTopK {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "approx_top_k"
     }
@@ -616,35 +735,20 @@ impl AggregateUDFImpl for ApproxTopK {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Arc::new(Field::new(
-                format_state_name(args.name, "summary"),
-                DataType::Binary,
-                true,
-            )),
-            Arc::new(Field::new(
-                format_state_name(args.name, "k"),
-                DataType::UInt64,
-                true,
-            )),
-            Arc::new(Field::new(
-                format_state_name(args.name, "data_type"),
-                DataType::Utf8,
-                true,
-            )),
-        ])
+        Ok(vec![Arc::new(Field::new(
+            format_state_name(args.name, "summary"),
+            DataType::Binary,
+            true,
+        ))])
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if args.exprs.len() < 2 {
-            return Err(datafusion_common::DataFusionError::Plan(
-                "approx_top_k requires two arguments: column and k".to_string(),
-            ));
+            return plan_err!("approx_top_k requires two arguments: column and k");
         }
 
         let k_expr = &args.exprs[1];
         let k = k_expr
-            .as_any()
             .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
             .and_then(|lit| match lit.value() {
                 // Guard against negative values before casting to usize to
@@ -659,18 +763,19 @@ impl AggregateUDFImpl for ApproxTopK {
                 ScalarValue::UInt32(Some(v)) => Some(*v as usize),
                 ScalarValue::UInt64(Some(v)) => Some(*v as usize),
                 _ => None,
-            })
-            .ok_or_else(|| {
-                datafusion_common::DataFusionError::Plan(
-                    "approx_top_k requires k to be a positive literal integer"
-                        .to_string(),
-                )
-            })?;
+            });
+
+        let Some(k) = k else {
+            return plan_err!(
+                "approx_top_k requires k to be a positive literal integer \
+                 between 1 and 10000"
+            );
+        };
 
         if k == 0 || k > APPROX_TOP_K_MAX_K {
-            return Err(datafusion_common::DataFusionError::Plan(format!(
+            return plan_err!(
                 "approx_top_k requires k to be between 1 and {APPROX_TOP_K_MAX_K}, got {k}"
-            )));
+            );
         }
 
         let data_type = args.expr_fields[0].data_type().clone();
@@ -833,29 +938,36 @@ impl ApproxTopKAccumulator {
                     DataType::Date64 => {
                         Ok(Arc::new(Date64Array::from(values)) as ArrayRef)
                     }
-                    DataType::Timestamp(unit, tz) => {
-                        use arrow::datatypes::TimeUnit;
-                        let arr: ArrayRef = match unit {
-                            TimeUnit::Second => {
-                                Arc::new(TimestampSecondArray::from(values))
+                    DataType::Timestamp(unit, tz) => match unit {
+                        TimeUnit::Second => {
+                            let mut arr = TimestampSecondArray::from(values);
+                            if let Some(tz) = tz {
+                                arr = arr.with_timezone(tz.as_ref());
                             }
-                            TimeUnit::Millisecond => {
-                                Arc::new(TimestampMillisecondArray::from(values))
-                            }
-                            TimeUnit::Microsecond => {
-                                Arc::new(TimestampMicrosecondArray::from(values))
-                            }
-                            TimeUnit::Nanosecond => {
-                                Arc::new(TimestampNanosecondArray::from(values))
-                            }
-                        };
-                        if tz.is_some() {
-                            // Preserve timezone in the output.
-                            Ok(arrow::compute::cast(&arr, &self.input_data_type)?)
-                        } else {
-                            Ok(arr)
+                            Ok(Arc::new(arr) as ArrayRef)
                         }
-                    }
+                        TimeUnit::Millisecond => {
+                            let mut arr = TimestampMillisecondArray::from(values);
+                            if let Some(tz) = tz {
+                                arr = arr.with_timezone(tz.as_ref());
+                            }
+                            Ok(Arc::new(arr) as ArrayRef)
+                        }
+                        TimeUnit::Microsecond => {
+                            let mut arr = TimestampMicrosecondArray::from(values);
+                            if let Some(tz) = tz {
+                                arr = arr.with_timezone(tz.as_ref());
+                            }
+                            Ok(Arc::new(arr) as ArrayRef)
+                        }
+                        TimeUnit::Nanosecond => {
+                            let mut arr = TimestampNanosecondArray::from(values);
+                            if let Some(tz) = tz {
+                                arr = arr.with_timezone(tz.as_ref());
+                            }
+                            Ok(Arc::new(arr) as ArrayRef)
+                        }
+                    },
                     _ => unreachable!(),
                 }
             }
@@ -879,11 +991,6 @@ impl ApproxTopKAccumulator {
             other => other.clone(),
         }
     }
-
-    /// Serialize a DataType to a string using Arrow's Display impl.
-    fn data_type_to_string(dt: &DataType) -> String {
-        dt.to_string()
-    }
 }
 
 impl Accumulator for ApproxTopKAccumulator {
@@ -897,7 +1004,12 @@ impl Accumulator for ApproxTopKAccumulator {
         // Downcast once and iterate directly to avoid per-row ScalarValue allocation.
         macro_rules! process_array {
             ($array_type:ty, $data_array:expr) => {{
-                let arr = $data_array.as_any().downcast_ref::<$array_type>().unwrap();
+                let Some(arr) = $data_array.as_any().downcast_ref::<$array_type>() else {
+                    return exec_err!(
+                        "approx_top_k: failed to downcast array to {}",
+                        stringify!($array_type)
+                    );
+                };
                 for i in 0..arr.len() {
                     if !arr.is_null(i) {
                         self.summary.add(&arr.value(i).to_le_bytes());
@@ -906,44 +1018,30 @@ impl Accumulator for ApproxTopKAccumulator {
             }};
         }
 
+        macro_rules! process_bytes_array {
+            ($array_type:ty, $data_array:expr) => {{
+                let Some(arr) = $data_array.as_any().downcast_ref::<$array_type>() else {
+                    return exec_err!(
+                        "approx_top_k: failed to downcast array to {}",
+                        stringify!($array_type)
+                    );
+                };
+                for i in 0..arr.len() {
+                    if !arr.is_null(i) {
+                        self.summary.add(arr.value(i).as_ref());
+                    }
+                }
+            }};
+        }
+
         match data_array.data_type() {
-            DataType::Utf8 => {
-                let arr = data_array.as_any().downcast_ref::<StringArray>().unwrap();
-                for i in 0..arr.len() {
-                    if !arr.is_null(i) {
-                        self.summary.add(arr.value(i).as_bytes());
-                    }
-                }
-            }
+            DataType::Utf8 => process_bytes_array!(StringArray, data_array),
             DataType::LargeUtf8 => {
-                let arr = data_array
-                    .as_any()
-                    .downcast_ref::<LargeStringArray>()
-                    .unwrap();
-                for i in 0..arr.len() {
-                    if !arr.is_null(i) {
-                        self.summary.add(arr.value(i).as_bytes());
-                    }
-                }
+                process_bytes_array!(LargeStringArray, data_array)
             }
-            DataType::Binary => {
-                let arr = data_array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                for i in 0..arr.len() {
-                    if !arr.is_null(i) {
-                        self.summary.add(arr.value(i));
-                    }
-                }
-            }
+            DataType::Binary => process_bytes_array!(BinaryArray, data_array),
             DataType::LargeBinary => {
-                let arr = data_array
-                    .as_any()
-                    .downcast_ref::<LargeBinaryArray>()
-                    .unwrap();
-                for i in 0..arr.len() {
-                    if !arr.is_null(i) {
-                        self.summary.add(arr.value(i));
-                    }
-                }
+                process_bytes_array!(LargeBinaryArray, data_array)
             }
             DataType::Int8 => process_array!(Int8Array, data_array),
             DataType::Int16 => process_array!(Int16Array, data_array),
@@ -960,28 +1058,22 @@ impl Accumulator for ApproxTopKAccumulator {
             DataType::Float64 => process_array!(Float64Array, data_array),
             DataType::Date32 => process_array!(Date32Array, data_array),
             DataType::Date64 => process_array!(Date64Array, data_array),
-            DataType::Timestamp(_, _) => {
-                // All timestamp variants are stored as i64 internally.
-                match data_array.data_type() {
-                    DataType::Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
-                        process_array!(TimestampSecondArray, data_array)
-                    }
-                    DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
-                        process_array!(TimestampMillisecondArray, data_array)
-                    }
-                    DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
-                        process_array!(TimestampMicrosecondArray, data_array)
-                    }
-                    DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
-                        process_array!(TimestampNanosecondArray, data_array)
-                    }
-                    _ => unreachable!(),
+            DataType::Timestamp(unit, _) => match unit {
+                TimeUnit::Second => {
+                    process_array!(TimestampSecondArray, data_array)
                 }
-            }
+                TimeUnit::Millisecond => {
+                    process_array!(TimestampMillisecondArray, data_array)
+                }
+                TimeUnit::Microsecond => {
+                    process_array!(TimestampMicrosecondArray, data_array)
+                }
+                TimeUnit::Nanosecond => {
+                    process_array!(TimestampNanosecondArray, data_array)
+                }
+            },
             other => {
-                return Err(datafusion_common::DataFusionError::Execution(format!(
-                    "Unsupported data type for approx_top_k: {other}"
-                )));
+                return exec_err!("Unsupported data type for approx_top_k: {other}");
             }
         }
 
@@ -989,21 +1081,13 @@ impl Accumulator for ApproxTopKAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // State layout: [summary (Binary), k (UInt64), data_type (Utf8)].
-        // The `k` field (states[1]) is carried for completeness but not read here
-        // because the planner guarantees all partial accumulators use the same `k`.
         if states.is_empty() || states[0].is_empty() {
             return Ok(());
         }
 
-        let summary_array = states[0]
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution(
-                    "Expected Binary array for summary state".to_string(),
-                )
-            })?;
+        let Some(summary_array) = states[0].as_any().downcast_ref::<BinaryArray>() else {
+            return exec_err!("Expected Binary array for summary state");
+        };
 
         for i in 0..summary_array.len() {
             if summary_array.is_null(i) {
@@ -1044,13 +1128,7 @@ impl Accumulator for ApproxTopKAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let summary_bytes = self.summary.serialize();
-
-        Ok(vec![
-            ScalarValue::Binary(Some(summary_bytes)),
-            ScalarValue::UInt64(Some(self.k as u64)),
-            ScalarValue::Utf8(Some(Self::data_type_to_string(&self.input_data_type))),
-        ])
+        Ok(vec![ScalarValue::Binary(Some(self.summary.serialize()))])
     }
 
     fn size(&self) -> usize {
@@ -1287,17 +1365,11 @@ mod tests {
         } else {
             panic!("Expected Binary for summary")
         };
-        let k = if let ScalarValue::UInt64(Some(k)) = &state2[1] {
-            *k
-        } else {
-            panic!("Expected UInt64 for k")
-        };
 
         let summary_array: ArrayRef =
             Arc::new(BinaryArray::from(vec![Some(summary_bytes.as_slice())]));
-        let k_array: ArrayRef = Arc::new(UInt64Array::from(vec![k]));
 
-        acc1.merge_batch(&[summary_array, k_array]).unwrap();
+        acc1.merge_batch(&[summary_array]).unwrap();
 
         let result = acc1.evaluate().unwrap();
         let top_k = extract_top_k_results(&result);
@@ -1351,29 +1423,11 @@ mod tests {
                 None
             },
         ];
-        let k_values: Vec<u64> = vec![
-            if let ScalarValue::UInt64(Some(k)) = state1[1] {
-                k
-            } else {
-                0
-            },
-            if let ScalarValue::UInt64(Some(k)) = state2[1] {
-                k
-            } else {
-                0
-            },
-            if let ScalarValue::UInt64(Some(k)) = state3[1] {
-                k
-            } else {
-                0
-            },
-        ];
 
         let summary_array: ArrayRef = Arc::new(BinaryArray::from(summary_bytes));
-        let k_array: ArrayRef = Arc::new(UInt64Array::from(k_values));
 
         let mut coord_acc = ApproxTopKAccumulator::new_with_data_type(3, DataType::Utf8);
-        coord_acc.merge_batch(&[summary_array, k_array]).unwrap();
+        coord_acc.merge_batch(&[summary_array]).unwrap();
 
         let result = coord_acc.evaluate().unwrap();
         let top_k = extract_top_k_results(&result);
@@ -1405,7 +1459,7 @@ mod tests {
 
     #[test]
     fn test_accumulator_large_utf8_input() {
-        let mut acc = ApproxTopKAccumulator::new_with_data_type(2, DataType::Utf8);
+        let mut acc = ApproxTopKAccumulator::new_with_data_type(2, DataType::LargeUtf8);
 
         let batch: ArrayRef = Arc::new(LargeStringArray::from(vec![
             "hello", "world", "hello", "hello", "world",

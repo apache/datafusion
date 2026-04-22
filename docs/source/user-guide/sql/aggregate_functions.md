@@ -1223,7 +1223,7 @@ An alternative syntax is also supported:
 
 ### `approx_top_k`
 
-Returns the approximate most frequent (top-k) values and their counts using the Filtered Space-Saving algorithm. Note: for float columns, -0.0 and +0.0 are treated as distinct values, and different NaN representations are tracked separately.
+Returns the approximate most frequent (top-k) values with their estimated counts, using the Filtered Space-Saving algorithm. The returned counts are upper-bound estimates; the true frequency lies in `[count - error, count]`. NULL values are skipped; an empty or all-NULL input returns an empty list `[]`. For float columns, -0.0 and +0.0 are treated as distinct values, and different NaN representations are tracked separately.
 
 ```sql
 approx_top_k(expression, k)
@@ -1238,9 +1238,9 @@ approx_top_k(expression, k)
 
 ```sql
 > SELECT approx_top_k(column_name, 3) FROM table_name;
-+-------------------------------------------+
-| approx_top_k(column_name, 3)              |
-+-------------------------------------------+
-| [{value: foo, count: 3}, {value: bar, count: 2}, {value: baz, count: 1}] |
-+-------------------------------------------+
++-----------------------------------------------------------------------------+
+| approx_top_k(column_name,Int64(3))                                          |
++-----------------------------------------------------------------------------+
+| [{value: foo, count: 3}, {value: bar, count: 2}, {value: baz, count: 1}]    |
++-----------------------------------------------------------------------------+
 ```

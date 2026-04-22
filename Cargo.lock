@@ -2220,6 +2220,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "foldhash 0.2.0",
  "half",
+ "hashbrown 0.17.0",
  "log",
  "num-traits",
  "rand 0.9.4",
