@@ -1197,23 +1197,35 @@ impl RowGroupsPrunedParquetOpen {
             && sort_options.len() == 1
         {
             // Build a sort order from DynamicFilter for non-sort-pushdown TopK.
-            // Always ASC — reverse handles DESC separately.
+            // Quick bail: check if the sort column exists in file schema.
+            // For GROUP BY + ORDER BY, the sort column is an aggregate output
+            // (not in parquet) — skip to avoid wasted StatisticsConverter work.
             let children = df.children();
             if !children.is_empty() {
-                let sort_expr =
-                    datafusion_physical_expr_common::sort_expr::PhysicalSortExpr {
-                        expr: Arc::clone(children[0]),
-                        options: arrow::compute::SortOptions {
-                            descending: false,
-                            nulls_first: sort_options[0].nulls_first,
-                        },
-                    };
-                LexOrdering::new(vec![sort_expr]).map(|order| {
-                    Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
-                        order,
-                    ))
-                        as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
-                })
+                let col = find_column_in_expr(children[0]);
+                if let Some(ref c) = col
+                    && prepared
+                        .physical_file_schema
+                        .field_with_name(c.name())
+                        .is_ok()
+                {
+                    let sort_expr =
+                        datafusion_physical_expr_common::sort_expr::PhysicalSortExpr {
+                            expr: Arc::clone(children[0]),
+                            options: arrow::compute::SortOptions {
+                                descending: false,
+                                nulls_first: sort_options[0].nulls_first,
+                            },
+                        };
+                    LexOrdering::new(vec![sort_expr]).map(|order| {
+                        Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                            order,
+                        ))
+                            as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
+                    })
+                } else {
+                    None
+                }
             } else {
                 None
             }
