@@ -61,9 +61,7 @@ impl FunctionRewrite for ConcatArrayRewrite {
         let mut any_non_list = false;
         for arg in args {
             match arg.get_type(schema)? {
-                DataType::List(_)
-                | DataType::LargeList(_)
-                | DataType::FixedSizeList(_, _) => any_list = true,
+                t if t.is_list() => any_list = true,
                 DataType::Null => {}
                 _ => any_non_list = true,
             }
