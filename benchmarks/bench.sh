@@ -694,7 +694,7 @@ run_tpch() {
       PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       TPCH_FILE_TYPE="${FORMAT}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
-      ${QUERY_ARG} \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }
 
@@ -712,7 +712,7 @@ run_tpch_mem() {
       TPCH_FILE_TYPE="mem" \
       PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
-      ${QUERY_ARG} \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }
 
