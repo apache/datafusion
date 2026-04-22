@@ -2749,6 +2749,111 @@ DROP TABLE tl_multikey;
 statement ok
 DROP TABLE tl_sorted;
 
+# ===========================================================
+# Test M: Multi-key Inexact sort pushdown (WITH ORDER multi-key)
+# File declared WITH ORDER (id ASC, value ASC), query ORDER BY
+# id DESC, value DESC → reversed matches → Inexact path.
+# ===========================================================
+
+statement ok
+CREATE TABLE tm_data(id INT, value INT) AS VALUES
+(1, 10), (1, 20), (1, 30),
+(2, 40), (2, 50), (2, 60),
+(3, 70), (3, 80), (3, 90),
+(4, 100), (4, 110), (4, 120);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+# Write sorted by (id ASC, value ASC)
+query I
+COPY (SELECT * FROM tm_data ORDER BY id ASC, value ASC)
+TO 'test_files/scratch/sort_pushdown/tm_multikey_sorted/data.parquet';
+----
+12
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE tm_sorted(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tm_multikey_sorted/data.parquet'
+WITH ORDER (id ASC, value ASC);
+
+# Test M.1: Multi-key DESC that fully matches reversed ordering
+# ORDER BY id DESC, value DESC matches reversed (id ASC, value ASC) → Inexact
+query TT
+EXPLAIN SELECT * FROM tm_sorted ORDER BY id DESC, value DESC LIMIT 3;
+----
+logical_plan
+01)Sort: tm_sorted.id DESC NULLS FIRST, tm_sorted.value DESC NULLS FIRST, fetch=3
+02)--TableScan: tm_sorted projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC, value@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tm_multikey_sorted/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+# Test M.2: Results must be correct (largest id first, then largest value)
+query II
+SELECT * FROM tm_sorted ORDER BY id DESC, value DESC LIMIT 3;
+----
+4 120
+4 110
+4 100
+
+# Test M.3: Larger limit spanning multiple RGs
+query II
+SELECT * FROM tm_sorted ORDER BY id DESC, value DESC LIMIT 6;
+----
+4 120
+4 110
+4 100
+3 90
+3 80
+3 70
+
+# Test M.4: Multi-key ASC (same direction as file = Exact, sort elimination)
+query II
+SELECT * FROM tm_sorted ORDER BY id ASC, value ASC LIMIT 3;
+----
+1 10
+1 20
+1 30
+
+# Test M.5: Partial match — first key reversed, second key SAME direction
+# ORDER BY id DESC, value ASC does NOT match reversed (id DESC, value DESC)
+# → NOT Inexact path (second key mismatch)
+query II
+SELECT * FROM tm_sorted ORDER BY id DESC, value ASC LIMIT 3;
+----
+4 100
+4 110
+4 120
+
+# Test M.6: All rows, verify full data integrity
+query II
+SELECT * FROM tm_sorted ORDER BY id DESC, value DESC;
+----
+4 120
+4 110
+4 100
+3 90
+3 80
+3 70
+2 60
+2 50
+2 40
+1 30
+1 20
+1 10
+
+# Cleanup Test M
+statement ok
+DROP TABLE tm_data;
+
+statement ok
+DROP TABLE tm_sorted;
+
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok
 SET datafusion.execution.target_partitions = 4;
