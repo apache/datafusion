@@ -21,11 +21,11 @@ use arrow::{
     compute,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        FieldRef, Float16Type, Float32Type, Float64Type, Int32Type, Int64Type,
-        Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+        FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+        Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
         Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        UInt32Type, UInt64Type,
+        UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
 };
 use datafusion_common::hash_utils::RandomState;
@@ -41,6 +41,7 @@ use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
 };
+use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::Bitmap65536DistinctCountAccumulator,
     count_distinct::Bitmap65536DistinctCountAccumulatorI16,
@@ -344,20 +345,33 @@ impl AggregateUDFImpl for Count {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        // groups accumulator only supports `COUNT(c1)`, not
-        // `COUNT(c1, c2)`, etc
-        if args.is_distinct {
+        if args.exprs.len() != 1 {
             return false;
         }
-        args.exprs.len() == 1
+        if !args.is_distinct {
+            return true;
+        }
+        matches!(
+            args.expr_fields[0].data_type(),
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+        )
     }
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        // instantiate specialized accumulator
-        Ok(Box::new(CountGroupsAccumulator::new()))
+        if !args.is_distinct {
+            return Ok(Box::new(CountGroupsAccumulator::new()));
+        }
+        create_distinct_count_groups_accumulator(&args)
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
@@ -427,6 +441,43 @@ impl AggregateUDFImpl for Count {
             let acc = CountAccumulator::new();
             Ok(Box::new(acc))
         }
+    }
+}
+
+#[cold]
+fn create_distinct_count_groups_accumulator(
+    args: &AccumulatorArgs,
+) -> Result<Box<dyn GroupsAccumulator>> {
+    let data_type = args.expr_fields[0].data_type();
+    match data_type {
+        DataType::Int8 => Ok(Box::new(
+            PrimitiveDistinctCountGroupsAccumulator::<Int8Type>::new(),
+        )),
+        DataType::Int16 => Ok(Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+            Int16Type,
+        >::new())),
+        DataType::Int32 => Ok(Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+            Int32Type,
+        >::new())),
+        DataType::Int64 => Ok(Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+            Int64Type,
+        >::new())),
+        DataType::UInt8 => Ok(Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+            UInt8Type,
+        >::new())),
+        DataType::UInt16 => Ok(Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+            UInt16Type,
+        >::new())),
+        DataType::UInt32 => Ok(Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+            UInt32Type,
+        >::new())),
+        DataType::UInt64 => Ok(Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+            UInt64Type,
+        >::new())),
+        _ => not_impl_err!(
+            "GroupsAccumulator not supported for COUNT(DISTINCT) with {}",
+            data_type
+        ),
     }
 }
 

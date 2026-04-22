@@ -18,6 +18,6 @@ exit_code: 1
 [CLI_VERSION]
 Error: Not enough memory to continue external sort. Consider increasing the memory limit config: 'datafusion.runtime.memory_limit', or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'.
 caused by
-Resources exhausted: Failed to allocate
+Resources exhausted: Failed to allocate additional 128.0 KB for ExternalSorter[0] with 0.0 B already allocated for this reservation - 0.0 B remain available for the total memory pool: fair(pool_size: 10.0 MB)
 
 ----- stderr -----
