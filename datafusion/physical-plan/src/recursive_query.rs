@@ -317,6 +317,20 @@ impl RecursiveQueryStream {
         mut batch: RecordBatch,
     ) -> Poll<Option<Result<RecordBatch>>> {
         let baseline_metrics = self.baseline_metrics.clone();
+
+        // Rebind to the declared output schema. The recursive term is planned
+        // independently from the static term and its projection may leave
+        // columns un-aliased (e.g. `upper(r.val)` vs the anchor's
+        // `upper(val) AS val`); downstream consumers that key on
+        // `batch.schema().field(i).name()` (TopK, CSV/JSON writers, custom
+        // collectors) would otherwise see the recursive branch's names leak
+        // through. Logical-plan coercion guarantees matching types, so this
+        // is a zero-copy field rebind.
+        if batch.schema() != self.schema {
+            batch =
+                RecordBatch::try_new(Arc::clone(&self.schema), batch.columns().to_vec())?;
+        }
+
         if let Some(deduplicator) = &mut self.distinct_deduplicator {
             let _timer_guard = baseline_metrics.elapsed_compute().timer();
             batch = deduplicator.deduplicate(&batch)?;
