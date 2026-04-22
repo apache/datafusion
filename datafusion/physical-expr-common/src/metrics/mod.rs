@@ -26,11 +26,11 @@ mod value;
 use datafusion_common::HashMap;
 pub use datafusion_common::format::{MetricCategory, MetricType};
 use parking_lot::Mutex;
-use std::vec::IntoIter;
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display},
     sync::Arc,
+    vec::IntoIter,
 };
 
 // public exports
@@ -227,7 +227,7 @@ impl MetricsSet {
     }
 
     /// Extends the current list of metrics with the provided ones
-    pub fn extend(&mut self, metrics: impl Iterator<Item = Arc<Metric>>) {
+    pub fn extend(&mut self, metrics: impl IntoIterator<Item = Arc<Metric>>) {
         self.metrics.extend(metrics)
     }
 
@@ -444,6 +444,14 @@ impl IntoIterator for MetricsSet {
 
     fn into_iter(self) -> Self::IntoIter {
         self.metrics.into_iter()
+    }
+}
+
+impl FromIterator<Arc<Metric>> for MetricsSet {
+    fn from_iter<T: IntoIterator<Item = Arc<Metric>>>(iter: T) -> Self {
+        Self {
+            metrics: iter.into_iter().collect(),
+        }
     }
 }
 
