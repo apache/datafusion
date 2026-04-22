@@ -417,7 +417,7 @@ impl TypeSignatureClass {
     ///
     /// This is used for `information_schema` and can be used to generate
     /// documentation or error messages.
-    /// Remove with `get_example_types`
+    // Remove with `get_example_types`
     #[deprecated(since = "53.0.0", note = "See get_representative_types instead")]
     fn get_example_types(&self) -> Vec<DataType> {
         match self {
