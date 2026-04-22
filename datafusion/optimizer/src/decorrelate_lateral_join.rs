@@ -28,7 +28,7 @@ use datafusion_expr::{Expr, Join, expr};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{Column, DFSchema, Result, TableReference};
+use datafusion_common::{Column, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, SubqueryAlias};
@@ -71,14 +71,13 @@ impl OptimizerRule for DecorrelateLateralJoin {
     }
 }
 
-// Build the decorrelated join based on the original lateral join query. For
-// now, we only support cross/inner lateral joins.
+// Build the decorrelated join based on the original lateral join query.
+// Supports INNER and LEFT lateral joins.
 fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
-    // TODO: Support outer joins
-    // <https://github.com/apache/datafusion/issues/21199>
-    if join.join_type != JoinType::Inner {
+    if !matches!(join.join_type, JoinType::Inner | JoinType::Left) {
         return Ok(Transformed::no(LogicalPlan::Join(join)));
     }
+    let original_join_type = join.join_type;
 
     // The right side is wrapped in a Subquery node when it contains outer
     // references. Quickly skip joins that don't have this structure.
@@ -106,7 +105,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     let original_join_filter = join.filter.clone();
 
     // Walk the subquery plan bottom-up, extracting correlated filter
-    // predicates into join conditions and converting scalar aggregates
+    // predicates into join conditions and converting ungrouped aggregates
     // into group-by aggregates keyed on the correlation columns.
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let rewritten_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
@@ -120,12 +119,9 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
         return Ok(Transformed::no(LogicalPlan::Join(join)));
     }
 
-    // We apply the correlation predicates (extracted from the subquery's WHERE)
-    // as the ON clause of the rewritten join. The original ON clause is applied
-    // as a post-join predicate. Semantically, this is important when the join
-    // is rewritten as a left join; we only want outer join semantics for the
-    // correlation predicates (which is required for "count bug" handling), not
-    // the original join predicates.
+    // The correlation predicates (extracted from the subquery's WHERE) become
+    // the rewritten join's ON clause. See below for discussion of how the
+    // user's original ON clause is handled.
     let correlation_filter = conjunction(pull_up.join_filters);
 
     // Look up each aggregate's default value on empty input (e.g., COUNT → 0,
@@ -157,23 +153,85 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
             (rewritten_subquery, correlation_filter, original_join_filter)
         };
 
-    // Use a left join when a scalar aggregation was pulled up (preserves
-    // outer rows with no matches), otherwise keep inner join.
-    // SELECT * FROM t0, LATERAL (SELECT sum(v1) FROM t1 WHERE t0.v0 = t1.v0);  → left join
-    // SELECT * FROM t0, LATERAL (SELECT * FROM t1 WHERE t0.v0 = t1.v0);        → inner join
-    let join_type = if pull_up.pulled_up_scalar_agg {
-        JoinType::Left
-    } else {
-        JoinType::Inner
-    };
+    // For LEFT lateral joins, verify that all column references in the
+    // correlation filter are resolvable within the join's left and right
+    // schemas. If the lateral subquery references columns from an outer scope,
+    // the extracted filter will contain unresolvable columns and we must skip
+    // decorrelation.
+    //
+    // INNER lateral joins do not need this check: later optimizer passes
+    // (filter pushdown, join reordering) can restructure the plan to resolve
+    // cross-scope references. LEFT joins cannot be freely reordered.
+    if original_join_type == JoinType::Left
+        && let Some(ref filter) = correlation_filter
+    {
+        let left_schema = join.left.schema();
+        let right_schema = right_plan.schema();
+        let has_outer_scope_refs = filter
+            .column_refs()
+            .iter()
+            .any(|col| !left_schema.has_column(col) && !right_schema.has_column(col));
+        if has_outer_scope_refs {
+            return Ok(Transformed::no(LogicalPlan::Join(join)));
+        }
+    }
+
+    // Use a left join when the user wrote LEFT LATERAL or when a scalar
+    // aggregation was pulled up (preserves outer rows with no matches).
+    let join_type =
+        if original_join_type == JoinType::Left || pull_up.pulled_up_scalar_agg {
+            JoinType::Left
+        } else {
+            JoinType::Inner
+        };
+
+    // The correlation predicates (extracted from the subquery's WHERE) are
+    // turned into the rewritten join's ON clause. There are three cases that
+    // determine how the user's original ON clause is handled:
+    //
+    // - INNER lateral: user ON clause becomes a post-join filter. This restores
+    //   inner-join semantics if the join is upgraded to LEFT for count-bug
+    //   handling.
+    //
+    // - LEFT lateral with grouped (or no) agg: user ON clause is merged into
+    //   the rewritten ON clause, alongside the correlation predicates. LEFT
+    //   join semantics correctly preserve unmatched rows with NULLs.
+    //
+    // - LEFT lateral with an ungrouped aggregate (which decorrelation converts
+    //   to a group-by keyed on the correlation columns): user ON clause cannot
+    //   be placed in the join condition (it would conflict with count-bug
+    //   compensation) or as a post-join filter (that would remove
+    //   left-preserved rows). Instead, a projection is added after count-bug
+    //   compensation that replaces each right-side column with NULL when the ON
+    //   condition is not satisfied:
+    //
+    //      CASE WHEN (on_cond) IS NOT TRUE THEN NULL ELSE <col> END
+    //
+    //   This simulates LEFT JOIN semantics for the user's ON clause without
+    //   interfering with count-bug compensation.
+    let (join_filter, post_join_filter, on_condition_for_projection) =
+        if original_join_type == JoinType::Left {
+            if pull_up.pulled_up_scalar_agg {
+                (correlation_filter, None, original_join_filter)
+            } else {
+                let combined = conjunction(
+                    correlation_filter.into_iter().chain(original_join_filter),
+                );
+                (combined, None, None)
+            }
+        } else {
+            (correlation_filter, original_join_filter, None)
+        };
+
     let left_field_count = join.left.schema().fields().len();
     let new_plan = LogicalPlanBuilder::from(join.left)
-        .join_on(right_plan, join_type, correlation_filter)?
+        .join_on(right_plan, join_type, join_filter)?
         .build()?;
 
-    // Handle the count bug: after a left join, unmatched outer rows get NULLs
-    // for all right-side columns. But COUNT(*) over an empty group should
-    // return 0, not NULL. Add a projection that wraps affected expressions:
+    // Handle the count bug: in the rewritten left join, unmatched outer
+    // rows get NULLs for all right-side columns. But some aggregates
+    // have non-NULL defaults on empty input (e.g., COUNT returns 0, not
+    // NULL). Add a projection that wraps those columns:
     //   CASE WHEN __always_true IS NULL THEN <default> ELSE <column> END
     let new_plan = if let Some(expr_map) = collected_count_expr_map {
         let join_schema = new_plan.schema();
@@ -202,12 +260,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
                     )],
                     else_expr: Some(Box::new(col)),
                 });
-                proj_exprs.push(Expr::Alias(expr::Alias {
-                    expr: Box::new(case_expr),
-                    relation: qualifier.cloned(),
-                    name: name.to_string(),
-                    metadata: None,
-                }));
+                proj_exprs.push(case_expr.alias_qualified(qualifier.cloned(), name));
                 continue;
             }
             proj_exprs.push(col);
@@ -220,8 +273,47 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
         new_plan
     };
 
-    // Apply the original ON clause as a post-join filter.
-    let new_plan = if let Some(on_filter) = original_join_filter {
+    // For LEFT lateral joins with an ungrouped aggregate, simulate LEFT JOIN
+    // semantics for the user's ON clause by adding a projection that replaces
+    // right-side columns with NULL when the ON condition is false (see
+    // commentary above).
+    //
+    // Note: the ON condition expression is duplicated per column, so this
+    // assumes it is deterministic.
+    let new_plan = if let Some(on_cond) = on_condition_for_projection {
+        let schema = Arc::clone(new_plan.schema());
+        let mut proj_exprs: Vec<Expr> = vec![];
+
+        for (i, (qualifier, field)) in schema.iter().enumerate() {
+            let col = Expr::Column(Column::new(qualifier.cloned(), field.name()));
+
+            if i < left_field_count {
+                proj_exprs.push(col);
+                continue;
+            }
+
+            let typed_null =
+                Expr::Literal(ScalarValue::try_from(field.data_type())?, None);
+            let case_expr = Expr::Case(expr::Case {
+                expr: None,
+                when_then_expr: vec![(
+                    Box::new(Expr::IsNotTrue(Box::new(on_cond.clone()))),
+                    Box::new(typed_null),
+                )],
+                else_expr: Some(Box::new(col)),
+            });
+            proj_exprs.push(case_expr.alias_qualified(qualifier.cloned(), field.name()));
+        }
+
+        LogicalPlanBuilder::from(new_plan)
+            .project(proj_exprs)?
+            .build()?
+    } else {
+        new_plan
+    };
+
+    // Apply the original ON clause as a post-join filter (INNER lateral only).
+    let new_plan = if let Some(on_filter) = post_join_filter {
         LogicalPlanBuilder::from(new_plan)
             .filter(on_filter)?
             .build()?

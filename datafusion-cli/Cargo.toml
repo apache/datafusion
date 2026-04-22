@@ -37,7 +37,7 @@ backtrace = ["datafusion/backtrace"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.8.14"
+aws-config = "1.8.16"
 aws-credential-types = "1.2.13"
 chrono = { workspace = true }
 clap = { version = "4.5.60", features = ["cargo", "derive"] }
@@ -78,3 +78,11 @@ insta = { workspace = true }
 insta-cmd = "0.6.0"
 rstest = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["minio"] }
+# Makes sure `test_display_pg_json` behaves in a consistent way regardless of
+# feature unification with dependencies
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+# Required because we pull serde_json with a feature to get consistent pg display,
+# but its not directly used.
+[package.metadata.cargo-machete]
+ignored = "serde_json"

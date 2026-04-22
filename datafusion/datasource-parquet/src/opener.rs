@@ -1199,10 +1199,7 @@ impl RowGroupsPrunedParquetOpen {
                 predicate_cache_records,
                 baseline_metrics: prepared.baseline_metrics,
             },
-            |mut state| async move {
-                let result = state.transition().await;
-                result.map(|r| (r, state))
-            },
+            |state| async move { state.transition().await },
         )
         .fuse();
 
@@ -1248,15 +1245,15 @@ impl PushDecoderStreamState {
     ///   fetched from the [`AsyncFileReader`] and fed back into the decoder.
     /// - [`Data`](DecodeResult::Data) – a decoded batch is projected and returned.
     /// - [`Finished`](DecodeResult::Finished) – signals end-of-stream (`None`).
-    async fn transition(&mut self) -> Option<Result<RecordBatch>> {
+    ///
+    /// Takes `self` by value (rather than `&mut self`) so the generated future
+    /// owns the state directly. This avoids a Stacked Borrows violation under
+    /// miri where `&mut self` creates a single opaque borrow that conflicts
+    /// with `unfold`'s ownership across yield points.
+    async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
         loop {
             match self.decoder.try_decode() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
-                    // IO (get_byte_ranges) and CPU (push_ranges) are still
-                    // decoupled — they just can't live in a nested async block
-                    // because that captures `&mut self` as one opaque borrow,
-                    // which violates Stacked Borrows across the yield point.
-                    // Inlining lets the compiler split the disjoint field borrows.
                     let data = self
                         .reader
                         .get_byte_ranges(ranges.clone())
@@ -1265,10 +1262,10 @@ impl PushDecoderStreamState {
                     match data {
                         Ok(data) => {
                             if let Err(e) = self.decoder.push_ranges(ranges, data) {
-                                return Some(Err(DataFusionError::from(e)));
+                                return Some((Err(DataFusionError::from(e)), self));
                             }
                         }
-                        Err(e) => return Some(Err(e)),
+                        Err(e) => return Some((Err(e), self)),
                     }
                 }
                 Ok(DecodeResult::Data(batch)) => {
@@ -1276,13 +1273,15 @@ impl PushDecoderStreamState {
                     self.copy_arrow_reader_metrics();
                     let result = self.project_batch(&batch);
                     timer.stop();
-                    return Some(result);
+                    // Release the borrow on baseline_metrics before moving self
+                    drop(timer);
+                    return Some((result, self));
                 }
                 Ok(DecodeResult::Finished) => {
                     return None;
                 }
                 Err(e) => {
-                    return Some(Err(DataFusionError::from(e)));
+                    return Some((Err(DataFusionError::from(e)), self));
                 }
             }
         }

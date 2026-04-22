@@ -48,6 +48,7 @@ name = "datafusion_physical_plan"
 
 [dependencies]
 arrow = { workspace = true }
+arrow-data = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
@@ -72,6 +73,7 @@ pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
 
 [dev-dependencies]
+arrow-data = { workspace = true }
 criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }

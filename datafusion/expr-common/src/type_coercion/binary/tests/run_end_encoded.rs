@@ -16,11 +16,17 @@
 // under the License.
 
 use super::*;
+use DataType::*;
+
+fn ree(value_type: DataType) -> DataType {
+    RunEndEncoded(
+        Arc::new(Field::new("run_ends", Int32, false)),
+        Arc::new(Field::new("values", value_type, false)),
+    )
+}
 
 #[test]
 fn test_ree_type_coercion() {
-    use DataType::*;
-
     let lhs_type = RunEndEncoded(
         Arc::new(Field::new("run_ends", Int8, false)),
         Arc::new(Field::new("values", Int32, false)),
@@ -96,4 +102,30 @@ fn test_ree_type_coercion() {
         ree_coercion(&lhs_type, &rhs_type, true, comparison_coercion),
         Some(rhs_type.clone())
     );
+}
+
+#[test]
+fn test_ree_arithmetic_coercion() -> Result<()> {
+    test_coercion_binary_rule!(ree(Int64), Int64, Operator::Plus, Int64);
+    test_coercion_binary_rule!(Int64, ree(Int64), Operator::Multiply, Int64);
+    test_coercion_binary_rule!(ree(Int32), ree(Int64), Operator::Plus, Int64);
+
+    // Decimal unwrapping through math_decimal_coercion
+    let (lhs, rhs) =
+        BinaryTypeCoercer::new(&ree(Decimal128(10, 2)), &Operator::Plus, &Int32)
+            .get_input_types()?;
+    assert_eq!(lhs, Decimal128(10, 2));
+    assert_eq!(rhs, Decimal128(10, 0));
+
+    let (lhs, rhs) =
+        BinaryTypeCoercer::new(&Int32, &Operator::Plus, &ree(Decimal128(10, 2)))
+            .get_input_types()?;
+    assert_eq!(lhs, Decimal128(10, 0));
+    assert_eq!(rhs, Decimal128(10, 2));
+
+    let result =
+        BinaryTypeCoercer::new(&ree(Utf8), &Operator::Plus, &Int32).get_input_types();
+    assert!(result.is_err());
+
+    Ok(())
 }
