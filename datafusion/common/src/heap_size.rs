@@ -17,7 +17,10 @@
 
 use crate::stats::Precision;
 use crate::{ColumnStatistics, ScalarValue, Statistics};
-use arrow::array::{Array, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray, MapArray, StructArray};
+use arrow::array::{
+    Array, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray,
+    ListViewArray, MapArray, StructArray,
+};
 use arrow::datatypes::{
     DataType, Field, Fields, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
     TimeUnit, UnionFields, UnionMode, i256,
