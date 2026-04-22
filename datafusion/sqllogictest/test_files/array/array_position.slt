@@ -458,4 +458,74 @@ select array_positions(column1, make_array(4, 5, 6)), array_positions(make_array
 [1] []
 
 
+query II? rowsort
+select id, array_position(haystack, needle), array_positions(haystack, needle)
+from values
+  (1, [1, 2], 1),         -- element found, return position
+  (2, [1, 2], 0),         -- element missing, return null & empty list
+  (3, [1, 2], null),      -- null is an element, which is missing, return as above
+  (4, [1, null], 1),      -- element found (regardless of null), return position
+  (5, [1, null], 0),      -- element missing, return null & empty list
+  (6, [1, null], null),   -- null is found as element so return position
+  (7, null, 1),           -- when haystack is null we always return null
+  (8, null, null)         -- ^
+t(id, haystack, needle);
+----
+1 1 [1]
+2 NULL []
+3 NULL []
+4 1 [1]
+5 NULL []
+6 2 [2]
+7 NULL NULL
+8 NULL NULL
+
+query TI? rowsort
+select id, array_position(haystack, needle), array_positions(haystack, needle)
+from values
+  ('01', [[1], [2]], [1]),             -- [1] is the sublist element, found it so return position
+  ('02', [[1], [2]], [0]),             -- not found, return null & []
+  ('03', [[1], [2]], [null]),          -- [null] is element, not found as above
+  ('04', [[1], [2]], null),            -- not found, return null & []
+  ('05', [[1], null], [1]),            -- [1] is found even though we have null, return position
+  ('06', [[1], null], [0]),            -- not found, return null & []
+  ('07', [[1], null], [null]),         -- ^
+  ('08', [[1], null], null),           -- null itself is an element, which exists so return position
+  ('09', [[]], null),                  -- no null element, return null & []
+  ('10', [[1], [null]], [null]),       -- [null] is found, return position
+  ('11', [[1], [null], null], [null]), -- ^ (ignore regular null)
+  ('12', [[1], []], []),               -- ^ ([] is element)
+  ('13', [[1], null, []], []),         -- ^ (ignore regular null)
+  ('14', null, [1]),                   -- haystack null, return null
+  ('15', null, [null]),                -- ^
+  ('16', null, null)                   -- ^
+t(id, haystack, needle);
+----
+01 1 [1]
+02 NULL []
+03 NULL []
+04 NULL []
+05 1 [1]
+06 NULL []
+07 NULL []
+08 2 [2]
+09 NULL []
+10 2 [2]
+11 2 [2]
+12 2 [2]
+13 3 [3]
+14 NULL NULL
+15 NULL NULL
+16 NULL NULL
+
+query error DataFusion error: Execution error: array_position index cannot contain nulls
+select array_position(haystack, needle, index_from)
+from values
+  ([1, 2], 1, 2),
+  ([1, 2], 1, null)
+t(haystack, needle, index_from)
+
+query error DataFusion error: Execution error: array_position index cannot contain nulls
+select array_position([1, 2], 1, null)
+
 include ./cleanup.slt.part

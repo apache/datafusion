@@ -43,7 +43,7 @@ use datafusion_common::cast::{
 use datafusion_common::{Result, exec_err, utils::take_function_args};
 use itertools::Itertools;
 
-use crate::utils::{compare_element_to_list, make_scalar_function};
+use crate::utils::{compare_element_to_list_fixed, make_scalar_function};
 
 make_udf_expr_and_func!(
     ArrayPosition,
@@ -209,8 +209,14 @@ fn resolve_start_from(
         Some(ColumnarValue::Scalar(ScalarValue::Int64(Some(v)))) => {
             Ok(vec![v - 1; num_rows])
         }
+        Some(ColumnarValue::Scalar(s)) if s.is_null() => {
+            exec_err!("array_position index cannot contain nulls")
+        }
         Some(ColumnarValue::Scalar(s)) => {
             exec_err!("array_position expected Int64 for start_from, got {s}")
+        }
+        Some(ColumnarValue::Array(a)) if a.null_count() > 0 => {
+            exec_err!("array_position index cannot contain nulls")
         }
         Some(ColumnarValue::Array(a)) => {
             Ok(as_int64_array(a)?.values().iter().map(|&x| x - 1).collect())
@@ -306,11 +312,11 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
     crate::utils::check_datatypes("array_position", &[haystack.values(), needle])?;
 
     let arr_from = if args.len() == 3 {
-        as_int64_array(&args[2])?
-            .values()
-            .iter()
-            .map(|&x| x - 1)
-            .collect::<Vec<_>>()
+        let arr_from = as_int64_array(&args[2])?;
+        if arr_from.null_count() > 0 {
+            return exec_err!("array_position index cannot contain nulls");
+        }
+        arr_from.values().iter().map(|&x| x - 1).collect::<Vec<_>>()
     } else {
         vec![0; haystack.len()]
     };
@@ -331,13 +337,18 @@ fn generic_position<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let mut data = Vec::with_capacity(haystack.len());
 
-    for (row_index, (row, &from)) in haystack.iter().zip(arr_from.iter()).enumerate() {
-        let from = from as usize;
+    let cmp = if needle.data_type().is_list() {
+        compare_element_to_list_fixed::<true>
+    } else {
+        compare_element_to_list_fixed::<false>
+    };
 
+    for (row_index, (row, &from)) in haystack.iter().zip(arr_from.iter()).enumerate() {
         if let Some(row) = row {
-            let eq_array = compare_element_to_list(&row, needle, row_index, true)?;
+            let eq_array = cmp(&row, needle, row_index)?;
 
             // Collect `true`s in 1-indexed positions
+            let from = from as usize;
             let index = eq_array
                 .iter()
                 .skip(from)
@@ -363,7 +374,7 @@ make_udf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Searches for an element in the array, returns all occurrences.",
+    description = "Returns the positions of all occurrences of an element in the array. Returns an empty list `[]` if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL. Only returns NULL if the array to search itself is NULL.",
     syntax_example = "array_positions(array, element)",
     sql_example = r#"```sql
 > select array_positions([1, 2, 2, 3, 1, 4], 2);
@@ -490,9 +501,15 @@ fn general_positions<O: OffsetSizeTrait>(
     crate::utils::check_datatypes("array_positions", &[haystack.values(), needle])?;
     let mut data = Vec::with_capacity(haystack.len());
 
+    let cmp = if needle.data_type().is_list() {
+        compare_element_to_list_fixed::<true>
+    } else {
+        compare_element_to_list_fixed::<false>
+    };
+
     for (row_index, row) in haystack.iter().enumerate() {
         if let Some(row) = row {
-            let eq_array = compare_element_to_list(&row, needle, row_index, true)?;
+            let eq_array = cmp(&row, needle, row_index)?;
 
             // Collect `true`s in 1-indexed positions
             let indexes = eq_array
@@ -591,7 +608,7 @@ fn array_positions_scalar<O: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::AsArray;
+    use arrow::array::{AsArray, Int32Array, new_empty_array};
     use arrow::datatypes::Int32Type;
     use datafusion_common::config::ConfigOptions;
 
@@ -747,6 +764,175 @@ mod tests {
         let row1 = output.value(1);
         let row1 = row1.as_primitive::<UInt64Type>();
         assert_eq!(row1.values().as_ref(), &[2]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_non_empty_null() -> Result<()> {
+        // Haystack             Needle  array_position  array_positionS
+        // [[7]]                [null]  null            []
+        // [[7]]                null    null            []
+        // [[7], null]          [null]  null            []
+        // [[7], null]          null    2               [2]
+        // [[7], [null]]        [null]  2               [2]
+        // [[7], [null], null]  [null]  2               [2]
+
+        // Nulls are not zero sized and have underlying value of 7
+
+        // [[7], [7], [7], null, [7], null, [7], [null], [7], [null], null]
+        let inner = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::from_lengths(vec![1; 11]),
+            Arc::new(Int32Array::new(
+                vec![7; 11].into(),
+                Some(
+                    vec![
+                        true, true, true, true, true, true, true, false, true, false,
+                        true,
+                    ]
+                    .into(),
+                ),
+            )),
+            Some(
+                vec![
+                    true, true, true, false, true, false, true, true, true, true, false,
+                ]
+                .into(),
+            ),
+        ));
+
+        // [[[7]], [[7]], [[7], null], [[7], null], [[7], [null]], [[7], [null], null]]
+        let haystack: Arc<dyn Array> = Arc::new(ListArray::new(
+            Field::new_list_field(inner.data_type().clone(), true).into(),
+            OffsetBuffer::from_lengths(vec![1, 1, 2, 2, 2, 3]),
+            inner,
+            None,
+        ));
+
+        // [[null], null, [null], null, [null], [null]]
+        let needle: Arc<dyn Array> = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::from_lengths(vec![1; 6]),
+            Arc::new(Int32Array::new(
+                vec![7; 6].into(),
+                Some(vec![false; 6].into()),
+            )),
+            Some(vec![true, false, true, false, true, true].into()),
+        ));
+
+        let output = ArrayPosition::new()
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(Arc::clone(&haystack)),
+                    ColumnarValue::Array(Arc::clone(&needle)),
+                ],
+                arg_fields: vec![],
+                number_rows: 0,
+                return_field: Arc::new(Field::new("", DataType::Null, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })?
+            .into_array(9)?;
+        // [null, null, null, 2, 2, 2]
+        let expected: Arc<dyn Array> = Arc::new(UInt64Array::from(vec![
+            None,
+            None,
+            None,
+            Some(2),
+            Some(2),
+            Some(2),
+        ]));
+        assert_eq!(&output, &expected);
+
+        let output = ArrayPositions::new()
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(haystack), ColumnarValue::Array(needle)],
+                arg_fields: vec![],
+                number_rows: 0,
+                return_field: Arc::new(Field::new("", DataType::Null, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })?
+            .into_array(9)?;
+        // [[], [], [], [2], [2], [2]]
+        let expected: Arc<dyn Array> =
+            Arc::new(ListArray::from_iter_primitive::<UInt64Type, _, _>(vec![
+                Some(vec![]),
+                Some(vec![]),
+                Some(vec![]),
+                Some(vec![Some(2)]),
+                Some(vec![Some(2)]),
+                Some(vec![Some(2)]),
+            ]));
+        assert_eq!(&output, &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_empty_list() -> Result<()> {
+        // Haystack             Needle  array_position  array_positionS
+        // [[]]                 null    null            []
+        // [[7], []]            []      2               [2]
+        // [[7], null, []]      []      3               [3]
+
+        // [[], [7], [], [7], null, []]
+        let inner = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::from_lengths(vec![0, 1, 0, 1, 0, 0]),
+            Arc::new(Int32Array::from(vec![7, 7])),
+            Some(vec![true, true, true, true, false, true].into()),
+        ));
+
+        // [[[]], [[7], []], [[7], null, []]]
+        let haystack: Arc<dyn Array> = Arc::new(ListArray::new(
+            Field::new_list_field(inner.data_type().clone(), true).into(),
+            OffsetBuffer::from_lengths(vec![1, 2, 3]),
+            inner,
+            None,
+        ));
+
+        // [null, [], []]
+        let needle: Arc<dyn Array> = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::from_lengths(vec![0, 0, 0]),
+            Arc::new(new_empty_array(&DataType::Int32)),
+            Some(vec![false, true, true].into()),
+        ));
+
+        let output = ArrayPosition::new()
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(Arc::clone(&haystack)),
+                    ColumnarValue::Array(Arc::clone(&needle)),
+                ],
+                arg_fields: vec![],
+                number_rows: 0,
+                return_field: Arc::new(Field::new("", DataType::Null, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })?
+            .into_array(9)?;
+        // [null, 2, 3]
+        let expected: Arc<dyn Array> =
+            Arc::new(UInt64Array::from(vec![None, Some(2), Some(3)]));
+        assert_eq!(&output, &expected);
+
+        let output = ArrayPositions::new()
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(haystack), ColumnarValue::Array(needle)],
+                arg_fields: vec![],
+                number_rows: 0,
+                return_field: Arc::new(Field::new("", DataType::Null, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })?
+            .into_array(9)?;
+        // [[], [2], [3]]
+        let expected: Arc<dyn Array> =
+            Arc::new(ListArray::from_iter_primitive::<UInt64Type, _, _>(vec![
+                Some(vec![]),
+                Some(vec![Some(2)]),
+                Some(vec![Some(3)]),
+            ]));
+        assert_eq!(&output, &expected);
 
         Ok(())
     }

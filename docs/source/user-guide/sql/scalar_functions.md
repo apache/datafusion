@@ -3937,7 +3937,7 @@ array_position(array, element, index)
 
 ### `array_positions`
 
-Searches for an element in the array, returns all occurrences.
+Returns the positions of all occurrences of an element in the array. Returns an empty list `[]` if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL. Only returns NULL if the array to search itself is NULL.
 
 ```sql
 array_positions(array, element)

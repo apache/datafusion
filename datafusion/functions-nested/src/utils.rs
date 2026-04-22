@@ -19,10 +19,12 @@
 
 use std::sync::Arc;
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Fields};
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar,
+    make_comparator,
 };
 use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::{
@@ -218,6 +220,30 @@ pub(crate) fn compare_element_to_list(
     };
 
     Ok(res)
+}
+
+/// Given a `haystack` array, and a specific value from `needle` selected by
+/// `needle_element_index`, return a `BooleanArray` based on whether the elements
+/// in `haystack` match the `needle` value using `IS NOT DISTINCT FROM` semantics.
+///   - Allows NULL = NULL to be considered true
+pub(crate) fn compare_element_to_list_fixed<const IS_LIST: bool>(
+    haystack: &dyn Array,
+    needle: &dyn Array,
+    needle_element_index: usize,
+) -> Result<BooleanArray> {
+    if IS_LIST {
+        // arrow_ord::cmp::eq does not support ListArray, so we resort to make_comparator
+        let cmp = make_comparator(haystack, needle, SortOptions::default())?;
+        let res = (0..haystack.len())
+            .map(|i| cmp(i, needle_element_index).is_eq())
+            .collect::<BooleanArray>();
+        Ok(res)
+    } else {
+        let needle = needle.slice(needle_element_index, 1);
+        let needle_value = Scalar::new(needle);
+        // use not_distinct so we can compare NULL
+        Ok(arrow_ord::cmp::not_distinct(&haystack, &needle_value)?)
+    }
 }
 
 /// Returns the length of each array dimension
