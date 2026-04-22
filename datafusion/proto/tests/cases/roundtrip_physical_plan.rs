@@ -3102,6 +3102,7 @@ fn roundtrip_dynamic_filter_expr_pair(
 /// - `dynamic_filter_2` before serialization
 /// - `dynamic_filter_1` after serialization
 /// - `dynamic_filter_2` after serialization
+#[allow(clippy::type_complexity)]
 fn roundtrip_dynamic_filter_plan_pair() -> Result<(
     Arc<dyn PhysicalExpr>,
     Arc<dyn PhysicalExpr>,
