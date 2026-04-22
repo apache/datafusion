@@ -10,7 +10,6 @@ select
 from
     customer,
     orders,
-    
     lineitem,
     nation
 where
