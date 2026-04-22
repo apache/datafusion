@@ -23,6 +23,10 @@ use datafusion_physical_expr::PhysicalExprRef;
 pub use hash_join::{
     HashExpr, HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr, SeededRandomState,
 };
+pub use join_accelerator::{
+    JoinAccelerator, JoinAcceleratorFactory, JoinAcceleratorFactoryRef,
+    JoinAcceleratorProber, JoinProbeBatch, NaiveJoinAcceleratorFactory,
+};
 pub use nested_loop_join::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use parking_lot::Mutex;
 // Note: SortMergeJoin is not used in plans yet
@@ -40,6 +44,7 @@ mod symmetric_hash_join;
 pub mod utils;
 
 mod array_map;
+mod join_accelerator;
 mod join_filter;
 /// Hash map implementations for join operations.
 ///
