@@ -1178,6 +1178,13 @@ data_sort_pushdown_inexact() {
         return
     fi
 
+    # Check pyarrow dependency (needed to split/scramble RGs)
+    if ! python3 -c "import pyarrow" 2>/dev/null; then
+        echo "Error: pyarrow is required for sort pushdown Inexact data generation."
+        echo "Install with: pip install pyarrow"
+        return 1
+    fi
+
     echo "Generating sort pushdown Inexact benchmark data (multi-file, scrambled RGs)..."
 
     # Re-use the sort_pushdown data as the source (generate if missing)
