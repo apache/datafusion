@@ -26,7 +26,7 @@ use datafusion::prelude::{CsvReadOptions, DataFrame, SessionContext};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
 use futures::StreamExt;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -92,8 +92,9 @@ impl SqlBenchmark {
             last_results: None,
             echo: vec![],
         };
-        bm.replacement_mapping.insert(
-            "BENCHMARK_DIR".to_string(),
+        insert_replacement(
+            &mut bm.replacement_mapping,
+            "BENCHMARK_DIR",
             benchmark_directory.to_string_lossy().into_owned(),
         );
 
@@ -326,6 +327,8 @@ impl SqlBenchmark {
         )
         .await?;
 
+        ctx.deregister_table("persist_data")?;
+
         Ok(())
     }
 
@@ -476,8 +479,11 @@ impl SqlBenchmark {
         debug!("Processing file {}", path.display());
 
         let mut replacement_mapping = self.replacement_mapping.clone();
-        replacement_mapping
-            .insert("FILE_PATH".to_string(), path.to_string_lossy().into_owned());
+        insert_replacement(
+            &mut replacement_mapping,
+            "FILE_PATH",
+            path.to_string_lossy().into_owned(),
+        );
 
         let mut reader = BenchmarkFileReader::new(path, replacement_mapping)?;
         let mut line = String::with_capacity(1024);
@@ -870,12 +876,12 @@ impl BenchmarkDirective {
             _ => unreachable!("unsupported metadata directive: {directive}"),
         }
 
-        bench
-            .replacement_mapping
-            .insert(replacement_key.to_string(), value.clone());
-        reader
-            .replacements
-            .insert(replacement_key.to_string(), value);
+        insert_replacement(
+            &mut bench.replacement_mapping,
+            replacement_key,
+            value.clone(),
+        );
+        insert_replacement(&mut reader.replacements, replacement_key, value);
 
         Ok(())
     }
@@ -1098,9 +1104,11 @@ impl BenchmarkDirective {
                             )
                         ));
                     };
-                    bench
-                        .replacement_mapping
-                        .insert(key.trim().to_string(), value.trim().to_string());
+                    insert_replacement(
+                        &mut bench.replacement_mapping,
+                        key.trim(),
+                        value.trim().to_string(),
+                    );
                 }
                 Some(Err(e)) => return Err(e),
                 None => break,
@@ -1243,6 +1251,10 @@ fn parse_group_from_path(path: &Path, benchmark_directory: &Path) -> String {
         parent = p.parent();
     }
 
+    if group_name.is_empty() {
+        warn!("Unable to find group name in path: {}", path.display());
+    }
+
     group_name
 }
 
@@ -1283,6 +1295,14 @@ fn is_comment_line(line: &str) -> bool {
 
 fn is_blank_or_comment_line(line: &str) -> bool {
     is_blank_line(line) || is_comment_line(line)
+}
+
+fn insert_replacement(
+    replacement_map: &mut HashMap<String, String>,
+    key: &str,
+    value: String,
+) {
+    replacement_map.insert(key.to_lowercase(), value);
 }
 
 fn replace_all<E>(
@@ -1374,11 +1394,8 @@ fn lookup_replacement_value(
     replacement_map: &HashMap<String, String>,
     get_env: &impl Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    // search replacement map for key
-    for (k, v) in replacement_map {
-        if key.eq_ignore_ascii_case(k) {
-            return Some(v.to_string());
-        }
+    if let Some(v) = replacement_map.get(&key.to_lowercase()) {
+        return Some(v.to_string());
     }
 
     // look in env variables
@@ -1600,6 +1617,14 @@ mod tests {
     }
 
     fn replacement_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        let mut replacements = HashMap::new();
+        for (key, value) in entries {
+            insert_replacement(&mut replacements, key, value.to_string());
+        }
+        replacements
+    }
+
+    fn env_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
         entries
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))
@@ -1629,7 +1654,7 @@ mod tests {
     #[test]
     fn process_replacements_uses_env_when_map_value_is_missing() {
         let replacements = HashMap::new();
-        let env = replacement_map(&[("DATA_DIR", "/tmp/data")]);
+        let env = env_map(&[("DATA_DIR", "/tmp/data")]);
 
         let actual = process_replacements_with_env(
             "${data_dir}/lineitem.parquet",
@@ -1644,7 +1669,7 @@ mod tests {
     #[test]
     fn process_replacements_prefers_map_over_env() {
         let replacements = replacement_map(&[("BENCH_SIZE", "10")]);
-        let env = replacement_map(&[("BENCH_SIZE", "100")]);
+        let env = env_map(&[("BENCH_SIZE", "100")]);
 
         let actual =
             process_replacements_with_env("sf${BENCH_SIZE}", &replacements, |key| {
@@ -1687,7 +1712,7 @@ mod tests {
     #[test]
     fn process_replacements_applies_true_false_true_branch() {
         let replacements = HashMap::new();
-        let env = replacement_map(&[("USE_PARQUET", "TrUe")]);
+        let env = env_map(&[("USE_PARQUET", "TrUe")]);
 
         let actual = process_replacements_with_env(
             "load_${USE_PARQUET:-false|parquet|csv}.sql",
@@ -1702,7 +1727,7 @@ mod tests {
     #[test]
     fn process_replacements_applies_true_false_false_branch() {
         let replacements = HashMap::new();
-        let env = replacement_map(&[("USE_PARQUET", "false")]);
+        let env = env_map(&[("USE_PARQUET", "false")]);
 
         let actual = process_replacements_with_env(
             "load_${USE_PARQUET:-true|parquet|csv}.sql",
@@ -1731,7 +1756,7 @@ mod tests {
     #[test]
     fn process_replacements_prefers_map_over_env_for_true_false_branch() {
         let replacements = replacement_map(&[("USE_PARQUET", "false")]);
-        let env = replacement_map(&[("USE_PARQUET", "true")]);
+        let env = env_map(&[("USE_PARQUET", "true")]);
 
         let actual = process_replacements_with_env(
             "load_${USE_PARQUET:-true|parquet|csv}.sql",
@@ -1793,7 +1818,7 @@ mod tests {
     #[test]
     fn process_replacements_resolves_variables_after_true_false_replacement() {
         let replacements = replacement_map(&[("FILE_TYPE", "parquet")]);
-        let env = replacement_map(&[("USE_TYPED_PATH", "true")]);
+        let env = env_map(&[("USE_TYPED_PATH", "true")]);
 
         let actual = process_replacements_with_env(
             "${USE_TYPED_PATH:-false|data.${FILE_TYPE}|data.csv}",
@@ -2054,7 +2079,7 @@ NULL|(empty)
             &vec!["select 'orders'".to_string()]
         );
         assert_eq!(
-            benchmark.replacement_mapping().get("TABLE_NAME"),
+            benchmark.replacement_mapping().get("table_name"),
             Some(&"orders".to_string())
         );
     }

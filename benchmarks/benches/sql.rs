@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Criterion benchmark harness for SQL benchmark files under `sql_benchmarks`.
+//!
+//! SQL benchmarks describe setup, queries, result validation, and cleanup in
+//! `.benchmark` files. Run them with `benchmarks/bench.sh` or directly with
+//! Cargo, for example: `BENCH_NAME=tpch cargo bench --bench sql`.
+
 use clap::Parser;
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use datafusion::error::Result;
@@ -25,7 +31,6 @@ use datafusion_common::instant::Instant;
 use log::{debug, info};
 use std::collections::BTreeMap;
 use std::fs;
-use std::sync::Mutex;
 use tokio::runtime::Runtime;
 
 static SQL_BENCHMARK_DIRECTORY: &str = "sql_benchmarks";
@@ -123,8 +128,6 @@ pub fn sql(c: &mut Criterion) {
                 name.push('_');
                 name.push_str(benchmark.subgroup());
             }
-
-            let mut benchmark = benchmark.clone();
 
             if args.persist_results {
                 handle_persist(&rt, &ctx, &name, &mut benchmark);
@@ -258,7 +261,7 @@ async fn load_benchmarks(
     ctx: &SessionContext,
     path: &str,
 ) -> Result<BTreeMap<String, Vec<SqlBenchmark>>> {
-    let benches = Mutex::new(BTreeMap::new());
+    let mut benches = BTreeMap::new();
     let mut paths = Vec::new();
 
     list_files(path, &mut |path: &str| {
@@ -271,13 +274,12 @@ async fn load_benchmarks(
         debug!("Loading benchmark from {path}");
 
         let benchmark = SqlBenchmark::new(ctx, &path, SQL_BENCHMARK_DIRECTORY).await?;
-        let mut map = benches.lock().unwrap();
-        let entries = map.entry(benchmark.group().to_string()).or_insert(vec![]);
+        let entries = benches
+            .entry(benchmark.group().to_string())
+            .or_insert(vec![]);
 
         entries.push(benchmark);
     }
-
-    let mut benches = benches.into_inner().unwrap();
 
     benches = filter_benchmarks(args, benches);
     benches.iter_mut().for_each(|(_, benchmarks)| {
@@ -313,12 +315,9 @@ fn filter_benchmarks(
             // if provided filter to just the query number we wish to run (corresponds loosely to SqlBenchmark::name())
             .map(|(key, val)| {
                 if let Some(query_number) = &args.query {
-                    let padded = if query_number < &10 {
-                        format!("Q{query_number:0>2}")
-                    } else {
-                        format! {"Q{query_number}"}
-                    };
+                    let padded = format!("Q{query_number:0>2}");
                     let mut benches = vec![];
+
                     for bench in val {
                         if bench.name().eq_ignore_ascii_case(&padded) {
                             benches.push(bench.clone());
@@ -329,7 +328,6 @@ fn filter_benchmarks(
                     (key, val)
                 }
             })
-            .map(|(key, val)| (key, val.clone()))
             .collect(),
         None => benchmarks,
     };
