@@ -368,7 +368,7 @@ fn roundtrip_statement_postgres_any_array_expr() -> Result<(), DataFusionError> 
         sql: "select left from array where 1 = any(left);",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserPostgreSqlDialect {},
-        expected: @r#"SELECT "array"."left" FROM "array" WHERE 1 = ANY("array"."left")"#,
+        expected: @r#"SELECT "array"."left" FROM "array" WHERE CASE WHEN "array"."left" IS NULL THEN NULL WHEN (cardinality("array"."left") = 0) THEN false WHEN 1 IS NULL THEN NULL WHEN 1 = ANY("array"."left") THEN true WHEN array_position("array"."left", NULL, 1) IS NOT NULL THEN NULL ELSE false END"#,
     );
     Ok(())
 }
