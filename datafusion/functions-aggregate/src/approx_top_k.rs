@@ -145,7 +145,7 @@ struct SpaceSavingSummary {
     /// Set to `max(64, requested_capacity * 2)`.
     target_capacity: usize,
     /// Running total of heap bytes owned by counter item `Vec`s.
-    /// Updated on push / evict / clone so that [`size`] is O(1).
+    /// Updated on push / evict / clone so that `size()` is O(1).
     item_heap_bytes: usize,
 }
 
