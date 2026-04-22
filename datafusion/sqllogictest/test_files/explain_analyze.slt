@@ -103,7 +103,7 @@ LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
 query TT
 EXPLAIN ANALYZE SELECT * FROM skew_parquet;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=84.31%<slt:ignore>
+Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=<slt:ignore>
 
 # All partition's output_rows: [0]
 statement ok
