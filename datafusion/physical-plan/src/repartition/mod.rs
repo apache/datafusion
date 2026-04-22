@@ -382,13 +382,15 @@ impl RepartitionExecState {
                 })
                 .collect();
 
-            // Extract senders for wait_for_task before moving txs
+            // Clone outbound senders so the same task that drives the input
+            // can forward EOS/error/panic markers after `pull_from_input`
+            // returns or unwinds.
             let senders: HashMap<_, _> = txs
                 .iter()
                 .map(|(partition, channel)| (*partition, channel.sender.clone()))
                 .collect();
 
-            let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
+            let input_task = SpawnedTask::spawn(RepartitionExec::drive_input(
                 stream,
                 txs,
                 partitioning.clone(),
@@ -396,13 +398,9 @@ impl RepartitionExecState {
                 // preserve_order depends on partition index to start from 0
                 if preserve_order { 0 } else { i },
                 num_input_partitions,
+                senders,
             ));
-
-            // In a separate task, wait for each input to be done
-            // (and pass along any errors, including panic!s)
-            let wait_for_task =
-                SpawnedTask::spawn(RepartitionExec::wait_for_task(input_task, senders));
-            spawned_tasks.push(wait_for_task);
+            spawned_tasks.push(input_task);
         }
         *self = Self::ConsumingInputStreams(ConsumingInputStreamsState {
             channels,
@@ -1456,47 +1454,67 @@ impl RepartitionExec {
         Ok(())
     }
 
-    /// Waits for `input_task` which is consuming one of the inputs to
-    /// complete. Upon each successful completion, sends a `None` to
-    /// each of the output tx channels to signal one of the inputs is
-    /// complete. Upon error, propagates the errors to all output tx
-    /// channels.
-    async fn wait_for_task(
-        input_task: SpawnedTask<Result<()>>,
-        txs: HashMap<usize, DistributionSender<MaybeBatch>>,
+    /// Drives `pull_from_input` for a single input partition and forwards
+    /// its completion, error, or panic to all output senders. Running the
+    /// forwarder in the same spawned task (rather than a separate
+    /// `wait_for_task` shepherd) halves the number of tokio tasks created
+    /// per `RepartitionExec`. Panic safety is preserved by wrapping the
+    /// inner future in `AssertUnwindSafe(..).catch_unwind()`.
+    ///
+    /// Send errors on the output channels are ignored (`.ok()`) because
+    /// they indicate the receiver has already shut down (e.g. from LIMIT).
+    async fn drive_input(
+        stream: SendableRecordBatchStream,
+        txs: HashMap<usize, OutputChannel>,
+        partitioning: Partitioning,
+        metrics: RepartitionMetrics,
+        input_partition: usize,
+        num_input_partitions: usize,
+        senders: HashMap<usize, DistributionSender<MaybeBatch>>,
     ) {
-        // wait for completion, and propagate error
-        // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
+        let result = std::panic::AssertUnwindSafe(Self::pull_from_input(
+            stream,
+            txs,
+            partitioning,
+            metrics,
+            input_partition,
+            num_input_partitions,
+        ))
+        .catch_unwind()
+        .await;
 
-        match input_task.join().await {
-            // Error in joining task
-            Err(e) => {
-                let e = Arc::new(e);
-
-                for (_, tx) in txs {
-                    let err = Err(DataFusionError::Context(
-                        "Join Error".to_string(),
-                        Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
-                    ));
-                    tx.send(Some(err)).await.ok();
+        match result {
+            // Input task completed successfully
+            Ok(Ok(())) => {
+                for (_partition, tx) in senders {
+                    tx.send(None).await.ok();
                 }
             }
-            // Error from running input task
+            // Error returned from pull_from_input
             Ok(Err(e)) => {
-                // send the same Arc'd error to all output partitions
                 let e = Arc::new(e);
-
-                for (_, tx) in txs {
-                    // wrap it because need to send error to all output partitions
+                for (_, tx) in senders {
                     let err = Err(DataFusionError::from(&e));
                     tx.send(Some(err)).await.ok();
                 }
             }
-            // Input task completed successfully
-            Ok(Ok(())) => {
-                // notify each output partition that this input partition has no more data
-                for (_partition, tx) in txs {
-                    tx.send(None).await.ok();
+            // pull_from_input panicked
+            Err(panic) => {
+                let msg = if let Some(s) = panic.downcast_ref::<&'static str>() {
+                    (*s).to_string()
+                } else if let Some(s) = panic.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                for (_, tx) in senders {
+                    let err = Err(DataFusionError::Context(
+                        "Join Error".to_string(),
+                        Box::new(DataFusionError::Execution(format!(
+                            "task panicked: {msg}"
+                        ))),
+                    ));
+                    tx.send(Some(err)).await.ok();
                 }
             }
         }
