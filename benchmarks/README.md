@@ -900,3 +900,44 @@ This command will:
 ```
 
 This runs queries against the pre-sorted dataset with the `--sorted-by EventTime` flag, which informs DataFusion that the data is pre-sorted, allowing it to optimize away redundant sort operations.
+
+## Sort Pushdown
+
+Benchmarks for sort pushdown optimizations on TPC-H lineitem data (SF=1).
+
+### Variants
+
+| Benchmark | Description |
+|-----------|-------------|
+| `sort_pushdown` | Baseline — no `WITH ORDER`, tests standard sort behavior |
+| `sort_pushdown_sorted` | With `WITH ORDER` — tests sort elimination on sorted files |
+| `sort_pushdown_inexact` | Inexact path (`--sorted` DESC) — multi-file with scrambled RGs, tests reverse scan + RG reorder |
+| `sort_pushdown_inexact_unsorted` | No `WITH ORDER` — same data, tests Unsupported path + RG reorder |
+| `sort_pushdown_inexact_overlap` | Multi-file scrambled RGs — streaming data scenario |
+
+### Queries
+
+**sort_pushdown / sort_pushdown_sorted** (q1-q8):
+- q1-q4: ASC queries (sort elimination with `--sorted`)
+- q5-q8: DESC LIMIT queries (reverse scan + TopK optimization with `--sorted`)
+
+**sort_pushdown_inexact** (q1-q4): DESC LIMIT queries on scrambled data
+
+### Data Generation
+
+The inexact/overlap data requires pyarrow (`pip install pyarrow`) to generate
+multi-file parquet with scrambled row group order. DataFusion's COPY cannot produce
+narrow-range RGs in scrambled order because the parquet writer merges rows from
+adjacent chunks at RG boundaries.
+
+### Running
+
+```bash
+# Generate data and run all sort pushdown benchmarks
+./bench.sh data sort_pushdown
+./bench.sh data sort_pushdown_inexact
+./bench.sh run sort_pushdown
+./bench.sh run sort_pushdown_sorted
+./bench.sh run sort_pushdown_inexact
+./bench.sh run sort_pushdown_inexact_overlap
+```

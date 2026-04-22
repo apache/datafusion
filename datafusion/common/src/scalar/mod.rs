@@ -44,12 +44,12 @@ use crate::cast::{
     as_float16_array, as_float32_array, as_float64_array, as_int8_array, as_int16_array,
     as_int32_array, as_int64_array, as_interval_dt_array, as_interval_mdn_array,
     as_interval_ym_array, as_large_binary_array, as_large_list_array,
-    as_large_string_array, as_run_array, as_string_array, as_string_view_array,
-    as_time32_millisecond_array, as_time32_second_array, as_time64_microsecond_array,
-    as_time64_nanosecond_array, as_timestamp_microsecond_array,
-    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
-    as_timestamp_second_array, as_uint8_array, as_uint16_array, as_uint32_array,
-    as_uint64_array, as_union_array,
+    as_large_list_view_array, as_large_string_array, as_list_view_array, as_run_array,
+    as_string_array, as_string_view_array, as_time32_millisecond_array,
+    as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
+    as_timestamp_microsecond_array, as_timestamp_millisecond_array,
+    as_timestamp_nanosecond_array, as_timestamp_second_array, as_uint8_array,
+    as_uint16_array, as_uint32_array, as_uint64_array, as_union_array,
 };
 use crate::error::{_exec_err, _internal_err, _not_impl_err, DataFusionError, Result};
 use crate::format::DEFAULT_CAST_OPTIONS;
@@ -63,14 +63,15 @@ use arrow::array::{
     DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
     FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
-    Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
-    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
-    PrimitiveArray, RunArray, Scalar, StringArray, StringViewArray, StringViewBuilder,
-    StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array, UnionArray, downcast_run_array, new_empty_array, new_null_array,
+    GenericListViewArray, Int8Array, Int16Array, Int32Array, Int64Array,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
+    ListViewArray, MapArray, MutableArrayData, PrimitiveArray, RunArray, Scalar,
+    StringArray, StringViewArray, StringViewBuilder, StructArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
+    downcast_run_array, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -257,8 +258,8 @@ pub(crate) fn format_timestamp_type_for_error(target_type: &DataType) -> String 
 ///
 /// # Nested Types
 ///
-/// `List` / `LargeList` / `FixedSizeList` / `Struct` / `Map` are represented as a
-/// single element array of the corresponding type.
+/// `List` / `LargeList` / `FixedSizeList` / `ListView` / `LargeListView` / `Struct` / `Map`
+/// are represented as a single element array of the corresponding type.
 ///
 /// ## Example: Creating [`ScalarValue::Struct`] using [`ScalarStructBuilder`]
 /// ```
@@ -381,6 +382,14 @@ pub enum ScalarValue {
     List(Arc<ListArray>),
     /// The array must be a LargeListArray with length 1.
     LargeList(Arc<LargeListArray>),
+    /// Represents a single element of a [`ListViewArray`] as an [`ArrayRef`]
+    ///
+    /// The array must be a ListViewArray with length 1.
+    ListView(Arc<ListViewArray>),
+    /// Represents a single element of a [`LargeListViewArray`] as an [`ArrayRef`]
+    ///
+    /// The array must be a LargeListViewArray with length 1.
+    LargeListView(Arc<LargeListViewArray>),
     /// Represents a single element [`StructArray`] as an [`ArrayRef`]. See
     /// [`ScalarValue`] for examples of how to create instances of this type.
     Struct(Arc<StructArray>),
@@ -517,6 +526,10 @@ impl PartialEq for ScalarValue {
             (List(_), _) => false,
             (LargeList(v1), LargeList(v2)) => v1.eq(v2),
             (LargeList(_), _) => false,
+            (ListView(v1), ListView(v2)) => v1.eq(v2),
+            (ListView(_), _) => false,
+            (LargeListView(v1), LargeListView(v2)) => v1.eq(v2),
+            (LargeListView(_), _) => false,
             (Struct(v1), Struct(v2)) => v1.eq(v2),
             (Struct(_), _) => false,
             (Map(v1), Map(v2)) => v1.eq(v2),
@@ -662,7 +675,8 @@ impl PartialOrd for ScalarValue {
             (FixedSizeBinary(_, _), _) => None,
             (LargeBinary(v1), LargeBinary(v2)) => v1.partial_cmp(v2),
             (LargeBinary(_), _) => None,
-            // ScalarValue::List / ScalarValue::FixedSizeList / ScalarValue::LargeList are ensure to have length 1
+            // ScalarValue::List / ScalarValue::FixedSizeList / ScalarValue::LargeList / ScalarValue::ListView / ScalarValue::LargeListView
+            // are guaranteed to have length 1
             (List(arr1), List(arr2)) => partial_cmp_list(arr1.as_ref(), arr2.as_ref()),
             (FixedSizeList(arr1), FixedSizeList(arr2)) => {
                 partial_cmp_list(arr1.as_ref(), arr2.as_ref())
@@ -670,7 +684,17 @@ impl PartialOrd for ScalarValue {
             (LargeList(arr1), LargeList(arr2)) => {
                 partial_cmp_list(arr1.as_ref(), arr2.as_ref())
             }
-            (List(_), _) | (LargeList(_), _) | (FixedSizeList(_), _) => None,
+            (ListView(arr1), ListView(arr2)) => {
+                partial_cmp_list(arr1.as_ref(), arr2.as_ref())
+            }
+            (LargeListView(arr1), LargeListView(arr2)) => {
+                partial_cmp_list(arr1.as_ref(), arr2.as_ref())
+            }
+            (List(_), _)
+            | (LargeList(_), _)
+            | (FixedSizeList(_), _)
+            | (ListView(_), _)
+            | (LargeListView(_), _) => None,
             (Struct(struct_arr1), Struct(struct_arr2)) => {
                 partial_cmp_struct(struct_arr1.as_ref(), struct_arr2.as_ref())
             }
@@ -745,7 +769,7 @@ impl PartialOrd for ScalarValue {
     }
 }
 
-/// List/LargeList/FixedSizeList scalars always have a single element
+/// List/LargeList/FixedSizeList/ListView/LargeListView scalars always have a single element
 /// array. This function returns that array
 fn first_array_for_list(arr: &dyn Array) -> ArrayRef {
     assert_eq!(arr.len(), 1);
@@ -755,14 +779,18 @@ fn first_array_for_list(arr: &dyn Array) -> ArrayRef {
         arr.value(0)
     } else if let Some(arr) = arr.as_fixed_size_list_opt() {
         arr.value(0)
+    } else if let Some(arr) = arr.as_list_view_opt::<i32>() {
+        arr.value(0)
+    } else if let Some(arr) = arr.as_list_view_opt::<i64>() {
+        arr.value(0)
     } else {
         unreachable!(
-            "Since only List / LargeList / FixedSizeList are supported, this should never happen"
+            "Since only List / LargeList / FixedSizeList / ListView / LargeListView are supported, this should never happen"
         )
     }
 }
 
-/// Compares two List/LargeList/FixedSizeList scalars
+/// Compares two List/LargeList/FixedSizeList/ListView/LargeListView scalars
 fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     if arr1.data_type() != arr2.data_type() {
         return None;
@@ -948,6 +976,12 @@ impl Hash for ScalarValue {
                 hash_nested_array(arr.to_owned() as ArrayRef, state);
             }
             FixedSizeList(arr) => {
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
+            }
+            ListView(arr) => {
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
+            }
+            LargeListView(arr) => {
                 hash_nested_array(arr.to_owned() as ArrayRef, state);
             }
             Struct(arr) => {
@@ -1288,6 +1322,12 @@ impl ScalarValue {
                     1,
                 )))
             }
+            DataType::ListView(field_ref) => ScalarValue::ListView(Arc::new(
+                GenericListViewArray::new_null(Arc::clone(field_ref), 1),
+            )),
+            DataType::LargeListView(field_ref) => ScalarValue::LargeListView(Arc::new(
+                GenericListViewArray::new_null(Arc::clone(field_ref), 1),
+            )),
             DataType::Struct(fields) => ScalarValue::Struct(
                 new_null_array(&DataType::Struct(fields.to_owned()), 1)
                     .as_struct()
@@ -1640,7 +1680,7 @@ impl ScalarValue {
                 let empty_arr = new_empty_array(field.data_type());
                 let values = Arc::new(
                     SingleRowListArrayBuilder::new(empty_arr)
-                        .with_nullable(field.is_nullable())
+                        .with_field(field)
                         .build_fixed_size_list_array(0),
                 );
                 Ok(ScalarValue::FixedSizeList(values))
@@ -1648,6 +1688,24 @@ impl ScalarValue {
             DataType::LargeList(field) => {
                 let list = ScalarValue::new_large_list(&[], field.data_type());
                 Ok(ScalarValue::LargeList(list))
+            }
+            DataType::ListView(field) => {
+                let empty_arr = new_empty_array(field.data_type());
+                let values = Arc::new(
+                    SingleRowListArrayBuilder::new(empty_arr)
+                        .with_field(field)
+                        .build_list_view_array(),
+                );
+                Ok(ScalarValue::ListView(values))
+            }
+            DataType::LargeListView(field) => {
+                let empty_arr = new_empty_array(field.data_type());
+                let values = Arc::new(
+                    SingleRowListArrayBuilder::new(empty_arr)
+                        .with_field(field)
+                        .build_large_list_view_array(),
+                );
+                Ok(ScalarValue::LargeListView(values))
             }
 
             // Struct types
@@ -1697,12 +1755,6 @@ impl ScalarValue {
                 } else {
                     _internal_err!("Union type must have at least one field")
                 }
-            }
-
-            DataType::ListView(_) | DataType::LargeListView(_) => {
-                _not_impl_err!(
-                    "Default value for data_type \"{datatype}\" is not implemented yet"
-                )
             }
         }
     }
@@ -1961,6 +2013,8 @@ impl ScalarValue {
             ScalarValue::List(arr) => arr.data_type().to_owned(),
             ScalarValue::LargeList(arr) => arr.data_type().to_owned(),
             ScalarValue::FixedSizeList(arr) => arr.data_type().to_owned(),
+            ScalarValue::ListView(arr) => arr.data_type().to_owned(),
+            ScalarValue::LargeListView(arr) => arr.data_type().to_owned(),
             ScalarValue::Struct(arr) => arr.data_type().to_owned(),
             ScalarValue::Map(arr) => arr.data_type().to_owned(),
             ScalarValue::Date32(_) => DataType::Date32,
@@ -2471,6 +2525,8 @@ impl ScalarValue {
             ScalarValue::List(arr) => arr.len() == arr.null_count(),
             ScalarValue::LargeList(arr) => arr.len() == arr.null_count(),
             ScalarValue::FixedSizeList(arr) => arr.len() == arr.null_count(),
+            ScalarValue::ListView(arr) => arr.len() == arr.null_count(),
+            ScalarValue::LargeListView(arr) => arr.len() == arr.null_count(),
             ScalarValue::Struct(arr) => arr.len() == arr.null_count(),
             ScalarValue::Map(arr) => arr.len() == arr.null_count(),
             ScalarValue::Date32(v) => v.is_none(),
@@ -2841,6 +2897,8 @@ impl ScalarValue {
             }
             DataType::List(_)
             | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
             | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _) => {
@@ -2997,9 +3055,7 @@ impl ScalarValue {
             DataType::Time32(TimeUnit::Microsecond)
             | DataType::Time32(TimeUnit::Nanosecond)
             | DataType::Time64(TimeUnit::Second)
-            | DataType::Time64(TimeUnit::Millisecond)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_) => {
+            | DataType::Time64(TimeUnit::Millisecond) => {
                 return _not_impl_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
@@ -3420,6 +3476,18 @@ impl ScalarValue {
                 }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
+            ScalarValue::ListView(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
+            }
+            ScalarValue::LargeListView(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
+            }
             ScalarValue::Struct(arr) => {
                 if size == 1 {
                     return Ok(Arc::clone(arr) as Arc<dyn Array>);
@@ -3797,29 +3865,35 @@ impl ScalarValue {
     pub fn convert_array_to_scalar_vec(
         array: &dyn Array,
     ) -> Result<Vec<Option<Vec<Self>>>> {
-        fn generic_collect<OffsetSize: OffsetSizeTrait>(
-            array: &dyn Array,
-        ) -> Result<Vec<Option<Vec<ScalarValue>>>> {
-            array
-                .as_list::<OffsetSize>()
-                .iter()
-                .map(|nested_array| {
-                    nested_array
-                        .map(|array| {
-                            (0..array.len())
-                                .map(|i| ScalarValue::try_from_array(&array, i))
-                                .collect::<Result<Vec<_>>>()
-                        })
-                        .transpose()
+        fn map_element(
+            nested_array: Option<ArrayRef>,
+        ) -> Result<Option<Vec<ScalarValue>>> {
+            nested_array
+                .map(|array| {
+                    (0..array.len())
+                        .map(|i| ScalarValue::try_from_array(&array, i))
+                        .collect::<Result<Vec<_>>>()
                 })
-                .collect()
+                .transpose()
         }
 
         match array.data_type() {
-            DataType::List(_) => generic_collect::<i32>(array),
-            DataType::LargeList(_) => generic_collect::<i64>(array),
+            DataType::List(_) => array.as_list::<i32>().iter().map(map_element).collect(),
+            DataType::LargeList(_) => {
+                array.as_list::<i64>().iter().map(map_element).collect()
+            }
+            DataType::ListView(_) => array
+                .as_list_view::<i32>()
+                .iter()
+                .map(map_element)
+                .collect(),
+            DataType::LargeListView(_) => array
+                .as_list_view::<i64>()
+                .iter()
+                .map(map_element)
+                .collect(),
             _ => _internal_err!(
-                "ScalarValue::convert_array_to_scalar_vec input must be a List/LargeList type"
+                "ScalarValue::convert_array_to_scalar_vec input must be a List/LargeList/ListView/LargeListView type"
             ),
         }
     }
@@ -3917,20 +3991,20 @@ impl ScalarValue {
                     .build_fixed_size_list_scalar(list_size)
             }
             DataType::ListView(field) => {
-                let list_array = array.as_list_view::<i32>();
+                let list_array = as_list_view_array(array)?;
                 let nested_array = list_array.value(index);
-                // Store as List scalar since ScalarValue has no ListView variant.
+                // Produces a single element `ListViewArray` with the value at `index`.
                 SingleRowListArrayBuilder::new(nested_array)
                     .with_field(field)
-                    .build_list_scalar()
+                    .build_list_view_scalar()
             }
             DataType::LargeListView(field) => {
-                let list_array = array.as_list_view::<i64>();
+                let list_array = as_large_list_view_array(array)?;
                 let nested_array = list_array.value(index);
-                // Store as LargeList scalar since ScalarValue has no LargeListView variant.
+                // Produces a single element `LargeListViewArray` with the value at `index`.
                 SingleRowListArrayBuilder::new(nested_array)
                     .with_field(field)
-                    .build_large_list_scalar()
+                    .build_large_list_view_scalar()
             }
             DataType::Date32 => typed_cast!(array, index, as_date32_array, Date32)?,
             DataType::Date64 => typed_cast!(array, index, as_date64_array, Date64)?,
@@ -4387,6 +4461,12 @@ impl ScalarValue {
             ScalarValue::FixedSizeList(arr) => {
                 Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
             }
+            ScalarValue::ListView(arr) => {
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
+            }
+            ScalarValue::LargeListView(arr) => {
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
+            }
             ScalarValue::Struct(arr) => {
                 Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
             }
@@ -4574,6 +4654,8 @@ impl ScalarValue {
                 ScalarValue::List(arr) => arr.get_array_memory_size(),
                 ScalarValue::LargeList(arr) => arr.get_array_memory_size(),
                 ScalarValue::FixedSizeList(arr) => arr.get_array_memory_size(),
+                ScalarValue::ListView(arr) => arr.get_array_memory_size(),
+                ScalarValue::LargeListView(arr) => arr.get_array_memory_size(),
                 ScalarValue::Struct(arr) => arr.get_array_memory_size(),
                 ScalarValue::Map(arr) => arr.get_array_memory_size(),
                 ScalarValue::Union(vals, fields, _mode) => {
@@ -4689,6 +4771,14 @@ impl ScalarValue {
             ScalarValue::LargeList(arr) => {
                 let array = copy_array_data(&arr.to_data());
                 *Arc::make_mut(arr) = LargeListArray::from(array)
+            }
+            ScalarValue::ListView(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                *Arc::make_mut(arr) = ListViewArray::from(array);
+            }
+            ScalarValue::LargeListView(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                *Arc::make_mut(arr) = LargeListViewArray::from(array)
             }
             ScalarValue::Struct(arr) => {
                 let array = copy_array_data(&arr.to_data());
@@ -5227,6 +5317,8 @@ impl fmt::Display for ScalarValue {
             ScalarValue::List(arr) => fmt_list(arr.as_ref(), f)?,
             ScalarValue::LargeList(arr) => fmt_list(arr.as_ref(), f)?,
             ScalarValue::FixedSizeList(arr) => fmt_list(arr.as_ref(), f)?,
+            ScalarValue::ListView(arr) => fmt_list(arr.as_ref(), f)?,
+            ScalarValue::LargeListView(arr) => fmt_list(arr.as_ref(), f)?,
             ScalarValue::Date32(e) => format_option!(
                 f,
                 e.map(|v| {
@@ -5350,7 +5442,7 @@ impl fmt::Display for ScalarValue {
 }
 
 fn fmt_list(arr: &dyn Array, f: &mut fmt::Formatter) -> fmt::Result {
-    // ScalarValue List, LargeList, FixedSizeList should always have a single element
+    // ScalarValue List, LargeList, FixedSizeList, ListView, LargeListView should always have a single element
     assert_eq!(arr.len(), 1);
     let options = FormatOptions::default().with_display_error(true);
     let formatter = ArrayFormatter::try_new(arr, &options).unwrap();
@@ -5436,6 +5528,8 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::FixedSizeList(_) => write!(f, "FixedSizeList({self})"),
             ScalarValue::List(_) => write!(f, "List({self})"),
             ScalarValue::LargeList(_) => write!(f, "LargeList({self})"),
+            ScalarValue::ListView(_) => write!(f, "ListView({self})"),
+            ScalarValue::LargeListView(_) => write!(f, "LargeListView({self})"),
             ScalarValue::Struct(struct_arr) => {
                 // ScalarValue Struct should always have a single element
                 assert_eq!(struct_arr.len(), 1);
@@ -5575,12 +5669,15 @@ impl ScalarType<i32> for Date32Type {
 mod tests {
 
     use super::*;
-    use crate::cast::{as_list_array, as_map_array, as_struct_array};
+    use crate::cast::{
+        as_large_list_view_array, as_list_array, as_map_array, as_struct_array,
+    };
     use crate::test_util::batches_to_string;
     use arrow::array::{
-        FixedSizeListBuilder, Int32Builder, LargeListBuilder, ListBuilder, MapBuilder,
-        NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveBuilder, RecordBatch,
-        StringBuilder, StringDictionaryBuilder, StructBuilder, UnionBuilder,
+        FixedSizeListBuilder, Int32Builder, LargeListBuilder, LargeListViewBuilder,
+        ListBuilder, ListViewBuilder, MapBuilder, NullArray, NullBufferBuilder,
+        OffsetSizeTrait, PrimitiveBuilder, RecordBatch, StringBuilder,
+        StringDictionaryBuilder, StructBuilder, UnionBuilder,
     };
     use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
@@ -5766,6 +5863,27 @@ mod tests {
         ]);
 
         assert_eq!(&arr, actual_list_arr);
+
+        // ListView
+        let arr =
+            ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                Some(1),
+                None,
+                Some(2),
+            ])]);
+
+        let sv = ScalarValue::ListView(Arc::new(arr));
+        let actual_arr = sv
+            .to_array_of_size(2)
+            .expect("Failed to convert to array of size");
+        let actual_list_arr = actual_arr.as_list_view::<i32>();
+
+        let arr = ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), None, Some(2)]),
+            Some(vec![Some(1), None, Some(2)]),
+        ]);
+
+        assert_eq!(&arr, actual_list_arr);
     }
 
     #[test]
@@ -5905,34 +6023,39 @@ mod tests {
         values
             .into_iter()
             .map(|v| {
-                let arr = if v.is_some() {
-                    Arc::new(
-                        GenericListArray::<O>::from_iter_primitive::<Int64Type, _, _>(
-                            vec![v],
-                        ),
-                    )
-                } else if O::IS_LARGE {
-                    new_null_array(
-                        &DataType::LargeList(Arc::new(Field::new_list_field(
-                            DataType::Int64,
-                            true,
-                        ))),
-                        1,
-                    )
-                } else {
-                    new_null_array(
-                        &DataType::List(Arc::new(Field::new_list_field(
-                            DataType::Int64,
-                            true,
-                        ))),
-                        1,
-                    )
-                };
+                let arr = Arc::new(GenericListArray::<O>::from_iter_primitive::<
+                    Int64Type,
+                    _,
+                    _,
+                >(vec![v])) as ArrayRef;
 
                 if O::IS_LARGE {
                     ScalarValue::LargeList(arr.as_list::<i64>().to_owned().into())
                 } else {
                     ScalarValue::List(arr.as_list::<i32>().to_owned().into())
+                }
+            })
+            .collect()
+    }
+
+    fn build_list_view<O: OffsetSizeTrait>(
+        values: Vec<Option<Vec<Option<i64>>>>,
+    ) -> Vec<ScalarValue> {
+        values
+            .into_iter()
+            .map(|v| {
+                let arr = Arc::new(GenericListViewArray::<O>::from_iter_primitive::<
+                    Int64Type,
+                    _,
+                    _,
+                >(vec![v])) as ArrayRef;
+
+                if O::IS_LARGE {
+                    ScalarValue::LargeListView(
+                        arr.as_list_view::<i64>().to_owned().into(),
+                    )
+                } else {
+                    ScalarValue::ListView(arr.as_list_view::<i32>().to_owned().into())
                 }
             })
             .collect()
@@ -6066,13 +6189,13 @@ mod tests {
 
     #[test]
     fn iter_to_array_primitive_test() {
+        // List
         // List[[1,2,3]], List[null], List[[4,5]]
         let scalars = build_list::<i32>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
             Some(vec![Some(4), Some(5)]),
         ]);
-
         let array = ScalarValue::iter_to_array(scalars).unwrap();
         let list_array = as_list_array(&array).unwrap();
         // List[[1,2,3], null, [4,5]]
@@ -6083,20 +6206,57 @@ mod tests {
         ]);
         assert_eq!(list_array, &expected);
 
+        // LargeList
+        // List[[1,2,3]], List[null], List[[4,5]]
         let scalars = build_list::<i64>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+        ]);
+        let array = ScalarValue::iter_to_array(scalars).unwrap();
+        let large_list_array = as_large_list_array(&array).unwrap();
+        let expected = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+        ]);
+        assert_eq!(large_list_array, &expected);
+
+        // ListView
+        // ListView[[1,2,3]], ListView[null], ListView[[4,5]]
+        let scalars = build_list_view::<i32>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
             Some(vec![Some(4), Some(5)]),
         ]);
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
-        let list_array = as_large_list_array(&array).unwrap();
-        let expected = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+        let list_view_array = as_list_view_array(&array).unwrap();
+        // ListView[[1,2,3], null, [4,5]]
+        let expected = ListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
             Some(vec![Some(4), Some(5)]),
         ]);
-        assert_eq!(list_array, &expected);
+        assert_eq!(list_view_array, &expected);
+
+        // LargeListView
+        // LargeListView[[1,2,3]], LargeListView[null], LargeListView[[4,5]]
+        let scalars = build_list_view::<i64>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+        ]);
+
+        let array = ScalarValue::iter_to_array(scalars).unwrap();
+        let large_list_view_array = as_large_list_view_array(&array).unwrap();
+        // LargeListView[[1,2,3], null, [4,5]]
+        let expected = LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+        ]);
+        assert_eq!(large_list_view_array, &expected);
     }
 
     #[test]
@@ -6139,16 +6299,36 @@ mod tests {
             ]));
 
         let fsl_array: ArrayRef =
-            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![
+                    Some(vec![Some(0), Some(1), Some(2)]),
+                    None,
+                    Some(vec![Some(3), None, Some(5)]),
+                ],
+                3,
+            ));
+        let list_view_array: ArrayRef =
+            Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
                 Some(vec![Some(0), Some(1), Some(2)]),
                 None,
-                Some(vec![Some(3), None, Some(5)]),
+                Some(vec![None, Some(5)]),
             ]));
 
-        for arr in [list_array, fsl_array] {
+        for arr in [list_array, fsl_array, list_view_array] {
             for i in 0..arr.len() {
-                let scalar =
-                    ScalarValue::List(arr.slice(i, 1).as_list::<i32>().to_owned().into());
+                let slice = arr.slice(i, 1);
+                let scalar = match arr.data_type() {
+                    DataType::List(_) => {
+                        ScalarValue::List(slice.as_list::<i32>().to_owned().into())
+                    }
+                    DataType::FixedSizeList(_, _) => ScalarValue::FixedSizeList(
+                        slice.as_fixed_size_list().to_owned().into(),
+                    ),
+                    DataType::ListView(_) => ScalarValue::ListView(
+                        slice.as_list_view::<i32>().to_owned().into(),
+                    ),
+                    _ => unreachable!(),
+                };
                 assert!(scalar.eq_array(&arr, i).unwrap());
             }
         }
@@ -6847,6 +7027,40 @@ mod tests {
             ),
         ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a = ScalarValue::ListView(Arc::new(ListViewArray::from_iter_primitive::<
+            Int64Type,
+            _,
+            _,
+        >(vec![Some(vec![
+            None,
+            Some(2),
+            Some(3),
+        ])])));
+        let b = ScalarValue::ListView(Arc::new(ListViewArray::from_iter_primitive::<
+            Int64Type,
+            _,
+            _,
+        >(vec![Some(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+        ])])));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a =
+            ScalarValue::LargeListView(Arc::new(
+                LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(
+                    vec![None, Some(2), Some(3)],
+                )]),
+            ));
+        let b =
+            ScalarValue::LargeListView(Arc::new(
+                LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(
+                    vec![Some(1), Some(2), Some(3)],
+                )]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
     }
 
     #[test]
@@ -7189,6 +7403,30 @@ mod tests {
         let expected = ScalarValue::FixedSizeList(
             new_null_array(data_type, 1)
                 .as_fixed_size_list()
+                .to_owned()
+                .into(),
+        );
+        assert_eq!(expected, scalar);
+        assert!(expected.is_null());
+
+        // Test for ListView
+        let data_type = &DataType::ListView(Arc::clone(&inner_field));
+        let scalar: ScalarValue = data_type.try_into().unwrap();
+        let expected = ScalarValue::ListView(
+            new_null_array(data_type, 1)
+                .as_list_view::<i32>()
+                .to_owned()
+                .into(),
+        );
+        assert_eq!(expected, scalar);
+        assert!(expected.is_null());
+
+        // Test for LargeListView
+        let data_type = &DataType::LargeListView(Arc::clone(&inner_field));
+        let scalar: ScalarValue = data_type.try_into().unwrap();
+        let expected = ScalarValue::LargeListView(
+            new_null_array(data_type, 1)
+                .as_list_view::<i64>()
                 .to_owned()
                 .into(),
         );
@@ -7908,6 +8146,34 @@ mod tests {
                 builder.append(true);
                 Arc::new(builder.finish())
             },
+            // list view array
+            {
+                let values_builder = StringBuilder::new();
+                let mut builder = ListViewBuilder::new(values_builder);
+                // [A, B]
+                builder.values().append_value("A");
+                builder.values().append_value("B");
+                builder.append(true);
+                // [ ] (empty list)
+                builder.append(true);
+                // Null
+                builder.append(false);
+                Arc::new(builder.finish())
+            },
+            // large list view array
+            {
+                let values_builder = StringBuilder::new();
+                let mut builder = LargeListViewBuilder::new(values_builder);
+                // [A, B]
+                builder.values().append_value("A");
+                builder.values().append_value("B");
+                builder.append(true);
+                // [ ] (empty list)
+                builder.append(true);
+                // Null
+                builder.append(false);
+                Arc::new(builder.finish())
+            },
             // map
             {
                 let string_builder = StringBuilder::new();
@@ -8429,6 +8695,38 @@ mod tests {
                 ScalarValue::LargeList(Arc::new(builder.finish()))
             },
             DataType::LargeList(Arc::new(Field::new("element", DataType::Int64, true))),
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder =
+                    ListViewBuilder::new(Int32Builder::new()).with_field(element_field);
+                builder.append_value([Some(1)]);
+                builder.append(true);
+
+                ScalarValue::ListView(Arc::new(builder.finish()))
+            },
+            DataType::ListView(Arc::new(Field::new("element", DataType::Int64, true))),
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder = LargeListViewBuilder::new(Int32Builder::new())
+                    .with_field(element_field);
+                builder.append_value([Some(1)]);
+                builder.append(true);
+
+                ScalarValue::LargeListView(Arc::new(builder.finish()))
+            },
+            DataType::LargeListView(Arc::new(Field::new(
+                "element",
+                DataType::Int64,
+                true,
+            ))),
         );
     }
 
@@ -9089,7 +9387,7 @@ mod tests {
             )))),
         ];
 
-        let check_array = |array| {
+        let check_array = |array: Arc<dyn Array>| {
             let is_null = is_null(&array).unwrap();
             assert_eq!(is_null, BooleanArray::from(vec![true, false, false]));
 
@@ -9152,6 +9450,21 @@ mod tests {
         | {a: 1, b: } |
         +-------------+
         ");
+    }
+
+    #[test]
+    fn test_list_view_display() {
+        let s = ScalarValue::ListView(
+            ListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                Some(1),
+                None,
+                Some(3),
+            ])])
+            .into(),
+        );
+
+        assert_eq!(s.to_string(), "[1, , 3]");
+        assert_eq!(format!("{s:?}"), "ListView([1, , 3])");
     }
 
     #[test]
@@ -9612,6 +9925,10 @@ mod tests {
                 42,
             ))
             .unwrap(),
+            ScalarValue::try_new_null(&DataType::ListView(Arc::clone(&field_ref)))
+                .unwrap(),
+            ScalarValue::try_new_null(&DataType::LargeListView(Arc::clone(&field_ref)))
+                .unwrap(),
             ScalarValue::try_new_null(&DataType::Struct(
                 vec![Arc::clone(&field_ref)].into(),
             ))
@@ -9702,6 +10019,41 @@ mod tests {
                 assert_eq!(arr.value_length(0), 0); // empty list
             }
             _ => panic!("Expected List"),
+        }
+
+        let list_field = Field::new_list_field(DataType::Int32, true);
+        let list_result =
+            ScalarValue::new_default(&DataType::LargeList(Arc::new(list_field.clone())))
+                .unwrap();
+        match list_result {
+            ScalarValue::LargeList(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert_eq!(arr.value_length(0), 0); // empty list
+            }
+            _ => panic!("Expected LargeList"),
+        }
+
+        let list_result =
+            ScalarValue::new_default(&DataType::ListView(Arc::new(list_field.clone())))
+                .unwrap();
+        match list_result {
+            ScalarValue::ListView(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert_eq!(arr.value_size(0), 0); // empty list
+            }
+            _ => panic!("Expected ListView"),
+        }
+
+        let list_result = ScalarValue::new_default(&DataType::LargeListView(Arc::new(
+            list_field.clone(),
+        )))
+        .unwrap();
+        match list_result {
+            ScalarValue::LargeListView(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert_eq!(arr.value_size(0), 0); // empty list
+            }
+            _ => panic!("Expected LargeListView"),
         }
 
         // Test struct type
@@ -9813,6 +10165,30 @@ mod tests {
             )))),
             None
         );
+        assert_eq!(
+            ScalarValue::min(&DataType::LargeList(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
+            None
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::ListView(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
+            None
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::LargeListView(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
+            None
+        );
     }
 
     #[test]
@@ -9887,6 +10263,22 @@ mod tests {
                 DataType::Int32,
                 true
             )]))),
+            None
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::ListView(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
+            None
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::LargeListView(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
             None
         );
     }
@@ -10264,6 +10656,53 @@ mod tests {
                     ScalarValue::Int64(Some(3)),
                     ScalarValue::Int64(Some(4)),
                     ScalarValue::Int64(Some(5)),
+                ]),
+            ]
+        );
+
+        // 6: Regular ListViewArray
+        let list = ListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(4)]),
+        ]);
+        let converted = ScalarValue::convert_array_to_scalar_vec(&list).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(None),
+                    ScalarValue::Int64(Some(4))
+                ]),
+            ]
+        );
+
+        // 7: Regular LargeListViewArray
+        let large_list =
+            LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3), None, Some(4)]),
+            ]);
+        let converted = ScalarValue::convert_array_to_scalar_vec(&large_list).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(None),
+                    ScalarValue::Int64(Some(4))
                 ]),
             ]
         );
