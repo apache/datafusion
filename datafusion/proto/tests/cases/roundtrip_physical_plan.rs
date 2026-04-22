@@ -25,7 +25,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonSink};
@@ -96,6 +96,7 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, NullEquality, Result, UnnestOptions, exec_datafusion_err,
     internal_datafusion_err, internal_err, not_impl_err,
@@ -3595,7 +3596,12 @@ fn roundtrip_filter_with_none_projection() -> Result<()> {
 struct CustomExecWithExprs {
     exprs: Vec<Arc<dyn PhysicalExpr>>,
     child: Arc<dyn ExecutionPlan>,
-    properties: Arc<datafusion::physical_plan::PlanProperties>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct CustomExecWithExprsProto {
+    #[prost(message, repeated, tag = "1")]
+    exprs: Vec<PhysicalExprNode>,
 }
 
 impl std::fmt::Debug for CustomExecWithExprs {
@@ -3609,19 +3615,7 @@ impl std::fmt::Debug for CustomExecWithExprs {
 
 impl CustomExecWithExprs {
     fn new(exprs: Vec<Arc<dyn PhysicalExpr>>, child: Arc<dyn ExecutionPlan>) -> Self {
-        use datafusion_physical_expr::equivalence::EquivalenceProperties;
-        use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-        let properties = Arc::new(datafusion::physical_plan::PlanProperties::new(
-            EquivalenceProperties::new(child.schema()),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        ));
-        Self {
-            exprs,
-            child,
-            properties,
-        }
+        Self { exprs, child }
     }
 }
 
@@ -3636,8 +3630,12 @@ impl ExecutionPlan for CustomExecWithExprs {
         "CustomExecWithExprs"
     }
 
+    fn schema(&self) -> SchemaRef {
+        self.child.schema()
+    }
+
     fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
-        &self.properties
+        self.child.properties()
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -3646,11 +3644,9 @@ impl ExecutionPlan for CustomExecWithExprs {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(
-            &dyn PhysicalExpr,
-        ) -> Result<datafusion_common::tree_node::TreeNodeRecursion>,
-    ) -> Result<datafusion_common::tree_node::TreeNodeRecursion> {
-        let mut tnr = datafusion_common::tree_node::TreeNodeRecursion::Continue;
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
         for expr in &self.exprs {
             tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
         }
@@ -3676,10 +3672,7 @@ impl ExecutionPlan for CustomExecWithExprs {
 /// A PhysicalExtensionCodec that uses proto_converter to serialize/deserialize
 /// the PhysicalExpr fields stored in CustomExecWithExprs.
 #[derive(Debug)]
-struct CustomExecWithExprsCodec {
-    /// The schema used for expression deserialization (shared between encode/decode).
-    schema: Arc<Schema>,
-}
+struct CustomExecWithExprsCodec {}
 
 impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
     fn try_decode(
@@ -3690,27 +3683,20 @@ impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let decode_ctx = PhysicalPlanDecodeContext::new(ctx, self);
-
-        let num_exprs = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
-        let mut offset = 4;
-
-        let mut exprs = Vec::with_capacity(num_exprs);
-        for _ in 0..num_exprs {
-            let expr_len =
-                u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            let expr_proto = PhysicalExprNode::decode(&buf[offset..offset + expr_len])
-                .map_err(|e| {
-                    internal_datafusion_err!("Failed to decode expression: {e}")
-                })?;
-            let expr = proto_converter.proto_to_physical_expr(
-                &expr_proto,
-                &self.schema,
-                &decode_ctx,
-            )?;
-            exprs.push(expr);
-            offset += expr_len;
-        }
+        let input_schema = inputs[0].schema();
+        let proto = CustomExecWithExprsProto::decode(buf)
+            .map_err(|e| internal_datafusion_err!("Failed to decode custom exec: {e}"))?;
+        let exprs = proto
+            .exprs
+            .iter()
+            .map(|expr_proto| {
+                proto_converter.proto_to_physical_expr(
+                    expr_proto,
+                    input_schema.as_ref(),
+                    &decode_ctx,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Arc::new(CustomExecWithExprs::new(exprs, inputs[0].clone())))
     }
@@ -3724,14 +3710,16 @@ impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
         let custom = node
             .downcast_ref::<CustomExecWithExprs>()
             .ok_or_else(|| internal_datafusion_err!("Expected CustomExecWithExprs"))?;
-
-        buf.extend_from_slice(&(custom.exprs.len() as u32).to_le_bytes());
-        for expr in &custom.exprs {
-            let expr_proto = proto_converter.physical_expr_to_proto(expr, self)?;
-            let expr_bytes = expr_proto.encode_to_vec();
-            buf.extend_from_slice(&(expr_bytes.len() as u32).to_le_bytes());
-            buf.extend_from_slice(&expr_bytes);
-        }
+        let proto = CustomExecWithExprsProto {
+            exprs: custom
+                .exprs
+                .iter()
+                .map(|expr| proto_converter.physical_expr_to_proto(expr, self))
+                .collect::<Result<Vec<_>>>()?,
+        };
+        proto
+            .encode(buf)
+            .map_err(|e| internal_datafusion_err!("Failed to encode custom exec: {e}"))?;
 
         Ok(())
     }
@@ -3746,19 +3734,21 @@ impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
 fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
 
-    // Create a dynamic filter expression
+    // Create a dynamic filter expression that will be shared between the
+    // FilterExec predicate and the CustomExecWithExprs's exprs.
     let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
         vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
         lit(true),
     ));
-    let dynamic_filter_expr = dynamic_filter.clone() as Arc<dyn PhysicalExpr>;
+    let dynamic_filter_expr: Arc<dyn PhysicalExpr> = dynamic_filter;
 
     // Create the plan:
+    //
     //   FilterExec(dynamic_filter)
     //     -> CustomExecWithExprs(exprs: [dynamic_filter])
     //         -> EmptyExec
     //
-    // The same dynamic_filter Arc is stored in both the FilterExec and the custom node.
+    // The same Arc is stored in both, so dedupe should preserve identity.
     let empty = Arc::new(EmptyExec::new(Arc::clone(&schema)));
     let custom_exec = Arc::new(CustomExecWithExprs::new(
         vec![Arc::clone(&dynamic_filter_expr)],
@@ -3770,9 +3760,7 @@ fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
     )?) as Arc<dyn ExecutionPlan>;
 
     // Roundtrip with DeduplicatingProtoConverter
-    let codec = CustomExecWithExprsCodec {
-        schema: Arc::clone(&schema),
-    };
+    let codec = CustomExecWithExprsCodec {};
     let converter = DeduplicatingProtoConverter {};
 
     let bytes = physical_plan_to_bytes_with_proto_converter(
