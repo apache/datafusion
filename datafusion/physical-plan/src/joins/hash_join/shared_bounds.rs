@@ -212,9 +212,12 @@ fn combine_membership_and_bounds(
 /// ## Synchronization Strategy
 ///
 /// 1. Each partition computes information from its build-side data (hash maps and/or bounds)
-/// 2. Information is stored in the shared state
-/// 3. A barrier tracks how many partitions have reported
-/// 4. When the last partition reports, information is merged and the filter is updated exactly once
+/// 2. Information is stored in the shared state, which tracks how many partitions have reported
+/// 3. When the last partition reports, one waiter is elected as the finalizer; it merges the
+///    collected information, updates the dynamic filter exactly once, and publishes the
+///    terminal result by transitioning [`CompletionState`] to `Ready`
+/// 4. A [`tokio::sync::Notify`] wakes any other partitions parked in `wait_for_completion`,
+///    which then observe the `Ready` state under the mutex and return immediately
 ///
 /// ## Hash Map vs Bounds
 ///
