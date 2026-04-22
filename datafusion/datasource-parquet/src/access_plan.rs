@@ -389,11 +389,13 @@ impl PreparedAccessPlan {
     /// Keep only the first `count` row groups, dropping the rest.
     /// Used for TopK cumulative pruning after reorder + reverse.
     pub(crate) fn truncate_row_groups(mut self, count: usize) -> Self {
-        self.row_group_indexes.truncate(count);
-        // Clear row_selection since it's tied to the original RG set
+        // Skip truncation if row_selection exists — it contains page-level
+        // pruning state that would be lost. Cumulative prune is a best-effort
+        // optimization; page pruning is already reducing I/O within those RGs.
         if self.row_selection.is_some() {
-            self.row_selection = None;
+            return self;
         }
+        self.row_group_indexes.truncate(count);
         self
     }
 
