@@ -105,7 +105,7 @@ pub trait FileStatisticsCache:
     fn update_cache_limit(&self, limit: usize);
 
     /// Retrieves the information about the entries currently cached.
-    fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry>;
+    fn list_entries(&self) -> HashMap<TableScopedPath, FileStatisticsCacheEntry>;
 
     fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> Result<()>;
 }
@@ -137,8 +137,6 @@ pub struct FileStatisticsCacheEntry {
     pub statistics_size_bytes: usize,
     /// Whether ordering information is cached for this file.
     pub has_ordering: bool,
-    /// Reference to the table associated with this statistics entry.
-    pub table_reference: Option<TableReference>,
 }
 
 /// Cached file listing.

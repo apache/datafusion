@@ -21,7 +21,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-
+use std::fmt::{Debug, Display, Formatter};
 use crate::cache::{
     CacheAccessor,
     cache_manager::{CachedFileList, ListFilesCache},
@@ -173,6 +173,16 @@ impl Default for DefaultListFilesCacheState {
 impl DFHeapSize for TableScopedPath {
     fn heap_size(&self) -> usize {
         self.path.as_ref().heap_size() + self.table.heap_size()
+    }
+}
+
+impl Display for TableScopedPath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(table) = &self.table {
+            write!(f, "({}, {})", self.path, table)
+        } else {
+            write!(f, "({})", self.path)
+        }
     }
 }
 

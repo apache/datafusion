@@ -19,7 +19,6 @@ use crate::cache::cache_manager::{
     CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
 };
 use crate::cache::{CacheAccessor, TableScopedPath};
-use object_store::path::Path;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -221,13 +220,13 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
         state.evict_entries();
     }
 
-    fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry> {
-        let mut entries = HashMap::<Path, FileStatisticsCacheEntry>::new();
+    fn list_entries(&self) -> HashMap<TableScopedPath, FileStatisticsCacheEntry> {
+        let mut entries = HashMap::<TableScopedPath, FileStatisticsCacheEntry>::new();
         for entry in self.state.lock().unwrap().lru_queue.list_entries() {
             let path = entry.0.clone();
             let cached = entry.1;
             entries.insert(
-                path.path,
+                path,
                 FileStatisticsCacheEntry {
                     object_meta: cached.meta.clone(),
                     num_rows: cached.statistics.num_rows,
@@ -235,7 +234,6 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
                     table_size_bytes: cached.statistics.total_byte_size,
                     statistics_size_bytes: cached.statistics.heap_size(),
                     has_ordering: cached.ordering.is_some(),
-                    table_reference: path.table,
                 },
             );
         }
