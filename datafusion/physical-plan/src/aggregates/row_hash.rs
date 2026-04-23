@@ -465,6 +465,13 @@ pub(crate) struct GroupedHashAggregateStream {
     /// `REPARTITION_RANDOM_STATE` hashes of the group-value arrays so a
     /// downstream `RepartitionExec` can skip rehashing. Partial mode only.
     emit_group_hash: bool,
+
+    /// If `Some(idx)`, incoming batches carry a precomputed-hash column at
+    /// `idx` (produced by a Partial `AggregateExec` with `emit_group_hash`
+    /// enabled). We extract it in `group_aggregate_batch` and feed it to
+    /// [`super::group_values::GroupValues::intern_with_hashes`] to skip the
+    /// Final-side rehashing pass.
+    precomputed_hash_input_col: Option<usize>,
 }
 
 impl GroupedHashAggregateStream {
@@ -676,6 +683,15 @@ impl GroupedHashAggregateStream {
         let num_group_cols = agg.group_expr().num_output_exprs();
         let emit_group_hash = agg.emit_group_hash() && agg.mode == AggregateMode::Partial;
 
+        // Detect a precomputed-hash column in the input schema (emitted by a
+        // Partial upstream). We only consume it when we ourselves are in a
+        // non-Partial mode — a Partial fed precomputed hashes is unusual.
+        let precomputed_hash_input_col = if agg.mode != AggregateMode::Partial {
+            detect_precomputed_hash_column_in_input(&agg.input.schema())
+        } else {
+            None
+        };
+
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
             input,
@@ -700,8 +716,33 @@ impl GroupedHashAggregateStream {
             reduction_factor,
             num_group_cols,
             emit_group_hash,
+            precomputed_hash_input_col,
         })
     }
+}
+
+/// Scans `schema` for a `UInt64` field tagged with the precomputed-hash
+/// metadata and returns its column index. Used by Final-side stream
+/// construction to know whether it can skip rehashing in `GroupValues::intern`.
+fn detect_precomputed_hash_column_in_input(
+    schema: &arrow::datatypes::Schema,
+) -> Option<usize> {
+    use crate::aggregates::{
+        PRECOMPUTED_HASH_METADATA_KEY, PRECOMPUTED_HASH_REPARTITION_VALUE,
+    };
+    use arrow::datatypes::DataType;
+    for (idx, field) in schema.fields().iter().enumerate() {
+        if field.data_type() == &DataType::UInt64
+            && field
+                .metadata()
+                .get(PRECOMPUTED_HASH_METADATA_KEY)
+                .map(String::as_str)
+                == Some(PRECOMPUTED_HASH_REPARTITION_VALUE)
+        {
+            return Some(idx);
+        }
+    }
+    None
 }
 
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
@@ -963,13 +1004,37 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, batch)?
         };
 
+        // Extract precomputed hashes once per batch, if the upstream Partial
+        // emitted them. Spill-merge input won't carry the column (spilled
+        // batches use a hash-free schema), so keep the check batch-local.
+        let precomputed_hashes: Option<UInt64Array> =
+            if !self.spill_state.is_stream_merging {
+                self.precomputed_hash_input_col.and_then(|idx| {
+                    batch
+                        .column(idx)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .cloned()
+                })
+            } else {
+                None
+            };
+
         for group_values in &group_by_values {
             let groups_start_time = Instant::now();
 
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
+            if let Some(hashes) = precomputed_hashes.as_ref() {
+                self.group_values.intern_with_hashes(
+                    group_values,
+                    hashes.values(),
+                    &mut self.current_group_indices,
+                )?;
+            } else {
+                self.group_values
+                    .intern(group_values, &mut self.current_group_indices)?;
+            }
             let group_indices = &self.current_group_indices;
 
             // Update ordering information if necessary

@@ -85,10 +85,13 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
 }
 
-/// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
+/// Hash seed shared with [`crate::repartition::REPARTITION_RANDOM_STATE`]. Using
+/// the same seed across the Partial's internal hash table, the emitted
+/// precomputed-hash column, `RepartitionExec` routing, and the Final's hash
+/// table lets a single hash value flow end-to-end. Hashbrown bucket selection
+/// uses high bits while routing uses low bits, so reuse is safe in practice.
 const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
-    // This seed is chosen to be a large 64-bit number
-    datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
+    datafusion_common::hash_utils::RandomState::with_seed(0);
 
 /// Name of the trailing `UInt64` column that a Partial [`AggregateExec`] may
 /// emit when [`AggregateExec::with_emit_group_hash`] is set. Holds per-group

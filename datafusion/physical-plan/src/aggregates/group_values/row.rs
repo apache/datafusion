@@ -116,63 +116,52 @@ impl GroupValuesRows {
 
 impl GroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // Convert the group keys into the row format
         let group_rows = &mut self.rows_buffer;
         group_rows.clear();
         self.row_converter.append(group_rows, cols)?;
         let n_rows = group_rows.num_rows();
 
-        let mut group_values = match self.group_values.take() {
-            Some(group_values) => group_values,
-            None => self.row_converter.empty_rows(0, 0),
-        };
-
-        // tracks to which group each of the input rows belongs
-        groups.clear();
-
-        // 1.1 Calculate the group keys for the group values
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
-        for (row, &target_hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.find_mut(target_hash, |(exist_hash, group_idx)| {
-                // Somewhat surprisingly, this closure can be called even if the
-                // hash doesn't match, so check the hash first with an integer
-                // comparison first avoid the more expensive comparison with
-                // group value. https://github.com/apache/datafusion/pull/11718
-                target_hash == *exist_hash
-                    // verify that the group that we are inserting with hash is
-                    // actually the same key value as the group in
-                    // existing_idx  (aka group_values @ row)
-                    && group_rows.row(row) == group_values.row(*group_idx)
-            });
+        Self::intern_rows(
+            &mut self.map,
+            &mut self.map_size,
+            &mut self.group_values,
+            &self.row_converter,
+            group_rows,
+            batch_hashes,
+            groups,
+        )
+    }
 
-            let group_idx = match entry {
-                // Existing group_index for this group value
-                Some((_hash, group_idx)) => *group_idx,
-                //  1.2 Need to create new entry for the group
-                None => {
-                    // Add new entry to aggr_state and save newly created index
-                    let group_idx = group_values.num_rows();
-                    group_values.push(group_rows.row(row));
-
-                    // for hasher function, use precomputed hash value
-                    self.map.insert_accounted(
-                        (target_hash, group_idx),
-                        |(hash, _group_index)| *hash,
-                        &mut self.map_size,
-                    );
-                    group_idx
-                }
-            };
-            groups.push(group_idx);
+    fn intern_with_hashes(
+        &mut self,
+        cols: &[ArrayRef],
+        hashes: &[u64],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
+        // Fallback: if hashes don't match the input rows, drop to recomputing.
+        let num_rows = cols.first().map(|a| a.len()).unwrap_or(0);
+        if hashes.len() != num_rows {
+            return self.intern(cols, groups);
         }
 
-        self.group_values = Some(group_values);
+        let group_rows = &mut self.rows_buffer;
+        group_rows.clear();
+        self.row_converter.append(group_rows, cols)?;
 
-        Ok(())
+        Self::intern_rows(
+            &mut self.map,
+            &mut self.map_size,
+            &mut self.group_values,
+            &self.row_converter,
+            group_rows,
+            hashes,
+            groups,
+        )
     }
 
     fn size(&self) -> usize {
@@ -256,6 +245,57 @@ impl GroupValues for GroupValuesRows {
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(num_rows);
+    }
+}
+
+impl GroupValuesRows {
+    /// Hash-table probe/insert loop shared by [`GroupValues::intern`] and
+    /// [`GroupValues::intern_with_hashes`]. `batch_hashes` must have the same
+    /// length as `group_rows` and must be keyed with [`AGGREGATION_HASH_SEED`].
+    ///
+    /// [`AGGREGATION_HASH_SEED`]: crate::aggregates::AGGREGATION_HASH_SEED
+    fn intern_rows(
+        map: &mut HashTable<(u64, usize)>,
+        map_size: &mut usize,
+        group_values_slot: &mut Option<Rows>,
+        row_converter: &RowConverter,
+        group_rows: &Rows,
+        batch_hashes: &[u64],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
+        let mut group_values = match group_values_slot.take() {
+            Some(group_values) => group_values,
+            None => row_converter.empty_rows(0, 0),
+        };
+
+        groups.clear();
+
+        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            let entry = map.find_mut(target_hash, |(exist_hash, group_idx)| {
+                // Integer compare first, row-equality only on hash match.
+                // https://github.com/apache/datafusion/pull/11718
+                target_hash == *exist_hash
+                    && group_rows.row(row) == group_values.row(*group_idx)
+            });
+
+            let group_idx = match entry {
+                Some((_hash, group_idx)) => *group_idx,
+                None => {
+                    let group_idx = group_values.num_rows();
+                    group_values.push(group_rows.row(row));
+                    map.insert_accounted(
+                        (target_hash, group_idx),
+                        |(hash, _group_index)| *hash,
+                        map_size,
+                    );
+                    group_idx
+                }
+            };
+            groups.push(group_idx);
+        }
+
+        *group_values_slot = Some(group_values);
+        Ok(())
     }
 }
 

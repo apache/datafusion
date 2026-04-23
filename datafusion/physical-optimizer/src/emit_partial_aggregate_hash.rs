@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn rule_is_disabled_by_default_config() -> Result<()> {
+    fn rule_respects_disabled_config() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
         let group_by =
@@ -159,13 +159,15 @@ mod tests {
             partial as Arc<dyn ExecutionPlan>,
             Partitioning::Hash(vec![col("a", &schema)?], 4),
         )?);
-        let optimized = EmitPartialAggregateHash::new()
-            .optimize(Arc::clone(&repartition), &ConfigOptions::default())?;
+        let mut cfg = ConfigOptions::default();
+        cfg.execution.emit_aggregate_group_hash = false;
+        let optimized =
+            EmitPartialAggregateHash::new().optimize(Arc::clone(&repartition), &cfg)?;
         let rep = optimized.downcast_ref::<RepartitionExec>().unwrap();
         let partial = rep.input().downcast_ref::<AggregateExec>().unwrap();
         assert!(
             !partial.emit_group_hash(),
-            "default config leaves the rule disabled"
+            "explicit disable leaves the rule off"
         );
         Ok(())
     }

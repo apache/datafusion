@@ -99,6 +99,22 @@ pub trait GroupValues: Send {
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
+    /// Same as [`Self::intern`] but the caller has already computed per-row
+    /// hashes of `cols` using [`AGGREGATION_HASH_SEED`]. Implementations that
+    /// can reuse externally computed hashes should override this to skip
+    /// recomputation. The default implementation ignores `hashes` and calls
+    /// [`Self::intern`].
+    ///
+    /// [`AGGREGATION_HASH_SEED`]: super::AGGREGATION_HASH_SEED
+    fn intern_with_hashes(
+        &mut self,
+        cols: &[ArrayRef],
+        _hashes: &[u64],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
+        self.intern(cols, groups)
+    }
+
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;
 
