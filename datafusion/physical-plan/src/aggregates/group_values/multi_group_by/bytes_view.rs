@@ -166,8 +166,18 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
+                if arr.data_buffers().is_empty() {
+                    // Fast path: all strings are inline (≤12 bytes).
+                    // The input array's u128 views are already in the correct format;
+                    // copy them directly instead of going through value() → make_view().
+                    self.views.extend(rows.iter().map(|&row| arr.views()[row]));
+                } else {
+                    // Slow path: some strings are non-inline (>12 bytes).
+                    // Pre-reserve views capacity to avoid repeated reallocation.
+                    self.views.reserve(rows.len());
+                    for &row in rows {
+                        self.do_append_val_inner(arr, row);
+                    }
                 }
             }
 
