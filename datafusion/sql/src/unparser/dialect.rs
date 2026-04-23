@@ -211,6 +211,15 @@ pub trait Dialect: Send + Sync {
         false
     }
 
+    /// Unparse the unnest plan as `LATERAL FLATTEN(INPUT => expr, ...)`.
+    ///
+    /// Snowflake uses FLATTEN as a table function instead of the SQL-standard UNNEST.
+    /// When this returns `true`, the unparser emits
+    /// `LATERAL FLATTEN(INPUT => <col>, OUTER => <bool>)` in the FROM clause.
+    fn unnest_as_lateral_flatten(&self) -> bool {
+        false
+    }
+
     /// Allows the dialect to override column alias unparsing if the dialect has specific rules.
     /// Returns None if the default unparsing should be used, or Some(String) if there is
     /// a custom implementation for the alias.
@@ -664,12 +673,110 @@ impl Dialect for BigQueryDialect {
     fn unnest_as_table_factor(&self) -> bool {
         true
     }
+
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        false
+    }
+
+    fn float64_ast_dtype(&self) -> ast::DataType {
+        ast::DataType::Float64
+    }
+
+    fn utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::String(None)
+    }
+
+    fn large_utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::String(None)
+    }
+
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        _tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        ast::DataType::Timestamp(None, TimezoneInfo::None)
+    }
+
+    fn date_field_extract_style(&self) -> DateFieldExtractStyle {
+        DateFieldExtractStyle::Extract
+    }
+
+    fn interval_style(&self) -> IntervalStyle {
+        IntervalStyle::SQLStandard
+    }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        if func_name == "date_part" {
+            return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        Ok(None)
+    }
 }
 
 impl BigQueryDialect {
     #[must_use]
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+/// Dialect for Snowflake SQL.
+///
+/// Key differences from the default dialect:
+/// - Uses double-quote identifier quoting
+/// - Supports `NULLS FIRST`/`NULLS LAST` in `ORDER BY`
+/// - Does not support empty select lists (`SELECT FROM t`)
+/// - Does not support column aliases in table alias definitions
+///   (Snowflake accepts the syntax but silently ignores the renames in join contexts)
+/// - Unparses `UNNEST` plans as `LATERAL FLATTEN(INPUT => expr, ...)`
+pub struct SnowflakeDialect {}
+
+#[expect(clippy::new_without_default)]
+impl SnowflakeDialect {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Dialect for SnowflakeDialect {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
+        Some('"')
+    }
+
+    fn supports_nulls_first_in_sort(&self) -> bool {
+        true
+    }
+
+    fn supports_empty_select_list(&self) -> bool {
+        false
+    }
+
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        false
+    }
+
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        if tz.is_some() {
+            ast::DataType::Timestamp(None, TimezoneInfo::WithTimeZone)
+        } else {
+            ast::DataType::Timestamp(None, TimezoneInfo::None)
+        }
+    }
+
+    fn unnest_as_lateral_flatten(&self) -> bool {
+        true
     }
 }
 
@@ -695,6 +802,7 @@ pub struct CustomDialect {
     window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
+    unnest_as_lateral_flatten: bool,
 }
 
 impl Default for CustomDialect {
@@ -724,6 +832,7 @@ impl Default for CustomDialect {
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
+            unnest_as_lateral_flatten: false,
         }
     }
 }
@@ -838,6 +947,10 @@ impl Dialect for CustomDialect {
     fn unnest_as_table_factor(&self) -> bool {
         self.unnest_as_table_factor
     }
+
+    fn unnest_as_lateral_flatten(&self) -> bool {
+        self.unnest_as_lateral_flatten
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -876,6 +989,7 @@ pub struct CustomDialectBuilder {
     window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
+    unnest_as_lateral_flatten: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -911,6 +1025,7 @@ impl CustomDialectBuilder {
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
+            unnest_as_lateral_flatten: false,
         }
     }
 
@@ -938,6 +1053,7 @@ impl CustomDialectBuilder {
             window_func_support_window_frame: self.window_func_support_window_frame,
             full_qualified_col: self.full_qualified_col,
             unnest_as_table_factor: self.unnest_as_table_factor,
+            unnest_as_lateral_flatten: self.unnest_as_lateral_flatten,
         }
     }
 
@@ -1082,6 +1198,14 @@ impl CustomDialectBuilder {
 
     pub fn with_unnest_as_table_factor(mut self, unnest_as_table_factor: bool) -> Self {
         self.unnest_as_table_factor = unnest_as_table_factor;
+        self
+    }
+
+    pub fn with_unnest_as_lateral_flatten(
+        mut self,
+        unnest_as_lateral_flatten: bool,
+    ) -> Self {
+        self.unnest_as_lateral_flatten = unnest_as_lateral_flatten;
         self
     }
 }

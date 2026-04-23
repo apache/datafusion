@@ -24,6 +24,7 @@
 mod builder;
 mod metrics;
 mod scan_state;
+pub(crate) mod work_source;
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -175,6 +176,7 @@ mod tests {
         IoFutureId, MockMorselizer, MockPlanBuilder, MockPlanner, MorselId,
         PendingPlannerBuilder, PollsToResolve,
     };
+    use crate::source::DataSource;
     use crate::tests::make_partition;
     use crate::{PartitionedFile, TableSchema};
     use arrow::array::{AsArray, RecordBatch};
@@ -184,13 +186,21 @@ mod tests {
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{FutureExt as _, StreamExt as _};
+    use std::collections::{BTreeMap, VecDeque};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::file_stream::{FileOpenFuture, FileOpener, FileStreamBuilder, OnError};
+    use crate::file_stream::{
+        FileOpenFuture, FileOpener, FileStream, FileStreamBuilder, OnError,
+        work_source::SharedWorkSource,
+    };
     use crate::test_util::MockSource;
 
     use datafusion_common::{assert_batches_eq, exec_err, internal_err};
+
+    /// Test identifier for one `FileStream` partition.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    struct PartitionId(usize);
 
     /// Test `FileOpener` which will simulate errors during file opening or scanning
     #[derive(Default)]
@@ -758,8 +768,8 @@ mod tests {
     async fn morsel_two_ios_one_batch() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .add_plan(PendingPlannerBuilder::new(IoFutureId(1)).build())
-                .add_plan(PendingPlannerBuilder::new(IoFutureId(2)).build())
+                .add_plan(PendingPlannerBuilder::new(IoFutureId(1)))
+                .add_plan(PendingPlannerBuilder::new(IoFutureId(2)))
                 .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 42))
                 .return_none(),
         );
@@ -871,8 +881,7 @@ mod tests {
     async fn morsel_ready_child_planner() -> Result<()> {
         let child_planner = MockPlanner::builder("child planner")
             .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 42))
-            .return_none()
-            .build();
+            .return_none();
 
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
@@ -1001,11 +1010,331 @@ mod tests {
         Ok(())
     }
 
-    /// Tests how FileStream opens and processes files.
+    /// Return a morsel test with two partitions:
+    /// Partition 0: file1, file2, file3
+    /// Partition 1: file4
+    ///
+    /// Partition 1 has only 1 file but it polled first 4 times
+    fn two_partition_morsel_test() -> FileStreamMorselTest {
+        FileStreamMorselTest::new()
+            // Partition 0 has three files
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file1.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 101))
+                    .return_none(),
+            )
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file2.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 102))
+                    .return_none(),
+            )
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file3.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(12), 103))
+                    .return_none(),
+            )
+            // Partition 1 has only one file, but is polled first
+            .with_file_in_partition(
+                PartitionId(1),
+                MockPlanner::builder("file4.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(13), 201))
+                    .return_none(),
+            )
+            .with_reads(vec![
+                PartitionId(1),
+                PartitionId(1),
+                PartitionId(1),
+                PartitionId(1),
+                PartitionId(1),
+            ])
+    }
+
+    /// Verifies that an idle sibling stream can steal shared files from
+    /// another stream once it exhausts its own local work.
+    #[tokio::test]
+    async fn morsel_shared_files_can_be_stolen() -> Result<()> {
+        let test = two_partition_morsel_test().with_file_stream_events(false);
+
+        // Partition 0 starts with 3 files, but Partition 1 is polled first.
+        // Since Partition 1 is polled first, it will run all the files even those
+        // that were assigned to Partition 0.
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Partition 0 -----
+        Done
+        ----- Partition 1 -----
+        Batch: 101
+        Batch: 102
+        Batch: 103
+        Batch: 201
+        Done
+        ----- File Stream Events -----
+        (omitted due to with_file_stream_events(false))
+        ");
+
+        Ok(())
+    }
+
+    /// Verifies that a stream that must preserve order keeps its files local
+    /// and therefore cannot steal from a sibling shared queue.
+    #[tokio::test]
+    async fn morsel_preserve_order_keeps_files_local() -> Result<()> {
+        // same fixture as `morsel_shared_files_can_be_stolen` but marked as
+        // preserve-order
+        let test = two_partition_morsel_test()
+            .with_preserve_order(true)
+            .with_file_stream_events(false);
+
+        // Even though that Partition 1 is polled first, it can not steal files
+        // from partition 0. The three files originally assigned to Partition 0
+        // must be evaluated by Partition 0.
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Partition 0 -----
+        Batch: 101
+        Batch: 102
+        Batch: 103
+        Done
+        ----- Partition 1 -----
+        Batch: 201
+        Done
+        ----- File Stream Events -----
+        (omitted due to with_file_stream_events(false))
+        ");
+
+        Ok(())
+    }
+
+    /// Verifies that `partitioned_by_file_group` disables shared work stealing.
+    #[tokio::test]
+    async fn morsel_partitioned_by_file_group_keeps_files_local() -> Result<()> {
+        // same fixture as `morsel_shared_files_can_be_stolen` but marked as
+        // preserve-partitioned
+        let test = two_partition_morsel_test()
+            .with_partitioned_by_file_group(true)
+            .with_file_stream_events(false);
+
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Partition 0 -----
+        Batch: 101
+        Batch: 102
+        Batch: 103
+        Done
+        ----- Partition 1 -----
+        Batch: 201
+        Done
+        ----- File Stream Events -----
+        (omitted due to with_file_stream_events(false))
+        ");
+
+        Ok(())
+    }
+
+    /// Verifies that an empty sibling can immediately steal shared files when
+    /// it is polled before the stream that originally owned them.
+    #[tokio::test]
+    async fn morsel_empty_sibling_can_steal() -> Result<()> {
+        let test = FileStreamMorselTest::new()
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file1.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 101))
+                    .return_none(),
+            )
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file2.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 102))
+                    .return_none(),
+            )
+            // Poll the empty sibling first so it steals both files.
+            .with_reads(vec![PartitionId(1), PartitionId(1), PartitionId(1)])
+            .with_file_stream_events(false);
+
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Partition 0 -----
+        Done
+        ----- Partition 1 -----
+        Batch: 101
+        Batch: 102
+        Done
+        ----- File Stream Events -----
+        (omitted due to with_file_stream_events(false))
+        ");
+
+        Ok(())
+    }
+
+    /// Ensures that if a sibling is built and polled
+    /// before another sibling has been built and contributed its files to the
+    /// shared queue, the first sibling does not finish prematurely.
+    #[tokio::test]
+    async fn morsel_empty_sibling_can_finish_before_shared_work_exists() -> Result<()> {
+        let test = FileStreamMorselTest::new()
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file1.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 101))
+                    .return_none(),
+            )
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file2.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 102))
+                    .return_none(),
+            )
+            // Build streams lazily so partition 1 can poll the shared queue
+            // before partition 0 has contributed its files. Once partition 0
+            // is built, a later poll of partition 1 can still steal one of
+            // them from the shared queue.
+            .with_build_streams_on_first_read(true)
+            .with_reads(vec![PartitionId(1), PartitionId(0), PartitionId(1)])
+            .with_file_stream_events(false);
+
+        // Partition 1 polls too early once, then later steals one file after
+        // partition 0 has populated the shared queue.
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Partition 0 -----
+        Batch: 102
+        Done
+        ----- Partition 1 -----
+        Batch: 101
+        Done
+        ----- File Stream Events -----
+        (omitted due to with_file_stream_events(false))
+        ");
+
+        Ok(())
+    }
+
+    /// Verifies that a sibling hitting its limit does not count shared files
+    /// left in the queue as already processed by that stream.
+    #[tokio::test]
+    async fn morsel_shared_limit_does_not_double_count_files_processed() -> Result<()> {
+        let test = two_partition_morsel_test();
+        let unlimited_config = test.test_config();
+        let limited_config = test.clone().with_limit(1).test_config();
+        let shared_work_source = limited_config
+            .create_sibling_state()
+            .and_then(|state| state.as_ref().downcast_ref::<SharedWorkSource>().cloned())
+            .expect("shared work source");
+        let limited_metrics = ExecutionPlanMetricsSet::new();
+        let unlimited_metrics = ExecutionPlanMetricsSet::new();
+
+        let limited_stream = FileStreamBuilder::new(&limited_config)
+            .with_partition(1)
+            .with_shared_work_source(Some(shared_work_source.clone()))
+            .with_morselizer(Box::new(test.morselizer.clone()))
+            .with_metrics(&limited_metrics)
+            .build()?;
+
+        let unlimited_stream = FileStreamBuilder::new(&unlimited_config)
+            .with_partition(0)
+            .with_shared_work_source(Some(shared_work_source))
+            .with_morselizer(Box::new(test.morselizer))
+            .with_metrics(&unlimited_metrics)
+            .build()?;
+
+        let limited_output = drain_stream_output(limited_stream).await?;
+        let unlimited_output = drain_stream_output(unlimited_stream).await?;
+
+        insta::assert_snapshot!(format!(
+            "----- Limited Stream -----\n{limited_output}\n----- Unlimited Stream -----\n{unlimited_output}"
+        ), @r"
+        ----- Limited Stream -----
+        Batch: 101
+        ----- Unlimited Stream -----
+        Batch: 102
+        Batch: 103
+        Batch: 201
+        ");
+
+        assert_eq!(
+            metric_count(&limited_metrics, "files_opened"),
+            1,
+            "the limited stream should only open the file that produced its output"
+        );
+        assert_eq!(
+            metric_count(&limited_metrics, "files_processed"),
+            1,
+            "the limited stream should only mark its own file as processed"
+        );
+        assert_eq!(
+            metric_count(&unlimited_metrics, "files_opened"),
+            3,
+            "the draining stream should open the remaining shared files"
+        );
+        assert_eq!(
+            metric_count(&unlimited_metrics, "files_processed"),
+            3,
+            "the draining stream should process exactly the files it opened"
+        );
+
+        Ok(())
+    }
+
+    /// Verifies that one fast sibling can drain shared files that originated
+    /// in more than one other partition.
+    #[tokio::test]
+    async fn morsel_one_sibling_can_drain_multiple_siblings() -> Result<()> {
+        let test = FileStreamMorselTest::new()
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file1.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 101))
+                    .return_none(),
+            )
+            // Partition 1 has two files
+            .with_file_in_partition(
+                PartitionId(1),
+                MockPlanner::builder("file2.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 102))
+                    .return_none(),
+            )
+            .with_file_in_partition(
+                PartitionId(1),
+                MockPlanner::builder("file3.parquet")
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(12), 103))
+                    .return_none(),
+            )
+            // Partition 2 starts empty but is polled first, so it should drain
+            // the shared queue across both sibling partitions.
+            .with_reads(vec![
+                PartitionId(2),
+                PartitionId(2),
+                PartitionId(1),
+                PartitionId(2),
+            ])
+            .with_file_stream_events(false);
+
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Partition 0 -----
+        Done
+        ----- Partition 1 -----
+        Batch: 103
+        Done
+        ----- Partition 2 -----
+        Batch: 101
+        Batch: 102
+        Done
+        ----- File Stream Events -----
+        (omitted due to with_file_stream_events(false))
+        ");
+
+        Ok(())
+    }
+
+    /// Tests how one or more `FileStream`s consume morselized file work.
     #[derive(Clone)]
     struct FileStreamMorselTest {
         morselizer: MockMorselizer,
-        file_names: Vec<String>,
+        partition_files: BTreeMap<PartitionId, Vec<String>>,
+        preserve_order: bool,
+        partitioned_by_file_group: bool,
+        file_stream_events: bool,
+        build_streams_on_first_read: bool,
+        reads: Vec<PartitionId>,
         limit: Option<usize>,
     }
 
@@ -1014,75 +1343,238 @@ mod tests {
         fn new() -> Self {
             Self {
                 morselizer: MockMorselizer::new(),
-                file_names: vec![],
+                partition_files: BTreeMap::new(),
+                preserve_order: false,
+                partitioned_by_file_group: false,
+                file_stream_events: true,
+                build_streams_on_first_read: false,
+                reads: vec![],
                 limit: None,
             }
         }
 
-        /// Adds one file and its root planner to the test input.
-        fn with_file(mut self, planner: impl Into<MockPlanner>) -> Self {
+        /// Adds one file and its root planner to partition 0.
+        fn with_file(self, planner: impl Into<MockPlanner>) -> Self {
+            self.with_file_in_partition(PartitionId(0), planner)
+        }
+
+        /// Adds one file and its root planner to the specified input partition.
+        fn with_file_in_partition(
+            mut self,
+            partition: PartitionId,
+            planner: impl Into<MockPlanner>,
+        ) -> Self {
             let planner = planner.into();
-            self.file_names.push(planner.file_path().to_string());
-            self.morselizer = self.morselizer.with_file(planner);
+            let file_path = planner.file_path().to_string();
+            self.morselizer = self.morselizer.with_planner(planner);
+            self.partition_files
+                .entry(partition)
+                .or_default()
+                .push(file_path);
             self
         }
 
-        /// Sets a global output limit for the stream.
+        /// Marks the stream (and all partitions) to preserve the specified file
+        /// order.
+        fn with_preserve_order(mut self, preserve_order: bool) -> Self {
+            self.preserve_order = preserve_order;
+            self
+        }
+
+        /// Marks the test scan as pre-partitioned by file group, which should
+        /// force each stream to keep its own files local.
+        fn with_partitioned_by_file_group(
+            mut self,
+            partitioned_by_file_group: bool,
+        ) -> Self {
+            self.partitioned_by_file_group = partitioned_by_file_group;
+            self
+        }
+
+        /// Controls whether scheduler events are included in the snapshot.
+        ///
+        /// When disabled, `run()` still includes the event section header but
+        /// replaces the trace with a fixed placeholder so tests can focus only
+        /// on the output batches.
+        fn with_file_stream_events(mut self, file_stream_events: bool) -> Self {
+            self.file_stream_events = file_stream_events;
+            self
+        }
+
+        /// Controls whether streams are all built up front or lazily on their
+        /// first read.
+        ///
+        /// The default builds all streams before polling begins, which matches
+        /// normal execution. Tests may enable lazy creation to model races
+        /// where one sibling polls before another has contributed its files to
+        /// the shared queue.
+        fn with_build_streams_on_first_read(
+            mut self,
+            build_streams_on_first_read: bool,
+        ) -> Self {
+            self.build_streams_on_first_read = build_streams_on_first_read;
+            self
+        }
+
+        /// Sets the partition polling order.
+        ///
+        /// `run()` polls these partitions in the listed order first. After
+        /// those explicit reads are exhausted, it completes to round
+        /// robin across all configured partitions, skipping any streams that
+        /// have already finished.
+        ///
+        /// This allows testing early scheduling decisions explicit in a test
+        /// while avoiding a fully scripted poll trace for the remainder.
+        fn with_reads(mut self, reads: Vec<PartitionId>) -> Self {
+            self.reads = reads;
+            self
+        }
+
+        /// Sets a global output limit for all streams created by this test.
         fn with_limit(mut self, limit: usize) -> Self {
             self.limit = Some(limit);
             self
         }
 
-        /// Runs the test returns combined output and scheduler trace text as a String.
+        /// Runs the test and returns combined stream output and scheduler
+        /// trace text.
         async fn run(self) -> Result<String> {
             let observer = self.morselizer.observer().clone();
             observer.clear();
 
-            let config = self.test_config();
             let metrics_set = ExecutionPlanMetricsSet::new();
-            let mut stream = FileStreamBuilder::new(&config)
-                .with_partition(0)
-                .with_morselizer(Box::new(self.morselizer))
-                .with_metrics(&metrics_set)
-                .build()?;
+            let partition_count = self.num_partitions();
 
-            let mut stream_contents = Vec::new();
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(batch) => {
-                        let col = batch.column(0).as_primitive::<Int32Type>();
-                        let batch_id = col.value(0);
-                        stream_contents.push(format!("Batch: {batch_id}"));
-                    }
-                    Err(e) => {
-                        // Pull the actual message for external errors rather than
-                        // relying on DataFusionError formatting, which changes
-                        // if backtraces are enabled, etc
-                        let message = if let DataFusionError::External(generic) = e {
-                            generic.to_string()
-                        } else {
-                            e.to_string()
-                        };
-                        stream_contents.push(format!("Error: {message}"));
-                    }
+            let mut partitions = (0..partition_count)
+                .map(|_| PartitionState::new())
+                .collect::<Vec<_>>();
+
+            let mut build_order = Vec::new();
+            for partition in self.reads.iter().map(|partition| partition.0) {
+                if !build_order.contains(&partition) {
+                    build_order.push(partition);
                 }
             }
-            stream_contents.push("Done".to_string());
+            for partition in 0..partition_count {
+                if !build_order.contains(&partition) {
+                    build_order.push(partition);
+                }
+            }
+
+            let config = self.test_config();
+            // `DataSourceExec::execute` creates one execution-local shared
+            // state object via `create_sibling_state()` and then passes it
+            // to `open_with_sibling_state(...)`. These tests build
+            // `FileStream`s directly, bypassing `DataSourceExec`, so they must
+            // perform the same setup explicitly when exercising sibling-stream
+            // work stealing.
+            let shared_work_source = config.create_sibling_state().and_then(|state| {
+                state.as_ref().downcast_ref::<SharedWorkSource>().cloned()
+            });
+            if !self.build_streams_on_first_read {
+                for partition in build_order {
+                    let stream = FileStreamBuilder::new(&config)
+                        .with_partition(partition)
+                        .with_shared_work_source(shared_work_source.clone())
+                        .with_morselizer(Box::new(self.morselizer.clone()))
+                        .with_metrics(&metrics_set)
+                        .build()?;
+                    partitions[partition].set_stream(stream);
+                }
+            }
+
+            let mut initial_reads: VecDeque<_> = self.reads.into();
+            let mut next_round_robin = 0;
+
+            while !initial_reads.is_empty()
+                || partitions.iter().any(PartitionState::is_active)
+            {
+                let partition = if let Some(partition) = initial_reads.pop_front() {
+                    partition.0
+                } else {
+                    let partition = next_round_robin;
+                    next_round_robin = (next_round_robin + 1) % partition_count.max(1);
+                    partition
+                };
+
+                let partition_state = &mut partitions[partition];
+
+                if self.build_streams_on_first_read && !partition_state.built {
+                    let stream = FileStreamBuilder::new(&config)
+                        .with_partition(partition)
+                        .with_shared_work_source(shared_work_source.clone())
+                        .with_morselizer(Box::new(self.morselizer.clone()))
+                        .with_metrics(&metrics_set)
+                        .build()?;
+                    partition_state.set_stream(stream);
+                }
+
+                let Some(stream) = partition_state.stream.as_mut() else {
+                    continue;
+                };
+
+                match stream.next().await {
+                    Some(result) => partition_state.push_output(format_result(result)),
+                    None => partition_state.finish(),
+                }
+            }
+
+            let output_text = if partition_count == 1 {
+                format!(
+                    "----- Output Stream -----\n{}",
+                    partitions[0].output.join("\n")
+                )
+            } else {
+                partitions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(partition, state)| {
+                        format!(
+                            "----- Partition {} -----\n{}",
+                            partition,
+                            state.output.join("\n")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+
+            let file_stream_events = if self.file_stream_events {
+                observer.format_events()
+            } else {
+                "(omitted due to with_file_stream_events(false))".to_string()
+            };
 
             Ok(format!(
-                "----- Output Stream -----\n{}\n----- File Stream Events -----\n{}",
-                stream_contents.join("\n"),
-                observer.format_events()
+                "{output_text}\n----- File Stream Events -----\n{file_stream_events}",
             ))
         }
 
-        /// Builds the `FileScanConfig` for the configured mock file set.
+        /// Returns the number of configured partitions, including empty ones
+        /// that appear only in the explicit read schedule.
+        fn num_partitions(&self) -> usize {
+            self.partition_files
+                .keys()
+                .map(|partition| partition.0 + 1)
+                .chain(self.reads.iter().map(|partition| partition.0 + 1))
+                .max()
+                .unwrap_or(1)
+        }
+
+        /// Builds a `FileScanConfig` covering every configured partition.
         fn test_config(&self) -> FileScanConfig {
-            let file_group = self
-                .file_names
-                .iter()
-                .map(|name| PartitionedFile::new(name, 10))
-                .collect();
+            let file_groups = (0..self.num_partitions())
+                .map(|partition| {
+                    self.partition_files
+                        .get(&PartitionId(partition))
+                        .into_iter()
+                        .flat_map(|files| files.iter())
+                        .map(|name| PartitionedFile::new(name, 10))
+                        .collect::<Vec<_>>()
+                        .into()
+                })
+                .collect::<Vec<_>>();
+
             let table_schema = TableSchema::new(
                 Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)])),
                 vec![],
@@ -1091,9 +1583,94 @@ mod tests {
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
             )
-            .with_file_group(file_group)
+            .with_file_groups(file_groups)
             .with_limit(self.limit)
+            .with_preserve_order(self.preserve_order)
+            .with_partitioned_by_file_group(self.partitioned_by_file_group)
             .build()
+        }
+    }
+
+    /// Formats one stream poll result into a stable snapshot line.
+    fn format_result(result: Result<RecordBatch>) -> String {
+        match result {
+            Ok(batch) => {
+                let col = batch.column(0).as_primitive::<Int32Type>();
+                let batch_id = col.value(0);
+                format!("Batch: {batch_id}")
+            }
+            Err(e) => {
+                // Pull the actual message for external errors rather than
+                // relying on DataFusionError formatting, which changes if
+                // backtraces are enabled, etc.
+                let message = if let DataFusionError::External(generic) = e {
+                    generic.to_string()
+                } else {
+                    e.to_string()
+                };
+                format!("Error: {message}")
+            }
+        }
+    }
+
+    async fn drain_stream_output(stream: FileStream) -> Result<String> {
+        let output = stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|result| result.map(|batch| format_result(Ok(batch))))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(output.join("\n"))
+    }
+
+    fn metric_count(metrics: &ExecutionPlanMetricsSet, name: &str) -> usize {
+        metrics
+            .clone_inner()
+            .sum_by_name(name)
+            .unwrap_or_else(|| panic!("missing metric: {name}"))
+            .as_usize()
+    }
+
+    /// Test-only state for one stream partition in [`FileStreamMorselTest`].
+    struct PartitionState {
+        /// Whether the `FileStream` for this partition has been built yet.
+        built: bool,
+        /// The live stream, if this partition has not finished yet.
+        stream: Option<FileStream>,
+        /// Snapshot lines produced by this partition.
+        output: Vec<String>,
+    }
+
+    impl PartitionState {
+        /// Create an unbuilt partition with no output yet.
+        fn new() -> Self {
+            Self {
+                built: false,
+                stream: None,
+                output: vec![],
+            }
+        }
+
+        /// Returns true if this partition might still produce output.
+        fn is_active(&self) -> bool {
+            !self.built || self.stream.is_some()
+        }
+
+        /// Records that this partition's stream has been built.
+        fn set_stream(&mut self, stream: FileStream) {
+            self.stream = Some(stream);
+            self.built = true;
+        }
+
+        /// Records one formatted output line for this partition.
+        fn push_output(&mut self, line: String) {
+            self.output.push(line);
+        }
+
+        /// Marks this partition as finished.
+        fn finish(&mut self) {
+            self.push_output("Done".to_string());
+            self.stream = None;
         }
     }
 }

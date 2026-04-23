@@ -1,0 +1,32 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+assertion_line: 307
+info:
+  program: datafusion-cli
+  args:
+    - "--maxrows"
+    - "5"
+    - "--command"
+    - "SELECT v1 as c0, v1+1 as c1, v1+2 as c2, v1+3 as c3, v1+4 as c4, v1+5 as c5, v1+6 as c6, v1+7 as c7, v1+8 as c8, v1+9 as c9 FROM generate_series(1, 100) as t1(v1);"
+---
+success: true
+exit_code: 0
+----- stdout -----
+[CLI_VERSION]
++----+----+----+----+----+----+----+----+----+----+
+| c0 | c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 |
++----+----+----+----+----+----+----+----+----+----+
+| 1  | 2  | 3  | 4  | 5  | 6  | 7  | 8  | 9  | 10 |
+| 2  | 3  | 4  | 5  | 6  | 7  | 8  | 9  | 10 | 11 |
+| 3  | 4  | 5  | 6  | 7  | 8  | 9  | 10 | 11 | 12 |
+| 4  | 5  | 6  | 7  | 8  | 9  | 10 | 11 | 12 | 13 |
+| 5  | 6  | 7  | 8  | 9  | 10 | 11 | 12 | 13 | 14 |
+| .                                               |
+| .                                               |
+| .                                               |
++----+----+----+----+----+----+----+----+----+----+
+100 row(s) fetched. (First 5 displayed. Use --maxrows to adjust)
+[ELAPSED]
+
+
+----- stderr -----

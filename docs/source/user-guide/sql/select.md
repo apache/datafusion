@@ -86,7 +86,7 @@ SELECT a FROM table WHERE a > 10
 
 ## JOIN clause
 
-DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN`, `CROSS JOIN`, `LEFT SEMI JOIN`, `RIGHT SEMI JOIN`, `LEFT ANTI JOIN`, `RIGHT ANTI JOIN`, and `LATERAL JOIN`.
+DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN`, `CROSS JOIN`, `LEFT SEMI JOIN`, `RIGHT SEMI JOIN`, `LEFT ANTI JOIN`, `RIGHT ANTI JOIN`, `LATERAL JOIN`, and `LEFT JOIN LATERAL`.
 
 The following examples are based on this table:
 
@@ -318,11 +318,53 @@ ORDER BY dept;
 +------+-------+-----+
 ```
 
+#### LEFT JOIN LATERAL
+
+`LEFT JOIN LATERAL` preserves all rows from the left table. When the lateral
+subquery produces no matching rows, the right-side columns are filled with
+NULLs.
+
+```sql
+SELECT d.name AS dept, e.name AS emp
+FROM departments d
+LEFT JOIN LATERAL (
+    SELECT employees.name FROM employees WHERE employees.dept_id = d.id
+) AS e ON true
+ORDER BY dept, emp;
++-------+-------+
+| dept  | emp   |
++-------+-------+
+| Eng   | Carol |
+| HR    | Alice |
+| HR    | Bob   |
+| Sales | NULL  |
++-------+-------+
+```
+
+The `ON` clause can also filter results. Rows that do not satisfy the `ON`
+condition are preserved with NULLs, just like a regular `LEFT JOIN`:
+
+```sql
+SELECT d.name AS dept, sub.cnt
+FROM departments d
+LEFT JOIN LATERAL (
+    SELECT count(*) AS cnt
+    FROM employees WHERE employees.dept_id = d.id
+) AS sub ON sub.cnt > 0
+ORDER BY dept;
++-------+------+
+| dept  | cnt  |
++-------+------+
+| Eng   | 1    |
+| HR    | 2    |
+| Sales | NULL |
++-------+------+
+```
+
 #### Limitations
 
 The following patterns are not yet supported:
 
-- `LEFT JOIN LATERAL` (lateral join with outer join semantics).
 - Outer references in the `SELECT` list of the lateral subquery (e.g., `LATERAL (SELECT outer.col + 1)`).
 - `HAVING` in lateral subqueries.
 

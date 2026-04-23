@@ -174,27 +174,21 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+statement error Function 'approx_percentile_cont_with_weight' failed to match any signature
 SELECT approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c1) FROM aggregate_test_100
 
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+statement error Function 'approx_percentile_cont_with_weight' failed to match any signature
 SELECT approx_percentile_cont_with_weight(c1, 0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+statement error Function 'approx_percentile_cont_with_weight' failed to match any signature
 SELECT approx_percentile_cont_with_weight(c2, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function
+statement error Function 'approx_percentile_cont' failed to match any signature
 SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
-
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Int16, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
-
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Float64, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
 SELECT approx_percentile_cont(c12) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
@@ -948,16 +942,16 @@ SELECT c2, var_samp(CASE WHEN c12 > 0.90 THEN c12 ELSE null END) FROM aggregate_
 
 
 # csv_query_approx_median_1
-query I
+query R
 SELECT approx_median(c2) FROM aggregate_test_100
 ----
 3
 
 # csv_query_approx_median_2
-query I
+query R
 SELECT approx_median(c6) FROM aggregate_test_100
 ----
-1146409980542786560
+1146409980542786600
 
 # csv_query_approx_median_3
 query R
@@ -1006,7 +1000,7 @@ SELECT median(col_i8), median(distinct col_i8) FROM median_table
 -14 100
 
 # approx_distinct_median_i8
-query I
+query R
 SELECT approx_median(distinct col_i8) FROM median_table
 ----
 100
@@ -2032,26 +2026,29 @@ SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c11) AS 
 true
 
 # percentile_cont_with_nulls
-query I
+query R
 SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (NULL), (NULL), (NULL)) as t (v);
 ----
 2
 
 # percentile_cont_with_nulls_only
-query I
+query R
 SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
 ----
 NULL
 
+query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal \(got null\)
+SELECT APPROX_PERCENTILE_CONT(NULL) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
+
 # percentile_cont_with_weight_with_nulls
-query I
+query R
 SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(w, 0.5) WITHIN GROUP (ORDER BY v)
 FROM (VALUES (1, 1), (2, 1), (3, 1), (4, NULL), (NULL, 1), (NULL, NULL)) as t (v, w);
 ----
 2
 
 # percentile_cont_with_weight_nulls_only
-query I
+query R
 SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(1, 0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
 ----
 NULL
@@ -2332,36 +2329,36 @@ b 5 NULL 20135.4
 b NULL NULL 7732.315789473684
 
 # csv_query_approx_percentile_cont_with_weight
-query TI
+query TR
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
 
 # csv_query_approx_percentile_cont_with_weight (should be the same as above)
-query TI
+query TR
 SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
 
 # using approx_percentile_cont on 2 columns with same signature
-query TII
+query TRR
 SELECT c1, approx_percentile_cont(c2, 0.95) AS c2, approx_percentile_cont(c3, 0.95) AS c3 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 5 73
+a 5 73.55
 b 5 68
-c 5 122
-d 5 124
-e 5 115
+c 5 122.5
+d 5 124.2
+e 5 115.6
 
 # error is unique to this UDAF
 query TRR
@@ -2375,73 +2372,82 @@ e 3 40.333333333333
 
 
 
-query TI
+query TR
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a -101
-b -114
-c -109
-d -98
-e -93
+b -114.3
+c -109.475
+d -98.6
+e -93.65
 
 # csv_query_approx_percentile_cont_with_weight (2)
-query TI
+query TR
 SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
 # csv_query_approx_percentile_cont_with_weight alternate syntax
-query TI
+query TR
 SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
-
-query TI
+query TR
 SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a -101
-b -114
-c -109
-d -98
-e -93
+b -114.3
+c -109.475
+d -98.6
+e -93.65
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-query TI
+query TR
 SELECT c1, approx_percentile_cont(0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
-query TI
+query TR
+SELECT c1, approx_percentile_cont(0.95, 200.1) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 73.55
+b 68
+c 122.5
+d 124.2
+e 115.6
+
+
+query TR
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 65
 b 68
 c 122
-d 123
-e 110
+d 123.15
+e 110.266666666667
 
 # approx_percentile_cont_with_weight with centroids
-query TI
+query TR
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 65
 b 68
 c 122
-d 123
-e 110
+d 123.15
+e 110.266666666667
 
 # csv_query_sum_crossjoin
 query TTI
@@ -3834,10 +3840,10 @@ SELECT COUNT(DISTINCT c1) FROM test
 # TODO: aggregate_with_alias
 
 # test_approx_percentile_cont_decimal_support
-query TI
+query TR
 SELECT c1, approx_percentile_cont(cast(0.85 as decimal(10,2))) WITHIN GROUP (ORDER BY c2) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 4
+a 4.175
 b 5
 c 4
 d 4
@@ -5978,7 +5984,7 @@ select median(a) from (select 1 as a where 1=0);
 ----
 NULL
 
-query I
+query R
 select approx_median(a) from (select 1 as a where 1=0);
 ----
 NULL

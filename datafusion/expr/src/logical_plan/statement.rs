@@ -20,7 +20,7 @@ use datafusion_common::metadata::format_type_and_metadata;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use itertools::Itertools as _;
 use std::fmt::{self, Display};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crate::{Expr, LogicalPlan, expr_vec_fmt};
 
@@ -55,10 +55,7 @@ impl Statement {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
         // Statements have an unchanging empty schema.
-        static STATEMENT_EMPTY_SCHEMA: LazyLock<DFSchemaRef> =
-            LazyLock::new(|| Arc::new(DFSchema::empty()));
-
-        &STATEMENT_EMPTY_SCHEMA
+        DFSchema::empty_ref()
     }
 
     /// Return a descriptive string describing the type of this

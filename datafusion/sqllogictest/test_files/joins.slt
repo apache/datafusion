@@ -4687,14 +4687,22 @@ query TT
 explain SELECT j1_string, j2_string FROM j1 LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);
 ----
 logical_plan
-01)Left Join:
-02)--TableScan: j1 projection=[j1_string]
-03)--SubqueryAlias: j2
-04)----Projection: j2.j2_string
-05)------Subquery:
-06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
-07)----------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+01)Projection: j1.j1_string, j2.j2_string
+02)--Left Join:  Filter: j1.j1_id < j2.j2_id
+03)----TableScan: j1 projection=[j1_string, j1_id]
+04)----SubqueryAlias: j2
+05)------TableScan: j2 projection=[j2_string, j2_id]
+physical_plan
+01)NestedLoopJoinExec: join_type=Left, filter=j1_id@0 < j2_id@1, projection=[j1_string@0, j2_string@2]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+# INNER lateral with multi-scope correlation: the subquery references
+# j1 (grandparent scope) and j2 (parent scope). The optimizer
+# restructures this into a valid plan via join reordering.
+query TITITI
+SELECT * FROM j1, (j2 CROSS JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3_lat);
+----
 
 query TT
 explain SELECT * FROM j1, (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true));

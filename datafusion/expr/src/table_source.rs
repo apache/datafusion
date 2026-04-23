@@ -91,9 +91,7 @@ impl std::fmt::Display for TableType {
 ///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 /// [`DefaultTableSource`]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
-pub trait TableSource: Sync + Send {
-    fn as_any(&self) -> &dyn Any;
-
+pub trait TableSource: Any + Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
@@ -128,5 +126,15 @@ pub trait TableSource: Sync + Send {
     /// Get the default value for a column, if available.
     fn get_column_default(&self, _column: &str) -> Option<&Expr> {
         None
+    }
+}
+
+impl dyn TableSource {
+    pub fn is<T: TableSource>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    pub fn downcast_ref<T: TableSource>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
     }
 }
