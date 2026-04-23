@@ -254,6 +254,48 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
             .map(|e| map.get(e).unwrap_or(e).clone())
             .collect::<Vec<_>>();
 
+        // The inner Projection may define aliases that the Sort references
+        // but the outer Projection does not include.  Since we are about to
+        // replace the inner Projection's expressions with `new_exprs` (which
+        // only contains the outer Projection's columns), those alias
+        // definitions will be lost.  To keep the Sort valid, rewrite any
+        // sort expression that references a dropped alias so that it uses
+        // the alias's underlying expression instead.
+        let projected_aliases: HashSet<&str> = new_exprs
+            .iter()
+            .filter_map(|e| match e {
+                Expr::Alias(alias) => Some(alias.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        let dropped_aliases: HashMap<String, Expr> = inner_p
+            .expr
+            .iter()
+            .filter_map(|e| match e {
+                Expr::Alias(alias)
+                    if !projected_aliases.contains(alias.name.as_str()) =>
+                {
+                    Some((alias.name.clone(), (*alias.expr).clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        if !dropped_aliases.is_empty() {
+            for sort_expr in &mut sort.expr {
+                let mut expr = sort_expr.expr.clone();
+                while let Expr::Alias(alias) = expr {
+                    expr = *alias.expr;
+                }
+                if let Expr::Column(ref col) = expr
+                    && let Some(underlying) = dropped_aliases.get(col.name())
+                {
+                    sort_expr.expr = underlying.clone();
+                }
+            }
+        }
+
         inner_p.expr.clone_from(&new_exprs);
         sort.input = Arc::new(LogicalPlan::Projection(inner_p));
 

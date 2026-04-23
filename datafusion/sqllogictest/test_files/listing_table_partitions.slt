@@ -73,3 +73,70 @@ foo
 
 statement count 0
 set datafusion.execution.listing_table_factory_infer_partitions = true;
+
+# Test: files outside partition structure are skipped
+# This simulates a table that transitioned from non-partitioned to
+# hive-partitioned storage, leaving a stale file in the root directory.
+
+# Create partitioned files first
+query I
+copy (values(1, 'alice'), (2, 'bob'))
+to 'test_files/scratch/listing_table_partitions/root_file_skipped/year=2024/data.parquet';
+----
+2
+
+query I
+copy (values(3, 'charlie'))
+to 'test_files/scratch/listing_table_partitions/root_file_skipped/year=2025/data.parquet';
+----
+1
+
+# Create the table before adding the stale root file, so partition
+# inference succeeds (it only runs at CREATE TABLE time).
+statement count 0
+create external table root_file_test
+stored as parquet
+location 'test_files/scratch/listing_table_partitions/root_file_skipped/';
+
+# Now add a stale root-level file (outside any partition directory).
+# This simulates a file left over from before partitioning was added.
+query I
+copy (values(99, 'stale'))
+to 'test_files/scratch/listing_table_partitions/root_file_skipped/stale.parquet';
+----
+1
+
+# The root file should be skipped — only partitioned files are included
+query IT
+select column1, column2 from root_file_test order by column1;
+----
+1 alice
+2 bob
+3 charlie
+
+# Partition column should be accessible
+query ITT
+select column1, column2, year from root_file_test order by column1;
+----
+1 alice 2024
+2 bob 2024
+3 charlie 2025
+
+# Partition filter should work
+query ITT
+select column1, column2, year from root_file_test where year = '2025';
+----
+3 charlie 2025
+
+# COUNT should not include the root file's rows
+query I
+select count(*) from root_file_test;
+----
+3
+
+# GROUP BY partition column should work
+query TI
+select year, count(*) from root_file_test group by year order by year;
+----
+2024 2
+2025 1

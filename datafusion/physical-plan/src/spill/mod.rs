@@ -18,6 +18,7 @@
 //! Defines the spilling functions
 
 pub(crate) mod in_progress_spill_file;
+pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
 
