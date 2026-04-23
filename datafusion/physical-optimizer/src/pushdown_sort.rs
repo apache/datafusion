@@ -61,7 +61,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::buffer::BufferExec;
-use datafusion_physical_plan::limit::GlobalLimitExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::sync::Arc;
@@ -105,9 +105,11 @@ impl PhysicalOptimizerRule for PushdownSort {
                 let required_ordering = sort_child.expr();
                 match sort_input.try_pushdown_sort(required_ordering)? {
                     SortOrderPushdownResult::Exact { inner } => {
+                        // Preserve fetch (LIMIT) from the eliminated SortExec.
+                        // Use LocalLimitExec (not Global) since input is multi-partition.
                         let inner = if let Some(fetch) = sort_child.fetch() {
                             inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
-                                Arc::new(GlobalLimitExec::new(inner, 0, Some(fetch)))
+                                Arc::new(LocalLimitExec::new(inner, fetch))
                             })
                         } else {
                             inner
