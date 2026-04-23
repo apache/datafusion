@@ -31,9 +31,17 @@ use datafusion_common::instant::Instant;
 use log::{debug, info};
 use std::collections::BTreeMap;
 use std::fs;
+use std::sync::LazyLock;
 use tokio::runtime::Runtime;
 
-static SQL_BENCHMARK_DIRECTORY: &str = "sql_benchmarks";
+static SQL_BENCHMARK_DIRECTORY: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{}{}{}",
+        env!("CARGO_MANIFEST_DIR"),
+        std::path::MAIN_SEPARATOR,
+        "sql_benchmarks"
+    )
+});
 
 #[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
 compile_error!(
@@ -43,6 +51,10 @@ compile_error!(
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Debug, Parser)]
 #[command(ignore_errors = true)]
@@ -76,10 +88,6 @@ struct EnvParser {
     query: Option<i32>,
 }
 
-#[cfg(feature = "mimalloc")]
-#[global_allocator]
-static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 pub fn sql(c: &mut Criterion) {
     env_logger::init();
 
@@ -92,7 +100,7 @@ pub fn sql(c: &mut Criterion) {
     let benchmarks = rt.block_on(async {
         let ctx = make_ctx(&args).expect("SessionContext creation failed");
 
-        load_benchmarks(&args, &ctx, SQL_BENCHMARK_DIRECTORY)
+        load_benchmarks(&args, &ctx, &SQL_BENCHMARK_DIRECTORY)
             .await
             .unwrap_or_else(|err| panic!("failed load benchmarks: {err:?}"))
     });
@@ -273,7 +281,7 @@ async fn load_benchmarks(
     for path in paths {
         debug!("Loading benchmark from {path}");
 
-        let benchmark = SqlBenchmark::new(ctx, &path, SQL_BENCHMARK_DIRECTORY).await?;
+        let benchmark = SqlBenchmark::new(ctx, &path, &*SQL_BENCHMARK_DIRECTORY).await?;
         let entries = benches
             .entry(benchmark.group().to_string())
             .or_insert(vec![]);
@@ -293,44 +301,21 @@ fn filter_benchmarks(
     args: &EnvParser,
     benchmarks: BTreeMap<String, Vec<SqlBenchmark>>,
 ) -> BTreeMap<String, Vec<SqlBenchmark>> {
-    let benchmarks_to_run: BTreeMap<String, Vec<SqlBenchmark>> = match &args.name {
+    match &args.name {
         Some(bench_name) => benchmarks
             .into_iter()
-            // first filter to the benchmark we wish to run (corresponds to SqlBenchmark::group())
             .filter(|(key, _val)| key.eq_ignore_ascii_case(bench_name))
-            // if provided filter to just the subgroup we wish to run (corresponds to SqlBenchmark::subgroup())
-            .map(|(key, val)| {
+            .map(|(key, mut val)| {
                 if let Some(subgroup) = &args.subgroup {
-                    let mut benches = vec![];
-                    for bench in val {
-                        if bench.subgroup().eq_ignore_ascii_case(subgroup) {
-                            benches.push(bench.clone());
-                        }
-                    }
-                    (key, benches)
-                } else {
-                    (key, val)
+                    val.retain(|bench| bench.subgroup().eq_ignore_ascii_case(subgroup));
                 }
-            })
-            // if provided filter to just the query number we wish to run (corresponds loosely to SqlBenchmark::name())
-            .map(|(key, val)| {
                 if let Some(query_number) = &args.query {
                     let padded = format!("Q{query_number:0>2}");
-                    let mut benches = vec![];
-
-                    for bench in val {
-                        if bench.name().eq_ignore_ascii_case(&padded) {
-                            benches.push(bench.clone());
-                        }
-                    }
-                    (key, benches)
-                } else {
-                    (key, val)
+                    val.retain(|bench| bench.name().eq_ignore_ascii_case(&padded));
                 }
+                (key, val)
             })
             .collect(),
         None => benchmarks,
-    };
-
-    benchmarks_to_run
+    }
 }
