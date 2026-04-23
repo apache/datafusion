@@ -201,7 +201,7 @@ fn simplify_demo() -> Result<()> {
 
     // basic arithmetic simplification
     // i + 1 + 2 => i + 3
-    // (note this is not done if the expr is (col("i") + (lit(1) + lit(2))))
+    // (note this is not done if the expr is (col("i") + lit(1) + lit(2)))
     assert_eq!(
         simplifier.simplify(col("i") + (lit(1) + lit(2)))?,
         col("i") + lit(3)
@@ -263,7 +263,7 @@ fn range_analysis_demo() -> Result<()> {
     // You can provide DataFusion any known boundaries on the values of `date`
     // (for example, maybe you know you only have data up to `2020-09-15`), but
     // in this case, let's say we don't know any boundaries beforehand so we use
-    // `try_new_unknown`
+    // `try_new_unbounded`
     let boundaries = ExprBoundaries::try_new_unbounded(&schema)?;
 
     // Now, we invoke the analysis code to perform the range analysis
