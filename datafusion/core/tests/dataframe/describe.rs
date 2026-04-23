@@ -127,19 +127,17 @@ async fn describe_binary_columns() -> Result<()> {
         Field::new("fbin", DataType::FixedSizeBinary(2), true),
     ]));
 
-    let bin: BinaryArray = vec![Some(&[0x00u8, 0x01][..]), Some(&[0xff, 0xee][..]), None]
+    let bin: BinaryArray = vec![Some([0x00u8, 0x01]), Some([0xff, 0xee]), None]
         .into_iter()
         .collect();
-    let lbin: LargeBinaryArray =
-        vec![Some(&[0x00u8, 0x01][..]), Some(&[0xff, 0xee][..]), None]
-            .into_iter()
-            .collect();
-    let vbin: BinaryViewArray =
-        vec![Some(&[0x00u8, 0x01][..]), Some(&[0xff, 0xee][..]), None]
-            .into_iter()
-            .collect();
+    let lbin: LargeBinaryArray = vec![Some([0x00u8, 0x01]), Some([0xff, 0xee]), None]
+        .into_iter()
+        .collect();
+    let vbin: BinaryViewArray = vec![Some([0x00u8, 0x01]), Some([0xff, 0xee]), None]
+        .into_iter()
+        .collect();
     let fbin = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-        vec![Some(vec![0x00u8, 0x01]), Some(vec![0xff, 0xee]), None].into_iter(),
+        [Some([0x00u8, 0x01]), Some([0xff, 0xee]), None].into_iter(),
         2,
     )?;
     let batch = RecordBatch::try_new(
