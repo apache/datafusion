@@ -450,6 +450,7 @@ impl ConcatLargeStringBuilder {
 pub(crate) struct GenericStringArrayBuilder<O: OffsetSizeTrait> {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
+    placeholder_count: usize,
     _phantom: PhantomData<O>,
 }
 
@@ -465,6 +466,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         Self {
             offsets_buffer,
             value_buffer: MutableBuffer::with_capacity(data_capacity),
+            placeholder_count: 0,
             _phantom: PhantomData,
         }
     }
@@ -481,12 +483,13 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         self.offsets_buffer.push(next_offset);
     }
 
-    /// Append an empty placeholder row. The corresponding slot is meaningful
-    /// only if the caller masks it via the null buffer passed to `finish`.
+    /// Append an empty placeholder row. The corresponding slot must be masked
+    /// as null by the null buffer passed to `finish`.
     pub fn append_placeholder(&mut self) {
         let next_offset =
             O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
         self.offsets_buffer.push(next_offset);
+        self.placeholder_count += 1;
     }
 
     /// Finalize into a [`GenericStringArray<O>`] using the caller-supplied
@@ -509,6 +512,12 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
                 n.len()
             );
         }
+        let null_count = null_buffer.as_ref().map_or(0, |n| n.null_count());
+        debug_assert!(
+            null_count >= self.placeholder_count,
+            "{} placeholder rows appended but null buffer has {null_count} null(s)",
+            self.placeholder_count,
+        );
         let array_data = ArrayDataBuilder::new(GenericStringArray::<O>::DATA_TYPE)
             .len(row_count)
             .add_buffer(self.offsets_buffer.into())
@@ -543,6 +552,7 @@ pub(crate) struct StringViewArrayBuilder {
     /// Current block-size target; doubles each time a block is flushed, up to
     /// [`MAX_BLOCK_SIZE`].
     block_size: u32,
+    placeholder_count: usize,
 }
 
 impl StringViewArrayBuilder {
@@ -552,6 +562,7 @@ impl StringViewArrayBuilder {
             in_progress: Vec::new(),
             completed: Vec::new(),
             block_size: STARTING_BLOCK_SIZE,
+            placeholder_count: 0,
         }
     }
 
@@ -599,12 +610,13 @@ impl StringViewArrayBuilder {
         self.views.push(make_view(v, buffer_index, offset));
     }
 
-    /// Append an empty placeholder row. The corresponding slot is meaningful
-    /// only if the caller masks it via the null buffer passed to `finish`.
+    /// Append an empty placeholder row. The corresponding slot must be
+    /// masked as null by the null buffer passed to `finish`.
     #[inline]
     pub fn append_placeholder(&mut self) {
         // Zero-length inline view — `length` field is 0, no buffer ref.
         self.views.push(0);
+        self.placeholder_count += 1;
     }
 
     fn flush_in_progress(&mut self) {
@@ -631,6 +643,12 @@ impl StringViewArrayBuilder {
                 self.views.len()
             );
         }
+        let null_count = null_buffer.as_ref().map_or(0, |n| n.null_count());
+        debug_assert!(
+            null_count >= self.placeholder_count,
+            "{} placeholder rows appended but null buffer has {null_count} null(s)",
+            self.placeholder_count,
+        );
         self.flush_in_progress();
         // SAFETY: every long-string view references bytes we wrote ourselves
         // into `self.completed`, with prefixes derived from those same bytes.
@@ -791,6 +809,27 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "placeholder rows appended")]
+    fn string_array_builder_placeholder_without_null_mask() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(2, 4);
+        builder.append_value("a");
+        builder.append_placeholder();
+        // Slot 1 is a placeholder but the null buffer doesn't mark it null.
+        let nulls = NullBuffer::from(vec![true, true]);
+        let _ = builder.finish(Some(nulls));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "placeholder rows appended")]
+    fn string_array_builder_placeholder_with_none_null_buffer() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(1, 4);
+        builder.append_placeholder();
+        let _ = builder.finish(None);
+    }
+
+    #[test]
     fn large_string_array_builder_with_nulls() {
         let mut builder = GenericStringArrayBuilder::<i64>::with_capacity(3, 8);
         builder.append_value("a");
@@ -847,6 +886,26 @@ mod tests {
         builder.append_value("b");
         let nulls = NullBuffer::from(vec![true, false, true]);
         assert!(builder.finish(Some(nulls)).is_err());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "placeholder rows appended")]
+    fn string_view_array_builder_placeholder_without_null_mask() {
+        let mut builder = StringViewArrayBuilder::with_capacity(2);
+        builder.append_value("a");
+        builder.append_placeholder();
+        let nulls = NullBuffer::from(vec![true, true]);
+        let _ = builder.finish(Some(nulls));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "placeholder rows appended")]
+    fn string_view_array_builder_placeholder_with_none_null_buffer() {
+        let mut builder = StringViewArrayBuilder::with_capacity(1);
+        builder.append_placeholder();
+        let _ = builder.finish(None);
     }
 
     #[test]
