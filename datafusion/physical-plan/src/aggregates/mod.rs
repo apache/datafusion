@@ -90,6 +90,23 @@ const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
     // This seed is chosen to be a large 64-bit number
     datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
 
+/// Name of the trailing `UInt64` column that a Partial [`AggregateExec`] may
+/// emit when [`AggregateExec::with_emit_group_hash`] is set. Holds per-group
+/// hashes computed with [`crate::repartition::REPARTITION_RANDOM_STATE`] so a
+/// downstream [`crate::repartition::RepartitionExec`] can skip rehashing.
+pub const PRECOMPUTED_GROUP_HASH_COLUMN: &str = "__datafusion_precomputed_hash";
+
+/// Field-metadata key used to mark a column as a precomputed hash.
+pub const PRECOMPUTED_HASH_METADATA_KEY: &str = "datafusion.precomputed_hash";
+/// Field-metadata value indicating the hash was computed with
+/// `REPARTITION_RANDOM_STATE` (seed `0`) and is safe for the repartition fast path.
+pub const PRECOMPUTED_HASH_REPARTITION_VALUE: &str = "repartition_seed_0";
+/// Field-metadata key whose value is a comma-separated list of column indices
+/// (relative to the emitting operator's output schema) over which the hash was
+/// computed, in the order passed to `create_hashes`. Consumers must match the
+/// partitioning-key columns against this list exactly and in order.
+pub const PRECOMPUTED_HASH_COLS_METADATA_KEY: &str = "datafusion.precomputed_hash_cols";
+
 /// Whether an aggregate stage consumes raw input data or intermediate
 /// accumulator state from a previous aggregation stage.
 ///
@@ -670,6 +687,13 @@ pub struct AggregateExec {
     /// it remains `Some(..)` to enable dynamic filtering during aggregate execution;
     /// otherwise, it is cleared to `None`.
     dynamic_filter: Option<Arc<AggrDynFilter>>,
+    /// When `true` and `mode` is [`AggregateMode::Partial`], the Partial aggregate
+    /// appends a trailing [`PRECOMPUTED_GROUP_HASH_COLUMN`] column to each emitted
+    /// batch. The hash is computed with [`crate::repartition::REPARTITION_RANDOM_STATE`]
+    /// so a downstream `RepartitionExec` with `Partitioning::Hash` can skip rehashing.
+    ///
+    /// Only relevant for Partial mode; setting it on other modes is a no-op.
+    emit_group_hash: bool,
 }
 
 impl AggregateExec {
@@ -695,6 +719,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            emit_group_hash: self.emit_group_hash,
         }
     }
 
@@ -715,6 +740,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            emit_group_hash: self.emit_group_hash,
         }
     }
 
@@ -732,7 +758,13 @@ impl AggregateExec {
         input_schema: SchemaRef,
     ) -> Result<Self> {
         let group_by = group_by.into();
-        let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
+        let schema = create_schema(
+            &input.schema(),
+            &group_by,
+            &aggr_expr,
+            mode,
+            /* emit_group_hash */ false,
+        )?;
 
         let schema = Arc::new(schema);
         AggregateExec::try_new_with_schema(
@@ -849,11 +881,53 @@ impl AggregateExec {
             input_order_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
+            emit_group_hash: false,
         };
 
         exec.init_dynamic_filter();
 
         Ok(exec)
+    }
+
+    /// Enable emission of a trailing precomputed-hash column on Partial batches.
+    ///
+    /// On `AggregateMode::Partial`, rebuilds `schema`/`cache` so the output
+    /// schema includes [`PRECOMPUTED_GROUP_HASH_COLUMN`] as its final field.
+    /// No-op for non-Partial modes.
+    pub fn with_emit_group_hash(mut self, emit: bool) -> Result<Self> {
+        if self.mode != AggregateMode::Partial || self.emit_group_hash == emit {
+            self.emit_group_hash = emit && self.mode == AggregateMode::Partial;
+            return Ok(self);
+        }
+        self.emit_group_hash = emit;
+
+        let new_schema = Arc::new(create_schema(
+            &self.input.schema(),
+            &self.group_by,
+            &self.aggr_expr,
+            self.mode,
+            emit,
+        )?);
+
+        let group_expr_mapping =
+            ProjectionMapping::try_new(self.group_by.expr.clone(), &self.input.schema())?;
+        let cache = Self::compute_properties(
+            &self.input,
+            Arc::clone(&new_schema),
+            &group_expr_mapping,
+            &self.mode,
+            &self.input_order_mode,
+            self.aggr_expr.as_ref(),
+        )?;
+        self.schema = new_schema;
+        self.cache = Arc::new(cache);
+        Ok(self)
+    }
+
+    /// Returns `true` when this Partial `AggregateExec` emits the trailing
+    /// precomputed-hash column for the downstream repartition fast path.
+    pub fn emit_group_hash(&self) -> bool {
+        self.emit_group_hash
     }
 
     /// Aggregation mode (full, partial)
@@ -1538,6 +1612,7 @@ impl ExecutionPlan for AggregateExec {
         )?;
         me.limit_options = self.limit_options;
         me.dynamic_filter.clone_from(&self.dynamic_filter);
+        me.emit_group_hash = self.emit_group_hash;
 
         Ok(Arc::new(me))
     }
@@ -1711,11 +1786,16 @@ impl ExecutionPlan for AggregateExec {
 
 /// Creates the output schema for an [`AggregateExec`] containing the group by columns followed
 /// by the aggregate columns.
+///
+/// When `emit_group_hash` is `true` and `mode` is Partial, a trailing
+/// [`PRECOMPUTED_GROUP_HASH_COLUMN`] field of type `UInt64` is appended and
+/// tagged with the [`PRECOMPUTED_HASH_METADATA_KEY`] field metadata.
 fn create_schema(
     input_schema: &Schema,
     group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<AggregateFunctionExpr>],
     mode: AggregateMode,
+    emit_group_hash: bool,
 ) -> Result<Schema> {
     let mut fields = Vec::with_capacity(group_by.num_output_exprs() + aggr_expr.len());
     fields.extend(group_by.output_fields(input_schema)?);
@@ -1733,6 +1813,27 @@ fn create_schema(
                 fields.extend(expr.state_fields()?.iter().cloned());
             }
         }
+    }
+
+    if emit_group_hash && mode == AggregateMode::Partial {
+        // Group columns are always at output positions 0..num_output_exprs,
+        // and the hash is computed over that slice. Record the indices so
+        // downstream consumers can match the partitioning exprs against them.
+        let num_group_cols = group_by.num_output_exprs();
+        let cols_csv = (0..num_group_cols)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            PRECOMPUTED_HASH_METADATA_KEY.to_string(),
+            PRECOMPUTED_HASH_REPARTITION_VALUE.to_string(),
+        );
+        metadata.insert(PRECOMPUTED_HASH_COLS_METADATA_KEY.to_string(), cols_csv);
+        fields.push(Arc::new(
+            Field::new(PRECOMPUTED_GROUP_HASH_COLUMN, DataType::UInt64, false)
+                .with_metadata(metadata),
+        ));
     }
 
     Ok(Schema::new_with_metadata(
@@ -3631,6 +3732,7 @@ mod tests {
             &grouping_set,
             &aggr_expr,
             AggregateMode::Final,
+            false,
         )?;
         let expected_schema = Schema::new(vec![
             Field::new("a", DataType::Float32, false),
@@ -4779,6 +4881,115 @@ mod tests {
             +---+--------+
         ");
 
+        Ok(())
+    }
+
+    /// Partial `AggregateExec` with `emit_group_hash = true` appends a
+    /// `UInt64` column at the end of each batch, carrying
+    /// `REPARTITION_RANDOM_STATE` hashes of the group values. Verify the
+    /// schema marker, value correctness, and that results are unchanged.
+    #[tokio::test]
+    async fn partial_aggregate_emits_precomputed_hash() -> Result<()> {
+        use crate::repartition::REPARTITION_RANDOM_STATE;
+        use datafusion_common::hash_utils::create_hashes;
+
+        let (input_schema, input_batches) = some_data_v2();
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestMemoryExec::try_new(
+            &[input_batches],
+            Arc::clone(&input_schema),
+            None,
+        )?);
+
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("a", &input_schema)?,
+            "a".to_string(),
+        )]);
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![lit(1i8)])
+                .schema(Arc::clone(&input_schema))
+                .alias("COUNT(1)")
+                .build()?,
+        )];
+
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggregates,
+            vec![None],
+            Arc::clone(&input),
+            Arc::clone(&input_schema),
+        )?
+        .with_emit_group_hash(true)?;
+
+        // Schema: [a, COUNT(1)[count], __datafusion_precomputed_hash]
+        let schema = partial.schema();
+        let last = schema.field(schema.fields().len() - 1);
+        assert_eq!(last.name(), PRECOMPUTED_GROUP_HASH_COLUMN);
+        assert_eq!(last.data_type(), &DataType::UInt64);
+        assert_eq!(
+            last.metadata()
+                .get(PRECOMPUTED_HASH_METADATA_KEY)
+                .map(String::as_str),
+            Some(PRECOMPUTED_HASH_REPARTITION_VALUE),
+        );
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let batches = crate::collect(Arc::new(partial), task_ctx).await?;
+        assert!(!batches.is_empty());
+
+        for batch in &batches {
+            let group_col = batch.column(0);
+            let hash_col = batch
+                .column(batch.num_columns() - 1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .expect("precomputed hash column should be UInt64");
+
+            let mut expected = vec![0u64; batch.num_rows()];
+            create_hashes(
+                &[Arc::clone(group_col)],
+                REPARTITION_RANDOM_STATE.random_state(),
+                &mut expected,
+            )?;
+
+            let actual: Vec<u64> = hash_col.values().to_vec();
+            assert_eq!(
+                actual, expected,
+                "precomputed hash values must match create_hashes with REPARTITION_RANDOM_STATE"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Setting `emit_group_hash` on a non-Partial `AggregateExec` is a no-op
+    /// and the output schema stays clean.
+    #[test]
+    fn emit_group_hash_is_noop_for_non_partial() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
+        let input = Arc::new(TestMemoryExec::try_new(
+            &[vec![RecordBatch::new_empty(Arc::clone(&schema))]],
+            Arc::clone(&schema),
+            None,
+        )?);
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            vec![],
+            vec![],
+            input,
+            Arc::clone(&schema),
+        )?
+        .with_emit_group_hash(true)?;
+        assert!(!final_agg.emit_group_hash());
+        let out = final_agg.schema();
+        assert!(
+            out.field_with_name(PRECOMPUTED_GROUP_HASH_COLUMN).is_err(),
+            "non-Partial modes must not expose the precomputed-hash column"
+        );
         Ok(())
     }
 }

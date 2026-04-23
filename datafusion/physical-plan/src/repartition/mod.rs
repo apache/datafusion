@@ -44,9 +44,9 @@ use crate::{
     check_if_same_properties,
 };
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
 use arrow::compute::take_arrays;
-use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow::datatypes::{DataType, SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -438,6 +438,93 @@ enum BatchPartitionerState {
 /// executions and runs.
 pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
+/// If `schema` carries a `UInt64` field tagged as a precomputed hash
+/// (see `PRECOMPUTED_HASH_METADATA_KEY` and
+/// `PRECOMPUTED_HASH_COLS_METADATA_KEY` in [`crate::aggregates`]) and `exprs`
+/// are the `Column` references over which that hash was computed — same
+/// columns, same order — returns the hash column's index.
+///
+/// Matches in two shapes:
+///
+/// 1. `exprs == [Column(hash_col_idx)]`. The caller already references the
+///    hash column directly; we just return its index.
+/// 2. `exprs == [Column(c0), Column(c1), ...]` matching the
+///    `precomputed_hash_cols` list (in order). This is the common case: the
+///    partitioning keys are the group columns and we swap in the hash.
+///
+/// When this matches, [`BatchPartitioner`] can skip calling [`create_hashes`]
+/// and use the `UInt64` array directly.
+fn detect_precomputed_hash_column(
+    exprs: &[Arc<dyn PhysicalExpr>],
+    schema: &arrow::datatypes::Schema,
+) -> Option<usize> {
+    use crate::aggregates::{
+        PRECOMPUTED_HASH_COLS_METADATA_KEY, PRECOMPUTED_HASH_METADATA_KEY,
+        PRECOMPUTED_HASH_REPARTITION_VALUE,
+    };
+    use datafusion_physical_expr::expressions::Column;
+
+    if exprs.is_empty() {
+        return None;
+    }
+
+    // All partitioning exprs must be plain `Column`s for the fast path.
+    let expr_cols: Option<Vec<&Column>> = exprs
+        .iter()
+        .map(|e| (e.as_ref() as &dyn std::any::Any).downcast_ref::<Column>())
+        .collect();
+    let expr_cols = expr_cols?;
+
+    // Scan fields for the precomputed-hash marker.
+    for (idx, field) in schema.fields().iter().enumerate() {
+        if field.data_type() != &DataType::UInt64 {
+            continue;
+        }
+        let md = field.metadata();
+        if md.get(PRECOMPUTED_HASH_METADATA_KEY).map(String::as_str)
+            != Some(PRECOMPUTED_HASH_REPARTITION_VALUE)
+        {
+            continue;
+        }
+
+        // Shape 1: partitioning expr IS the hash column.
+        if expr_cols.len() == 1 && expr_cols[0].index() == idx {
+            return Some(idx);
+        }
+
+        // Shape 2: partitioning exprs cover the recorded source columns
+        // in the same order.
+        let Some(cols_csv) = md.get(PRECOMPUTED_HASH_COLS_METADATA_KEY) else {
+            continue;
+        };
+        let Some(source_cols) = parse_hash_source_cols(cols_csv) else {
+            continue;
+        };
+        if source_cols.len() != expr_cols.len() {
+            continue;
+        }
+        let matches = expr_cols
+            .iter()
+            .zip(source_cols.iter())
+            .all(|(c, &src)| c.index() == src);
+        if matches {
+            return Some(idx);
+        }
+    }
+
+    None
+}
+
+/// Parse a comma-separated list of column indices (as emitted into the
+/// `PRECOMPUTED_HASH_COLS_METADATA_KEY` field metadata). Returns `None` on
+/// malformed input rather than erroring — a bad marker just disables the
+/// fast path.
+fn parse_hash_source_cols(csv: &str) -> Option<Vec<usize>> {
+    csv.split(',')
+        .map(|s| s.trim().parse::<usize>().ok())
+        .collect()
+}
+
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
     ///
@@ -582,22 +669,53 @@ impl BatchPartitioner {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
-                    let arrays =
-                        evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
-
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
-
-                    create_hashes(
-                        &arrays,
-                        REPARTITION_RANDOM_STATE.random_state(),
-                        hash_buffer,
-                    )?;
+                    // Fast path: a single column expression that points at a
+                    // UInt64 field tagged as a precomputed hash (produced by a
+                    // Partial `AggregateExec` with `emit_group_hash = true`).
+                    // The values were hashed with `REPARTITION_RANDOM_STATE`
+                    // upstream, so we can consume them directly.
+                    let precomputed_hash_col = detect_precomputed_hash_column(
+                        exprs.as_slice(),
+                        batch.schema().as_ref(),
+                    );
 
                     indices.iter_mut().for_each(|v| v.clear());
 
-                    for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize].push(index as u32);
+                    if let Some(col_idx) = precomputed_hash_col {
+                        let column = batch.column(col_idx);
+                        let hashes = column
+                            .as_any()
+                            .downcast_ref::<UInt64Array>()
+                            .ok_or_else(|| {
+                                internal_datafusion_err!(
+                                    "precomputed hash column is not UInt64Array"
+                                )
+                            })?;
+                        for row in 0..hashes.len() {
+                            // Precomputed hashes are produced by `create_hashes`
+                            // over a non-nullable UInt64 field, so the values
+                            // are always valid.
+                            let hash = hashes.value(row);
+                            indices[(hash % *partitions as u64) as usize]
+                                .push(row as u32);
+                        }
+                    } else {
+                        let arrays =
+                            evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
+
+                        hash_buffer.clear();
+                        hash_buffer.resize(batch.num_rows(), 0);
+
+                        create_hashes(
+                            &arrays,
+                            REPARTITION_RANDOM_STATE.random_state(),
+                            hash_buffer,
+                        )?;
+
+                        for (index, hash) in hash_buffer.iter().enumerate() {
+                            indices[(*hash % *partitions as u64) as usize]
+                                .push(index as u32);
+                        }
                     }
 
                     // Finished building index-arrays for output partitions
@@ -1899,6 +2017,94 @@ mod tests {
 
     fn test_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
+    }
+
+    /// `detect_precomputed_hash_column` recognizes the precomputed-hash marker
+    /// in both shapes: (a) partitioning expr IS the hash column, and
+    /// (b) partitioning exprs are the recorded source columns in order.
+    #[test]
+    fn detect_precomputed_hash_column_matches_marker() {
+        use crate::aggregates::{
+            PRECOMPUTED_HASH_COLS_METADATA_KEY, PRECOMPUTED_HASH_METADATA_KEY,
+            PRECOMPUTED_HASH_REPARTITION_VALUE,
+        };
+        use datafusion_physical_expr::expressions::Column;
+        use std::collections::HashMap;
+
+        // Single-column group: hash computed over column 0.
+        let mut md = HashMap::new();
+        md.insert(
+            PRECOMPUTED_HASH_METADATA_KEY.to_string(),
+            PRECOMPUTED_HASH_REPARTITION_VALUE.to_string(),
+        );
+        md.insert(
+            PRECOMPUTED_HASH_COLS_METADATA_KEY.to_string(),
+            "0".to_string(),
+        );
+        let schema = Schema::new(vec![
+            Field::new("group", DataType::Utf8, true),
+            Field::new("hash", DataType::UInt64, false).with_metadata(md),
+        ]);
+
+        // Shape (a): partitioning expr IS the hash column.
+        let hash_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("hash", 1));
+        assert_eq!(
+            detect_precomputed_hash_column(&[Arc::clone(&hash_col)], &schema),
+            Some(1)
+        );
+
+        // Shape (b): partitioning expr is the source group column; detection
+        // finds the tagged hash field by scanning schema.
+        let group_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("group", 0));
+        assert_eq!(
+            detect_precomputed_hash_column(&[Arc::clone(&group_col)], &schema),
+            Some(1)
+        );
+
+        // Multi-column group: hash covers columns 0, 1, 2.
+        let mut md3 = HashMap::new();
+        md3.insert(
+            PRECOMPUTED_HASH_METADATA_KEY.to_string(),
+            PRECOMPUTED_HASH_REPARTITION_VALUE.to_string(),
+        );
+        md3.insert(
+            PRECOMPUTED_HASH_COLS_METADATA_KEY.to_string(),
+            "0,1,2".to_string(),
+        );
+        let schema3 = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int64, true),
+            Field::new("hash", DataType::UInt64, false).with_metadata(md3),
+        ]);
+        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
+        let c: Arc<dyn PhysicalExpr> = Arc::new(Column::new("c", 2));
+        assert_eq!(
+            detect_precomputed_hash_column(
+                &[Arc::clone(&a), Arc::clone(&b), Arc::clone(&c)],
+                &schema3,
+            ),
+            Some(3),
+            "multi-column partitioning should match the recorded source columns"
+        );
+
+        // Wrong order — refuse to match (would give incorrect routing).
+        assert_eq!(
+            detect_precomputed_hash_column(
+                &[Arc::clone(&b), Arc::clone(&a), Arc::clone(&c)],
+                &schema3,
+            ),
+            None,
+            "order mismatch must disable the fast path"
+        );
+
+        // Subset — refuse to match.
+        assert_eq!(
+            detect_precomputed_hash_column(&[a, b], &schema3),
+            None,
+            "subset of source columns must disable the fast path"
+        );
     }
 
     async fn repartition(

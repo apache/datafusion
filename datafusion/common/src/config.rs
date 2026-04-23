@@ -648,6 +648,13 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
+        /// When `true`, a Partial `AggregateExec` feeding a Hash `RepartitionExec`
+        /// over the same group columns emits a trailing `UInt64` column of
+        /// precomputed row hashes. The `RepartitionExec` consumes it directly
+        /// instead of rehashing the group values, saving the per-row hash on
+        /// the shuffle path. Largest wins are for string/binary group keys.
+        pub emit_aggregate_group_hash: bool, default = false
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.

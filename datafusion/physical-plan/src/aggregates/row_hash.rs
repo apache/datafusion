@@ -30,6 +30,7 @@ use crate::aggregates::{
     create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
+use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::{PhysicalExpr, aggregates, metrics};
@@ -455,6 +456,15 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Reduction factor metric, calculated as `output_rows/input_rows` (only for partial aggregation)
     reduction_factor: Option<metrics::RatioMetrics>,
+
+    /// Number of group-by columns in the output schema. Used to locate
+    /// group-value arrays when appending the precomputed-hash column.
+    num_group_cols: usize,
+
+    /// When `true`, `emit()` appends a trailing `UInt64` column with
+    /// `REPARTITION_RANDOM_STATE` hashes of the group-value arrays so a
+    /// downstream `RepartitionExec` can skip rehashing. Partial mode only.
+    emit_group_hash: bool,
 }
 
 impl GroupedHashAggregateStream {
@@ -520,11 +530,15 @@ impl GroupedHashAggregateStream {
         // Therefore, when we spill these intermediate states or pass them to another
         // aggregation operator, we must use a schema that includes both the group
         // columns **and** the partial-state columns.
+        // Spill batches are read back by the merge path inside this same
+        // operator, not by a downstream `RepartitionExec`, so we never need
+        // the precomputed-hash column on disk.
         let spill_schema = Arc::new(create_schema(
             &agg.input().schema(),
             &agg_group_by,
             &aggregate_exprs,
             AggregateMode::Partial,
+            /* emit_group_hash */ false,
         )?);
 
         // Need to update the GROUP BY expressions to point to the correct column after schema change
@@ -659,6 +673,9 @@ impl GroupedHashAggregateStream {
             None
         };
 
+        let num_group_cols = agg.group_expr().num_output_exprs();
+        let emit_group_hash = agg.emit_group_hash() && agg.mode == AggregateMode::Partial;
+
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
             input,
@@ -681,6 +698,8 @@ impl GroupedHashAggregateStream {
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
             reduction_factor,
+            num_group_cols,
+            emit_group_hash,
         })
     }
 }
@@ -1114,6 +1133,22 @@ impl GroupedHashAggregateStream {
                 output.extend(acc.state(emit_to)?)
             }
         }
+
+        // Append the precomputed-hash column for the downstream repartition
+        // fast path. Only on non-spill emits — spill batches stay inside this
+        // operator and never reach `RepartitionExec`.
+        if self.emit_group_hash && !spilling {
+            let group_arrays = &output[..self.num_group_cols];
+            let num_rows = group_arrays.first().map(|a| a.len()).unwrap_or(0);
+            let mut hashes = vec![0u64; num_rows];
+            datafusion_common::hash_utils::create_hashes(
+                group_arrays,
+                REPARTITION_RANDOM_STATE.random_state(),
+                &mut hashes,
+            )?;
+            output.push(Arc::new(UInt64Array::from(hashes)) as ArrayRef);
+        }
+
         drop(timer);
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
@@ -1345,6 +1380,21 @@ impl GroupedHashAggregateStream {
         for ((acc, values), opt_filter) in iter {
             let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
             output.extend(acc.convert_to_state(values, opt_filter)?);
+        }
+
+        // Match the `emit()` path: append the precomputed-hash column when
+        // enabled so downstream `RepartitionExec` can reuse it even for
+        // pass-through batches produced in skip-aggregation mode.
+        if self.emit_group_hash {
+            let group_arrays = &output[..self.num_group_cols];
+            let num_rows = group_arrays.first().map(|a| a.len()).unwrap_or(0);
+            let mut hashes = vec![0u64; num_rows];
+            datafusion_common::hash_utils::create_hashes(
+                group_arrays,
+                REPARTITION_RANDOM_STATE.random_state(),
+                &mut hashes,
+            )?;
+            output.push(Arc::new(UInt64Array::from(hashes)) as ArrayRef);
         }
 
         let states_batch = RecordBatch::try_new(self.schema(), output)?;

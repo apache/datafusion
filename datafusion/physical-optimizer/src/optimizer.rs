@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
+use crate::emit_partial_aggregate_hash::EmitPartialAggregateHash;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
 use crate::ensure_coop::EnsureCooperative;
@@ -225,6 +226,12 @@ impl PhysicalOptimizer {
             Arc::new(ProjectionPushdown::new()),
             // PushdownSort: Detect sorts that can be pushed down to data sources.
             Arc::new(PushdownSort::new()),
+            // Enable the precomputed-hash output on any Partial AggregateExec
+            // whose consumer is a Hash RepartitionExec over the same group
+            // columns. Runs after CombinePartialFinalAggregate (which may fuse
+            // Partial+Final into Single) and ProjectionPushdown (which settles
+            // the group-column positions).
+            Arc::new(EmitPartialAggregateHash::new()),
             Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.

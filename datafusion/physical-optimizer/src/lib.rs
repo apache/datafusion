@@ -27,6 +27,7 @@
 
 pub mod aggregate_statistics;
 pub mod combine_partial_final_agg;
+pub mod emit_partial_aggregate_hash;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod ensure_coop;
