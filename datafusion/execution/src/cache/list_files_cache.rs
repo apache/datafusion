@@ -15,17 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cache::{
+    CacheAccessor,
+    cache_manager::{CachedFileList, ListFilesCache},
+    lru_queue::LruQueue,
+};
+
+use std::fmt::{Debug, Display, Formatter};
 use std::mem::size_of;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
-};
-use std::fmt::{Debug, Display, Formatter};
-use crate::cache::{
-    CacheAccessor,
-    cache_manager::{CachedFileList, ListFilesCache},
-    lru_queue::LruQueue,
 };
 
 use datafusion_common::TableReference;

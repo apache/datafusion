@@ -275,6 +275,7 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use object_store::ObjectMeta;
+    use object_store::path::Path;
     use std::sync::Arc;
 
     fn create_test_meta(path: &str, size: u64) -> ObjectMeta {
@@ -351,7 +352,7 @@ mod tests {
             table: None,
         };
 
-        let entry = entries.get(&path_3.path).unwrap();
+        let entry = entries.get(&path_3).unwrap();
         assert_eq!(entry.object_meta.size, 2048); // Should be updated value
     }
 
@@ -442,7 +443,7 @@ mod tests {
         // Verify list_entries shows has_ordering = true
         let entries = cache.list_entries();
         assert_eq!(entries.len(), 1);
-        assert!(entries.get(&path.path).unwrap().has_ordering);
+        assert!(entries.get(&path).unwrap().has_ordering);
     }
 
     #[test]
@@ -587,7 +588,7 @@ mod tests {
             entries,
             HashMap::from([
                 (
-                    Path::from("test1.parquet"),
+                    path_1,
                     FileStatisticsCacheEntry {
                         object_meta: meta1,
                         num_rows: Precision::Absent,
@@ -595,11 +596,10 @@ mod tests {
                         table_size_bytes: Precision::Absent,
                         statistics_size_bytes: 304,
                         has_ordering: false,
-                        table_reference: None,
                     }
                 ),
                 (
-                    Path::from("test2.parquet"),
+                    path_2,
                     FileStatisticsCacheEntry {
                         object_meta: meta2,
                         num_rows: Precision::Absent,
@@ -607,7 +607,6 @@ mod tests {
                         table_size_bytes: Precision::Absent,
                         statistics_size_bytes: 304,
                         has_ordering: true,
-                        table_reference: None,
                     }
                 ),
             ])
