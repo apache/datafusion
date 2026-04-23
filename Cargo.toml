@@ -88,27 +88,27 @@ version = "53.1.0"
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "58.1.0", features = [
+arrow = { version = "58.2.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-avro = { version = "58.1.0", default-features = false, features = [
+arrow-avro = { version = "58.2.0", default-features = false, features = [
     "deflate",
     "snappy",
     "zstd",
     "bzip2",
     "xz",
 ] }
-arrow-buffer = { version = "58.1.0", default-features = false }
-arrow-data = { version = "58.1.0", default-features = false }
-arrow-flight = { version = "58.1.0", features = [
+arrow-buffer = { version = "58.2.0", default-features = false }
+arrow-data = { version = "58.2.0", default-features = false }
+arrow-flight = { version = "58.2.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "58.1.0", default-features = false, features = [
+arrow-ipc = { version = "58.2.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "58.1.0", default-features = false }
-arrow-schema = { version = "58.1.0", default-features = false }
+arrow-ord = { version = "58.2.0", default-features = false }
+arrow-schema = { version = "58.2.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -173,7 +173,7 @@ memchr = "2.8.0"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.2", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "58.1.0", default-features = false, features = [
+parquet = { version = "58.2.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -285,3 +285,21 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+
+## Temporary arrow-rs patch until 58.2.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-avro = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "940104c985d737b59a90c309db0cddddd92bda68" }
