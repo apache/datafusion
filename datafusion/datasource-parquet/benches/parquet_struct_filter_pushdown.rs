@@ -349,5 +349,224 @@ fn build_struct_batch(
     )?)
 }
 
-criterion_group!(benches, parquet_struct_filter_pushdown);
+// ---------------------------------------------------------------------------
+// Benchmark: struct IS NOT NULL pushdown
+//
+// Uses a separate dataset with a NULLABLE struct containing many leaf fields.
+// Compares scanning with vs without row-level pushdown for `s IS NOT NULL`.
+//
+// The key metric: with pushdown, only 1 leaf column is read for the null
+// check (via definition levels); without pushdown, ALL leaf columns are
+// decoded to materialize the struct and then check nullability post-scan.
+// ---------------------------------------------------------------------------
+
+const NULLABLE_STRUCT_COLUMN_NAME: &str = "s";
+/// Number of leaf fields inside the nullable struct.
+/// More fields = bigger difference between pushdown and no-pushdown.
+const NUM_STRUCT_FIELDS: usize = 12;
+/// Fraction of rows where the struct is null (~10%).
+const NULL_FRACTION: usize = 10;
+
+struct NullableBenchmarkDataset {
+    _tempdir: TempDir,
+    file_path: PathBuf,
+}
+
+impl NullableBenchmarkDataset {
+    fn path(&self) -> &Path {
+        &self.file_path
+    }
+}
+
+static NULLABLE_DATASET: LazyLock<NullableBenchmarkDataset> = LazyLock::new(|| {
+    create_nullable_dataset()
+        .expect("failed to prepare nullable struct benchmark dataset")
+});
+
+fn nullable_struct_schema() -> SchemaRef {
+    let struct_fields: Vec<Field> = (0..NUM_STRUCT_FIELDS)
+        .map(|i| Field::new(format!("f{i}"), DataType::Utf8, true))
+        .collect();
+    Arc::new(Schema::new(vec![
+        Field::new(ID_COLUMN_NAME, DataType::Int32, false),
+        Field::new(
+            NULLABLE_STRUCT_COLUMN_NAME,
+            DataType::Struct(Fields::from(struct_fields)),
+            true,
+        ),
+    ]))
+}
+
+fn create_nullable_dataset() -> datafusion_common::Result<NullableBenchmarkDataset> {
+    let tempdir = TempDir::new()?;
+    let file_path = tempdir.path().join("struct_nullable_filter.parquet");
+
+    let schema = nullable_struct_schema();
+    let writer_props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(ROW_GROUP_ROW_COUNT))
+        .build();
+
+    let mut writer = ArrowWriter::try_new(
+        std::fs::File::create(&file_path)?,
+        Arc::clone(&schema),
+        Some(writer_props),
+    )?;
+
+    for rg_idx in 0..TOTAL_ROW_GROUPS {
+        let batch = build_nullable_struct_batch(&schema, rg_idx, ROW_GROUP_ROW_COUNT)?;
+        writer.write(&batch)?;
+    }
+
+    writer.close()?;
+    Ok(NullableBenchmarkDataset {
+        _tempdir: tempdir,
+        file_path,
+    })
+}
+
+fn build_nullable_struct_batch(
+    schema: &SchemaRef,
+    _rg_idx: usize,
+    len: usize,
+) -> datafusion_common::Result<RecordBatch> {
+    use arrow::array::NullBufferBuilder;
+
+    let large_string: String = "x".repeat(LARGE_STRING_LEN);
+    let id_array = Arc::new(Int32Array::from_iter_values(0..len as i32));
+
+    // Build struct fields — each leaf is a large string column
+    let fields: Vec<(Arc<Field>, Arc<dyn arrow::array::Array>)> = (0..NUM_STRUCT_FIELDS)
+        .map(|i| {
+            let mut builder = StringBuilder::new();
+            for _ in 0..len {
+                builder.append_value(&large_string);
+            }
+            (
+                Arc::new(Field::new(format!("f{i}"), DataType::Utf8, true)),
+                Arc::new(builder.finish()) as Arc<dyn arrow::array::Array>,
+            )
+        })
+        .collect();
+
+    // ~10% of rows have null struct
+    let mut null_buffer = NullBufferBuilder::new(len);
+    for row in 0..len {
+        null_buffer.append(row % NULL_FRACTION != 0);
+    }
+    let struct_array = StructArray::try_new(
+        Fields::from(
+            fields
+                .iter()
+                .map(|(f, _)| Arc::clone(f))
+                .collect::<Vec<_>>(),
+        ),
+        fields.into_iter().map(|(_, a)| a).collect(),
+        null_buffer.finish(),
+    )?;
+
+    Ok(RecordBatch::try_new(
+        Arc::clone(schema),
+        vec![id_array, Arc::new(struct_array)],
+    )?)
+}
+
+/// `s IS NOT NULL`
+fn struct_is_not_null_expr() -> Expr {
+    col(NULLABLE_STRUCT_COLUMN_NAME).is_not_null()
+}
+
+/// `s IS NULL`
+fn struct_is_null_expr() -> Expr {
+    col(NULLABLE_STRUCT_COLUMN_NAME).is_null()
+}
+
+fn expected_non_null_rows() -> usize {
+    // rows where row % NULL_FRACTION != 0
+    TOTAL_ROWS - TOTAL_ROWS / NULL_FRACTION
+}
+
+fn expected_null_rows() -> usize {
+    TOTAL_ROWS / NULL_FRACTION
+}
+
+fn parquet_struct_null_check_pushdown(c: &mut Criterion) {
+    let dataset_path = NULLABLE_DATASET.path().to_owned();
+    let mut group = c.benchmark_group("parquet_struct_null_check_pushdown");
+    group.throughput(Throughput::Elements(TOTAL_ROWS as u64));
+
+    // Scenario 1: SELECT * FROM t WHERE s IS NOT NULL — no pushdown
+    // Without pushdown, ALL 12 leaf columns of the struct are decoded
+    // to materialize the struct, then IS NOT NULL is checked post-scan.
+    group.bench_function("select_star/no_pushdown", |b| {
+        let file_schema = setup_reader(&dataset_path);
+        let predicate = logical2physical(&struct_is_not_null_expr(), &file_schema);
+        b.iter(|| {
+            let matched = scan(&dataset_path, &predicate, false, ProjectionMask::all())
+                .expect("scan succeeded");
+            assert_eq!(matched, expected_non_null_rows());
+        });
+    });
+
+    // Scenario 2: SELECT * FROM t WHERE s IS NOT NULL — with pushdown
+    // With pushdown, only 1 leaf column is read for the null check.
+    // Remaining leaves are read only for matched rows.
+    group.bench_function("select_star/with_pushdown", |b| {
+        let file_schema = setup_reader(&dataset_path);
+        let predicate = logical2physical(&struct_is_not_null_expr(), &file_schema);
+        b.iter(|| {
+            let matched = scan(&dataset_path, &predicate, true, ProjectionMask::all())
+                .expect("scan succeeded");
+            assert_eq!(matched, expected_non_null_rows());
+        });
+    });
+
+    // Scenario 3: SELECT id FROM t WHERE s IS NOT NULL — no pushdown
+    // Without pushdown we must read all columns to materialize the struct
+    // for post-scan IS NOT NULL evaluation, so ProjectionMask::all() is
+    // correct here even though the query only needs `id` in the output.
+    group.bench_function("select_id/no_pushdown", |b| {
+        let file_schema = setup_reader(&dataset_path);
+        let predicate = logical2physical(&struct_is_not_null_expr(), &file_schema);
+        b.iter(|| {
+            let matched = scan(&dataset_path, &predicate, false, ProjectionMask::all())
+                .expect("scan succeeded");
+            assert_eq!(matched, expected_non_null_rows());
+        });
+    });
+
+    // Scenario 4: SELECT id FROM t WHERE s IS NOT NULL — with pushdown
+    // Best case: pushdown reads 1 leaf for null check, output reads only `id`.
+    // The 12 struct leaves are never decoded at all.
+    group.bench_function("select_id/with_pushdown", |b| {
+        let file_schema = setup_reader(&dataset_path);
+        let predicate = logical2physical(&struct_is_not_null_expr(), &file_schema);
+        let id_only = id_projection(&dataset_path);
+        b.iter(|| {
+            let matched = scan(&dataset_path, &predicate, true, id_only.clone())
+                .expect("scan succeeded");
+            assert_eq!(matched, expected_non_null_rows());
+        });
+    });
+
+    // Scenario 5: SELECT id FROM t WHERE s IS NULL — with pushdown
+    // Verify IS NULL pushdown works symmetrically with IS NOT NULL.
+    group.bench_function("select_id_is_null/with_pushdown", |b| {
+        let file_schema = setup_reader(&dataset_path);
+        let predicate = logical2physical(&struct_is_null_expr(), &file_schema);
+        let id_only = id_projection(&dataset_path);
+        b.iter(|| {
+            let matched = scan(&dataset_path, &predicate, true, id_only.clone())
+                .expect("scan succeeded");
+            assert_eq!(matched, expected_null_rows());
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    parquet_struct_filter_pushdown,
+    parquet_struct_null_check_pushdown
+);
 criterion_main!(benches);
