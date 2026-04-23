@@ -2942,8 +2942,10 @@ config_namespace! {
         /// One of: "Always", "Necessary", "NonNumeric", "Never"
         pub quote_style: CsvQuoteStyle, default = CsvQuoteStyle::Necessary
         /// Whether to ignore leading whitespace in string values when writing CSV.
+        /// Defaults to `false` when `None`.
         pub ignore_leading_whitespace: Option<bool>, default = None
         /// Whether to ignore trailing whitespace in string values when writing CSV.
+        /// Defaults to `false` when `None`.
         pub ignore_trailing_whitespace: Option<bool>, default = None
         /// Specifies whether newlines in (quoted) values are supported.
         ///
