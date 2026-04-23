@@ -275,12 +275,12 @@ FROM left_parquet l
 WHERE l.id IN (SELECT r.id FROM right_parquet r);
 ----
 logical_plan
-01)LeftSemi Join: l.id = __correlated_sq_1.id
-02)--SubqueryAlias: l
-03)----TableScan: left_parquet projection=[id, data]
-04)--SubqueryAlias: __correlated_sq_1
-05)----SubqueryAlias: r
-06)------TableScan: right_parquet projection=[id]
+01)RightSemi Join: __correlated_sq_1.id = l.id
+02)--SubqueryAlias: __correlated_sq_1
+03)----SubqueryAlias: r
+04)------TableScan: right_parquet projection=[id]
+05)--SubqueryAlias: l
+06)----TableScan: left_parquet projection=[id, data]
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
@@ -295,12 +295,12 @@ FROM right_parquet r
 WHERE r.id IN (SELECT l.id FROM left_parquet l);
 ----
 logical_plan
-01)LeftSemi Join: r.id = __correlated_sq_1.id
-02)--SubqueryAlias: r
-03)----TableScan: right_parquet projection=[id, info]
-04)--SubqueryAlias: __correlated_sq_1
-05)----SubqueryAlias: l
-06)------TableScan: left_parquet projection=[id]
+01)RightSemi Join: __correlated_sq_1.id = r.id
+02)--SubqueryAlias: __correlated_sq_1
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id]
+05)--SubqueryAlias: r
+06)----TableScan: right_parquet projection=[id, info]
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
@@ -327,12 +327,12 @@ ORDER BY l.data DESC;
 ----
 logical_plan
 01)Sort: l.data DESC NULLS FIRST
-02)--LeftSemi Join: l.id = __correlated_sq_1.id
-03)----SubqueryAlias: l
-04)------TableScan: left_parquet projection=[id, data]
-05)----SubqueryAlias: __correlated_sq_1
-06)------SubqueryAlias: r
-07)--------TableScan: right_parquet projection=[id]
+02)--RightSemi Join: __correlated_sq_1.id = l.id
+03)----SubqueryAlias: __correlated_sq_1
+04)------SubqueryAlias: r
+05)--------TableScan: right_parquet projection=[id]
+06)----SubqueryAlias: l
+07)------TableScan: left_parquet projection=[id, data]
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
@@ -351,12 +351,12 @@ ORDER BY l.data DESC;
 ----
 logical_plan
 01)Sort: l.data DESC NULLS FIRST
-02)--LeftSemi Join: l.id = __correlated_sq_1.id
-03)----SubqueryAlias: l
-04)------TableScan: left_parquet projection=[id, data]
-05)----SubqueryAlias: __correlated_sq_1
-06)------SubqueryAlias: r
-07)--------TableScan: right_parquet projection=[id]
+02)--RightSemi Join: __correlated_sq_1.id = l.id
+03)----SubqueryAlias: __correlated_sq_1
+04)------SubqueryAlias: r
+05)--------TableScan: right_parquet projection=[id]
+06)----SubqueryAlias: l
+07)------TableScan: left_parquet projection=[id, data]
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
@@ -435,12 +435,12 @@ ORDER BY l.id LIMIT 2;
 ----
 logical_plan
 01)Sort: l.id ASC NULLS LAST, fetch=2
-02)--LeftSemi Join: l.id = __correlated_sq_1.id
-03)----SubqueryAlias: l
-04)------TableScan: left_parquet projection=[id, data]
-05)----SubqueryAlias: __correlated_sq_1
-06)------SubqueryAlias: r
-07)--------TableScan: right_parquet projection=[id]
+02)--RightSemi Join: __correlated_sq_1.id = l.id
+03)----SubqueryAlias: __correlated_sq_1
+04)------SubqueryAlias: r
+05)--------TableScan: right_parquet projection=[id]
+06)----SubqueryAlias: l
+07)------TableScan: left_parquet projection=[id, data]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]

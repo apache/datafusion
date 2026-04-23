@@ -1022,13 +1022,13 @@ query TT
 explain with cte as (select * from person) SELECT * FROM person WHERE EXISTS (SELECT * FROM cte WHERE id = person.id);
 ----
 logical_plan
-01)LeftSemi Join: person.id = __correlated_sq_1.id
-02)--TableScan: person projection=[id, name]
-03)--SubqueryAlias: __correlated_sq_1
-04)----SubqueryAlias: cte
-05)------TableScan: person projection=[id]
+01)RightSemi Join: __correlated_sq_1.id = person.id
+02)--SubqueryAlias: __correlated_sq_1
+03)----SubqueryAlias: cte
+04)------TableScan: person projection=[id]
+05)--TableScan: person projection=[id, name]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(id@0, id@0)]
+01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
 03)--DataSourceExec: partitions=1, partition_sizes=[0]
 

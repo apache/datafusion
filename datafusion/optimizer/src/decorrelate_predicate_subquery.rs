@@ -234,11 +234,11 @@ fn has_subquery(expr: &Expr) -> bool {
 ///
 /// ```text
 /// Projection: t1.a, t1.b
-///   LeftSemi Join:  Filter: t1.a = __correlated_sq_1.a AND t1.b = __correlated_sq_1.b AND t1.c > __correlated_sq_1.c
-///     TableScan: t1
+///   RightSemi Join:  Filter: t1.a = __correlated_sq_1.a AND t1.b = __correlated_sq_1.b AND t1.c > __correlated_sq_1.c
 ///     SubqueryAlias: __correlated_sq_1
 ///       Projection: t2.a, t2.b, t2.c
 ///         TableScan: t2
+///     TableScan: t1
 /// ```
 ///
 /// Given another query like:
@@ -248,11 +248,11 @@ fn has_subquery(expr: &Expr) -> bool {
 ///
 /// ```text
 /// Projection: t1.id
-///   LeftSemi Join:  Filter: t1.id = __correlated_sq_1.id
-///     TableScan: t1
+///   RightSemi Join:  Filter: t1.id = __correlated_sq_1.id
 ///     SubqueryAlias: __correlated_sq_1
 ///       Projection: t2.id
 ///         TableScan: t2
+///     TableScan: t1
 /// ```
 fn build_join_top(
     query_info: &SubqueryInfo,
@@ -275,7 +275,7 @@ fn build_join_top(
 
     let join_type = match query_info.negated {
         true => JoinType::LeftAnti,
-        false => JoinType::LeftSemi,
+        false => JoinType::RightSemi,
     };
     let subquery = query_info.query.subquery.as_ref();
     let subquery_alias = alias.next("__correlated_sq");
@@ -486,6 +486,12 @@ fn build_join(
                 true, // null_aware
             )?
             .build()?
+    } else if join_type == JoinType::RightSemi {
+        // RightSemi outputs rows from the right input; put the outer query on the
+        // right so the join result still contains the outer rows.
+        LogicalPlanBuilder::from(sub_query_alias)
+            .join_on(left.clone(), join_type, Some(join_filter))?
+            .build()?
     } else {
         LogicalPlanBuilder::from(left.clone())
             .join_on(sub_query_alias, join_type, Some(join_filter))?
@@ -587,15 +593,15 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.b = __correlated_sq_2.c [a:UInt32, b:UInt32, c:UInt32]
-            LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-              SubqueryAlias: __correlated_sq_1 [c:UInt32]
-                Projection: sq_1.c [c:UInt32]
-                  TableScan: sq_1 [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.b = __correlated_sq_2.c [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_2 [c:UInt32]
               Projection: sq_2.c [c:UInt32]
                 TableScan: sq_2 [a:UInt32, b:UInt32, c:UInt32]
+            RightSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
+              SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                Projection: sq_1.c [c:UInt32]
+                  TableScan: sq_1 [a:UInt32, b:UInt32, c:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -620,11 +626,11 @@ mod tests {
             @r"
         Projection: test.b [b:UInt32]
           Filter: test.a = UInt32(1) AND test.b < UInt32(30) [a:UInt32, b:UInt32, c:UInt32]
-            LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            RightSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
               SubqueryAlias: __correlated_sq_1 [c:UInt32]
                 Projection: sq.c [c:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -648,15 +654,15 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.b = __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.b = __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_2 [a:UInt32]
               Projection: sq.a [a:UInt32]
-                LeftSemi Join:  Filter: sq.a = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
-                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+                RightSemi Join:  Filter: sq.a = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
                   SubqueryAlias: __correlated_sq_1 [c:UInt32]
                     Projection: sq_nested.c [c:UInt32]
                       TableScan: sq_nested [a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -687,15 +693,15 @@ mod tests {
                 plan,
                 @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]
-            LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-              TableScan: customer [c_custkey:Int64, c_name:Utf8]
-              SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
-                Projection: orders.o_custkey [o_custkey:Int64]
-                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
+              SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
+                Projection: orders.o_custkey [o_custkey:Int64]
+                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+              TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "    
         )
     }
@@ -735,15 +741,15 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
-                LeftSemi Join:  Filter: orders.o_orderkey = __correlated_sq_1.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+                RightSemi Join:  Filter: orders.o_orderkey = __correlated_sq_1.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
                   SubqueryAlias: __correlated_sq_1 [l_orderkey:Int64]
                     Projection: lineitem.l_orderkey [l_orderkey:Int64]
                       TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]
+                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -771,12 +777,12 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
                   TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -803,11 +809,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -831,12 +837,12 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 Filter: orders.o_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
                   TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -863,11 +869,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey AND customer.c_custkey != __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey AND customer.c_custkey != __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -894,11 +900,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey AND customer.c_custkey < __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey AND customer.c_custkey < __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -926,11 +932,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey AND (customer.c_custkey = __correlated_sq_1.o_custkey OR __correlated_sq_1.o_orderkey = Int32(1)) [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey AND (customer.c_custkey = __correlated_sq_1.o_custkey OR __correlated_sq_1.o_orderkey = Int32(1)) [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64, o_orderkey:Int64]
               Projection: orders.o_custkey, orders.o_orderkey [o_custkey:Int64, o_orderkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -980,11 +986,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey + Int32(1) = __correlated_sq_1.o_custkey AND customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey + Int32(1) = __correlated_sq_1.o_custkey AND customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1011,11 +1017,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.orders.o_custkey + Int32(1) AND customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.orders.o_custkey + Int32(1) AND customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]
               Projection: orders.o_custkey + Int32(1), orders.o_custkey [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1075,11 +1081,11 @@ mod tests {
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
           Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
-            LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-              TableScan: customer [c_custkey:Int64, c_name:Utf8]
+            RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
               SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
                 Projection: orders.o_custkey [o_custkey:Int64]
                   TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+              TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1103,11 +1109,11 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.c = __correlated_sq_1.c AND test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.c = __correlated_sq_1.c AND test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]
               Projection: sq.c, sq.a [c:UInt32, a:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1125,11 +1131,11 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [c:UInt32]
               Projection: sq.c [c:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1192,11 +1198,11 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [c:UInt32]
               Projection: sq.c [c:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1219,11 +1225,11 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32]
               Projection: sq.c * UInt32(2) [sq.c * UInt32(2):UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1251,12 +1257,12 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) AND test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) AND test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32, a:UInt32]
               Projection: sq.c * UInt32(2), sq.a [sq.c * UInt32(2):UInt32, a:UInt32]
                 Filter: sq.a + UInt32(1) = sq.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1285,12 +1291,12 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) AND test.a + test.b = __correlated_sq_1.a + __correlated_sq_1.b [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) AND test.a + test.b = __correlated_sq_1.a + __correlated_sq_1.b [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]
               Projection: sq.c * UInt32(2), sq.a, sq.b [sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]
                 Filter: sq.a + UInt32(1) = sq.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1326,15 +1332,15 @@ mod tests {
             @r"
         Projection: test.b [b:UInt32]
           Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]
-            LeftSemi Join:  Filter: test.c * UInt32(2) = __correlated_sq_2.sq2.c * UInt32(2) AND test.a > __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]
-              LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq1.c * UInt32(2) AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-                SubqueryAlias: __correlated_sq_1 [sq1.c * UInt32(2):UInt32, a:UInt32]
-                  Projection: sq1.c * UInt32(2), sq1.a [sq1.c * UInt32(2):UInt32, a:UInt32]
-                    TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]
+            RightSemi Join:  Filter: test.c * UInt32(2) = __correlated_sq_2.sq2.c * UInt32(2) AND test.a > __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]
               SubqueryAlias: __correlated_sq_2 [sq2.c * UInt32(2):UInt32, a:UInt32]
                 Projection: sq2.c * UInt32(2), sq2.a [sq2.c * UInt32(2):UInt32, a:UInt32]
                   TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]
+              RightSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq1.c * UInt32(2) AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
+                SubqueryAlias: __correlated_sq_1 [sq1.c * UInt32(2):UInt32, a:UInt32]
+                  Projection: sq1.c * UInt32(2), sq1.a [sq1.c * UInt32(2):UInt32, a:UInt32]
+                    TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1358,12 +1364,12 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.a = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.a = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [c:UInt32]
               Projection: test.c [c:UInt32]
                 Filter: test.a > test.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1390,15 +1396,15 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: __correlated_sq_2.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]
-            LeftSemi Join:  Filter: __correlated_sq_1.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]
-              TableScan: customer [c_custkey:Int64, c_name:Utf8]
-              SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
-                Projection: orders.o_custkey [o_custkey:Int64]
-                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+          RightSemi Join:  Filter: __correlated_sq_2.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            RightSemi Join:  Filter: __correlated_sq_1.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]
+              SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
+                Projection: orders.o_custkey [o_custkey:Int64]
+                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+              TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1437,15 +1443,15 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: __correlated_sq_2.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: __correlated_sq_2.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
-                LeftSemi Join:  Filter: __correlated_sq_1.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+                RightSemi Join:  Filter: __correlated_sq_1.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
                   SubqueryAlias: __correlated_sq_1 [l_orderkey:Int64]
                     Projection: lineitem.l_orderkey [l_orderkey:Int64]
                       TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]
+                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1473,12 +1479,12 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
                   TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1502,11 +1508,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = UInt32(1) [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = UInt32(1) [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1530,12 +1536,12 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 Filter: orders.o_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
                   TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1562,11 +1568,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey != __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey != __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1593,11 +1599,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey < __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey < __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1625,11 +1631,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey OR __correlated_sq_1.o_orderkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey OR __correlated_sq_1.o_orderkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_custkey:Int64, o_orderkey:Int64]
               Projection: orders.o_custkey, orders.o_orderkey [o_custkey:Int64, o_orderkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1655,10 +1661,10 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
               TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1685,11 +1691,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
             SubqueryAlias: __correlated_sq_1 [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]
               Projection: orders.o_custkey + Int32(1), orders.o_custkey [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1716,11 +1722,11 @@ mod tests {
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
           Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
-            LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-              TableScan: customer [c_custkey:Int64, c_name:Utf8]
+            RightSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
               SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
                 Projection: orders.o_custkey [o_custkey:Int64]
                   TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+              TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
     }
@@ -1775,11 +1781,11 @@ mod tests {
             plan,
             @r"
         Projection: test.c [c:UInt32]
-          LeftSemi Join:  Filter: test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]
               Projection: sq.c, sq.a [c:UInt32, a:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1797,11 +1803,11 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [c:UInt32]
               Projection: sq.c [c:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1857,15 +1863,15 @@ mod tests {
             @r"
         Projection: test.b [b:UInt32]
           Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]
-            LeftSemi Join:  Filter: test.a = __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]
-              LeftSemi Join:  Filter: test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-                SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]
-                  Projection: sq1.c, sq1.a [c:UInt32, a:UInt32]
-                    TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]
+            RightSemi Join:  Filter: test.a = __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]
               SubqueryAlias: __correlated_sq_2 [c:UInt32, a:UInt32]
                 Projection: sq2.c, sq2.a [c:UInt32, a:UInt32]
                   TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]
+              RightSemi Join:  Filter: test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]
+                SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]
+                  Projection: sq1.c, sq1.a [c:UInt32, a:UInt32]
+                    TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1890,11 +1896,11 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [UInt32(1):UInt32, a:UInt32]
               Projection: UInt32(1), sq.a [UInt32(1):UInt32, a:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1918,12 +1924,12 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [c:UInt32]
               Projection: test.c [c:UInt32]
                 Filter: test.a > test.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1949,12 +1955,12 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]
               Distinct: [c:UInt32, a:UInt32]
                 Projection: sq.c, sq.a [c:UInt32, a:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1980,12 +1986,12 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [sq.b + sq.c:UInt32, a:UInt32]
               Distinct: [sq.b + sq.c:UInt32, a:UInt32]
                 Projection: sq.b + sq.c, sq.a [sq.b + sq.c:UInt32, a:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -2011,12 +2017,12 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [UInt32(1):UInt32, c:UInt32, a:UInt32]
               Distinct: [UInt32(1):UInt32, c:UInt32, a:UInt32]
                 Projection: UInt32(1), sq.c, sq.a [UInt32(1):UInt32, c:UInt32, a:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -2046,11 +2052,11 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [arr:Int32;N]
               Unnest: lists[sq.arr|depth=1] structs[] [arr:Int32;N]
                 TableScan: sq [arr:List(Int32);N]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -2081,11 +2087,11 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: __correlated_sq_1.a = test.b [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          RightSemi Join:  Filter: __correlated_sq_1.a = test.b [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [a:UInt32;N]
               Unnest: lists[sq.a|depth=1] structs[] [a:UInt32;N]
                 TableScan: sq [a:List(UInt32);N]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -2115,11 +2121,11 @@ mod tests {
             plan,
             @r"
         Projection: TEST_A.B [B:UInt32]
-          LeftSemi Join:  Filter: __correlated_sq_1.A = TEST_A.A [A:UInt32, B:UInt32]
-            TableScan: TEST_A [A:UInt32, B:UInt32]
+          RightSemi Join:  Filter: __correlated_sq_1.A = TEST_A.A [A:UInt32, B:UInt32]
             SubqueryAlias: __correlated_sq_1 [Int32(1):Int32, A:UInt32]
               Projection: Int32(1), TEST_B.A [Int32(1):Int32, A:UInt32]
                 TableScan: TEST_B [A:UInt32, B:UInt32]
+            TableScan: TEST_A [A:UInt32, B:UInt32]
         "
         )
     }

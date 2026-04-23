@@ -210,13 +210,13 @@ fn semi_join_with_join_filter() -> Result<()> {
     format!("{plan}"),
     @r"
     Projection: test.col_utf8
-      LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32 Filter: test.col_uint32 != __correlated_sq_1.col_uint32
-        Filter: test.col_int32 IS NOT NULL
-          TableScan: test projection=[col_int32, col_uint32, col_utf8]
+      RightSemi Join: __correlated_sq_1.col_int32 = test.col_int32 Filter: test.col_uint32 != __correlated_sq_1.col_uint32
         SubqueryAlias: __correlated_sq_1
           SubqueryAlias: t2
             Filter: test.col_int32 IS NOT NULL
               TableScan: test projection=[col_int32, col_uint32]
+        Filter: test.col_int32 IS NOT NULL
+          TableScan: test projection=[col_int32, col_uint32, col_utf8]
     "
     );
     Ok(())
@@ -254,14 +254,14 @@ fn where_exists_distinct() -> Result<()> {
     assert_snapshot!(
     format!("{plan}"),
     @r"
-    LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32
-      Filter: test.col_int32 IS NOT NULL
-        TableScan: test projection=[col_int32]
+    RightSemi Join: __correlated_sq_1.col_int32 = test.col_int32
       SubqueryAlias: __correlated_sq_1
         Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]
           SubqueryAlias: t2
             Filter: test.col_int32 IS NOT NULL
               TableScan: test projection=[col_int32]
+      Filter: test.col_int32 IS NOT NULL
+        TableScan: test projection=[col_int32]
     "
 
     );
@@ -518,14 +518,14 @@ fn select_correlated_predicate_subquery_with_uppercase_ident() {
     assert_snapshot!(
     format!("{plan}"),
     @r"
-    LeftSemi Join: test.col_int32 = __correlated_sq_1.COL_INT32
-      Filter: test.col_int32 IS NOT NULL
-        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]
+    RightSemi Join: __correlated_sq_1.COL_INT32 = test.col_int32
       SubqueryAlias: __correlated_sq_1
         SubqueryAlias: T1
           Projection: test.col_int32 AS COL_INT32
             Filter: test.col_int32 IS NOT NULL
               TableScan: test projection=[col_int32]
+      Filter: test.col_int32 IS NOT NULL
+        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]
     "
     );
 }
