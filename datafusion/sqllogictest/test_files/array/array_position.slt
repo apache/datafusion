@@ -314,10 +314,9 @@ select array_positions([1, 2, 3, 4, 5], null);
 
 #TODO: https://github.com/apache/datafusion/issues/7142
 # array_positions with NULL (follow PostgreSQL)
-#query ?
-#select array_positions(null, 1);
-#----
-#NULL
+# expected to return null
+query error DataFusion error: Execution error: array_positions does not support type 'Null'
+select array_positions(null, 1);
 
 # array_positions scalar function #1
 query ???
