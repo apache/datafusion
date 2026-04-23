@@ -61,20 +61,16 @@ variables to pass in arguments which is what is used here.
 
 The SQL benchmarking tool uses the following environment variables:
 
-| Environment Variable            | Description                                                                                                                                                                                       |
-|---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| BENCH_NAME                      | The name of the benchmark suite to run. For example 'imdb'. This should correspond to a directory name in the `sql_benchmarks` directory.                                                         |
-| BENCH_SUBGROUP                  | The subgroup with the benchmark suite to run. For example 'window' to run the window subgroup of the h2o benchmark.                                                                               |
-| BENCH_QUERY                     | A query number to run.                                                                                                                                                                            |
-| BENCH_PERSIST_RESULTS           | true/false to persist benchmark results. Results will be persisted in csv format so be cognizant of the size of the results.                                                                      |
-| BENCH_VALIDATE                  | true/false to validate benchmark results against persisted results or result_query's. If both `BENCH_PERSIST_RESULTS` and `BENCH_VALIDATE` are true, persist mode runs and validation is skipped. |
-| SIMULATE_LATENCY                | Simulate object store latency to mimic remote storage (e.g. S3). Adds random latency in the range 20-200ms to each object store operation.                                                        |
-| PARTITIONS                      | Number of partitions to process in parallel. Defaults to number of available cores.                                                                                                               |
-| BATCH_SIZE                      | Batch size when reading CSV or Parquet files.                                                                                                                                                     |
-| MEM_POOL_TYPE                   | The memory pool type to use, should be one of "fair" or "greedy".                                                                                                                                 |
-| MEMORY_LIMIT                    | Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query if there's any, otherwise run with no memory limit.                                       |
-| DATAFUSION_RUNTIME_MEMORY_LIMIT | Used if MEMORY_LIMIT is not set.                                                                                                                                                                  |
-| SORT_SPILL_RESERVATION_BYTES    | The amount of memory to reserve for sort spill operations. DataFusion's default value will be used if not specified.                                                                              |
+| Environment Variable  | Description                                                                                                                                                                                       |
+|-----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| BENCH_NAME            | The name of the benchmark suite to run. For example 'imdb'. This should correspond to a directory name in the `sql_benchmarks` directory.                                                         |
+| BENCH_SUBGROUP        | The subgroup with the benchmark suite to run. For example 'window' to run the window subgroup of the h2o benchmark.                                                                               |
+| BENCH_QUERY           | A query number to run.                                                                                                                                                                            |
+| BENCH_PERSIST_RESULTS | true/false to persist benchmark results. Results will be persisted in csv format so be cognizant of the size of the results.                                                                      |
+| BENCH_VALIDATE        | true/false to validate benchmark results against persisted results or result_query's. If both `BENCH_PERSIST_RESULTS` and `BENCH_VALIDATE` are true, persist mode runs and validation is skipped. |
+| SIMULATE_LATENCY      | Simulate object store latency to mimic remote storage (e.g. S3). Adds random latency in the range 20-200ms to each object store operation.                                                        |
+| MEM_POOL_TYPE         | The memory pool type to use, should be one of "fair" or "greedy".                                                                                                                                 |
+| MEMORY_LIMIT          | Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query if there's any, otherwise run with no memory limit.                                       | |
 
 Example – Run the H2O window benchmarks on the 'small' sized CSV data files:
 
