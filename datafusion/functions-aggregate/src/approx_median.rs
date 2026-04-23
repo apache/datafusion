@@ -21,7 +21,6 @@ use arrow::datatypes::DataType::{Float64, UInt64};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::NativeType;
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -75,16 +74,11 @@ impl ApproxMedian {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
-                        TypeSignatureClass::Integer,
-                    )]),
-                    TypeSignature::Coercible(vec![Coercion::new_implicit(
-                        TypeSignatureClass::Float,
-                        vec![TypeSignatureClass::Decimal],
-                        NativeType::Float64,
-                    )]),
-                ],
+                vec![TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Float,
+                    vec![TypeSignatureClass::Numeric],
+                    NativeType::Float64,
+                )])],
                 Volatility::Immutable,
             ),
         }
@@ -92,10 +86,6 @@ impl ApproxMedian {
 }
 
 impl AggregateUDFImpl for ApproxMedian {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.input_fields[0].data_type().is_null() {
             Ok(vec![

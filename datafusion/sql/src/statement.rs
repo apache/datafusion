@@ -790,8 +790,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect::<Result<_>>()?;
 
                 // Create planner context with parameters
-                let mut planner_context =
-                    PlannerContext::new().with_prepare_param_data_types(fields.clone());
+                let mut planner_context = PlannerContext::new()
+                    .with_prepare_param_data_types(
+                        fields.iter().cloned().map(Some).collect(),
+                    );
 
                 // Build logical plan for inner statement of the prepare statement
                 let plan = self.sql_statement_to_plan_with_context_impl(
@@ -808,7 +810,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         })
                         .collect();
                     fields.extend(param_types.iter().cloned());
-                    planner_context.with_prepare_param_data_types(param_types);
+                    planner_context.with_prepare_param_data_types(
+                        param_types.into_iter().map(Some).collect(),
+                    );
                 }
 
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
@@ -1078,9 +1082,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     });
                 // TODO: support multiple tables in UPDATE SET FROM
                 if from_clauses.as_ref().is_some_and(|f| f.len() > 1) {
-                    plan_err!("Multiple tables in UPDATE SET FROM not yet supported")?;
+                    not_impl_err!(
+                        "Multiple tables in UPDATE SET FROM not yet supported"
+                    )?;
                 }
                 let update_from = from_clauses.and_then(|mut f| f.pop());
+
+                // UPDATE ... FROM is currently not working
+                // TODO fix https://github.com/apache/datafusion/issues/19950
+                if update_from.is_some() {
+                    return not_impl_err!("UPDATE ... FROM is not supported");
+                }
+
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
                 }
@@ -1332,7 +1345,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
                 let mut planner_context = PlannerContext::new()
-                    .with_prepare_param_data_types(arg_types.unwrap_or_default());
+                    .with_prepare_param_data_types(
+                        arg_types
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(Some)
+                            .collect(),
+                    );
 
                 let function_body = match function_body {
                     Some(r) => Some(self.sql_to_expr(
@@ -2331,7 +2350,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
         }
-        let prepare_param_data_types = prepare_param_data_types.into_values().collect();
+        let prepare_param_data_types = {
+            let len = prepare_param_data_types.keys().last().map_or(0, |&k| k + 1);
+            (0..len)
+                .map(|i| prepare_param_data_types.remove(&i))
+                .collect()
+        };
 
         // Projection
         let mut planner_context =

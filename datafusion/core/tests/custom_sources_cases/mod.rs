@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -39,6 +38,7 @@ use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -156,10 +156,6 @@ impl ExecutionPlan for CustomExecutionPlan {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -183,12 +179,12 @@ impl ExecutionPlan for CustomExecutionPlan {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
+            return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
         }
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
-        Ok(Statistics {
+        Ok(Arc::new(Statistics {
             num_rows: Precision::Exact(batch.num_rows()),
             total_byte_size: Precision::Absent,
             column_statistics: self
@@ -207,16 +203,28 @@ impl ExecutionPlan for CustomExecutionPlan {
                     ..Default::default()
                 })
                 .collect(),
-        })
+        }))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.cache.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 
 #[async_trait]
 impl TableProvider for CustomTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         TEST_CUSTOM_SCHEMA_REF!()
     }
@@ -318,7 +326,7 @@ async fn optimizers_catch_all_statistics() {
 
 #[expect(clippy::needless_pass_by_value)]
 fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if plan.as_any().is::<PlaceholderRowExec>() {
+    if plan.is::<PlaceholderRowExec>() {
         true
     } else if plan.children().len() != 1 {
         false

@@ -21,7 +21,6 @@ mod required_indices;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
@@ -147,26 +146,39 @@ fn optimize_projections(
             // `aggregate.aggr_expr`:
             let (group_by_reqs, aggregate_reqs) = indices.split_off(n_group_exprs);
 
-            // Get absolutely necessary GROUP BY fields:
-            let group_by_expr_existing = aggregate
-                .group_expr
-                .iter()
-                .map(|group_by_expr| group_by_expr.schema_name().to_string())
-                .collect::<Vec<_>>();
-
-            let new_group_bys = if let Some(simplest_groupby_indices) =
-                get_required_group_by_exprs_indices(
-                    aggregate.input.schema(),
-                    &group_by_expr_existing,
-                ) {
-                // Some of the fields in the GROUP BY may be required by the
-                // parent even if these fields are unnecessary in terms of
-                // functional dependency.
-                group_by_reqs
-                    .append(&simplest_groupby_indices)
-                    .get_at_indices(&aggregate.group_expr)
-            } else {
+            // Get absolutely necessary GROUP BY fields.
+            //
+            // When the input has no functional dependencies, we can
+            // short-circuit this analysis.
+            let new_group_bys = if aggregate
+                .input
+                .schema()
+                .functional_dependencies()
+                .is_empty()
+            {
                 aggregate.group_expr
+            } else {
+                let group_by_expr_existing = aggregate
+                    .group_expr
+                    .iter()
+                    .map(|group_by_expr| group_by_expr.schema_name().to_string())
+                    .collect::<Vec<_>>();
+
+                if let Some(simplest_groupby_indices) =
+                    get_required_group_by_exprs_indices(
+                        aggregate.input.schema(),
+                        &group_by_expr_existing,
+                    )
+                {
+                    // Some of the fields in the GROUP BY may be required by
+                    // the parent even if these fields are unnecessary in
+                    // terms of functional dependency.
+                    group_by_reqs
+                        .append(&simplest_groupby_indices)
+                        .get_at_indices(&aggregate.group_expr)
+                } else {
+                    aggregate.group_expr
+                }
             };
 
             // Only use the absolutely necessary aggregate expressions required
@@ -329,29 +341,34 @@ fn optimize_projections(
                 .collect()
         }
         LogicalPlan::Extension(extension) => {
-            let Some(necessary_children_indices) =
+            if let Some(necessary_children_indices) =
                 extension.node.necessary_children_exprs(indices.indices())
-            else {
-                // Requirements from parent cannot be routed down to user defined logical plan safely
-                return Ok(Transformed::no(plan));
-            };
-            let children = extension.node.inputs();
-            assert_eq_or_internal_err!(
-                children.len(),
-                necessary_children_indices.len(),
-                "Inconsistent length between children and necessary children indices. \
+            {
+                let children = extension.node.inputs();
+                assert_eq_or_internal_err!(
+                    children.len(),
+                    necessary_children_indices.len(),
+                    "Inconsistent length between children and necessary children indices. \
                 Make sure `.necessary_children_exprs` implementation of the \
                 `UserDefinedLogicalNode` is consistent with actual children length \
                 for the node."
-            );
-            children
-                .into_iter()
-                .zip(necessary_children_indices)
-                .map(|(child, necessary_indices)| {
-                    RequiredIndices::new_from_indices(necessary_indices)
-                        .with_plan_exprs(&plan, child.schema())
-                })
-                .collect::<Result<Vec<_>>>()?
+                );
+                children
+                    .into_iter()
+                    .zip(necessary_children_indices)
+                    .map(|(child, necessary_indices)| {
+                        RequiredIndices::new_from_indices(necessary_indices)
+                            .with_plan_exprs(&plan, child.schema())
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            } else {
+                // Requirements from parent cannot be routed down to user defined logical plan safely
+                // Assume it requires all input exprs here
+                plan.inputs()
+                    .into_iter()
+                    .map(RequiredIndices::new_for_all_exprs)
+                    .collect()
+            }
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
@@ -385,8 +402,9 @@ fn optimize_projections(
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
+            let right_len = join.right.schema().fields().len();
             let (left_req_indices, right_req_indices) =
-                split_join_requirements(left_len, indices, &join.join_type);
+                split_join_requirements(left_len, right_len, indices, &join.join_type);
             let left_indices =
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
             let right_indices =
@@ -676,56 +694,6 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
     })
 }
 
-/// Accumulates outer-referenced columns by the
-/// given expression, `expr`.
-///
-/// # Parameters
-///
-/// * `expr` - The expression to analyze for outer-referenced columns.
-/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
-///   columns are collected.
-fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
-    // inspect_expr_pre doesn't handle subquery references, so find them explicitly
-    expr.apply(|expr| {
-        match expr {
-            Expr::OuterReferenceColumn(_, col) => {
-                columns.insert(col);
-            }
-            Expr::ScalarSubquery(subquery) => {
-                outer_columns_helper_multi(&subquery.outer_ref_columns, columns);
-            }
-            Expr::Exists(exists) => {
-                outer_columns_helper_multi(&exists.subquery.outer_ref_columns, columns);
-            }
-            Expr::InSubquery(insubquery) => {
-                outer_columns_helper_multi(
-                    &insubquery.subquery.outer_ref_columns,
-                    columns,
-                );
-            }
-            _ => {}
-        };
-        Ok(TreeNodeRecursion::Continue)
-    })
-    // unwrap: closure above never returns Err, so can not be Err here
-    .unwrap();
-}
-
-/// A recursive subroutine that accumulates outer-referenced columns by the
-/// given expressions (`exprs`).
-///
-/// # Parameters
-///
-/// * `exprs` - The expressions to analyze for outer-referenced columns.
-/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
-///   columns are collected.
-fn outer_columns_helper_multi<'a, 'b>(
-    exprs: impl IntoIterator<Item = &'a Expr>,
-    columns: &'b mut HashSet<&'a Column>,
-) {
-    exprs.into_iter().for_each(|e| outer_columns(e, columns));
-}
-
 /// Splits requirement indices for a join into left and right children based on
 /// the join type.
 ///
@@ -746,6 +714,7 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// # Parameters
 ///
 /// * `left_len` - The length of the left child.
+/// * `right_len` - The length of the right child.
 /// * `indices` - A slice of requirement indices.
 /// * `join_type` - The type of join (e.g. `INNER`, `LEFT`, `RIGHT`).
 ///
@@ -757,20 +726,28 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// adjusted based on the join type.
 fn split_join_requirements(
     left_len: usize,
+    right_len: usize,
     indices: RequiredIndices,
     join_type: &JoinType,
 ) -> (RequiredIndices, RequiredIndices) {
     match join_type {
         // In these cases requirements are split between left/right children:
-        JoinType::Inner
-        | JoinType::Left
-        | JoinType::Right
-        | JoinType::Full
-        | JoinType::LeftMark
-        | JoinType::RightMark => {
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)
+        }
+        JoinType::LeftMark => {
+            // LeftMark output: [left_cols(0..left_len), mark]
+            // The mark column is synthetic (produced by the join itself),
+            // so discard it and route only to the left child.
+            let (left_indices, _mark) = indices.split_off(left_len);
+            (left_indices, RequiredIndices::new())
+        }
+        JoinType::RightMark => {
+            // Same as LeftMark, but for the right child.
+            let (right_indices, _mark) = indices.split_off(right_len);
+            (RequiredIndices::new(), right_indices)
         }
         // All requirements can be re-routed to left child directly.
         JoinType::LeftAnti | JoinType::LeftSemi => (indices, RequiredIndices::new()),
@@ -1169,6 +1146,57 @@ mod tests {
 
         fn supports_limit_pushdown(&self) -> bool {
             false // Disallow limit push-down by default
+        }
+    }
+
+    /// A user-defined node that does NOT implement `necessary_children_exprs`,
+    /// so the optimizer cannot determine which columns are required from its
+    /// children and must assume all columns are needed.
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct OpaqueRequirementsUserDefined {
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+    }
+
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for OpaqueRequirementsUserDefined {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            self.input
+                .partial_cmp(&other.input)
+                .filter(|cmp| *cmp != Ordering::Equal || self == other)
+        }
+    }
+
+    impl UserDefinedLogicalNodeCore for OpaqueRequirementsUserDefined {
+        fn name(&self) -> &str {
+            "OpaqueRequirementsUserDefined"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.input]
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            vec![]
+        }
+
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            mut inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                input: Arc::new(inputs.swap_remove(0)),
+                schema: Arc::clone(&self.schema),
+            })
+        }
+
+        fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "OpaqueRequirementsUserDefined")
         }
     }
 
@@ -2204,6 +2232,29 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_continue_processing_through_extension() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![col("a")])?
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(OpaqueRequirementsUserDefined {
+                input: Arc::new(plan),
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+        let plan = optimize(plan).expect("failed to optimize plan");
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        OpaqueRequirementsUserDefined
+          TableScan: test projection=[a]
+        "
+        )
+    }
+
     /// tests that it removes an aggregate is never used downstream
     #[test]
     fn table_unused_aggregate() -> Result<()> {
@@ -2307,6 +2358,68 @@ mod tests {
             Projection: test.b, max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
               WindowAggr: windowExpr=[[max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
                 TableScan: test projection=[a, b]
+        "
+        )
+    }
+
+    // Regression test for https://github.com/apache/datafusion/issues/20083
+    // Optimizer must not fail when LeftMark joins from EXISTS OR EXISTS
+    // feed into a Left join.
+    #[test]
+    fn optimize_projections_exists_or_exists_with_outer_join() -> Result<()> {
+        use datafusion_expr::utils::disjunction;
+        use datafusion_expr::{exists, out_ref_col};
+
+        let table_a = test_table_scan_with_name("a")?;
+        let table_b = test_table_scan_with_name("b")?;
+
+        let sq_a = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_a")?)
+                .filter(col("sq_a.a").eq(out_ref_col(DataType::UInt32, "a.a")))?
+                .project(vec![lit(1)])?
+                .build()?,
+        );
+
+        let sq_b = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_b")?)
+                .filter(col("sq_b.b").eq(out_ref_col(DataType::UInt32, "a.b")))?
+                .project(vec![lit(1)])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(table_a)
+            .filter(disjunction(vec![exists(sq_a), exists(sq_b)]).unwrap())?
+            .join(table_b, JoinType::Left, (vec!["a"], vec!["a"]), None)?
+            .build()?;
+
+        let optimizer = Optimizer::new();
+        let config = OptimizerContext::new();
+        optimizer.optimize(plan, &config, observe)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_projections_left_mark_join_with_projection() -> Result<()> {
+        let table_a = test_table_scan_with_name("a")?;
+        let table_b = test_table_scan_with_name("b")?;
+        let table_c = test_table_scan_with_name("c")?;
+
+        let plan = LogicalPlanBuilder::from(table_a)
+            .join(table_b, JoinType::LeftMark, (vec!["a"], vec!["a"]), None)?
+            .project(vec![col("a.a"), col("a.b"), col("a.c")])?
+            .join(table_c, JoinType::Left, (vec!["a"], vec!["a"]), None)?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: a.a = c.a
+          Projection: a.a, a.b, a.c
+            LeftMark Join: a.a = b.a
+              TableScan: a projection=[a, b, c]
+              TableScan: b projection=[a]
+          TableScan: c projection=[a, b, c]
         "
         )
     }

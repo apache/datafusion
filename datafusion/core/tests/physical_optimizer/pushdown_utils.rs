@@ -18,6 +18,7 @@
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
     PartitionedFile, file::FileSource, file_scan_config::FileScanConfig,
@@ -42,7 +43,6 @@ use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
 use std::{
-    any::Any,
     fmt::{Display, Formatter},
     pin::Pin,
     sync::Arc,
@@ -144,10 +144,6 @@ impl FileSource for TestSource {
         self.predicate.clone()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        todo!("should not be called")
-    }
-
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(TestSource {
             batch_size: Some(batch_size),
@@ -238,6 +234,25 @@ impl FileSource for TestSource {
 
     fn table_schema(&self) -> &datafusion_datasource::TableSchema {
         &self.table_schema
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit predicate (filter) expression if present
+        if let Some(predicate) = &self.predicate {
+            f(predicate.as_ref())?;
+        }
+
+        // Visit projection expressions if present
+        if let Some(projection) = &self.projection {
+            for proj_expr in projection {
+                f(proj_expr.expr.as_ref())?;
+            }
+        }
+
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -470,10 +485,6 @@ impl ExecutionPlan for TestNode {
         "TestInsertExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         self.input.properties()
     }
@@ -557,5 +568,14 @@ impl ExecutionPlan for TestNode {
             let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit the predicate expression
+        f(self.predicate.as_ref())?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }

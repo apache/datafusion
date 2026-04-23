@@ -171,9 +171,8 @@ trait FromColumnStatistics {
                     let col_stats = &statistics_args.statistics.column_statistics;
                     if statistics_args.exprs.len() == 1 {
                         // TODO optimize with exprs other than Column
-                        if let Some(col_expr) = statistics_args.exprs[0]
-                            .as_any()
-                            .downcast_ref::<expressions::Column>()
+                        if let Some(col_expr) =
+                            statistics_args.exprs[0].downcast_ref::<expressions::Column>()
                         {
                             return self.value_from_column_statistics(
                                 &col_stats[col_expr.index()],
@@ -203,10 +202,6 @@ impl FromColumnStatistics for Max {
 }
 
 impl AggregateUDFImpl for Max {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "max"
     }
@@ -490,10 +485,6 @@ impl FromColumnStatistics for Min {
 }
 
 impl AggregateUDFImpl for Min {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "min"
     }
@@ -1154,7 +1145,6 @@ mod tests {
         check(&mut max(), &[&[zero, neg_inf]], zero);
     }
 
-    use datafusion_common::Result;
     use rand::Rng;
 
     fn get_random_vec_i32(len: usize) -> Vec<i32> {

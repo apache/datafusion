@@ -17,13 +17,14 @@
 
 use arrow::array::{ArrayRef, AsArray, StringArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Int64Type};
-use datafusion::logical_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
 use datafusion_common::types::{NativeType, logical_int64};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
-use datafusion_expr::{Coercion, ScalarFunctionArgs, ScalarUDFImpl, TypeSignatureClass};
+use datafusion_expr::{
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `bin` expression
@@ -55,10 +56,6 @@ impl SparkBin {
 }
 
 impl ScalarUDFImpl for SparkBin {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bin"
     }

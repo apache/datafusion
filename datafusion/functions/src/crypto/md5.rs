@@ -29,7 +29,7 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use crate::crypto::basic::{DigestAlgorithm, digest_process};
 
@@ -77,10 +77,6 @@ impl Md5Func {
 }
 
 impl ScalarUDFImpl for Md5Func {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "md5"
     }

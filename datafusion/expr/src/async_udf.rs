@@ -63,7 +63,7 @@ impl PartialEq for AsyncScalarUDF {
     fn eq(&self, other: &Self) -> bool {
         // Deconstruct to catch any new fields added in future
         let Self { inner } = self;
-        inner.dyn_eq(other.inner.as_any())
+        inner.as_ref().dyn_eq(other.inner.as_ref() as &dyn Any)
     }
 }
 impl Eq for AsyncScalarUDF {}
@@ -102,10 +102,6 @@ impl AsyncScalarUDF {
 }
 
 impl ScalarUDFImpl for AsyncScalarUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -156,10 +152,6 @@ mod tests {
     }
 
     impl ScalarUDFImpl for TestAsyncUDFImpl1 {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             todo!()
         }
@@ -193,10 +185,6 @@ mod tests {
     }
 
     impl ScalarUDFImpl for TestAsyncUDFImpl2 {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             todo!()
         }

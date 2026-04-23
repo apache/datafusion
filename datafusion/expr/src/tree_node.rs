@@ -116,7 +116,7 @@ impl TreeNode for Expr {
     /// indicating whether the expression was transformed or left unchanged.
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        mut f: F,
+        f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
             // TODO: remove the next line after `Expr::Wildcard` is removed
@@ -150,8 +150,13 @@ impl TreeNode for Expr {
                 relation,
                 name,
                 metadata,
-            }) => f(*expr)?.update_data(|e| {
-                e.alias_qualified_with_metadata(relation, name, metadata)
+            }) => expr.map_elements(f)?.update_data(|expr| {
+                Expr::Alias(Alias {
+                    expr,
+                    relation,
+                    name,
+                    metadata,
+                })
             }),
             Expr::InSubquery(InSubquery {
                 expr,
@@ -234,12 +239,12 @@ impl TreeNode for Expr {
                 .update_data(|(new_expr, new_when_then_expr, new_else_expr)| {
                     Expr::Case(Case::new(new_expr, new_when_then_expr, new_else_expr))
                 }),
-            Expr::Cast(Cast { expr, data_type }) => expr
+            Expr::Cast(Cast { expr, field }) => expr
                 .map_elements(f)?
-                .update_data(|be| Expr::Cast(Cast::new(be, data_type))),
-            Expr::TryCast(TryCast { expr, data_type }) => expr
+                .update_data(|be| Expr::Cast(Cast::new_from_field(be, field))),
+            Expr::TryCast(TryCast { expr, field }) => expr
                 .map_elements(f)?
-                .update_data(|be| Expr::TryCast(TryCast::new(be, data_type))),
+                .update_data(|be| Expr::TryCast(TryCast::new_from_field(be, field))),
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 args.map_elements(f)?.map_data(|new_args| {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(

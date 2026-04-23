@@ -16,12 +16,15 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, ListArray, StructArray};
+use arrow::array::{
+    Array, ArrayRef, ListArray, PrimitiveArray, RunArray, StructArray,
+    downcast_run_end_index,
+};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::Result;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
@@ -291,6 +294,33 @@ fn dictionary_encode_if_necessary(
             )?))
         }
         (DataType::Dictionary(_, _), _) => Ok(cast(array.as_ref(), expected)?),
+        (
+            DataType::RunEndEncoded(run_ends_field, expected_values_field),
+            &DataType::RunEndEncoded(_, _),
+        ) => {
+            macro_rules! reencode_ree {
+                ($run_end_type:ty) => {{
+                    let run_array = array
+                        .as_any()
+                        .downcast_ref::<RunArray<$run_end_type>>()
+                        .unwrap();
+                    let values = dictionary_encode_if_necessary(
+                        &(Arc::clone(run_array.values()) as ArrayRef),
+                        expected_values_field.data_type(),
+                    )?;
+                    let run_ends = PrimitiveArray::<$run_end_type>::new(
+                        run_array.run_ends().inner().clone(),
+                        None,
+                    );
+                    Ok(Arc::new(RunArray::try_new(&run_ends, &values)?))
+                }};
+            }
+            downcast_run_end_index! {
+                run_ends_field.data_type() => (reencode_ree),
+                _ => unreachable!("unsupported run end type: {}", run_ends_field.data_type()),
+            }
+        }
+        (DataType::RunEndEncoded(_, _), _) => Ok(cast(array.as_ref(), expected)?),
         (_, _) => Ok(Arc::<dyn Array>::clone(array)),
     }
 }

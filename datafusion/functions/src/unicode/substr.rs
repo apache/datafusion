@@ -15,16 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use crate::strings::make_and_append_view;
+use crate::strings::append_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayIter, ArrayRef, AsArray, Int64Array, NullBufferBuilder, StringArrayType,
-    StringViewArray, StringViewBuilder,
+    Array, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
+    StringArrayType, StringViewArray, StringViewBuilder, make_view,
 };
-use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
@@ -32,8 +31,8 @@ use datafusion_common::types::{
 };
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -53,7 +52,7 @@ use datafusion_macros::user_doc;
     standard_argument(name = "str", prefix = "String"),
     argument(
         name = "start_pos",
-        description = "Character position to start the substring at. The first character in the string has a position of 1."
+        description = "Character position to start the substring at. The first character in the string has a position of 1. If the start position is less than 1, it is treated as if it is before the start of the string and the (absolute) number of characters before position 1 is subtracted from `length` (if given). For example, `substr('abc', -3, 6)` returns `'ab'`."
     ),
     argument(
         name = "length",
@@ -104,10 +103,6 @@ impl SubstrFunc {
 }
 
 impl ScalarUDFImpl for SubstrFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "substr"
     }
@@ -121,10 +116,7 @@ impl ScalarUDFImpl for SubstrFunc {
         Ok(DataType::Utf8View)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(substr, vec![])(&args.args)
     }
 
@@ -137,19 +129,16 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 }
 
-/// Extracts the substring of string starting at the start'th character, and extending for count characters if that is specified. (Same as substring(string from start for count).)
-/// substr('alphabet', 3) = 'phabet'
-/// substr('alphabet', 3, 2) = 'ph'
-/// The implementation uses UTF-8 code points as characters
+/// Dispatches `substr` to the appropriate string array implementation.
 fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            string_substr::<_>(string_array, &args[1..])
+            generic_string_substr(string_array, &args[1..])
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            string_substr::<_>(string_array, &args[1..])
+            generic_string_substr(string_array, &args[1..])
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
@@ -162,70 +151,74 @@ fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-// Convert the given `start` and `count` to valid byte indices within `input` string
-//
-// Input `start` and `count` are equivalent to PostgreSQL's `substr(s, start, count)`
-// `start` is 1-based, if `count` is not provided count to the end of the string
-// Input indices are character-based, and return values are byte indices
-// The input bounds can be outside string bounds, this function will return
-// the intersection between input bounds and valid string bounds
-// `input_ascii_only` is used to optimize this function if `input` is ASCII-only
-//
-// * Example
-// 'Hi🌏' in-mem (`[]` for one char, `x` for one byte): [x][x][xxxx]
-// `get_true_start_end('Hi🌏', 1, None) -> (0, 6)`
-// `get_true_start_end('Hi🌏', 1, 1) -> (0, 1)`
-// `get_true_start_end('Hi🌏', -10, 2) -> (0, 0)`
+/// Convert the given `start` and `count` to valid byte indices within `input` string.
+///
+/// Input `start` and `count` are equivalent to PostgreSQL's `substr(s, start, count)`.
+/// `start` is 1-based; if `count` is not provided, returns indices to the end of the string.
+/// Input indices are character-based, and return values are byte indices.
+/// The input bounds can be outside string bounds; this function will return
+/// the intersection between input bounds and valid string bounds.
+/// `is_input_ascii_only` is used to optimize this function if `input` is ASCII-only.
+///
+/// # Example
+/// ```text
+/// 'Hi🌏' in-mem (`[]` for one char, `x` for one byte): [x][x][xxxx]
+/// get_true_start_end('Hi🌏', 1, None) -> Ok((0, 6))
+/// get_true_start_end('Hi🌏', 1, Some(1)) -> Ok((0, 1))
+/// get_true_start_end('Hi🌏', -10, Some(2)) -> Ok((0, 0))
+/// ```
 pub fn get_true_start_end(
     input: &str,
     start: i64,
-    count: Option<u64>,
+    count: Option<i64>,
     is_input_ascii_only: bool,
-) -> (usize, usize) {
-    let start = start.checked_sub(1).unwrap_or(start);
+) -> Result<(usize, usize)> {
+    if let Some(count) = count
+        && count < 0
+    {
+        return exec_err!("negative count not allowed: {count}");
+    }
+
+    // The caller-provided `start` is 1-indexed.
+    let Some(start) = start.checked_sub(1) else {
+        return exec_err!("start position overflow: {start}");
+    };
 
     let end = match count {
-        Some(count) => {
-            let count_i64 = i64::try_from(count).unwrap_or(i64::MAX);
-            start.saturating_add(count_i64)
-        }
+        Some(count) => start.saturating_add(count),
         None => input.len() as i64,
     };
-    let count_to_end = count.is_some();
 
     let start = start.clamp(0, input.len() as i64) as usize;
     let end = end.clamp(0, input.len() as i64) as usize;
-    let count = end - start;
 
-    // If input is ASCII-only, byte-based indices equals to char-based indices
+    // If input is ASCII-only, byte-based indices equal char-based indices
     if is_input_ascii_only {
-        return (start, end);
+        return Ok((start, end));
     }
 
-    // Otherwise, calculate byte indices from char indices
-    // Note this decoding is relatively expensive for this simple `substr` function,,
-    // so the implementation attempts to decode in one pass (and caused the complexity)
-    let (mut st, mut ed) = (input.len(), input.len());
-    let mut start_counting = false;
-    let mut cnt = 0;
-    for (char_cnt, (byte_cnt, _)) in input.char_indices().enumerate() {
-        if char_cnt == start {
-            st = byte_cnt;
-            if count_to_end {
-                start_counting = true;
-            } else {
+    // Otherwise, calculate byte indices from char indices.  We initialize both
+    // `byte_start` and `byte_end` to the string length to handle cases where
+    // the requested 'start' or 'end' positions are at or beyond the end of the
+    // string (resulting in an empty substring).
+    let mut byte_start = input.len();
+    let mut byte_end = input.len();
+
+    for (char_idx, (byte_idx, _)) in input.char_indices().enumerate() {
+        if char_idx == start {
+            byte_start = byte_idx;
+            // If no length is specified, we only need the start offset.
+            if count.is_none() {
                 break;
             }
         }
-        if start_counting {
-            if cnt == count {
-                ed = byte_cnt;
-                break;
-            }
-            cnt += 1;
+        if char_idx == end {
+            byte_end = byte_idx;
+            break;
         }
     }
-    (st, ed)
+
+    Ok((byte_start, byte_end))
 }
 
 // String characters are variable length encoded in UTF-8, `substr()` function's
@@ -275,104 +268,41 @@ pub fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
     }
 }
 
-// The decoding process refs the trait at: arrow/arrow-data/src/byte_view.rs:44
-// From<u128> for ByteView
 fn string_view_substr(
     string_view_array: &StringViewArray,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
-    let mut views_buf = Vec::with_capacity(string_view_array.len());
-    let mut null_builder = NullBufferBuilder::new(string_view_array.len());
-
     let start_array = as_int64_array(&args[0])?;
-    let count_array_opt = if args.len() == 2 {
-        Some(as_int64_array(&args[1])?)
-    } else {
-        None
-    };
+    let count_array_opt = args.get(1).map(|a| as_int64_array(a)).transpose()?;
 
-    let enable_ascii_fast_path =
+    let is_ascii =
         enable_ascii_fast_path(&string_view_array, start_array, count_array_opt);
 
-    // In either case of `substr(s, i)` or `substr(s, i, cnt)`
-    // If any of input argument is `NULL`, the result is `NULL`
-    match args.len() {
-        1 => {
-            for ((str_opt, raw_view), start_opt) in string_view_array
-                .iter()
-                .zip(string_view_array.views().iter())
-                .zip(start_array.iter())
-            {
-                if let (Some(str), Some(start)) = (str_opt, start_opt) {
-                    let (start, end) =
-                        get_true_start_end(str, start, None, enable_ascii_fast_path);
-                    let substr = &str[start..end];
+    // Combine null bitmaps from all inputs in bulk.
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_view_array.nulls(), start_array.nulls()).as_ref(),
+        count_array_opt.and_then(|a| a.nulls()),
+    );
 
-                    make_and_append_view(
-                        &mut views_buf,
-                        &mut null_builder,
-                        raw_view,
-                        substr,
-                        start as u32,
-                    );
-                } else {
-                    null_builder.append_null();
-                    views_buf.push(0);
-                }
-            }
-        }
-        2 => {
-            let count_array = count_array_opt.unwrap();
-            for (((str_opt, raw_view), start_opt), count_opt) in string_view_array
-                .iter()
-                .zip(string_view_array.views().iter())
-                .zip(start_array.iter())
-                .zip(count_array.iter())
-            {
-                if let (Some(str), Some(start), Some(count)) =
-                    (str_opt, start_opt, count_opt)
-                {
-                    if count < 0 {
-                        return exec_err!(
-                            "negative substring length not allowed: substr(<str>, {start}, {count})"
-                        );
-                    } else {
-                        if start == i64::MIN {
-                            return exec_err!(
-                                "negative overflow when calculating skip value"
-                            );
-                        }
-                        let (start, end) = get_true_start_end(
-                            str,
-                            start,
-                            Some(count as u64),
-                            enable_ascii_fast_path,
-                        );
-                        let substr = &str[start..end];
+    let mut views_buf = Vec::with_capacity(string_view_array.len());
 
-                        make_and_append_view(
-                            &mut views_buf,
-                            &mut null_builder,
-                            raw_view,
-                            substr,
-                            start as u32,
-                        );
-                    }
-                } else {
-                    null_builder.append_null();
-                    views_buf.push(0);
-                }
-            }
+    for (i, raw_view) in string_view_array.views().iter().enumerate() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            views_buf.push(0);
+            continue;
         }
-        other => {
-            return exec_err!(
-                "substr was called with {other} arguments. It requires 2 or 3."
-            );
-        }
+
+        let string = string_view_array.value(i);
+        let start = start_array.value(i);
+        let count = count_array_opt.map(|a| a.value(i));
+
+        let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
+        let substr = &string[byte_start..byte_end];
+
+        append_view(&mut views_buf, raw_view, substr, byte_start as u32);
     }
 
     let views_buf = ScalarBuffer::from(views_buf);
-    let nulls_buf = null_builder.finish();
 
     // Safety:
     // (1) The blocks of the given views are all provided
@@ -382,95 +312,143 @@ fn string_view_substr(
         let array = StringViewArray::new_unchecked(
             views_buf,
             string_view_array.data_buffers().to_vec(),
-            nulls_buf,
+            nulls,
         );
         Ok(Arc::new(array) as ArrayRef)
     }
 }
 
-fn string_substr<'a, V>(string_array: V, args: &[ArrayRef]) -> Result<ArrayRef>
-where
-    V: StringArrayType<'a>,
-{
+fn values_fit_in_i32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -> bool {
+    // The Arrow spec defines StringView offset fields as signed 32-bit
+    // integers, so the maximum representable offset is i32::MAX.
+    string_array
+        .offsets()
+        .last()
+        .map(|offset| offset.as_usize() <= i32::MAX as usize)
+        .unwrap_or(true)
+}
+
+#[inline]
+fn append_view_from_buffer(
+    views_buf: &mut Vec<u128>,
+    substr: &str,
+    byte_offset: usize,
+) -> bool {
+    let byte_offset =
+        u32::try_from(byte_offset).expect("validated string buffer offset fits in i32");
+    let view = make_view(substr.as_bytes(), 0, byte_offset);
+    views_buf.push(view);
+    substr.len() > 12
+}
+
+#[expect(clippy::needless_range_loop)]
+fn generic_string_substr<T: OffsetSizeTrait>(
+    string_array: &GenericStringArray<T>,
+    args: &[ArrayRef],
+) -> Result<ArrayRef> {
+    // We'd like to return a StringViewArray that points into the input string
+    // array's values buffer. Since the Arrow spec defines StringView offsets
+    // as i32, we can't use this approach when the values buffer is >2GB, so
+    // fallback to copying.
+    if !values_fit_in_i32(string_array) {
+        return generic_string_substr_copy(string_array, args);
+    }
+
     let start_array = as_int64_array(&args[0])?;
-    let count_array_opt = if args.len() == 2 {
-        Some(as_int64_array(&args[1])?)
+    let count_array_opt = args.get(1).map(|a| as_int64_array(a)).transpose()?;
+
+    let is_ascii = enable_ascii_fast_path(&string_array, start_array, count_array_opt);
+    let offsets = string_array.value_offsets();
+    let mut views_buf = Vec::with_capacity(string_array.len());
+    let mut has_out_of_line = false;
+
+    // Combine null bitmaps from all inputs in bulk.
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_array.nulls(), start_array.nulls()).as_ref(),
+        count_array_opt.and_then(|a| a.nulls()),
+    );
+
+    for i in 0..string_array.len() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            views_buf.push(0);
+            continue;
+        }
+
+        let string = string_array.value(i);
+        let source_offset = offsets[i].as_usize();
+        let start = start_array.value(i);
+        let count = count_array_opt.map(|a| a.value(i));
+
+        let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
+        has_out_of_line |= append_view_from_buffer(
+            &mut views_buf,
+            &string[byte_start..byte_end],
+            source_offset + byte_start,
+        );
+    }
+
+    let views_buf = ScalarBuffer::from(views_buf);
+
+    // If all result strings are stored inline, we don't need to retain the
+    // input string array.
+    let data_buffers = if has_out_of_line {
+        vec![string_array.values().clone()]
     } else {
-        None
+        vec![]
     };
 
-    let enable_ascii_fast_path =
-        enable_ascii_fast_path(&string_array, start_array, count_array_opt);
-
-    match args.len() {
-        1 => {
-            let iter = ArrayIter::new(string_array);
-            let mut result_builder = StringViewBuilder::new();
-            for (string, start) in iter.zip(start_array.iter()) {
-                match (string, start) {
-                    (Some(string), Some(start)) => {
-                        let (start, end) = get_true_start_end(
-                            string,
-                            start,
-                            None,
-                            enable_ascii_fast_path,
-                        ); // start, end is byte-based
-                        let substr = &string[start..end];
-                        result_builder.append_value(substr);
-                    }
-                    _ => {
-                        result_builder.append_null();
-                    }
-                }
-            }
-            Ok(Arc::new(result_builder.finish()) as ArrayRef)
-        }
-        2 => {
-            let iter = ArrayIter::new(string_array);
-            let count_array = count_array_opt.unwrap();
-            let mut result_builder = StringViewBuilder::new();
-
-            for ((string, start), count) in
-                iter.zip(start_array.iter()).zip(count_array.iter())
-            {
-                match (string, start, count) {
-                    (Some(string), Some(start), Some(count)) => {
-                        if count < 0 {
-                            return exec_err!(
-                                "negative substring length not allowed: substr(<str>, {start}, {count})"
-                            );
-                        } else {
-                            if start == i64::MIN {
-                                return exec_err!(
-                                    "negative overflow when calculating skip value"
-                                );
-                            }
-                            let (start, end) = get_true_start_end(
-                                string,
-                                start,
-                                Some(count as u64),
-                                enable_ascii_fast_path,
-                            ); // start, end is byte-based
-                            let substr = &string[start..end];
-                            result_builder.append_value(substr);
-                        }
-                    }
-                    _ => {
-                        result_builder.append_null();
-                    }
-                }
-            }
-            Ok(Arc::new(result_builder.finish()) as ArrayRef)
-        }
-        other => {
-            exec_err!("substr was called with {other} arguments. It requires 2 or 3.")
-        }
+    // Safety:
+    // (1) The blocks of the given views are all provided
+    // (2) Each referenced range in the source values buffer is within bounds
+    unsafe {
+        let array = StringViewArray::new_unchecked(views_buf, data_buffers, nulls);
+        Ok(Arc::new(array) as ArrayRef)
     }
+}
+
+// Fallback for `generic_string_substr` if we can't use zerocopy because the
+// input string array is too large.
+fn generic_string_substr_copy<T: OffsetSizeTrait>(
+    string_array: &GenericStringArray<T>,
+    args: &[ArrayRef],
+) -> Result<ArrayRef> {
+    let start_array = as_int64_array(&args[0])?;
+    let count_array_opt = args.get(1).map(|a| as_int64_array(a)).transpose()?;
+
+    let is_ascii = enable_ascii_fast_path(&string_array, start_array, count_array_opt);
+
+    // Combine null bitmaps from all inputs in bulk.
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_array.nulls(), start_array.nulls()).as_ref(),
+        count_array_opt.and_then(|a| a.nulls()),
+    );
+
+    let mut result_builder = StringViewBuilder::new();
+
+    for i in 0..string_array.len() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            result_builder.append_null();
+            continue;
+        }
+
+        let string = string_array.value(i);
+        let start = start_array.value(i);
+        let count = count_array_opt.map(|a| a.value(i));
+
+        let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
+        result_builder.append_value(&string[byte_start..byte_end]);
+    }
+
+    Ok(Arc::new(result_builder.finish()) as ArrayRef)
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringViewArray};
+    use std::sync::Arc;
+
+    use arrow::array::{
+        Array, ArrayRef, AsArray, Int64Array, StringArray, StringViewArray,
+    };
     use arrow::datatypes::DataType::Utf8View;
 
     use datafusion_common::{Result, ScalarValue, exec_err};
@@ -778,7 +756,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
                 ColumnarValue::Scalar(ScalarValue::from(-1i64)),
             ],
-            exec_err!("negative substring length not allowed: substr(<str>, 1, -1)"),
+            exec_err!("negative count not allowed: -1"),
             &str,
             Utf8View,
             StringViewArray
@@ -815,7 +793,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::from("abc")),
                 ColumnarValue::Scalar(ScalarValue::from(i64::MIN)),
             ],
-            Ok(Some("abc")),
+            exec_err!("start position overflow: -9223372036854775808"),
             &str,
             Utf8View,
             StringViewArray
@@ -827,7 +805,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::from(i64::MIN)),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
             ],
-            exec_err!("negative overflow when calculating skip value"),
+            exec_err!("start position overflow: -9223372036854775808"),
             &str,
             Utf8View,
             StringViewArray
@@ -844,6 +822,27 @@ mod tests {
             Utf8View,
             StringViewArray
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sliced_string_array_array_args() -> Result<()> {
+        // Use strings longer than 12 bytes so the result views are out-of-line.
+        let string_array = Arc::new(StringArray::from(vec![
+            "skipped_prefix_value",
+            "alphabet_long_string",
+            "joséésojanother_long",
+        ])) as ArrayRef;
+        let string_array = string_array.slice(1, 2);
+        let start_array = Arc::new(Int64Array::from(vec![3, 5])) as ArrayRef;
+        let count_array = Arc::new(Int64Array::from(vec![15, 14])) as ArrayRef;
+
+        let result = super::substr(&[string_array, start_array, count_array])?;
+        let result = result.as_string_view();
+
+        assert_eq!(result.value(0), "phabet_long_str");
+        assert_eq!(result.value(1), "ésojanother_lo");
 
         Ok(())
     }

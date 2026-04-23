@@ -39,11 +39,11 @@ def main():
     args = parser.parse_args()
 
     tag = args.tag
-    ghp_token = os.environ.get("GH_TOKEN")
+    ghp_token = os.environ.get("GITHUB_TOKEN")
     if not ghp_token:
         print(
             "ERROR: Personal Github token is required to download workflow artifacts. "
-            "Please specify a token through GH_TOKEN environment variable.")
+            "Please specify a token through GITHUB_TOKEN environment variable.")
         sys.exit(1)
 
     print(f"Downloading latest python wheels for RC tag {tag}...")

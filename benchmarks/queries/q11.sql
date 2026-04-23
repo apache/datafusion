@@ -13,7 +13,7 @@ group by
     ps_partkey having
     sum(ps_supplycost * ps_availqty) > (
     select
-    sum(ps_supplycost * ps_availqty) * 0.0001
+    sum(ps_supplycost * ps_availqty) * 0.0001 /* __TPCH_Q11_FRACTION__ */
     from
     partsupp,
     supplier,

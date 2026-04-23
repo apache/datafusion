@@ -17,7 +17,6 @@
 
 //! [`CsvFormat`], Comma Separated Value (CSV) [`FileFormat`] abstractions
 
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -60,7 +59,9 @@ use bytes::{Buf, Bytes};
 use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt, pin_mut};
-use object_store::{ObjectMeta, ObjectStore, delimited::newline_delimited_stream};
+use object_store::{
+    ObjectMeta, ObjectStore, ObjectStoreExt, delimited::newline_delimited_stream,
+};
 use regex::Regex;
 
 #[derive(Default)]
@@ -119,10 +120,6 @@ impl FileFormatFactory for CsvFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(CsvFormat::default())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -360,10 +357,6 @@ impl Debug for CsvSerializer {
 
 #[async_trait]
 impl FileFormat for CsvFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         CsvFormatFactory::new().get_ext()
     }
@@ -448,7 +441,6 @@ impl FileFormat for CsvFormat {
         // We need to preserve the table_schema from the original source (which includes partition columns)
         let csv_source = conf
             .file_source
-            .as_any()
             .downcast_ref::<CsvSource>()
             .expect("file_source should be a CsvSource");
         let source = Arc::new(csv_source.clone().with_csv_options(csv_options));
@@ -823,10 +815,6 @@ impl FileSink for CsvSink {
 
 #[async_trait]
 impl DataSink for CsvSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }

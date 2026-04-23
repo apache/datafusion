@@ -303,7 +303,6 @@ mod tests {
     use super::*;
 
     use crate::{Operator, col};
-    use datafusion_common::ScalarValue;
     use datafusion_common::tree_node::TransformedResult;
 
     #[test]

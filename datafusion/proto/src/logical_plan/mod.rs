@@ -44,13 +44,15 @@ use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
     FileFormatFactory, file_type_to_format, format_as_file_type,
 };
-use datafusion_datasource_arrow::file_format::ArrowFormat;
+use datafusion_datasource_arrow::file_format::{ArrowFormat, ArrowFormatFactory};
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::file_format::AvroFormat;
-use datafusion_datasource_csv::file_format::CsvFormat;
-use datafusion_datasource_json::file_format::JsonFormat as OtherNdJsonFormat;
+use datafusion_datasource_csv::file_format::{CsvFormat, CsvFormatFactory};
+use datafusion_datasource_json::file_format::{
+    JsonFormat as OtherNdJsonFormat, JsonFormatFactory,
+};
 #[cfg(feature = "parquet")]
-use datafusion_datasource_parquet::file_format::ParquetFormat;
+use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::{
     AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
 };
@@ -104,7 +106,7 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
-pub trait LogicalExtensionCodec: Debug + Send + Sync {
+pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
     fn try_decode(
         &self,
         buf: &[u8],
@@ -206,6 +208,95 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         not_impl_err!("LogicalExtensionCodec is not provided")
+    }
+
+    fn try_decode_file_format(
+        &self,
+        buf: &[u8],
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn FileFormatFactory>> {
+        let proto = protobuf::FileFormatProto::decode(buf).map_err(|e| {
+            internal_datafusion_err!("Failed to decode FileFormatProto: {e}")
+        })?;
+
+        let kind = protobuf::FileFormatKind::try_from(proto.kind).map_err(|_| {
+            internal_datafusion_err!("Unknown FileFormatKind: {}", proto.kind)
+        })?;
+
+        match kind {
+            protobuf::FileFormatKind::Csv => file_formats::CsvLogicalExtensionCodec
+                .try_decode_file_format(&proto.encoded_file_format, ctx),
+            protobuf::FileFormatKind::Json => file_formats::JsonLogicalExtensionCodec
+                .try_decode_file_format(&proto.encoded_file_format, ctx),
+            #[cfg(feature = "parquet")]
+            protobuf::FileFormatKind::Parquet => {
+                file_formats::ParquetLogicalExtensionCodec
+                    .try_decode_file_format(&proto.encoded_file_format, ctx)
+            }
+            protobuf::FileFormatKind::Arrow => file_formats::ArrowLogicalExtensionCodec
+                .try_decode_file_format(&proto.encoded_file_format, ctx),
+            protobuf::FileFormatKind::Avro => file_formats::AvroLogicalExtensionCodec
+                .try_decode_file_format(&proto.encoded_file_format, ctx),
+            #[cfg(not(feature = "parquet"))]
+            protobuf::FileFormatKind::Parquet => {
+                not_impl_err!("Parquet support requires the 'parquet' feature")
+            }
+            protobuf::FileFormatKind::Unspecified => {
+                not_impl_err!("Unspecified file format kind")
+            }
+        }
+    }
+
+    fn try_encode_file_format(
+        &self,
+        buf: &mut Vec<u8>,
+        node: Arc<dyn FileFormatFactory>,
+    ) -> Result<()> {
+        let mut encoded_file_format = Vec::new();
+
+        let kind = if node.downcast_ref::<CsvFormatFactory>().is_some() {
+            file_formats::CsvLogicalExtensionCodec
+                .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
+            protobuf::FileFormatKind::Csv
+        } else if node.downcast_ref::<JsonFormatFactory>().is_some() {
+            file_formats::JsonLogicalExtensionCodec
+                .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
+            protobuf::FileFormatKind::Json
+        } else if node.downcast_ref::<ArrowFormatFactory>().is_some() {
+            file_formats::ArrowLogicalExtensionCodec
+                .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
+            protobuf::FileFormatKind::Arrow
+        } else {
+            #[cfg(feature = "parquet")]
+            {
+                if node.downcast_ref::<ParquetFormatFactory>().is_some() {
+                    file_formats::ParquetLogicalExtensionCodec.try_encode_file_format(
+                        &mut encoded_file_format,
+                        Arc::clone(&node),
+                    )?;
+                    protobuf::FileFormatKind::Parquet
+                } else {
+                    return not_impl_err!(
+                        "Unsupported FileFormatFactory type for DefaultLogicalExtensionCodec"
+                    );
+                }
+            }
+            #[cfg(not(feature = "parquet"))]
+            {
+                return not_impl_err!(
+                    "Unsupported FileFormatFactory type for DefaultLogicalExtensionCodec"
+                );
+            }
+        };
+
+        let proto = protobuf::FileFormatProto {
+            kind: kind as i32,
+            encoded_file_format,
+        };
+        proto.encode(buf).map_err(|e| {
+            internal_datafusion_err!("Failed to encode FileFormatProto: {e}")
+        })?;
+        Ok(())
     }
 }
 
@@ -1019,7 +1110,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => {
                 let provider = source_as_provider(source)?;
                 let schema = provider.schema();
-                let source = provider.as_any();
 
                 let projection = match projection {
                     None => None,
@@ -1037,13 +1127,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let filters: Vec<protobuf::LogicalExprNode> =
                     serialize_exprs(filters, extension_codec)?;
 
-                if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
-                    let any = listing_table.options().format.as_any();
+                if let Some(listing_table) = provider.downcast_ref::<ListingTable>() {
+                    let format = listing_table.options().format.as_ref();
                     let file_format_type = {
                         let mut maybe_some_type = None;
 
                         #[cfg(feature = "parquet")]
-                        if let Some(parquet) = any.downcast_ref::<ParquetFormat>() {
+                        if let Some(parquet) = format.downcast_ref::<ParquetFormat>() {
                             let options = parquet.options();
                             maybe_some_type =
                                 Some(FileFormatType::Parquet(protobuf::ParquetFormat {
@@ -1051,7 +1141,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 }));
                         };
 
-                        if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+                        if let Some(csv) = format.downcast_ref::<CsvFormat>() {
                             let options = csv.options();
                             maybe_some_type =
                                 Some(FileFormatType::Csv(protobuf::CsvFormat {
@@ -1059,7 +1149,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 }));
                         }
 
-                        if let Some(json) = any.downcast_ref::<OtherNdJsonFormat>() {
+                        if let Some(json) = format.downcast_ref::<OtherNdJsonFormat>() {
                             let options = json.options();
                             maybe_some_type =
                                 Some(FileFormatType::Json(protobuf::NdJsonFormat {
@@ -1068,12 +1158,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }
 
                         #[cfg(feature = "avro")]
-                        if any.is::<AvroFormat>() {
+                        if format.is::<AvroFormat>() {
                             maybe_some_type =
                                 Some(FileFormatType::Avro(protobuf::AvroFormat {}))
                         }
 
-                        if any.is::<ArrowFormat>() {
+                        if format.is::<ArrowFormat>() {
                             maybe_some_type =
                                 Some(FileFormatType::Arrow(protobuf::ArrowFormat {}))
                         }
@@ -1151,7 +1241,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         )),
                     })
-                } else if let Some(view_table) = source.downcast_ref::<ViewTable>() {
+                } else if let Some(view_table) = provider.downcast_ref::<ViewTable>() {
                     let schema: protobuf::Schema = schema.as_ref().try_into()?;
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
@@ -1172,7 +1262,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         ))),
                     })
-                } else if let Some(cte_work_table) = source.downcast_ref::<CteWorkTable>()
+                } else if let Some(cte_work_table) =
+                    provider.downcast_ref::<CteWorkTable>()
                 {
                     let name = cte_work_table.name().to_string();
                     let schema = cte_work_table.schema();

@@ -17,7 +17,6 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use std::any::Any;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -593,7 +592,23 @@ impl LogicalPlanBuilder {
         self,
         expr: Vec<(impl Into<SelectExpr>, bool)>,
     ) -> Result<Self> {
-        project_with_validation(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
+        project_with_validation(Arc::unwrap_or_clone(self.plan), expr, None)
+            .map(Self::new)
+    }
+
+    /// Apply a projection, aliasing non-Column/non-Alias expressions to
+    /// match the field names from the provided schema.
+    pub fn project_with_validation_and_schema(
+        self,
+        expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
+        schema: &DFSchemaRef,
+    ) -> Result<Self> {
+        project_with_validation(
+            Arc::unwrap_or_clone(self.plan),
+            expr.into_iter().map(|e| (e, true)),
+            Some(schema),
+        )
+        .map(Self::new)
     }
 
     /// Select the given column indices
@@ -1916,7 +1931,7 @@ pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
 ) -> Result<LogicalPlan> {
-    project_with_validation(plan, expr.into_iter().map(|e| (e, true)))
+    project_with_validation(plan, expr.into_iter().map(|e| (e, true)), None)
 }
 
 /// Create Projection. Similar to project except that the expressions
@@ -1929,12 +1944,15 @@ pub fn project(
 fn project_with_validation(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
+    schema: Option<&DFSchemaRef>,
 ) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
+    let mut has_wildcard = false;
     for (e, validate) in expr {
         let e = e.into();
         match e {
             SelectExpr::Wildcard(opt) => {
+                has_wildcard = true;
                 let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
 
                 // If there is a REPLACE statement, replace that column with the given
@@ -1955,6 +1973,7 @@ fn project_with_validation(
                 }
             }
             SelectExpr::QualifiedWildcard(table_ref, opt) => {
+                has_wildcard = true;
                 let expanded =
                     expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
 
@@ -1984,6 +2003,24 @@ fn project_with_validation(
             }
         }
     }
+
+    if has_wildcard && projected_expr.is_empty() && !plan.schema().fields().is_empty() {
+        return plan_err!(
+            "SELECT list is empty after resolving * expressions, \
+             the wildcard expanded to zero columns"
+        );
+    }
+
+    // When inside a set expression, alias non-Column/non-Alias expressions
+    // to match the left side's field names, avoiding duplicate name errors.
+    if let Some(schema) = &schema {
+        for (expr, field) in projected_expr.iter_mut().zip(schema.fields()) {
+            if !matches!(expr, Expr::Column(_) | Expr::Alias(_)) {
+                *expr = std::mem::take(expr).alias(field.name());
+            }
+        }
+    }
+
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
@@ -2123,6 +2160,8 @@ pub fn wrap_projection_for_join_if_necessary(
             .into_iter()
             .map(Expr::Column)
             .collect::<Vec<_>>();
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+        // Expr contains Arc with interior mutability but is intentionally used as hash key
         let join_key_items = alias_join_keys
             .iter()
             .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))
@@ -2176,10 +2215,6 @@ impl LogicalTableSource {
 }
 
 impl TableSource for LogicalTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
     }
@@ -2259,7 +2294,7 @@ mod tests {
     use super::*;
     use crate::lit_with_metadata;
     use crate::logical_plan::StringifiedPlan;
-    use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
+    use crate::{col, expr, expr_fn::exists, in_subquery, scalar_subquery};
 
     use crate::test::function_stub::sum;
     use datafusion_common::{

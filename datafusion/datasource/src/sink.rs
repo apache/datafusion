@@ -24,9 +24,10 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequirements};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -45,11 +46,7 @@ use futures::StreamExt;
 /// The `Display` impl is used to format the sink for explain plan
 /// output.
 #[async_trait]
-pub trait DataSink: DisplayAs + Debug + Send + Sync {
-    /// Returns the data sink as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     /// Return a snapshot of the [MetricsSet] for this
     /// [DataSink].
     ///
@@ -74,6 +71,18 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64>;
+}
+
+impl dyn DataSink {
+    /// Returns true if the inner type is `T`.
+    pub fn is<T: DataSink>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Returns a reference to the inner value as the type `T` if it is of that type.
+    pub fn downcast_ref<T: DataSink>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }
 
 /// Execution plan for writing record batches to a [`DataSink`]
@@ -170,10 +179,6 @@ impl ExecutionPlan for DataSinkExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -217,6 +222,19 @@ impl ExecutionPlan for DataSinkExec {
             Arc::clone(&self.sink),
             self.sort_order.clone(),
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to sort order requirements if present
+        if let Some(sort_order) = &self.sort_order {
+            for req in sort_order.iter() {
+                f(req.expr.as_ref())?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     /// Execute the plan and return a stream of `RecordBatch`es for

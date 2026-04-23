@@ -441,3 +441,58 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn group_by_ree_dict_column() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let run_ends = Int32Array::from(vec![2, 4, 5]);
+    let dict = DictionaryArray::new(
+        UInt32Array::from(vec![0, 1, 2]),
+        Arc::new(StringArray::from(vec!["alpha", "beta", "gamma"])),
+    );
+    let ree_col = RunArray::<Int32Type>::try_new(&run_ends, &dict).unwrap();
+    let value_col = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+    let dict_type =
+        DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "group_col",
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", dict_type, true)),
+            ),
+            true,
+        ),
+        Field::new("value", DataType::Int32, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(ree_col), Arc::new(value_col)],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+
+    let results = ctx
+        .sql("SELECT group_col, SUM(value) as total FROM t GROUP BY group_col ORDER BY group_col")
+        .await?
+        .collect()
+        .await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r"
+    +-----------+-------+
+    | group_col | total |
+    +-----------+-------+
+    | alpha     | 3     |
+    | beta      | 7     |
+    | gamma     | 5     |
+    +-----------+-------+
+    "
+    );
+
+    Ok(())
+}

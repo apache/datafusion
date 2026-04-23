@@ -39,10 +39,13 @@ pub mod optimizer;
 pub mod output_requirements;
 pub mod projection_pushdown;
 pub use datafusion_pruning as pruning;
+pub mod hash_join_buffering;
 pub mod pushdown_sort;
 pub mod sanity_checker;
 pub mod topk_aggregation;
+pub mod topk_repartition;
 pub mod update_aggr_exprs;
 pub mod utils;
+pub mod window_topn;
 
-pub use optimizer::PhysicalOptimizerRule;
+pub use optimizer::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};

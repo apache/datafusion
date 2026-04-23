@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use crate::unicode::common::{LeftSlicer, general_left_right};
 use crate::utils::make_scalar_function;
 use arrow::datatypes::DataType;
@@ -24,7 +22,8 @@ use datafusion_common::Result;
 use datafusion_common::exec_err;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -72,10 +71,6 @@ impl LeftFunc {
 }
 
 impl ScalarUDFImpl for LeftFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "left"
     }
@@ -84,18 +79,15 @@ impl ScalarUDFImpl for LeftFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8View)
     }
 
     /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
     /// left('abcde', 2) = 'ab'
     /// left('abcde', -2) = 'abc'
     /// The implementation uses UTF-8 code points as characters
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
@@ -116,8 +108,8 @@ impl ScalarUDFImpl for LeftFunc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray, StringViewArray};
-    use arrow::datatypes::DataType::{Utf8, Utf8View};
+    use arrow::array::{Array, StringViewArray};
+    use arrow::datatypes::DataType::Utf8View;
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -135,8 +127,8 @@ mod tests {
             ],
             Ok(Some("ab")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -146,8 +138,8 @@ mod tests {
             ],
             Ok(Some("abcde")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -157,8 +149,8 @@ mod tests {
             ],
             Ok(Some("abc")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -168,8 +160,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -179,8 +171,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -190,8 +182,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -201,8 +193,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -212,8 +204,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -223,8 +215,8 @@ mod tests {
             ],
             Ok(Some("joséé")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -234,8 +226,8 @@ mod tests {
             ],
             Ok(Some("joséé")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
@@ -248,8 +240,8 @@ mod tests {
                 "function left requires compilation with feature flag: unicode_expressions."
             ),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
 
         // StringView cases
@@ -315,8 +307,8 @@ mod tests {
                 ],
                 Ok(Some(expected.as_str())),
                 &str,
-                Utf8,
-                StringArray
+                Utf8View,
+                StringViewArray
             );
         }
 

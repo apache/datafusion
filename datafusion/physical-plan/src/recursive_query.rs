@@ -36,10 +36,12 @@ use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 use futures::{Stream, StreamExt, ready};
@@ -139,16 +141,19 @@ impl ExecutionPlan for RecursiveQueryExec {
         "RecursiveQueryExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.static_term, &self.recursive_term]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     // TODO: control these hints and see whether we can
@@ -312,6 +317,20 @@ impl RecursiveQueryStream {
         mut batch: RecordBatch,
     ) -> Poll<Option<Result<RecordBatch>>> {
         let baseline_metrics = self.baseline_metrics.clone();
+
+        // Rebind to the declared output schema. The recursive term is planned
+        // independently from the static term and its projection may leave
+        // columns un-aliased (e.g. `upper(r.val)` vs the anchor's
+        // `upper(val) AS val`); downstream consumers that key on
+        // `batch.schema().field(i).name()` (TopK, CSV/JSON writers, custom
+        // collectors) would otherwise see the recursive branch's names leak
+        // through. Logical-plan coercion guarantees matching types, so this
+        // is a zero-copy field rebind.
+        if batch.schema() != self.schema {
+            batch =
+                RecordBatch::try_new(Arc::clone(&self.schema), batch.columns().to_vec())?;
+        }
+
         if let Some(deduplicator) = &mut self.distinct_deduplicator {
             let _timer_guard = baseline_metrics.elapsed_compute().timer();
             batch = deduplicator.deduplicate(&batch)?;

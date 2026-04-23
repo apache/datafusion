@@ -65,6 +65,24 @@ pub trait ExprSchemable {
     -> Result<(DataType, bool)>;
 }
 
+/// Derives the output field for a cast expression from the source field.
+/// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
+fn cast_output_field(
+    source_field: &FieldRef,
+    target_type: &DataType,
+    force_nullable: bool,
+) -> Arc<Field> {
+    let mut f = source_field
+        .as_ref()
+        .clone()
+        .with_data_type(target_type.clone())
+        .with_metadata(source_field.metadata().clone());
+    if force_nullable {
+        f = f.with_nullable(true);
+    }
+    Arc::new(f)
+}
+
 impl ExprSchemable for Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression
     /// based on [ExprSchema]
@@ -132,15 +150,18 @@ impl ExprSchemable for Expr {
                     .as_ref()
                     .map_or(Ok(DataType::Null), |e| e.get_type(schema))
             }
-            Expr::Cast(Cast { data_type, .. })
-            | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
+            Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
+                Ok(field.data_type().clone())
+            }
             Expr::Unnest(Unnest { expr }) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
                 match arg_data_type {
                     DataType::List(field)
                     | DataType::LargeList(field)
-                    | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
+                    | DataType::FixedSizeList(field, _)
+                    | DataType::ListView(field)
+                    | DataType::LargeListView(field) => Ok(field.data_type().clone()),
                     DataType::Struct(_) => Ok(arg_data_type),
                     DataType::Null => {
                         not_impl_err!("unnest() does not support null yet")
@@ -550,19 +571,25 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, data_type }) => expr
-                .to_field(schema)
-                .map(|(_, f)| f.retyped(data_type.clone())),
+            Expr::Cast(Cast { expr, field }) => {
+                expr.to_field(schema).map(|(_table_ref, src)| {
+                    cast_output_field(&src, field.data_type(), false)
+                })
+            }
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::TryCast(TryCast { expr, field }) => {
+                expr.to_field(schema).map(|(_table_ref, src)| {
+                    cast_output_field(&src, field.data_type(), true)
+                })
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
             | Expr::Case(_)
-            | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
@@ -634,7 +661,7 @@ fn verify_function_arguments<F: UDFCoercionExt>(
             .cloned()
             .collect::<Vec<_>>();
         plan_datafusion_err!(
-            "{} {}",
+            "{}. {}",
             match err {
                 DataFusionError::Plan(msg) => msg,
                 err => err.to_string(),
@@ -704,8 +731,7 @@ mod tests {
     use super::*;
     use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
 
-    use arrow::datatypes::FieldRef;
-    use datafusion_common::{DFSchema, ScalarValue, assert_or_internal_err};
+    use datafusion_common::{DFSchema, assert_or_internal_err};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{

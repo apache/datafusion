@@ -23,7 +23,7 @@ use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_datafusion_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use crate::PhysicalExpr;
@@ -48,12 +48,12 @@ pub fn simplify_const_expr(
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     let batch = create_dummy_batch()?;
     // If expr is already a const literal or can't be evaluated into one.
-    if expr.as_any().is::<Literal>() || (!can_evaluate_as_constant(&expr)) {
+    if expr.is::<Literal>() || (!can_evaluate_as_constant(&expr)) {
         return Ok(Transformed::no(expr));
     }
 
     // Evaluate the expression
-    match expr.evaluate(&batch) {
+    match expr.evaluate(batch) {
         Ok(ColumnarValue::Scalar(scalar)) => {
             Ok(Transformed::yes(Arc::new(Literal::new(scalar))))
         }
@@ -90,12 +90,12 @@ pub(crate) fn simplify_const_expr_immediate(
     batch: &RecordBatch,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     // Already a literal - nothing to do
-    if expr.as_any().is::<Literal>() {
+    if expr.is::<Literal>() {
         return Ok(Transformed::no(expr));
     }
 
     // Column references cannot be evaluated at plan time
-    if expr.as_any().is::<Column>() {
+    if expr.is::<Column>() {
         return Ok(Transformed::no(expr));
     }
 
@@ -107,10 +107,7 @@ pub(crate) fn simplify_const_expr_immediate(
     // Since transform visits bottom-up, children have already been simplified.
     // If all children are now Literals, this node can be const-evaluated.
     // This is O(k) where k = number of children, instead of O(subtree).
-    let all_children_literal = expr
-        .children()
-        .iter()
-        .all(|child| child.as_any().is::<Literal>());
+    let all_children_literal = expr.children().iter().all(|child| child.is::<Literal>());
 
     if !all_children_literal {
         return Ok(Transformed::no(expr));
@@ -146,18 +143,30 @@ pub(crate) fn simplify_const_expr_immediate(
 /// that only contain literals, the batch content is irrelevant.
 ///
 /// This is the same approach used in the logical expression `ConstEvaluator`.
-pub(crate) fn create_dummy_batch() -> Result<RecordBatch> {
-    // RecordBatch requires at least one column
-    let dummy_schema = Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
-    let col = new_null_array(&DataType::Null, 1);
-    Ok(RecordBatch::try_new(dummy_schema, vec![col])?)
+pub(crate) fn create_dummy_batch() -> Result<&'static RecordBatch> {
+    static DUMMY_BATCH: std::sync::OnceLock<Result<RecordBatch>> =
+        std::sync::OnceLock::new();
+    DUMMY_BATCH
+        .get_or_init(|| {
+            // RecordBatch requires at least one column
+            let dummy_schema =
+                Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
+            let col = new_null_array(&DataType::Null, 1);
+            Ok(RecordBatch::try_new(dummy_schema, vec![col])?)
+        })
+        .as_ref()
+        .map_err(|e| {
+            internal_datafusion_err!(
+                "Failed to create dummy batch for constant expression evaluation: {e}"
+            )
+        })
 }
 
 fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut can_evaluate = true;
 
     expr.apply(|e| {
-        if e.as_any().is::<Column>() || e.is_volatile_node() {
+        if e.is::<Column>() || e.is_volatile_node() {
             can_evaluate = false;
             Ok(TreeNodeRecursion::Stop)
         } else {
@@ -177,7 +186,7 @@ fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
 pub fn has_column_references(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut has_columns = false;
     expr.apply(|expr| {
-        if expr.as_any().downcast_ref::<Column>().is_some() {
+        if expr.downcast_ref::<Column>().is_some() {
             has_columns = true;
             Ok(TreeNodeRecursion::Stop)
         } else {

@@ -171,6 +171,14 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::LargeList(item_type) => Self::LargeList(Box::new(protobuf::List {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
+            DataType::ListView(item_type) => Self::ListView(Box::new(protobuf::List {
+                field_type: Some(Box::new(item_type.as_ref().try_into()?)),
+            })),
+            DataType::LargeListView(item_type) => {
+                Self::LargeListView(Box::new(protobuf::List {
+                    field_type: Some(Box::new(item_type.as_ref().try_into()?)),
+                }))
+            }
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
                 sub_field_types: convert_arc_fields_to_proto_fields(struct_fields)?,
             }),
@@ -226,11 +234,6 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     run_ends_field: Some(Box::new(run_ends_field.as_ref().try_into()?)),
                     values_field: Some(Box::new(values_field.as_ref().try_into()?)),
                 }))
-            }
-            DataType::ListView(_) | DataType::LargeListView(_) => {
-                return Err(Error::General(format!(
-                    "Proto serialization error: {val} not yet supported"
-                )));
             }
         };
 
@@ -381,6 +384,12 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
             ScalarValue::FixedSizeList(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::ListView(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::LargeListView(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
             ScalarValue::Struct(arr) => {
@@ -904,6 +913,13 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             skip_arrow_metadata: value.skip_arrow_metadata,
             coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
+            content_defined_chunking: value.use_content_defined_chunking.as_ref().map(|cdc|
+                protobuf::CdcOptions {
+                    min_chunk_size: cdc.min_chunk_size as u64,
+                    max_chunk_size: cdc.max_chunk_size as u64,
+                    norm_level: cdc.norm_level,
+                }
+            ),
         })
     }
 }
@@ -963,8 +979,11 @@ impl TryFrom<&TableParquetOptions> for protobuf::TableParquetOptions {
             .iter()
             .filter_map(|(k, v)| v.as_ref().map(|v| (k.clone(), v.clone())))
             .collect::<HashMap<String, String>>();
+
+        let global: protobuf::ParquetOptions = (&value.global).try_into()?;
+
         Ok(protobuf::TableParquetOptions {
-            global: Some((&value.global).try_into()?),
+            global: Some(global),
             column_specific_options,
             key_value_metadata,
         })
@@ -1032,8 +1051,8 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-// Nested ScalarValue types (List / FixedSizeList / LargeList / Struct / Map) are serialized using
-// Arrow IPC messages as a single column RecordBatch
+// Nested ScalarValue types (List / FixedSizeList / LargeList / ListView / LargeListView / Struct / Map)
+// are serialized using Arrow IPC messages as a single column RecordBatch
 fn encode_scalar_nested_value(
     arr: ArrayRef,
     val: &ScalarValue,
@@ -1092,6 +1111,16 @@ fn encode_scalar_nested_value(
         }),
         ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
             value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::ListView(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::ListViewValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::LargeListView(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::LargeListViewValue(
                 scalar_list_value,
             )),
         }),

@@ -42,10 +42,6 @@ impl SparkIf {
 }
 
 impl ScalarUDFImpl for SparkIf {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "if"
     }

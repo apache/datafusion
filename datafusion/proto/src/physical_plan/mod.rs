@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -42,9 +43,13 @@ use datafusion_datasource_csv::source::CsvSource;
 use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_json::source::JsonSource;
 #[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::CachedParquetFileReaderFactory;
+#[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::source::ParquetSource;
+#[cfg(feature = "parquet")]
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
@@ -74,7 +79,7 @@ use datafusion_physical_plan::joins::{
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
-use datafusion_physical_plan::metrics::MetricType;
+use datafusion_physical_plan::metrics::{MetricCategory, MetricType};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -328,7 +333,7 @@ impl protobuf::PhysicalPlanNode {
         Self: Sized,
     {
         let plan_clone = Arc::clone(&plan);
-        let plan = plan.as_any();
+        let plan = plan.as_ref() as &dyn Any;
 
         if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
             return protobuf::PhysicalPlanNode::try_from_explain_exec(exec, codec);
@@ -691,6 +696,7 @@ impl protobuf::PhysicalPlanNode {
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
             .with_batch_size(filter.batch_size as usize)
+            .with_fetch(filter.fetch.map(|f| f as usize))
             .build()?;
         match filter_selectivity {
             Ok(filter_selectivity) => Ok(Arc::new(
@@ -847,9 +853,19 @@ impl protobuf::PhysicalPlanNode {
 
             // Parse table schema with partition columns
             let table_schema = parse_table_schema_from_proto(base_conf)?;
+            let object_store_url = match base_conf.object_store_url.is_empty() {
+                false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
+                true => ObjectStoreUrl::local_filesystem(),
+            };
+            let store = ctx.runtime_env().object_store(object_store_url)?;
+            let metadata_cache =
+                ctx.runtime_env().cache_manager.get_file_metadata_cache();
+            let reader_factory =
+                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
 
-            let mut source =
-                ParquetSource::new(table_schema).with_table_parquet_options(options);
+            let mut source = ParquetSource::new(table_schema)
+                .with_parquet_file_reader_factory(reader_factory)
+                .with_table_parquet_options(options);
 
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
@@ -996,10 +1012,11 @@ impl protobuf::PhysicalPlanNode {
             codec,
             proto_converter,
         )?;
-        Ok(Arc::new(RepartitionExec::try_new(
-            input,
-            partitioning.unwrap(),
-        )?))
+        let mut repart_exec = RepartitionExec::try_new(input, partitioning.unwrap())?;
+        if repart.preserve_order {
+            repart_exec = repart_exec.with_preserve_order();
+        }
+        Ok(Arc::new(repart_exec))
     }
 
     fn try_into_global_limit_physical_plan(
@@ -1814,10 +1831,21 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&analyze.input, ctx, codec, proto_converter)?;
+        let metric_categories = if analyze.has_metric_categories {
+            let cats: Result<Vec<MetricCategory>> = analyze
+                .metric_categories
+                .iter()
+                .map(|s| s.parse::<MetricCategory>())
+                .collect();
+            Some(cats?)
+        } else {
+            None
+        };
         Ok(Arc::new(AnalyzeExec::new(
             analyze.verbose,
             analyze.show_statistics,
-            vec![MetricType::SUMMARY, MetricType::DEV],
+            vec![MetricType::Summary, MetricType::Dev],
+            metric_categories,
             input,
             Arc::new(convert_required!(analyze.schema)?),
         )))
@@ -2285,6 +2313,10 @@ impl protobuf::PhysicalPlanNode {
             codec,
             proto_converter,
         )?;
+        let (has_metric_categories, metric_categories) = match exec.metric_categories() {
+            Some(cats) => (true, cats.iter().map(|c| c.to_string()).collect()),
+            None => (false, vec![]),
+        };
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Analyze(Box::new(
                 protobuf::AnalyzeExecNode {
@@ -2292,6 +2324,8 @@ impl protobuf::PhysicalPlanNode {
                     show_statistics: exec.show_statistics(),
                     input: Some(Box::new(input)),
                     schema: Some(exec.schema().as_ref().try_into()?),
+                    has_metric_categories,
+                    metric_categories,
                 },
             ))),
         })
@@ -2320,6 +2354,7 @@ impl protobuf::PhysicalPlanNode {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                     batch_size: exec.batch_size() as u32,
+                    fetch: exec.fetch().map(|f| f as u32),
                 },
             ))),
         })
@@ -2833,9 +2868,9 @@ impl protobuf::PhysicalPlanNode {
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<Self>> {
         let data_source = data_source_exec.data_source();
-        if let Some(maybe_csv) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(maybe_csv) = data_source.downcast_ref::<FileScanConfig>() {
             let source = maybe_csv.file_source();
-            if let Some(csv_config) = source.as_any().downcast_ref::<CsvSource>() {
+            if let Some(csv_config) = source.downcast_ref::<CsvSource>() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::CsvScan(
                         protobuf::CsvScanExecNode {
@@ -2875,9 +2910,9 @@ impl protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(scan_conf) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
             let source = scan_conf.file_source();
-            if let Some(_json_source) = source.as_any().downcast_ref::<JsonSource>() {
+            if let Some(_json_source) = source.downcast_ref::<JsonSource>() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::JsonScan(
                         protobuf::JsonScanExecNode {
@@ -2892,9 +2927,9 @@ impl protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(scan_conf) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
             let source = scan_conf.file_source();
-            if let Some(_arrow_source) = source.as_any().downcast_ref::<ArrowSource>() {
+            if let Some(_arrow_source) = source.downcast_ref::<ArrowSource>() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::ArrowScan(
                         protobuf::ArrowScanExecNode {
@@ -2933,9 +2968,9 @@ impl protobuf::PhysicalPlanNode {
         }
 
         #[cfg(feature = "avro")]
-        if let Some(maybe_avro) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(maybe_avro) = data_source.downcast_ref::<FileScanConfig>() {
             let source = maybe_avro.file_source();
-            if source.as_any().downcast_ref::<AvroSource>().is_some() {
+            if source.downcast_ref::<AvroSource>().is_some() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::AvroScan(
                         protobuf::AvroScanExecNode {
@@ -2950,9 +2985,7 @@ impl protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(source_conf) =
-            data_source.as_any().downcast_ref::<MemorySourceConfig>()
-        {
+        if let Some(source_conf) = data_source.downcast_ref::<MemorySourceConfig>() {
             let proto_partitions = source_conf
                 .partitions()
                 .iter()
@@ -3040,6 +3073,7 @@ impl protobuf::PhysicalPlanNode {
                 protobuf::RepartitionExecNode {
                     input: Some(Box::new(input)),
                     partitioning: Some(pb_partitioning),
+                    preserve_order: exec.preserve_order(),
                 },
             ))),
         })
@@ -3344,7 +3378,7 @@ impl protobuf::PhysicalPlanNode {
             None => None,
         };
 
-        if let Some(sink) = exec.sink().as_any().downcast_ref::<JsonSink>() {
+        if let Some(sink) = exec.sink().downcast_ref::<JsonSink>() {
             return Ok(Some(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(
                     protobuf::JsonSinkExecNode {
@@ -3357,7 +3391,7 @@ impl protobuf::PhysicalPlanNode {
             }));
         }
 
-        if let Some(sink) = exec.sink().as_any().downcast_ref::<CsvSink>() {
+        if let Some(sink) = exec.sink().downcast_ref::<CsvSink>() {
             return Ok(Some(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(
                     protobuf::CsvSinkExecNode {
@@ -3371,7 +3405,7 @@ impl protobuf::PhysicalPlanNode {
         }
 
         #[cfg(feature = "parquet")]
-        if let Some(sink) = exec.sink().as_any().downcast_ref::<ParquetSink>() {
+        if let Some(sink) = exec.sink().downcast_ref::<ParquetSink>() {
             return Ok(Some(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
                     protobuf::ParquetSinkExecNode {
@@ -3636,7 +3670,7 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
-pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     fn try_decode(
         &self,
         buf: &[u8],

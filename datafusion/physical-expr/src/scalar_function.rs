@@ -29,7 +29,6 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
-use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -46,7 +45,7 @@ use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
-    Volatility, expr_vec_fmt,
+    ScalarUDFImpl, Volatility, expr_vec_fmt,
 };
 
 /// Physical expression of a scalar function
@@ -105,11 +104,7 @@ impl ScalarFunctionExpr {
 
         let arguments = args
             .iter()
-            .map(|e| {
-                e.as_any()
-                    .downcast_ref::<Literal>()
-                    .map(|literal| literal.value())
-            })
+            .map(|e| e.downcast_ref::<Literal>().map(|literal| literal.value()))
             .collect::<Vec<_>>();
         let ret_args = ReturnFieldArgs {
             arg_fields: &arg_fields,
@@ -169,19 +164,10 @@ impl ScalarFunctionExpr {
     /// Otherwise returns `Some(ScalarFunctionExpr)`.
     pub fn try_downcast_func<T>(expr: &dyn PhysicalExpr) -> Option<&ScalarFunctionExpr>
     where
-        T: 'static,
+        T: ScalarUDFImpl,
     {
-        match expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
-            Some(scalar_expr)
-                if scalar_expr
-                    .fun()
-                    .inner()
-                    .as_any()
-                    .downcast_ref::<T>()
-                    .is_some() =>
-            {
-                Some(scalar_expr)
-            }
+        match expr.downcast_ref::<ScalarFunctionExpr>() {
+            Some(scalar_expr) if scalar_expr.fun().inner().is::<T>() => Some(scalar_expr),
             _ => None,
         }
     }
@@ -239,11 +225,6 @@ fn sorted_config_entries(config_options: &ConfigOptions) -> Vec<ConfigEntry> {
 }
 
 impl PhysicalExpr for ScalarFunctionExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_field.data_type().clone())
     }
@@ -374,10 +355,9 @@ impl PhysicalExpr for ScalarFunctionExpr {
 mod tests {
     use super::*;
     use crate::expressions::Column;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::{ScalarUDF, ScalarUDFImpl, Signature};
+    use arrow::datatypes::Field;
+    use datafusion_expr::{ScalarUDFImpl, Signature};
     use datafusion_physical_expr_common::physical_expr::is_volatile;
-    use std::any::Any;
 
     /// Test helper to create a mock UDF with a specific volatility
     #[derive(Debug, PartialEq, Eq, Hash)]
@@ -386,10 +366,6 @@ mod tests {
     }
 
     impl ScalarUDFImpl for MockScalarUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "mock_function"
         }

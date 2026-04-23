@@ -124,13 +124,11 @@ pub async fn expression_deduplication() -> Result<()> {
 
     // Step 5: check that we deduplicated expressions
     println!("Step 5: Checking for deduplicated expressions...");
-    let Some(filter_exec) = deserialized_plan.as_any().downcast_ref::<FilterExec>()
-    else {
+    let Some(filter_exec) = deserialized_plan.downcast_ref::<FilterExec>() else {
         panic!("Deserialized plan is not a FilterExec");
     };
     let predicate = Arc::clone(filter_exec.predicate());
     let binary_expr = predicate
-        .as_any()
         .downcast_ref::<BinaryExpr>()
         .expect("Predicate is not a BinaryExpr");
     let left = &binary_expr.left();

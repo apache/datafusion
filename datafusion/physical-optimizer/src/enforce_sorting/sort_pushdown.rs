@@ -280,7 +280,7 @@ fn pushdown_requirement_to_children(
             }
             RequirementsCompatibility::NonCompatible => Ok(None),
         }
-    } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+    } else if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
         let Some(sort_ordering) = sort_exec.properties().output_ordering().cloned()
         else {
             return internal_err!("SortExec should have output ordering");
@@ -319,7 +319,7 @@ fn pushdown_requirement_to_children(
         // `UnionExec` does not have real sort requirements for its input, we
         // just propagate the sort requirements down:
         Ok(Some(vec![Some(parent_required); plan.children().len()]))
-    } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
+    } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
         let left_columns_len = smj.left().schema().fields().len();
         let parent_ordering: Vec<PhysicalSortExpr> = parent_required
             .first()
@@ -354,14 +354,14 @@ fn pushdown_requirement_to_children(
                 Ok(None)
             }
         }
-    } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+    } else if let Some(aggregate_exec) = plan.downcast_ref::<AggregateExec>() {
         handle_aggregate_pushdown(aggregate_exec, parent_required)
     } else if maintains_input_order.is_empty()
         || !maintains_input_order.iter().any(|o| *o)
-        || plan.as_any().is::<RepartitionExec>()
-        || plan.as_any().is::<FilterExec>()
+        || plan.is::<RepartitionExec>()
+        || plan.is::<FilterExec>()
         // TODO: Add support for Projection push down
-        || plan.as_any().is::<ProjectionExec>()
+        || plan.is::<ProjectionExec>()
         || pushdown_would_violate_requirements(&parent_required, plan.as_ref())
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
@@ -383,7 +383,7 @@ fn pushdown_requirement_to_children(
             // ordering requirement invalidates requirement of sort preserving merge exec.
             Ok(None)
         }
-    } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+    } else if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
     } else {
         handle_custom_pushdown(plan, parent_required, &maintains_input_order)
@@ -430,7 +430,7 @@ fn handle_aggregate_pushdown(
     for req in parent_requirement {
         // Sort above AggregateExec should reference its output columns. Map each
         // output group-by column to its original input expression.
-        let Some(column) = req.expr.as_any().downcast_ref::<Column>() else {
+        let Some(column) = req.expr.downcast_ref::<Column>() else {
             return Ok(None);
         };
         if column.index() >= group_input_exprs.len() {
@@ -604,14 +604,13 @@ fn expr_source_side(
             let mut right_ordering = ordering.clone();
             let (mut valid_left, mut valid_right) = (true, true);
             for (left, right) in ordering.iter_mut().zip(right_ordering.iter_mut()) {
-                let col = left.expr.as_any().downcast_ref::<Column>()?;
+                let col = left.expr.downcast_ref::<Column>()?;
                 let eq_class = eq_group.get_equivalence_class(&left.expr);
                 if col.index() < left_columns_len {
                     if valid_right {
                         valid_right = eq_class.is_some_and(|cls| {
                             for expr in cls.iter() {
                                 if expr
-                                    .as_any()
                                     .downcast_ref::<Column>()
                                     .is_some_and(|c| c.index() >= left_columns_len)
                                 {
@@ -626,7 +625,6 @@ fn expr_source_side(
                     valid_left = eq_class.is_some_and(|cls| {
                         for expr in cls.iter() {
                             if expr
-                                .as_any()
                                 .downcast_ref::<Column>()
                                 .is_some_and(|c| c.index() < left_columns_len)
                             {
@@ -652,11 +650,11 @@ fn expr_source_side(
         }
         JoinType::LeftSemi | JoinType::LeftAnti => ordering
             .iter()
-            .all(|e| e.expr.as_any().is::<Column>())
+            .all(|e| e.expr.is::<Column>())
             .then_some((JoinSide::Left, ordering)),
         JoinType::RightSemi | JoinType::RightAnti => ordering
             .iter()
-            .all(|e| e.expr.as_any().is::<Column>())
+            .all(|e| e.expr.is::<Column>())
             .then_some((JoinSide::Right, ordering)),
     }
 }
@@ -680,8 +678,10 @@ fn handle_custom_pushdown(
     parent_required: OrderingRequirements,
     maintains_input_order: &[bool],
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    let plan_children = plan.children();
+
     // If the plan has no children, return early:
-    if plan.children().is_empty() {
+    if plan_children.is_empty() {
         return Ok(None);
     }
 
@@ -699,8 +699,7 @@ fn handle_custom_pushdown(
         .collect();
 
     // Get the number of fields in each child's schema:
-    let children_schema_lengths: Vec<usize> = plan
-        .children()
+    let children_schema_lengths: Vec<usize> = plan_children
         .iter()
         .map(|c| c.schema().fields().len())
         .collect();
@@ -734,11 +733,11 @@ fn handle_custom_pushdown(
         let updated_parent_req = requirement
             .into_iter()
             .map(|req| {
-                let child_schema = plan.children()[maintained_child_idx].schema();
+                let child_schema = plan_children[maintained_child_idx].schema();
                 let updated_columns = req
                     .expr
                     .transform_up(|expr| {
-                        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                        if let Some(col) = expr.downcast_ref::<Column>() {
                             let new_index = col.index() - sub_offset;
                             Ok(Transformed::yes(Arc::new(Column::new(
                                 child_schema.field(new_index).name(),
@@ -809,17 +808,19 @@ fn handle_hash_join(
 
     let all_from_right_child = all_indices.iter().all(|i| *i >= len_of_left_fields);
 
+    let plan_children = plan.children();
+
     // If all columns are from the right child, update the parent requirements
     if all_from_right_child {
         // Transform the parent-required expression for the child schema by adjusting columns
         let updated_parent_req = requirement
             .into_iter()
             .map(|req| {
-                let child_schema = plan.children()[1].schema();
+                let child_schema = plan_children[1].schema();
                 let updated_columns = req
                     .expr
                     .transform_up(|expr| {
-                        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                        if let Some(col) = expr.downcast_ref::<Column>() {
                             let index = projected_indices[col.index()].index;
                             Ok(Transformed::yes(Arc::new(Column::new(
                                 child_schema.field(index).name(),

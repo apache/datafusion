@@ -15,17 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
+use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, TableReference, plan_err};
+use datafusion_common::{
+    DFSchemaRef, Result, ScalarValue, TableReference, ToDFSchema, plan_err,
+};
+use datafusion_expr::expr::Cast;
+use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::test::function_stub::sum_udaf;
-use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, Expr, Extension, LogicalPlan, ScalarUDF, SortExpr,
+    TableProviderFilterPushDown, TableSource, UserDefinedLogicalNodeCore, WindowUDF, col,
+};
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::planner::AggregateFunctionPlanner;
@@ -690,6 +698,144 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 
 fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
+fn optimize_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
+    let config = OptimizerContext::new().with_skip_failing_rules(false);
+    let optimizer = Optimizer::new();
+    optimizer.optimize(plan, &config, observe)
+}
+
+/// Extension node that does NOT implement `necessary_children_exprs`.
+/// Used to test that the optimizer still processes subtrees below such nodes.
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct OpaqueRequirementsExtension {
+    input: Arc<LogicalPlan>,
+    schema: DFSchemaRef,
+}
+
+impl PartialOrd for OpaqueRequirementsExtension {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.input
+            .partial_cmp(&other.input)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
+impl UserDefinedLogicalNodeCore for OpaqueRequirementsExtension {
+    fn name(&self) -> &str {
+        "OpaqueRequirementsExtension"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
+        Ok(Self {
+            input: Arc::new(inputs.swap_remove(0)),
+            schema: Arc::clone(&self.schema),
+        })
+    }
+
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "OpaqueRequirementsExtension")
+    }
+}
+
+struct InexactFilterTableSource {
+    schema: SchemaRef,
+}
+
+impl TableSource for InexactFilterTableSource {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+    }
+}
+
+/// Reproduction of https://github.com/apache/datafusion/issues/18816
+/// Extension nodes without `necessary_children_exprs` should not prevent
+/// the optimizer from pruning unnecessary columns in subtrees.
+#[test]
+fn extension_node_does_not_block_projection_pruning() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+        Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+    ]));
+
+    let table_source: Arc<dyn TableSource> = Arc::new(InexactFilterTableSource {
+        schema: Arc::clone(&schema),
+    });
+
+    let ts_cast = Expr::Cast(Cast::new(
+        Box::new(col("t.ts")),
+        DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+    ));
+    let ts_millis_1000 = Expr::Literal(
+        ScalarValue::TimestampMillisecond(Some(1000), Some("UTC".into())),
+        None,
+    );
+    let ts_millis_2000 = Expr::Literal(
+        ScalarValue::TimestampMillisecond(Some(2000), Some("UTC".into())),
+        None,
+    );
+
+    let plan = LogicalPlanBuilder::scan("t", table_source, None)?
+        .project(vec![col("t.a"), ts_cast.alias_qualified(Some("t"), "ts")])?
+        .filter(
+            col("t.ts")
+                .gt(ts_millis_1000)
+                .and(col("t.ts").lt(ts_millis_2000)),
+        )?
+        .sort(vec![
+            SortExpr::new(col("t.a"), true, true),
+            SortExpr::new(col("t.ts"), true, true),
+        ])?
+        .build()?;
+
+    let df_schema = schema.to_dfschema_ref()?;
+    let plan = LogicalPlan::Extension(Extension {
+        node: Arc::new(OpaqueRequirementsExtension {
+            input: Arc::new(plan),
+            schema: df_schema,
+        }),
+    });
+
+    let optimized = optimize_plan(plan)?;
+    assert_snapshot!(
+        format!("{optimized}"),
+        @r#"
+    OpaqueRequirementsExtension
+      Sort: t.a ASC NULLS FIRST, t.ts ASC NULLS FIRST
+        Projection: t.a, CAST(t.ts AS Timestamp(ms, "UTC")) AS ts
+          Projection: t.a, t.ts
+            Filter: __common_expr_3 > TimestampMillisecond(1000, Some("UTC")) AND __common_expr_3 < TimestampMillisecond(2000, Some("UTC"))
+              Projection: CAST(t.ts AS Timestamp(ms, "UTC")) AS __common_expr_3, t.a, t.ts
+                TableScan: t projection=[a, ts], partial_filters=[t.ts > TimestampNanosecond(1000000000, None), t.ts < TimestampNanosecond(2000000000, None), CAST(t.ts AS Timestamp(ms, "UTC")) > TimestampMillisecond(1000, Some("UTC")), CAST(t.ts AS Timestamp(ms, "UTC")) < TimestampMillisecond(2000, Some("UTC"))]
+    "#,
+    );
+
+    Ok(())
+}
+
 #[derive(Default)]
 struct MyContextProvider {
     options: ConfigOptions,
@@ -781,10 +927,6 @@ struct MyTableSource {
 }
 
 impl TableSource for MyTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

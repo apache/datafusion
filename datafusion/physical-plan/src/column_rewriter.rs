@@ -50,7 +50,7 @@ impl<'a> TreeNodeRewriter for PhysicalColumnRewriter<'a> {
         &mut self,
         node: Self::Node,
     ) -> datafusion_common::Result<Transformed<Self::Node>> {
-        if let Some(column) = node.as_any().downcast_ref::<Column>() {
+        if let Some(column) = node.downcast_ref::<Column>() {
             if let Some(new_column) = self.column_map.get(column) {
                 // jump to prevent rewriting the new sub-expression again
                 return Ok(Transformed::new(
@@ -74,12 +74,11 @@ impl<'a> TreeNodeRewriter for PhysicalColumnRewriter<'a> {
 mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{DataFusionError, Result, tree_node::TreeNode};
+    use datafusion_common::{Result, tree_node::TreeNode};
     use datafusion_physical_expr::{
         PhysicalExpr,
         expressions::{Column, binary, col, lit},
     };
-    use std::sync::Arc;
 
     /// Helper function to create a test schema
     fn create_test_schema() -> Arc<Schema> {

@@ -19,10 +19,10 @@
 
 use std::sync::Arc;
 
-use crate::strings::make_and_append_view;
+use crate::strings::append_view;
 use arrow::array::{
     Array, ArrayRef, GenericStringArray, GenericStringBuilder, NullBufferBuilder,
-    OffsetSizeTrait, StringBuilder, StringViewArray, new_null_array,
+    OffsetSizeTrait, StringViewArray, StringViewBuilder, new_null_array,
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -152,13 +152,8 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
             {
                 if let Some(src_str) = src_str_opt {
                     let (trimmed, offset) = Tr::trim_ascii_char(src_str, b' ');
-                    make_and_append_view(
-                        &mut views_buf,
-                        &mut null_builder,
-                        raw_view,
-                        trimmed,
-                        offset,
-                    );
+                    append_view(&mut views_buf, raw_view, trimmed, offset);
+                    null_builder.append_non_null();
                 } else {
                     null_builder.append_null();
                     views_buf.push(0);
@@ -204,13 +199,8 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                         pattern.clear();
                         pattern.extend(characters.chars());
                         let (trimmed, offset) = Tr::trim(src_str, &pattern);
-                        make_and_append_view(
-                            &mut views_buf,
-                            &mut null_builder,
-                            raw_view,
-                            trimmed,
-                            offset,
-                        );
+                        append_view(&mut views_buf, raw_view, trimmed, offset);
+                        null_builder.append_non_null();
                     } else {
                         null_builder.append_null();
                         views_buf.push(0);
@@ -261,7 +251,8 @@ fn trim_and_append_view<Tr: Trimmer>(
 ) {
     if let Some(src_str) = src_str_opt {
         let (trimmed, offset) = Tr::trim(src_str, pattern);
-        make_and_append_view(views_buf, null_builder, original_view, trimmed, offset);
+        append_view(views_buf, original_view, trimmed, offset);
+        null_builder.append_non_null();
     } else {
         null_builder.append_null();
         views_buf.push(0);
@@ -358,10 +349,8 @@ where
             >(array, op)?)),
             DataType::Utf8View => {
                 let string_array = as_string_view_array(array)?;
-                let mut string_builder = StringBuilder::with_capacity(
-                    string_array.len(),
-                    string_array.get_array_memory_size(),
-                );
+                let mut string_builder =
+                    StringViewBuilder::with_capacity(string_array.len());
 
                 for str in string_array.iter() {
                     if let Some(str) = str {
@@ -386,7 +375,7 @@ where
             }
             ScalarValue::Utf8View(a) => {
                 let result = a.as_ref().map(|x| op(x));
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },

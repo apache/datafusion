@@ -18,7 +18,6 @@
 //! Defines NTH_VALUE aggregate expression which may specify ordering requirement
 //! that can evaluated at runtime during query execution
 
-use std::any::Any;
 use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -112,10 +111,6 @@ impl Default for NthValueAgg {
 }
 
 impl AggregateUDFImpl for NthValueAgg {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "nth_value"
     }
@@ -130,7 +125,6 @@ impl AggregateUDFImpl for NthValueAgg {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let n = match acc_args.exprs[1]
-            .as_any()
             .downcast_ref::<Literal>()
             .map(|lit| lit.value())
         {

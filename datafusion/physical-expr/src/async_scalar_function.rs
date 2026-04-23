@@ -26,7 +26,6 @@ use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr::async_udf::AsyncScalarUDF;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use std::any::Any;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -68,7 +67,7 @@ impl AsyncFuncExpr {
         func: Arc<dyn PhysicalExpr>,
         schema: &Schema,
     ) -> Result<Self> {
-        let Some(_) = func.as_any().downcast_ref::<ScalarFunctionExpr>() else {
+        let Some(_) = func.downcast_ref::<ScalarFunctionExpr>() else {
             return internal_err!(
                 "unexpected function type, expected ScalarFunctionExpr, got: {:?}",
                 func
@@ -99,9 +98,8 @@ impl AsyncFuncExpr {
 
     /// Return the ideal batch size for this function
     pub fn ideal_batch_size(&self) -> Result<Option<usize>> {
-        if let Some(expr) = self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
-            && let Some(udf) =
-                expr.fun().inner().as_any().downcast_ref::<AsyncScalarUDF>()
+        if let Some(expr) = self.func.downcast_ref::<ScalarFunctionExpr>()
+            && let Some(udf) = expr.fun().inner().downcast_ref::<AsyncScalarUDF>()
         {
             return Ok(udf.ideal_batch_size());
         }
@@ -116,8 +114,7 @@ impl AsyncFuncExpr {
         batch: &RecordBatch,
         config_options: Arc<ConfigOptions>,
     ) -> Result<ColumnarValue> {
-        let Some(scalar_function_expr) =
-            self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
+        let Some(scalar_function_expr) = self.func.downcast_ref::<ScalarFunctionExpr>()
         else {
             return internal_err!(
                 "unexpected function type, expected ScalarFunctionExpr, got: {:?}",
@@ -128,7 +125,6 @@ impl AsyncFuncExpr {
         let Some(async_udf) = scalar_function_expr
             .fun()
             .inner()
-            .as_any()
             .downcast_ref::<AsyncScalarUDF>()
         else {
             return not_impl_err!(
@@ -211,10 +207,6 @@ impl AsyncFuncExpr {
 }
 
 impl PhysicalExpr for AsyncFuncExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         self.func.data_type(input_schema)
     }
