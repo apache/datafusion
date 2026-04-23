@@ -558,6 +558,66 @@ mod tests {
 
         assert_eq!(metric_usize(&aggregated, "rows_written"), 50);
         assert!(metric_usize(&aggregated, "bytes_written") > 0);
+        assert!(
+            metric_usize(&aggregated, "elapsed_compute") > 0,
+            "expected elapsed_compute > 0 on parallel path"
+        );
+
+        Ok(())
+    }
+
+    /// Test that ParquetSink reports a non-zero elapsed_compute on the sequential
+    /// write path (allow_single_file_parallelism = false), where elapsed_compute
+    /// is computed as total_write_time - io_time via TimingWriter.
+    #[tokio::test]
+    async fn test_parquet_sink_metrics_sequential() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use datafusion_execution::TaskContext;
+
+        use futures::TryStreamExt;
+
+        let ctx = SessionContext::new();
+        ctx.sql("SET datafusion.execution.parquet.allow_single_file_parallelism = false")
+            .await?
+            .collect()
+            .await?;
+
+        let tmp_dir = TempDir::new()?;
+        let output_path = tmp_dir.path().join("metrics_sequential.parquet");
+        let output_path_str = output_path.to_str().unwrap();
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let ids: Vec<i32> = (0..50).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(ids))],
+        )?;
+        ctx.register_batch("source_seq", batch)?;
+
+        let df = ctx
+            .sql(&format!(
+                "COPY source_seq TO '{output_path_str}' STORED AS PARQUET"
+            ))
+            .await?;
+        let plan = df.create_physical_plan().await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+        let stream = plan.execute(0, task_ctx)?;
+        let _batches: Vec<_> = stream.try_collect().await?;
+
+        let metrics = plan
+            .metrics()
+            .expect("DataSinkExec should return metrics from ParquetSink");
+        let aggregated = metrics.aggregate_by_name();
+
+        assert_eq!(metric_usize(&aggregated, "rows_written"), 50);
+        assert!(metric_usize(&aggregated, "bytes_written") > 0);
+        assert!(
+            metric_usize(&aggregated, "elapsed_compute") > 0,
+            "expected elapsed_compute > 0 on sequential path"
+        );
 
         Ok(())
     }

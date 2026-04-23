@@ -22,6 +22,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
@@ -55,7 +56,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::metrics::{
-    ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet,
+    ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet, Time,
 };
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
@@ -78,6 +79,7 @@ use parquet::arrow::arrow_writer::{
     ArrowWriterOptions, compute_leaves,
 };
 use parquet::arrow::async_reader::MetadataFetch;
+use parquet::arrow::async_writer::AsyncFileWriter;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::basic::Type;
 #[cfg(feature = "parquet_encryption")]
@@ -1175,6 +1177,35 @@ impl DisplayAs for ParquetSink {
     }
 }
 
+/// Wraps an [`AsyncFileWriter`] and records the wall-clock time spent in I/O
+/// calls (`write` and `complete`). Used by the sequential write path to isolate
+/// I/O time so it can be subtracted from the total write time, yielding a clean
+/// `elapsed_compute` that covers only Arrow→Parquet encoding.
+///
+/// `io_time` is backed by `Arc<AtomicUsize>`, so clones share the same counter.
+/// This type is an internal implementation detail and is not registered in any
+/// `MetricsSet`.
+struct TimingWriter<W> {
+    inner: W,
+    io_time: Time,
+}
+
+impl<W: AsyncFileWriter> AsyncFileWriter for TimingWriter<W> {
+    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        Box::pin(async move {
+            let _timer = self.io_time.timer();
+            self.inner.write(bs).await
+        })
+    }
+
+    fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        Box::pin(async move {
+            let _timer = self.io_time.timer();
+            self.inner.complete().await
+        })
+    }
+}
+
 impl ParquetSink {
     /// Create from config.
     pub fn new(config: FileSinkConfig, parquet_options: TableParquetOptions) -> Self {
@@ -1244,7 +1275,8 @@ impl ParquetSink {
         object_store: Arc<dyn ObjectStore>,
         context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
-    ) -> Result<AsyncArrowWriter<BufWriter>> {
+        io_time: Time,
+    ) -> Result<AsyncArrowWriter<TimingWriter<BufWriter>>> {
         let buf_writer = BufWriter::with_capacity(
             object_store,
             location.clone(),
@@ -1254,12 +1286,16 @@ impl ParquetSink {
                 .execution
                 .objectstore_writer_buffer_size,
         );
+        let timing_writer = TimingWriter {
+            inner: buf_writer,
+            io_time,
+        };
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
 
         let writer = AsyncArrowWriter::try_new_with_options(
-            buf_writer,
+            timing_writer,
             get_writer_schema(&self.config),
             options,
         )?;
@@ -1339,8 +1375,10 @@ impl FileSink for ParquetSink {
             .with_category(MetricCategory::Bytes)
             .global_counter("bytes_written");
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
-
-        let write_start = datafusion_common::instant::Instant::now();
+        // Sequential path only: not registered in MetricsSet — used internally to
+        // compute elapsed_compute = total_write_time - io_time.
+        let total_write_time = Time::new();
+        let io_time = Time::new();
 
         let parquet_opts = &self.parquet_options;
 
@@ -1371,15 +1409,19 @@ impl FileSink for ParquetSink {
                         Arc::clone(&object_store),
                         context,
                         parquet_props.clone(),
+                        io_time.clone(),
                     )
                     .await?;
                 let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
+                let total_write_time_task = total_write_time.clone();
                 file_write_tasks.spawn(async move {
                     while let Some(batch) = rx.recv().await {
+                        let _timer = total_write_time_task.timer();
                         writer.write(&batch).await?;
                         reservation.try_resize(writer.memory_size())?;
                     }
+                    let _timer = total_write_time_task.timer();
                     let parquet_meta_data = writer
                         .close()
                         .await
@@ -1407,6 +1449,7 @@ impl FileSink for ParquetSink {
                 let skip_arrow_metadata = self.parquet_options.global.skip_arrow_metadata;
                 let parallel_options_clone = parallel_options.clone();
                 let pool = Arc::clone(context.memory_pool());
+                let encoding_time = elapsed_compute.clone();
                 file_write_tasks.spawn(async move {
                     let parquet_meta_data = output_single_parquet_file_parallelized(
                         writer,
@@ -1416,6 +1459,7 @@ impl FileSink for ParquetSink {
                         skip_arrow_metadata,
                         parallel_options_clone,
                         pool,
+                        encoding_time,
                     )
                     .await?;
                     Ok((path, parquet_meta_data))
@@ -1456,7 +1500,8 @@ impl FileSink for ParquetSink {
             .await
             .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
-        elapsed_compute.add_elapsed(write_start);
+        let encoding_nanos = total_write_time.value().saturating_sub(io_time.value());
+        elapsed_compute.add_duration(Duration::from_nanos(encoding_nanos as u64));
 
         Ok(rows_written_counter.value() as u64)
     }
@@ -1487,8 +1532,10 @@ async fn column_serializer_task(
     mut rx: Receiver<ArrowLeafColumn>,
     mut writer: ArrowColumnWriter,
     reservation: MemoryReservation,
+    encoding_time: Time,
 ) -> Result<(ArrowColumnWriter, MemoryReservation)> {
     while let Some(col) = rx.recv().await {
+        let _timer = encoding_time.timer();
         writer.write(&col)?;
         reservation.try_resize(writer.memory_size())?;
     }
@@ -1505,6 +1552,7 @@ fn spawn_column_parallel_row_group_writer(
     col_writers: Vec<ArrowColumnWriter>,
     max_buffer_size: usize,
     pool: &Arc<dyn MemoryPool>,
+    encoding_time: &Time,
 ) -> Result<(Vec<ColumnWriterTask>, Vec<ColSender>)> {
     let num_columns = col_writers.len();
 
@@ -1522,6 +1570,7 @@ fn spawn_column_parallel_row_group_writer(
             receive_array,
             writer,
             reservation,
+            encoding_time.clone(),
         ));
         col_writer_tasks.push(task);
     }
@@ -1570,6 +1619,7 @@ fn spawn_rg_join_and_finalize_task(
     column_writer_tasks: Vec<ColumnWriterTask>,
     rg_rows: usize,
     pool: &Arc<dyn MemoryPool>,
+    encoding_time: Time,
 ) -> SpawnedTask<RBStreamSerializeResult> {
     let rg_reservation =
         MemoryConsumer::new("ParquetSink(SerializedRowGroupWriter)").register(pool);
@@ -1584,6 +1634,7 @@ fn spawn_rg_join_and_finalize_task(
                 .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
             let encoded_size = writer.get_estimated_total_bytes();
             rg_reservation.grow(encoded_size);
+            let _timer = encoding_time.timer();
             finalized_rg.push(writer.close()?);
         }
 
@@ -1599,6 +1650,7 @@ fn spawn_rg_join_and_finalize_task(
 /// on the next row group in parallel. So, parquet serialization is parallelized
 /// across both columns and row_groups, with a theoretical max number of parallel tasks
 /// given by n_columns * num_row_groups.
+#[expect(clippy::too_many_arguments)]
 fn spawn_parquet_parallel_serialization_task(
     row_group_writer_factory: ArrowRowGroupWriterFactory,
     mut data: Receiver<RecordBatch>,
@@ -1607,6 +1659,7 @@ fn spawn_parquet_parallel_serialization_task(
     writer_props: Arc<WriterProperties>,
     parallel_options: Arc<ParallelParquetWriterOptions>,
     pool: Arc<dyn MemoryPool>,
+    encoding_time: Time,
 ) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
         let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
@@ -1617,7 +1670,12 @@ fn spawn_parquet_parallel_serialization_task(
         let col_writers =
             row_group_writer_factory.create_column_writers(row_group_index)?;
         let (mut column_writer_handles, mut col_array_channels) =
-            spawn_column_parallel_row_group_writer(col_writers, max_buffer_rb, &pool)?;
+            spawn_column_parallel_row_group_writer(
+                col_writers,
+                max_buffer_rb,
+                &pool,
+                &encoding_time,
+            )?;
         let mut current_rg_rows = 0;
 
         while let Some(mut rb) = data.recv().await {
@@ -1652,6 +1710,7 @@ fn spawn_parquet_parallel_serialization_task(
                         column_writer_handles,
                         max_row_group_rows,
                         &pool,
+                        encoding_time.clone(),
                     );
 
                     // Do not surface error from closed channel (means something
@@ -1671,6 +1730,7 @@ fn spawn_parquet_parallel_serialization_task(
                             col_writers,
                             max_buffer_rb,
                             &pool,
+                            &encoding_time,
                         )?;
                 }
             }
@@ -1683,6 +1743,7 @@ fn spawn_parquet_parallel_serialization_task(
                 column_writer_handles,
                 current_rg_rows,
                 &pool,
+                encoding_time.clone(),
             );
 
             // Do not surface error from closed channel (means something
@@ -1746,6 +1807,7 @@ async fn concatenate_parallel_row_groups(
 /// independent RecordBatch streams in parallel to RowGroups in memory. Another
 /// task then stitches these independent RowGroups together and streams this large
 /// single parquet file to an ObjectStore in multiple parts.
+#[expect(clippy::too_many_arguments)]
 async fn output_single_parquet_file_parallelized(
     object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     data: Receiver<RecordBatch>,
@@ -1754,6 +1816,7 @@ async fn output_single_parquet_file_parallelized(
     skip_arrow_metadata: bool,
     parallel_options: ParallelParquetWriterOptions,
     pool: Arc<dyn MemoryPool>,
+    encoding_time: Time,
 ) -> Result<ParquetMetaData> {
     let max_rowgroups = parallel_options.max_parallel_row_groups;
     // Buffer size of this channel limits maximum number of RowGroups being worked on in parallel
@@ -1780,6 +1843,7 @@ async fn output_single_parquet_file_parallelized(
         Arc::clone(&arc_props),
         parallel_options.into(),
         Arc::clone(&pool),
+        encoding_time,
     );
     let parquet_meta_data = concatenate_parallel_row_groups(
         writer,
