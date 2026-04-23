@@ -886,6 +886,8 @@ fn coerced_from<'a>(
         (Interval(_), Null | Utf8 | LargeUtf8) => Some(type_into.clone()),
         // We can go into a Utf8View from a Utf8 or LargeUtf8
         (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
+        // We can go into a BinaryView from a Binary or LargeBinary
+        (BinaryView, Binary | LargeBinary | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
@@ -956,10 +958,38 @@ mod tests {
         let cases = vec![
             (DataType::Utf8View, DataType::Utf8),
             (DataType::Utf8View, DataType::LargeUtf8),
+            (DataType::Utf8View, DataType::Null),
+            (DataType::BinaryView, DataType::Binary),
+            (DataType::BinaryView, DataType::LargeBinary),
+            (DataType::BinaryView, DataType::Null),
         ];
 
         for case in cases {
             assert_eq!(coerced_from(&case.0, &case.1), Some(case.0));
+        }
+    }
+
+    #[test]
+    fn test_binaryview_signature_accepts_binary_columns() {
+        // A scalar UDF declared with `Signature::exact(vec![BinaryView], ...)`
+        // must accept `Binary`, `LargeBinary`, and `Null` arguments via
+        // coercion, matching the behaviour already in place for `Utf8View`.
+        let signature =
+            Signature::exact(vec![DataType::BinaryView], Volatility::Immutable);
+
+        for input in [DataType::Binary, DataType::LargeBinary, DataType::Null] {
+            let current_fields = vec![Arc::new(Field::new("f", input.clone(), true))];
+            let coerced = fields_with_udf(&current_fields, &MockUdf(signature.clone()))
+                .unwrap_or_else(|e| {
+                    panic!("failed to coerce {input:?} into BinaryView: {e}")
+                });
+            assert_eq!(
+                coerced
+                    .iter()
+                    .map(|f| f.data_type().clone())
+                    .collect::<Vec<_>>(),
+                vec![DataType::BinaryView]
+            );
         }
     }
 
