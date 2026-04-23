@@ -515,7 +515,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         let null_count = null_buffer.as_ref().map_or(0, |n| n.null_count());
         debug_assert!(
             null_count >= self.placeholder_count,
-            "{} placeholder rows appended but null buffer has {null_count} null(s)",
+            "{} placeholder rows but null buffer has {null_count} nulls",
             self.placeholder_count,
         );
         let array_data = ArrayDataBuilder::new(GenericStringArray::<O>::DATA_TYPE)
@@ -646,7 +646,7 @@ impl StringViewArrayBuilder {
         let null_count = null_buffer.as_ref().map_or(0, |n| n.null_count());
         debug_assert!(
             null_count >= self.placeholder_count,
-            "{} placeholder rows appended but null buffer has {null_count} null(s)",
+            "{} placeholder rows but null buffer has {null_count} nulls",
             self.placeholder_count,
         );
         self.flush_in_progress();
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic(expected = "placeholder rows appended")]
+    #[should_panic(expected = "placeholder rows")]
     fn string_array_builder_placeholder_without_null_mask() {
         let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(2, 4);
         builder.append_value("a");
@@ -822,7 +822,7 @@ mod tests {
 
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic(expected = "placeholder rows appended")]
+    #[should_panic(expected = "placeholder rows")]
     fn string_array_builder_placeholder_with_none_null_buffer() {
         let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(1, 4);
         builder.append_placeholder();
@@ -890,7 +890,7 @@ mod tests {
 
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic(expected = "placeholder rows appended")]
+    #[should_panic(expected = "placeholder rows")]
     fn string_view_array_builder_placeholder_without_null_mask() {
         let mut builder = StringViewArrayBuilder::with_capacity(2);
         builder.append_value("a");
@@ -901,7 +901,7 @@ mod tests {
 
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic(expected = "placeholder rows appended")]
+    #[should_panic(expected = "placeholder rows")]
     fn string_view_array_builder_placeholder_with_none_null_buffer() {
         let mut builder = StringViewArrayBuilder::with_capacity(1);
         builder.append_placeholder();
