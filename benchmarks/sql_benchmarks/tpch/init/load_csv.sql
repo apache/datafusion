@@ -76,7 +76,7 @@ CREATE EXTERNAL TABLE orders
     o_shippriority  INT,
     o_comment       VARCHAR(79),
     PRIMARY KEY (o_orderkey)
-) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/order/orders.1.csv';
+) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/orders/orders.1.csv';
 
 CREATE EXTERNAL TABLE lineitem
 (
