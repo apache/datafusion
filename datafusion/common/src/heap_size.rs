@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::stats::Precision;
-use crate::{ColumnStatistics, ScalarValue, Statistics};
+use crate::{ColumnStatistics, ScalarValue, Statistics, TableReference};
 use arrow::array::{
     Array, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray,
     ListViewArray, MapArray, StructArray,
@@ -48,6 +48,12 @@ impl DFHeapSize for Statistics {
         self.num_rows.heap_size()
             + self.total_byte_size.heap_size()
             + self.column_statistics.heap_size()
+    }
+}
+
+impl DFHeapSize for TableReference {
+    fn heap_size(&self) -> usize {
+        self.table().heap_size()
     }
 }
 

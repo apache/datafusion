@@ -22,15 +22,16 @@ use std::{
     time::Duration,
 };
 
-use datafusion_common::TableReference;
-use datafusion_common::instant::Instant;
-use object_store::{ObjectMeta, path::Path};
-
 use crate::cache::{
     CacheAccessor,
     cache_manager::{CachedFileList, ListFilesCache},
     lru_queue::LruQueue,
 };
+
+use datafusion_common::TableReference;
+use datafusion_common::heap_size::DFHeapSize;
+use datafusion_common::instant::Instant;
+use object_store::{ObjectMeta, path::Path};
 
 pub trait TimeProvider: Send + Sync + 'static {
     fn now(&self) -> Instant;
@@ -166,6 +167,12 @@ impl Default for DefaultListFilesCacheState {
             memory_used: 0,
             ttl: DEFAULT_LIST_FILES_CACHE_TTL,
         }
+    }
+}
+
+impl DFHeapSize for TableScopedPath {
+    fn heap_size(&self) -> usize {
+        self.path.as_ref().heap_size() + self.table.heap_size()
     }
 }
 

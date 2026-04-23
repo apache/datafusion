@@ -100,7 +100,7 @@ impl DefaultFileStatisticsCacheState {
         key: &TableScopedPath,
         value: CachedFileMetadata,
     ) -> Option<CachedFileMetadata> {
-        let key_size = key.path.as_ref().heap_size();
+        let key_size = key.heap_size();
         let entry_size = value.heap_size();
 
         if entry_size + key_size > self.memory_limit {
@@ -111,11 +111,11 @@ impl DefaultFileStatisticsCacheState {
 
         let old_value = self.lru_queue.put(key.clone(), value);
         self.memory_used += entry_size;
-        self.memory_used += key.path.as_ref().heap_size();
+        self.memory_used += key.heap_size();
 
         if let Some(old_entry) = &old_value {
             self.memory_used -= old_entry.heap_size();
-            self.memory_used -= key.path.as_ref().heap_size();
+            self.memory_used -= key.heap_size();
         }
 
         self.evict_entries();
@@ -125,7 +125,7 @@ impl DefaultFileStatisticsCacheState {
 
     fn remove(&mut self, k: &TableScopedPath) -> Option<CachedFileMetadata> {
         if let Some(old_entry) = self.lru_queue.remove(k) {
-            self.memory_used -= k.path.as_ref().heap_size();
+            self.memory_used -= k.heap_size();
             self.memory_used -= old_entry.heap_size();
             Some(old_entry)
         } else {
@@ -149,7 +149,7 @@ impl DefaultFileStatisticsCacheState {
     fn evict_entries(&mut self) {
         while self.memory_used > self.memory_limit {
             if let Some(removed) = self.lru_queue.pop() {
-                self.memory_used -= removed.0.path.as_ref().heap_size();
+                self.memory_used -= removed.0.heap_size();
                 self.memory_used -= removed.1.heap_size();
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
