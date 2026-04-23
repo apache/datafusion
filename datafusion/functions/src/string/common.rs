@@ -350,6 +350,7 @@ where
             DataType::Utf8View => {
                 let string_array = as_string_view_array(array)?;
                 let item_len = string_array.len();
+                // Null-preserving: reuse the input null buffer as the output null buffer.
                 let nulls = string_array.nulls().cloned();
                 let mut builder = StringViewArrayBuilder::with_capacity(item_len);
 
@@ -411,6 +412,7 @@ where
     // Values contain non-ASCII.
     let item_len = string_array.len();
     let capacity = value_data.len() + PRE_ALLOC_BYTES;
+    // Null-preserving: reuse the input null buffer as the output null buffer.
     let nulls = string_array.nulls().cloned();
     let mut builder = GenericStringArrayBuilder::<O>::with_capacity(item_len, capacity);
 
@@ -459,7 +461,8 @@ where
     let values = Buffer::from_vec(bytes);
     let offsets = string_array.offsets().clone();
     let nulls = string_array.nulls().cloned();
-    // SAFETY: offsets and nulls are consistent with the input array.
+
+    // SAFETY: we can reuse the offsets and nulls from the input array
     Ok(Arc::new(unsafe {
         GenericStringArray::<O>::new_unchecked(offsets, values, nulls)
     }))
