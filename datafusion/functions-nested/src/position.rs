@@ -327,25 +327,24 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
         }
     }
 
-    generic_position::<O>(haystack, needle, &arr_from)
+    if needle.data_type().is_list() {
+        generic_position::<O, true>(haystack, needle, &arr_from)
+    } else {
+        generic_position::<O, false>(haystack, needle, &arr_from)
+    }
 }
 
-fn generic_position<O: OffsetSizeTrait>(
+fn generic_position<O: OffsetSizeTrait, const IS_NESTED: bool>(
     haystack: &GenericListArray<O>,
     needle: &ArrayRef,
     arr_from: &[i64], // 0-indexed
 ) -> Result<ArrayRef> {
     let mut data = Vec::with_capacity(haystack.len());
 
-    let cmp = if needle.data_type().is_list() {
-        compare_element_to_list_fixed::<true>
-    } else {
-        compare_element_to_list_fixed::<false>
-    };
-
     for (row_index, (row, &from)) in haystack.iter().zip(arr_from.iter()).enumerate() {
         if let Some(row) = row {
-            let eq_array = cmp(&row, needle, row_index)?;
+            let eq_array =
+                compare_element_to_list_fixed::<IS_NESTED>(&row, needle, row_index)?;
 
             // Collect `true`s in 1-indexed positions
             let from = from as usize;
@@ -487,29 +486,34 @@ fn try_array_positions_scalar(args: &[ColumnarValue]) -> Result<Option<ColumnarV
 fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [haystack, needle] = take_function_args("array_positions", args)?;
 
-    match &haystack.data_type() {
-        List(_) => general_positions::<i32>(as_list_array(&haystack)?, needle),
-        LargeList(_) => general_positions::<i64>(as_large_list_array(&haystack)?, needle),
-        dt => exec_err!("array_positions does not support type '{dt}'"),
+    match (haystack.data_type(), needle.data_type().is_list()) {
+        (List(_), true) => {
+            general_positions::<i32, true>(as_list_array(&haystack)?, needle)
+        }
+        (LargeList(_), true) => {
+            general_positions::<i64, true>(as_large_list_array(&haystack)?, needle)
+        }
+        (List(_), false) => {
+            general_positions::<i32, false>(as_list_array(&haystack)?, needle)
+        }
+        (LargeList(_), false) => {
+            general_positions::<i64, false>(as_large_list_array(&haystack)?, needle)
+        }
+        (dt, _) => exec_err!("array_positions does not support type '{dt}'"),
     }
 }
 
-fn general_positions<O: OffsetSizeTrait>(
+fn general_positions<O: OffsetSizeTrait, const IS_NESTED: bool>(
     haystack: &GenericListArray<O>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     crate::utils::check_datatypes("array_positions", &[haystack.values(), needle])?;
     let mut data = Vec::with_capacity(haystack.len());
 
-    let cmp = if needle.data_type().is_list() {
-        compare_element_to_list_fixed::<true>
-    } else {
-        compare_element_to_list_fixed::<false>
-    };
-
     for (row_index, row) in haystack.iter().enumerate() {
         if let Some(row) = row {
-            let eq_array = cmp(&row, needle, row_index)?;
+            let eq_array =
+                compare_element_to_list_fixed::<IS_NESTED>(&row, needle, row_index)?;
 
             // Collect `true`s in 1-indexed positions
             let indexes = eq_array
