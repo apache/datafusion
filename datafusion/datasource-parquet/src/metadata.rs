@@ -520,12 +520,10 @@ fn summarize_column_statistics(
 
         // handle the common special case when all row groups have exact statistics
         let exactness = &is_max_value_exact_stat;
-        if !exactness.is_empty()
-            && exactness.null_count() == 0
-            && exactness.true_count() == exactness.len()
+        if !exactness.is_empty() && exactness.null_count() == 0 && !exactness.has_false()
         {
             accumulators.is_max_value_exact[logical_schema_index] = Some(true);
-        } else if exactness.true_count() == 0 {
+        } else if !exactness.has_true() {
             accumulators.is_max_value_exact[logical_schema_index] = Some(false);
         } else {
             let val = max_acc.evaluate()?;
@@ -539,12 +537,10 @@ fn summarize_column_statistics(
 
         // handle the common special case when all row groups have exact statistics
         let exactness = &is_min_value_exact_stat;
-        if !exactness.is_empty()
-            && exactness.null_count() == 0
-            && exactness.true_count() == exactness.len()
+        if !exactness.is_empty() && exactness.null_count() == 0 && !exactness.has_false()
         {
             accumulators.is_min_value_exact[logical_schema_index] = Some(true);
-        } else if exactness.true_count() == 0 {
+        } else if !exactness.has_true() {
             accumulators.is_min_value_exact[logical_schema_index] = Some(false);
         } else {
             let val = min_acc.evaluate()?;
@@ -675,7 +671,7 @@ fn has_any_exact_match(
     let scalar_array = value.to_scalar().ok()?;
     let eq_mask = eq(&scalar_array, &array).ok()?;
     let combined_mask = and(&eq_mask, exactness).ok()?;
-    Some(combined_mask.true_count() > 0)
+    Some(combined_mask.has_true())
 }
 
 /// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].

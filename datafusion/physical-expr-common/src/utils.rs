@@ -83,18 +83,18 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
     };
 
     let output_len = mask.len();
-    let count = mask.true_count();
 
     // Fast path: no true values mean all-null object
-    if count == 0 {
+    if !mask.has_true() {
         return Ok(new_null_array(truthy.data_type(), output_len));
     }
 
     // Fast path: all true means output = truthy
-    if count == output_len {
+    if mask.null_count() == 0 && !mask.has_false() {
         return Ok(truthy.slice(0, truthy.len()));
     }
 
+    let count = mask.true_count();
     let selectivity = count as f64 / output_len as f64;
     let mask_buffer = mask.values();
 

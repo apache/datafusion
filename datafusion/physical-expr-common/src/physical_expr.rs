@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
-use arrow::array::{ArrayRef, BooleanArray, new_empty_array};
+use arrow::array::{Array, ArrayRef, BooleanArray, new_empty_array};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
@@ -109,17 +109,15 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             );
         }
 
-        let selection_count = selection.true_count();
-
         // First, check if we can avoid filtering altogether.
-        if selection_count == row_count {
+        if selection.null_count() == 0 && !selection.has_false() {
             // All values from the `selection` filter are true and match the input batch.
             // No need to perform any filtering.
             return self.evaluate(batch);
         }
 
         // Next, prepare the result array for each 'true' row in the selection vector.
-        let filtered_result = if selection_count == 0 {
+        let filtered_result = if !selection.has_true() {
             // Do not call `evaluate` when the selection is empty.
             // `evaluate_selection` is used to conditionally evaluate expressions.
             // When the expression in question is fallible, evaluating it with an empty
@@ -132,7 +130,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             // If we reach this point, there's no other option than to filter the batch.
             // This is a fairly costly operation since it requires creating partial copies
             // (worst case of length `row_count - 1`) of all the arrays in the record batch.
-            // The resulting `filtered_batch` will contain `selection_count` rows.
+            // The resulting `filtered_batch` will contain one row per true in `selection`.
             let filtered_batch = filter_record_batch(batch, selection)?;
             self.evaluate(&filtered_batch)?
         };
