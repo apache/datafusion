@@ -20,6 +20,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{InvariantLevel, assert_expected_schema};
@@ -129,6 +130,30 @@ pub trait OptimizerRule: Debug {
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         internal_err!("rewrite is not implemented for {}", self.name())
     }
+}
+
+/// Like [`OptimizerRule`], but may perform async operations during optimization.
+///
+/// Async optimizer rules run as a post-optimization phase in
+/// [`SessionState::create_physical_plan`], after the synchronous [`Optimizer`]
+/// has finished all its passes. By default no rules are registered, so the
+/// phase is a no-op.
+///
+/// Unlike the sync [`Optimizer`], async rules run exactly once (no fixed-point
+/// loop).
+///
+/// [`SessionState::create_physical_plan`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.create_physical_plan
+#[async_trait]
+pub trait AsyncOptimizerRule: Debug + Send + Sync {
+    /// Try to rewrite `plan`. Called exactly once per query.
+    async fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        config: &ConfigOptions,
+    ) -> Result<LogicalPlan>;
+
+    /// A human readable name for this rule.
+    fn name(&self) -> &str;
 }
 
 /// Options to control the DataFusion Optimizer.

@@ -61,12 +61,13 @@ datafusion-physical-expr = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
+async-trait = { workspace = true }
 recursive = { workspace = true, optional = true }
 regex = { workspace = true }
 regex-syntax = "0.8.9"
 
 [dev-dependencies]
-async-trait = { workspace = true }
+
 criterion = { workspace = true }
 ctor = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }

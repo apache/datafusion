@@ -40,7 +40,6 @@ use datafusion_common::alias::AliasGenerator;
 #[cfg(feature = "sql")]
 use datafusion_common::config::Dialect;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
-use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
@@ -61,10 +60,11 @@ use datafusion_expr::registry::{
     SerializerRegistry,
 };
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{AggregateUDF, Explain, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
-    Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerRule,
+    Analyzer, AnalyzerRule, DEFAULT_ANALYSIS_PHASE, DEFAULT_OPTIMIZATION_PHASE,
+    LogicalPlanningPipeline, Optimizer, OptimizerConfig, OptimizerRule, Phase,
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -138,8 +138,10 @@ use uuid::Uuid;
 pub struct SessionState {
     /// A unique UUID that identifies the session
     session_id: String,
-    /// Responsible for analyzing and rewrite a logical plan before optimization
-    analyzer: Analyzer,
+    /// Ordered pipeline of named analysis and optimization phases.
+    logical_pipeline: LogicalPlanningPipeline,
+    /// Expression-level function rewrites applied before physical expr creation.
+    function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,
     /// Provides support for customizing the SQL planner, e.g. to add support for custom operators like `->>` or `?`
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     #[cfg(feature = "sql")]
@@ -147,8 +149,6 @@ pub struct SessionState {
     /// Provides support for customizing the SQL type planning
     #[cfg(feature = "sql")]
     type_planner: Option<Arc<dyn TypePlanner>>,
-    /// Responsible for optimizing a logical plan
-    optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
     physical_optimizers: PhysicalOptimizer,
     /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
@@ -240,8 +240,7 @@ impl Debug for SessionState {
         let ret = ret.field("type_planner", &self.type_planner);
 
         ret.field("query_planners", &self.query_planner)
-            .field("analyzer", &self.analyzer)
-            .field("optimizer", &self.optimizer)
+            .field("logical_pipeline", &self.logical_pipeline)
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
@@ -357,31 +356,40 @@ impl SessionState {
             })
     }
 
-    /// Add `analyzer_rule` to the end of the list of
-    /// [`AnalyzerRule`]s used to rewrite queries.
+    /// Add `analyzer_rule` to the end of the DEFAULT_ANALYSIS_PHASE phase in the pipeline.
     pub fn add_analyzer_rule(
         &mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
     ) -> &Self {
-        self.analyzer.rules.push(analyzer_rule);
+        if let Some(Phase::SyncAnalysis(p)) =
+            self.logical_pipeline.phase_mut(DEFAULT_ANALYSIS_PHASE)
+        {
+            p.rules.push(analyzer_rule);
+        }
         self
     }
 
-    // the add_optimizer_rule takes an owned reference
-    // it should probably be renamed to `with_optimizer_rule` to follow builder style
-    // and `add_optimizer_rule` that takes &mut self added instead of this
     pub(crate) fn append_optimizer_rule(
         &mut self,
         optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
     ) {
-        self.optimizer.rules.push(optimizer_rule);
+        if let Some(Phase::SyncOptimization(p)) =
+            self.logical_pipeline.phase_mut(DEFAULT_OPTIMIZATION_PHASE)
+        {
+            p.rules.push(optimizer_rule);
+        }
     }
 
-    /// Removes an optimizer rule by name, returning `true` if it existed.
+    /// Removes an optimizer rule by name from the DEFAULT_OPTIMIZATION_PHASE phase, returning `true` if it existed.
     pub(crate) fn remove_optimizer_rule(&mut self, name: &str) -> bool {
-        let original_len = self.optimizer.rules.len();
-        self.optimizer.rules.retain(|r| r.name() != name);
-        self.optimizer.rules.len() < original_len
+        if let Some(Phase::SyncOptimization(p)) =
+            self.logical_pipeline.phase_mut(DEFAULT_OPTIMIZATION_PHASE)
+        {
+            let before = p.rules.len();
+            p.rules.retain(|r| r.name() != name);
+            return p.rules.len() < before;
+        }
+        false
     }
 
     /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
@@ -615,14 +623,46 @@ impl SessionState {
         query.sql_to_expr_with_alias(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
-    /// Returns the [`Analyzer`] for this session
-    pub fn analyzer(&self) -> &Analyzer {
-        &self.analyzer
+    /// Returns the [`Analyzer`] for this session, reconstructed from the DEFAULT_ANALYSIS_PHASE pipeline phase.
+    pub fn analyzer(&self) -> Analyzer {
+        let rules = self
+            .logical_pipeline
+            .phase(DEFAULT_ANALYSIS_PHASE)
+            .and_then(|p| {
+                if let Phase::SyncAnalysis(a) = p {
+                    Some(a.rules.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        Analyzer::with_rules(rules)
     }
 
-    /// Returns the [`Optimizer`] for this session
-    pub fn optimizer(&self) -> &Optimizer {
-        &self.optimizer
+    /// Returns the [`Optimizer`] for this session, reconstructed from the DEFAULT_OPTIMIZATION_PHASE pipeline phase.
+    pub fn optimizer(&self) -> Optimizer {
+        let rules = self
+            .logical_pipeline
+            .phase(DEFAULT_OPTIMIZATION_PHASE)
+            .and_then(|p| {
+                if let Phase::SyncOptimization(o) = p {
+                    Some(o.rules.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        Optimizer { rules }
+    }
+
+    /// Returns the logical planning pipeline for this session.
+    pub fn logical_pipeline(&self) -> &LogicalPlanningPipeline {
+        &self.logical_pipeline
+    }
+
+    /// Returns a mutable reference to the logical planning pipeline.
+    pub fn logical_pipeline_mut(&mut self) -> &mut LogicalPlanningPipeline {
+        &mut self.logical_pipeline
     }
 
     /// Returns the [`ExprPlanner`]s for this session
@@ -653,80 +693,47 @@ impl SessionState {
         &self.query_planner
     }
 
-    /// Optimizes the logical plan by applying optimizer rules.
+    /// Optimizes the logical plan by running all sync phases in the pipeline.
+    ///
+    /// Returns an error if any enabled async phase is encountered; use
+    /// [`Self::create_physical_plan`] instead when async phases are registered.
+    ///
     pub fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
-
-            // analyze & capture output of each rule
-            let analyzer_result = self.analyzer.execute_and_check(
-                e.plan.as_ref().clone(),
-                &self.options(),
-                |analyzed_plan, analyzer| {
-                    let analyzer_name = analyzer.name().to_string();
-                    let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
-                    stringified_plans.push(analyzed_plan.to_stringified(plan_type));
+            let (inner, new_stringified) = self
+                .logical_pipeline
+                .apply_sync_explained(e.plan.as_ref().clone(), self)?;
+            stringified_plans.extend(new_stringified);
+            return Ok(LogicalPlan::Explain(
+                datafusion_expr::logical_plan::Explain {
+                    verbose: e.verbose,
+                    explain_format: e.explain_format.clone(),
+                    plan: Arc::new(inner),
+                    stringified_plans,
+                    schema: Arc::clone(&e.schema),
+                    logical_optimization_succeeded: true,
                 },
-            );
-            let analyzed_plan = match analyzer_result {
-                Ok(plan) => plan,
-                Err(DataFusionError::Context(analyzer_name, err)) => {
-                    let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
-                    stringified_plans
-                        .push(StringifiedPlan::new(plan_type, err.to_string()));
+            ));
+        }
+        self.logical_pipeline.apply_sync(plan.clone(), self)
+    }
 
-                    return Ok(LogicalPlan::Explain(Explain {
-                        verbose: e.verbose,
-                        plan: Arc::clone(&e.plan),
-                        explain_format: e.explain_format.clone(),
-                        stringified_plans,
-                        schema: Arc::clone(&e.schema),
-                        logical_optimization_succeeded: false,
-                    }));
-                }
-                Err(e) => return Err(e),
-            };
-
-            // to delineate the analyzer & optimizer phases in explain output
-            stringified_plans
-                .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
-
-            // optimize the child plan, capturing the output of each optimizer
-            let optimized_plan = self.optimizer.optimize(
-                analyzed_plan,
-                self,
-                |optimized_plan, optimizer| {
-                    let optimizer_name = optimizer.name().to_string();
-                    let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
-                    stringified_plans.push(optimized_plan.to_stringified(plan_type));
-                },
-            );
-            let (plan, logical_optimization_succeeded) = match optimized_plan {
-                Ok(plan) => (Arc::new(plan), true),
-                Err(DataFusionError::Context(optimizer_name, err)) => {
-                    let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
-                    stringified_plans
-                        .push(StringifiedPlan::new(plan_type, err.to_string()));
-                    (Arc::clone(&e.plan), false)
-                }
-                Err(e) => return Err(e),
-            };
-
-            Ok(LogicalPlan::Explain(Explain {
-                verbose: e.verbose,
-                explain_format: e.explain_format.clone(),
-                plan,
-                stringified_plans,
-                schema: Arc::clone(&e.schema),
-                logical_optimization_succeeded,
-            }))
+    /// Run only the optimization phase with a custom [`OptimizerConfig`].
+    ///
+    /// Skips the analysis phase. Used when the plan is already analyzed and the
+    /// caller needs a different config (e.g. PREPARE without `now()` evaluation).
+    pub fn optimize_with_config(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> datafusion_common::Result<LogicalPlan> {
+        if let Some(Phase::SyncOptimization(p)) =
+            self.logical_pipeline.phase(DEFAULT_OPTIMIZATION_PHASE)
+        {
+            p.apply(plan, config)
         } else {
-            let analyzed_plan = self.analyzer.execute_and_check(
-                plan.clone(),
-                &self.options(),
-                |_, _| {},
-            )?;
-            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
+            Ok(plan)
         }
     }
 
@@ -744,10 +751,16 @@ impl SessionState {
         &self,
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let logical_plan = self.optimize(logical_plan)?;
-        self.query_planner
-            .create_physical_plan(&logical_plan, self)
-            .await
+        // Explain nodes require special per-rule capturing via the sync path.
+        // Non-explain plans use the async path so async phases can run.
+        let plan = if matches!(logical_plan, LogicalPlan::Explain(_)) {
+            self.optimize(logical_plan)?
+        } else {
+            self.logical_pipeline
+                .apply(logical_plan.clone(), self)
+                .await?
+        };
+        self.query_planner.create_physical_plan(&plan, self).await
     }
 
     /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type
@@ -782,7 +795,7 @@ impl SessionState {
         let mut expr = simplifier.coerce(expr, df_schema)?;
 
         // rewrite Exprs to functions if necessary
-        for rewrite in self.analyzer.function_rewrites() {
+        for rewrite in &self.function_rewrites {
             expr = expr
                 .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
                 .data;
@@ -820,9 +833,18 @@ impl SessionState {
         &mut self.config
     }
 
-    /// Return the logical optimizers
+    /// Return the logical optimizers from the DEFAULT_OPTIMIZATION_PHASE pipeline phase.
     pub fn optimizers(&self) -> &[Arc<dyn OptimizerRule + Send + Sync>] {
-        &self.optimizer.rules
+        self.logical_pipeline
+            .phase(DEFAULT_OPTIMIZATION_PHASE)
+            .and_then(|p| {
+                if let Phase::SyncOptimization(o) = p {
+                    Some(o.rules.as_slice())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(&[])
     }
 
     /// Return the physical optimizers
@@ -1008,13 +1030,12 @@ impl SessionState {
 #[derive(Clone)]
 pub struct SessionStateBuilder {
     session_id: Option<String>,
-    analyzer: Option<Analyzer>,
+    logical_pipeline: Option<LogicalPlanningPipeline>,
     expr_planners: Option<Vec<Arc<dyn ExprPlanner>>>,
     #[cfg(feature = "sql")]
     relation_planners: Option<Vec<Arc<dyn RelationPlanner>>>,
     #[cfg(feature = "sql")]
     type_planner: Option<Arc<dyn TypePlanner>>,
-    optimizer: Option<Optimizer>,
     physical_optimizers: Option<PhysicalOptimizer>,
     query_planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
     catalog_list: Option<Arc<dyn CatalogProviderList>>,
@@ -1037,6 +1058,7 @@ pub struct SessionStateBuilder {
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
     physical_optimizer_rules: Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
+    function_rewrites: Option<Vec<Arc<dyn FunctionRewrite + Send + Sync>>>,
 }
 
 impl SessionStateBuilder {
@@ -1050,13 +1072,12 @@ impl SessionStateBuilder {
     pub fn new() -> Self {
         Self {
             session_id: None,
-            analyzer: None,
+            logical_pipeline: None,
             expr_planners: None,
             #[cfg(feature = "sql")]
             relation_planners: None,
             #[cfg(feature = "sql")]
             type_planner: None,
-            optimizer: None,
             physical_optimizers: None,
             query_planner: None,
             catalog_list: None,
@@ -1079,6 +1100,7 @@ impl SessionStateBuilder {
             analyzer_rules: None,
             optimizer_rules: None,
             physical_optimizer_rules: None,
+            function_rewrites: None,
         }
     }
 
@@ -1105,13 +1127,12 @@ impl SessionStateBuilder {
             .with_create_default_catalog_and_schema(create_default_catalog_and_schema);
         Self {
             session_id: None,
-            analyzer: Some(existing.analyzer),
+            logical_pipeline: Some(existing.logical_pipeline),
             expr_planners: Some(existing.expr_planners),
             #[cfg(feature = "sql")]
             relation_planners: Some(existing.relation_planners),
             #[cfg(feature = "sql")]
             type_planner: existing.type_planner,
-            optimizer: Some(existing.optimizer),
             physical_optimizers: Some(existing.physical_optimizers),
             query_planner: Some(existing.query_planner),
             catalog_list: Some(existing.catalog_list),
@@ -1136,6 +1157,7 @@ impl SessionStateBuilder {
             analyzer_rules: None,
             optimizer_rules: None,
             physical_optimizer_rules: None,
+            function_rewrites: Some(existing.function_rewrites),
         }
     }
 
@@ -1206,12 +1228,17 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Set the [`AnalyzerRule`]s optimizer plan rules.
+    /// Replace the analysis-phase rules with the given set.
     pub fn with_analyzer_rules(
         mut self,
         rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
     ) -> Self {
-        self.analyzer = Some(Analyzer::with_rules(rules));
+        let pipeline = self
+            .logical_pipeline
+            .get_or_insert_with(LogicalPlanningPipeline::default);
+        if let Some(Phase::SyncAnalysis(p)) = pipeline.phase_mut(DEFAULT_ANALYSIS_PHASE) {
+            p.rules = rules;
+        }
         self
     }
 
@@ -1227,12 +1254,19 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Set the [`OptimizerRule`]s used to optimize plans.
+    /// Replace the optimization-phase rules with the given set.
     pub fn with_optimizer_rules(
         mut self,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     ) -> Self {
-        self.optimizer = Some(Optimizer::with_rules(rules));
+        let pipeline = self
+            .logical_pipeline
+            .get_or_insert_with(LogicalPlanningPipeline::default);
+        if let Some(Phase::SyncOptimization(p)) =
+            pipeline.phase_mut(DEFAULT_OPTIMIZATION_PHASE)
+        {
+            p.rules = rules;
+        }
         self
     }
 
@@ -1293,6 +1327,38 @@ impl SessionStateBuilder {
         let mut rules = self.physical_optimizer_rules.unwrap_or_default();
         rules.push(physical_optimizer_rule);
         self.physical_optimizer_rules = Some(rules);
+        self
+    }
+
+    /// Replace the entire logical planning pipeline.
+    pub fn with_logical_pipeline(mut self, pipeline: LogicalPlanningPipeline) -> Self {
+        self.logical_pipeline = Some(pipeline);
+        self
+    }
+
+    /// Append a phase to the end of the pipeline.
+    pub fn with_phase(mut self, phase: Phase) -> Self {
+        self.logical_pipeline
+            .get_or_insert_with(LogicalPlanningPipeline::default)
+            .push(phase);
+        self
+    }
+
+    /// Insert a phase immediately before the named anchor phase.
+    pub fn with_phase_before(mut self, anchor: &str, phase: Phase) -> Self {
+        let pipeline = self
+            .logical_pipeline
+            .get_or_insert_with(LogicalPlanningPipeline::default);
+        pipeline.insert_before(anchor, phase);
+        self
+    }
+
+    /// Insert a phase immediately after the named anchor phase.
+    pub fn with_phase_after(mut self, anchor: &str, phase: Phase) -> Self {
+        let pipeline = self
+            .logical_pipeline
+            .get_or_insert_with(LogicalPlanningPipeline::default);
+        pipeline.insert_after(anchor, phase);
         self
     }
 
@@ -1506,13 +1572,12 @@ impl SessionStateBuilder {
     pub fn build(self) -> SessionState {
         let Self {
             session_id,
-            analyzer,
+            logical_pipeline,
             expr_planners,
             #[cfg(feature = "sql")]
             relation_planners,
             #[cfg(feature = "sql")]
             type_planner,
-            optimizer,
             physical_optimizers,
             query_planner,
             catalog_list,
@@ -1534,6 +1599,7 @@ impl SessionStateBuilder {
             analyzer_rules,
             optimizer_rules,
             physical_optimizer_rules,
+            function_rewrites,
         } = self;
 
         let config = config.unwrap_or_default();
@@ -1541,13 +1607,13 @@ impl SessionStateBuilder {
 
         let mut state = SessionState {
             session_id: session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
-            analyzer: analyzer.unwrap_or_default(),
+            logical_pipeline: logical_pipeline.unwrap_or_default(),
+            function_rewrites: function_rewrites.unwrap_or_default(),
             expr_planners: expr_planners.unwrap_or_default(),
             #[cfg(feature = "sql")]
             relation_planners: relation_planners.unwrap_or_default(),
             #[cfg(feature = "sql")]
             type_planner,
-            optimizer: optimizer.unwrap_or_default(),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
             query_planner: query_planner
                 .unwrap_or_else(|| Arc::new(DefaultQueryPlanner {})),
@@ -1650,15 +1716,32 @@ impl SessionStateBuilder {
             }
         }
 
-        if let Some(analyzer_rules) = analyzer_rules {
-            for analyzer_rule in analyzer_rules {
-                state.analyzer.rules.push(analyzer_rule);
+        // Sync function_rewrites into the analysis phase so they run before
+        // TypeCoercion (matches original Analyzer::execute_and_check behavior).
+        // Always overwrite to avoid duplication when rebuilding from an existing state.
+        if let Some(Phase::SyncAnalysis(p)) =
+            state.logical_pipeline.phase_mut(DEFAULT_ANALYSIS_PHASE)
+        {
+            p.function_rewrites.clear();
+            p.function_rewrites
+                .extend(state.function_rewrites.iter().map(Arc::clone));
+        }
+
+        if let (Some(rules), Some(Phase::SyncAnalysis(p))) = (
+            analyzer_rules,
+            state.logical_pipeline.phase_mut(DEFAULT_ANALYSIS_PHASE),
+        ) {
+            for rule in rules {
+                p.rules.push(rule);
             }
         }
 
-        if let Some(optimizer_rules) = optimizer_rules {
-            for optimizer_rule in optimizer_rules {
-                state.optimizer.rules.push(optimizer_rule);
+        if let (Some(rules), Some(Phase::SyncOptimization(p))) = (
+            optimizer_rules,
+            state.logical_pipeline.phase_mut(DEFAULT_OPTIMIZATION_PHASE),
+        ) {
+            for rule in rules {
+                p.rules.push(rule);
             }
         }
 
@@ -1679,9 +1762,9 @@ impl SessionStateBuilder {
         &self.session_id
     }
 
-    /// Returns the current analyzer value
-    pub fn analyzer(&mut self) -> &mut Option<Analyzer> {
-        &mut self.analyzer
+    /// Returns the logical planning pipeline for direct mutation.
+    pub fn logical_pipeline(&mut self) -> &mut Option<LogicalPlanningPipeline> {
+        &mut self.logical_pipeline
     }
 
     /// Returns the current expr_planners value
@@ -1699,11 +1782,6 @@ impl SessionStateBuilder {
     #[cfg(feature = "sql")]
     pub fn type_planner(&mut self) -> &mut Option<Arc<dyn TypePlanner>> {
         &mut self.type_planner
-    }
-
-    /// Returns the current optimizer value
-    pub fn optimizer(&mut self) -> &mut Option<Optimizer> {
-        &mut self.optimizer
     }
 
     /// Returns the current physical_optimizers value
@@ -1833,10 +1911,9 @@ impl Debug for SessionStateBuilder {
         #[cfg(feature = "sql")]
         let ret = ret.field("type_planner", &self.type_planner);
         ret.field("query_planners", &self.query_planner)
+            .field("logical_pipeline", &self.logical_pipeline)
             .field("analyzer_rules", &self.analyzer_rules)
-            .field("analyzer", &self.analyzer)
             .field("optimizer_rules", &self.optimizer_rules)
-            .field("optimizer", &self.optimizer)
             .field("physical_optimizer_rules", &self.physical_optimizer_rules)
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
@@ -2118,7 +2195,12 @@ impl FunctionRegistry for SessionState {
         &mut self,
         rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
     ) -> datafusion_common::Result<()> {
-        self.analyzer.add_function_rewrite(rewrite);
+        self.function_rewrites.push(Arc::clone(&rewrite));
+        if let Some(Phase::SyncAnalysis(p)) =
+            self.logical_pipeline.phase_mut(DEFAULT_ANALYSIS_PHASE)
+        {
+            p.function_rewrites.push(rewrite);
+        }
         Ok(())
     }
 

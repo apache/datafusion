@@ -75,9 +75,17 @@ pub mod utils;
 #[cfg(test)]
 pub mod test;
 
-pub use analyzer::{Analyzer, AnalyzerRule};
+pub mod logical_pipeline;
+
+pub use analyzer::{Analyzer, AnalyzerRule, AsyncAnalyzerRule};
+pub use logical_pipeline::{
+    AsyncAnalysisPhase, AsyncOptimizationPhase, AsyncPhase, DEFAULT_ANALYSIS_PHASE,
+    DEFAULT_OPTIMIZATION_PHASE, LogicalPlanningPipeline, Phase, Strategy,
+    SyncAnalysisPhase, SyncOptimizationPhase, SyncPhase,
+};
 pub use optimizer::{
-    ApplyOrder, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
+    ApplyOrder, AsyncOptimizerRule, Optimizer, OptimizerConfig, OptimizerContext,
+    OptimizerRule,
 };
 
 pub(crate) mod join_key_set;
