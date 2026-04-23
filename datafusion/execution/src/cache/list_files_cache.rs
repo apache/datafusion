@@ -180,9 +180,9 @@ impl DFHeapSize for TableScopedPath {
 impl Display for TableScopedPath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(table) = &self.table {
-            write!(f, "({}, {})", self.path, table)
+            write!(f, "{}, {}", self.path, table)
         } else {
-            write!(f, "({})", self.path)
+            write!(f, "{}", self.path)
         }
     }
 }
