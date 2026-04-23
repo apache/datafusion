@@ -16,3 +16,5 @@ true
 run sql_benchmarks/tpch/queries/q${QUERY_NUMBER_PADDED}.sql
 
 result sql_benchmarks/tpch/results/sf${BENCH_SIZE:-1}/q${QUERY_NUMBER_PADDED}.csv
+
+cleanup sql_benchmarks/tpch/init/cleanup.sql
