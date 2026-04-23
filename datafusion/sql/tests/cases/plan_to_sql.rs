@@ -35,6 +35,7 @@ use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_window::rank::rank_udwf;
+use datafusion_functions_window::row_number::row_number_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     BigQueryDialect, CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect,
@@ -2678,6 +2679,128 @@ fn test_unparse_window() -> Result<()> {
         @r#"SELECT "k", "v", "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "k" AS "k", "v" AS "v", rank() OVER (PARTITION BY "k" ORDER BY "v" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "test"."k" AS "k", "test"."v" AS "v" FROM "test") AS "derived_projection") AS "__qualify_subquery" WHERE ("rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" = 1)"#
     );
 
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_aggregate_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("value", DataType::Float64, true),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("time").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("gas"), &schema, None)?
+        .aggregate(vec![col("time")], vec![sum(col("value")).alias("sum_n")])?
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT sum(gas."value") AS sum_n, gas."time", row_number() OVER (ORDER BY gas."time" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM gas GROUP BY gas."time""#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_table_scan_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![col("k")],
+            order_by: vec![col("v").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("test"), &schema, None)?
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT *, row_number() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM test"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_stacked_windows_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    let row_number_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![col("k")],
+            order_by: vec![col("v").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let rank_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("v").sort(false, false)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("rank_idx");
+    let plan = table_scan(Some("test"), &schema, None)?
+        .window(vec![row_number_expr])?
+        .window(vec![rank_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT *, row_number() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx, rank() OVER (ORDER BY test.v DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS rank_idx FROM test"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_array_to_sql_postgres() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT [1, 2, 3, 4, 5]",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT ARRAY[1, 2, 3, 4, 5]",
+    );
     Ok(())
 }
 

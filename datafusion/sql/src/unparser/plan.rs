@@ -912,13 +912,52 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Window(window) => {
-                // Window nodes are handled simultaneously with Projection nodes
+                // Window nodes are usually handled simultaneously with Projection
+                // nodes, where projected columns are unprojected back into their
+                // corresponding window expressions. Manually built plans can have
+                // Window nodes without an enclosing Projection, so in that case
+                // the Window node itself must contribute its output expressions.
+                let project_window_output = !select.already_projected();
+                let agg = if project_window_output {
+                    find_agg_node_within_select(plan, false)
+                } else {
+                    None
+                };
+
                 self.select_to_sql_recursively(
                     window.input.as_ref(),
                     query,
                     select,
                     relation,
-                )
+                )?;
+
+                if project_window_output {
+                    let mut items = if select.already_projected() {
+                        select.pop_projections()
+                    } else {
+                        vec![ast::SelectItem::Wildcard(
+                            ast::WildcardAdditionalOptions::default(),
+                        )]
+                    };
+
+                    items.extend(
+                        window
+                            .window_expr
+                            .iter()
+                            .map(|expr| {
+                                let expr = if let Some(agg) = agg {
+                                    unproject_agg_exprs(expr.clone(), agg, None)?
+                                } else {
+                                    expr.clone()
+                                };
+                                self.select_item_to_sql(&expr)
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                    );
+                    select.projection(items);
+                }
+
+                Ok(())
             }
             LogicalPlan::EmptyRelation(_) => {
                 // An EmptyRelation could be behind an UNNEST node. If the dialect supports UNNEST as a table factor,
