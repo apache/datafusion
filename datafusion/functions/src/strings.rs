@@ -30,14 +30,13 @@ use arrow::datatypes::DataType;
 /// Builder used by `concat`/`concat_ws` to assemble a [`StringArray`] one row
 /// at a time from multiple input columns.
 ///
-/// Each row is written via repeated [`Self::write`] calls (one per input
-/// fragment) followed by a single [`Self::append_offset`] to commit the row.
-/// The output null buffer is computed in bulk by the caller and supplied to
-/// [`Self::finish`], avoiding per-row [`arrow::array::builder::NullBufferBuilder`]
-/// work.
+/// Each row is written via repeated `write` calls (one per input fragment)
+/// followed by a single `append_offset` to commit the row.  The output null
+/// buffer is computed in bulk by the caller and supplied to `finish`, avoiding
+/// per-row NULL handling work.
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
-/// [`GenericStringArrayBuilder<i32>`][GenericStringArrayBuilder] instead.
+/// `GenericStringArrayBuilder` instead.
 pub(crate) struct ConcatStringBuilder {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
@@ -163,16 +162,13 @@ impl ConcatStringBuilder {
 /// Builder used by `concat`/`concat_ws` to assemble a [`StringViewArray`] one
 /// row at a time from multiple input columns.
 ///
-/// Each row is written via repeated [`Self::write`] calls (one per input
-/// fragment) followed by a single [`Self::append_offset`] to commit the row
+/// Each row is written via repeated `write` calls (one per input
+/// fragment) followed by a single `append_offset` to commit the row
 /// as a single string view. The output null buffer is supplied by the caller
-/// at [`Self::finish`] time, avoiding per-row
-/// [`arrow::array::builder::NullBufferBuilder`] work.
+/// at `finish` time, avoiding per-row NULL handling work.
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
 /// [`StringViewArrayBuilder`] instead.
-///
-/// [`StringViewArray`]: arrow::array::StringViewArray
 pub(crate) struct ConcatStringViewBuilder {
     views: Vec<u128>,
     data: Vec<u8>,
@@ -307,7 +303,7 @@ impl ConcatStringViewBuilder {
 /// details on the row-composition contract.
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
-/// [`GenericStringArrayBuilder<i64>`][GenericStringArrayBuilder] instead.
+/// `GenericStringArrayBuilder` instead.
 pub(crate) struct ConcatLargeStringBuilder {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
