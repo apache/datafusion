@@ -1763,7 +1763,9 @@ impl SessionContext {
         provided_schema: Option<SchemaRef>,
         sql_definition: Option<String>,
     ) -> Result<()> {
-        let table_path = ListingTableUrl::parse(table_path)?;
+        let table_ref = table_ref.into();
+        let table_path =
+            ListingTableUrl::parse(table_path)?.with_table_ref(table_ref.clone());
         let resolved_schema = match provided_schema {
             Some(s) => s,
             None => options.infer_schema(&self.state(), &table_path).await?,
