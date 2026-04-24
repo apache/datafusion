@@ -205,7 +205,7 @@ pub trait ExtensionPlanner {
     ///         _session_state: &SessionState,
     ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     ///         // Check if this is your custom table source
-    ///         if scan.source.as_any().is::<MyCustomTableSource>() {
+    ///         if scan.source.is::<MyCustomTableSource>() {
     ///             // Create a custom execution plan for your table source
     ///             let exec = MyCustomExec::new(
     ///                 scan.table_name.clone(),
@@ -732,9 +732,7 @@ impl DefaultPhysicalPlanner {
                 op: WriteOp::Insert(insert_op),
                 ..
             }) => {
-                if let Some(provider) =
-                    target.as_any().downcast_ref::<DefaultTableSource>()
-                {
+                if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
                     let input_exec = children.one()?;
                     provider
                         .table_provider
@@ -753,9 +751,7 @@ impl DefaultPhysicalPlanner {
                 input,
                 ..
             }) => {
-                if let Some(provider) =
-                    target.as_any().downcast_ref::<DefaultTableSource>()
-                {
+                if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
                     let filters = extract_dml_filters(input, table_name)?;
                     provider
                         .table_provider
@@ -777,9 +773,7 @@ impl DefaultPhysicalPlanner {
                 input,
                 ..
             }) => {
-                if let Some(provider) =
-                    target.as_any().downcast_ref::<DefaultTableSource>()
-                {
+                if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
                     let filters = extract_dml_filters(input, table_name)?;
@@ -804,9 +798,7 @@ impl DefaultPhysicalPlanner {
                 op: WriteOp::Truncate,
                 ..
             }) => {
-                if let Some(provider) =
-                    target.as_any().downcast_ref::<DefaultTableSource>()
-                {
+                if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
                     provider
                         .table_provider
                         .truncate(session_state)
@@ -3112,7 +3104,6 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::cmp::Ordering;
     use std::fmt::{self, Debug};
     use std::ops::{BitAnd, Not};
@@ -4680,10 +4671,6 @@ digraph {
     }
 
     impl TableSource for MockTableSource {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn schema(&self) -> SchemaRef {
             Arc::clone(&self.schema)
         }
@@ -4710,7 +4697,7 @@ digraph {
             scan: &TableScan,
             _session_state: &SessionState,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            if scan.source.as_any().is::<MockTableSource>() {
+            if scan.source.is::<MockTableSource>() {
                 Ok(Some(Arc::new(EmptyExec::new(Arc::clone(
                     scan.projected_schema.inner(),
                 )))))

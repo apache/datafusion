@@ -26,17 +26,20 @@ use arrow::array::{
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 
-/// Optimized version of the StringBuilder in Arrow that:
-/// 1. Precalculating the expected length of the result, avoiding reallocations.
-/// 2. Avoids creating / incrementally creating a `NullBufferBuilder`
-pub struct StringArrayBuilder {
+/// Builder used by `concat`/`concat_ws` to assemble a [`StringArray`] one row
+/// at a time from multiple input columns.
+///
+/// Each row is written via repeated `write` calls, followed by a single
+/// `append_offset` call to commit the row. The output null buffer is supplied
+/// by the caller at `finish` time.
+pub(crate) struct ConcatStringBuilder {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
     /// If true, a safety check is required during the `finish` call
     tainted: bool,
 }
 
-impl StringArrayBuilder {
+impl ConcatStringBuilder {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let capacity = item_capacity
             .checked_add(1)
@@ -151,13 +154,13 @@ impl StringArrayBuilder {
     }
 }
 
-/// Optimized version of Arrow's [`StringViewBuilder`]. Rather than adding NULLs
-/// on a row-by-row basis, the caller should provide nulls when calling
-/// [`finish`](Self::finish). This allows callers to compute nulls more
-/// efficiently (e.g., via bulk bitmap operations).
+/// Builder used by `concat`/`concat_ws` to assemble a [`StringViewArray`] one
+/// row at a time from multiple input columns.
 ///
-/// [`StringViewBuilder`]: arrow::array::StringViewBuilder
-pub struct StringViewArrayBuilder {
+/// Each row is written via repeated `write` calls, followed by a single
+/// `append_offset` call to commit the row as a single string view. The output
+/// null buffer is supplied by the caller at `finish` time.
+pub(crate) struct ConcatStringViewBuilder {
     views: Vec<u128>,
     data: Vec<u8>,
     block: Vec<u8>,
@@ -165,7 +168,7 @@ pub struct StringViewArrayBuilder {
     tainted: bool,
 }
 
-impl StringViewArrayBuilder {
+impl ConcatStringViewBuilder {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         Self {
             views: Vec::with_capacity(item_capacity),
@@ -286,14 +289,17 @@ impl StringViewArrayBuilder {
     }
 }
 
-pub struct LargeStringArrayBuilder {
+/// Builder used by `concat`/`concat_ws` to assemble a [`LargeStringArray`] one
+/// row at a time from multiple input columns. See [`ConcatStringBuilder`] for
+/// details on the row-composition contract.
+pub(crate) struct ConcatLargeStringBuilder {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
     /// If true, a safety check is required during the `finish` call
     tainted: bool,
 }
 
-impl LargeStringArrayBuilder {
+impl ConcatLargeStringBuilder {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let capacity = item_capacity
             .checked_add(1)
@@ -426,7 +432,7 @@ impl LargeStringArrayBuilder {
 /// LLVM is apparently overly eager to inline this function into some hot loops,
 /// which bloats them and regresses performance, so we disable inlining for now.
 #[inline(never)]
-pub fn append_view(
+pub(crate) fn append_view(
     views_buffer: &mut Vec<u128>,
     original_view: &u128,
     substr: &str,
@@ -447,7 +453,7 @@ pub fn append_view(
 }
 
 #[derive(Debug)]
-pub enum ColumnarValueRef<'a> {
+pub(crate) enum ColumnarValueRef<'a> {
     Scalar(&'a [u8]),
     NullableArray(&'a StringArray),
     NonNullableArray(&'a StringArray),
@@ -497,13 +503,13 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "capacity integer overflow")]
-    fn test_overflow_string_array_builder() {
-        let _builder = StringArrayBuilder::with_capacity(usize::MAX, usize::MAX);
+    fn test_overflow_concat_string_builder() {
+        let _builder = ConcatStringBuilder::with_capacity(usize::MAX, usize::MAX);
     }
 
     #[test]
     #[should_panic(expected = "capacity integer overflow")]
-    fn test_overflow_large_string_array_builder() {
-        let _builder = LargeStringArrayBuilder::with_capacity(usize::MAX, usize::MAX);
+    fn test_overflow_concat_large_string_builder() {
+        let _builder = ConcatLargeStringBuilder::with_capacity(usize::MAX, usize::MAX);
     }
 }

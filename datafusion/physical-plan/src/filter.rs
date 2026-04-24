@@ -2892,6 +2892,52 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_filter_statistics_equality_timestamp_ndv() -> Result<()> {
+        // ts: min=1_000_000_000, max=2_000_000_000, ndv=500
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            false,
+        )]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(8000),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::TimestampNanosecond(
+                        Some(1_000_000_000),
+                        None,
+                    )),
+                    max_value: Precision::Inexact(ScalarValue::TimestampNanosecond(
+                        Some(2_000_000_000),
+                        None,
+                    )),
+                    distinct_count: Precision::Inexact(500),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("ts", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::TimestampNanosecond(
+                Some(1_500_000_000),
+                None,
+            ))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_collect_equality_columns() {
         use std::collections::HashSet;

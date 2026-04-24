@@ -974,14 +974,12 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
         })?;
     let file_scan = data_source
         .data_source()
-        .as_any()
         .downcast_ref::<FileScanConfig>()
         .ok_or_else(|| {
             internal_datafusion_err!("Expected FileScanConfig after roundtrip")
         })?;
     let parquet_source = file_scan
         .file_source()
-        .as_any()
         .downcast_ref::<ParquetSource>()
         .ok_or_else(|| {
             internal_datafusion_err!("Expected ParquetSource after roundtrip")
@@ -1647,11 +1645,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     )?;
 
     let roundtrip_plan = roundtrip_plan.downcast_ref::<DataSinkExec>().unwrap();
-    let csv_sink = roundtrip_plan
-        .sink()
-        .as_any()
-        .downcast_ref::<CsvSink>()
-        .unwrap();
+    let csv_sink = roundtrip_plan.sink().downcast_ref::<CsvSink>().unwrap();
     assert_eq!(
         CompressionTypeVariant::ZSTD,
         csv_sink.writer_options().compression

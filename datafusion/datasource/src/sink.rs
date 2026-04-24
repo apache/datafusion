@@ -46,11 +46,7 @@ use futures::StreamExt;
 /// The `Display` impl is used to format the sink for explain plan
 /// output.
 #[async_trait]
-pub trait DataSink: DisplayAs + Debug + Send + Sync {
-    /// Returns the data sink as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     /// Return a snapshot of the [MetricsSet] for this
     /// [DataSink].
     ///
@@ -75,6 +71,18 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64>;
+}
+
+impl dyn DataSink {
+    /// Returns true if the inner type is `T`.
+    pub fn is<T: DataSink>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Returns a reference to the inner value as the type `T` if it is of that type.
+    pub fn downcast_ref<T: DataSink>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }
 
 /// Execution plan for writing record batches to a [`DataSink`]

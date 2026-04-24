@@ -261,11 +261,11 @@ fn bind_to_settings(snapshot_name: &str) -> SettingsBindDropGuard {
         "Consumer(can spill: bool) consumed XB, peak XB",
     );
     settings.add_filter(
-        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total memory pool: '.*?'",
         "Error: Failed to allocate ",
     );
     settings.add_filter(
-        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total memory pool: '.*?'",
         "Resources exhausted: Failed to allocate",
     );
 
@@ -283,6 +283,23 @@ fn test_cli_with_unbounded_memory_pool() {
     let mut cmd = cli();
     let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
     cmd.args(["--maxrows", "10", "--command", sql]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[test]
+fn test_cli_wide_result_set_no_crash() {
+    let mut settings = make_settings();
+
+    settings.set_snapshot_suffix("wide_result_set");
+
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    let sql = "SELECT v1 as c0, v1+1 as c1, v1+2 as c2, v1+3 as c3, v1+4 as c4, \
+               v1+5 as c5, v1+6 as c6, v1+7 as c7, v1+8 as c8, v1+9 as c9 \
+               FROM generate_series(1, 100) as t1(v1);";
+    cmd.args(["--maxrows", "5", "--command", sql]);
 
     assert_cmd_snapshot!(cmd);
 }

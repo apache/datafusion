@@ -64,6 +64,7 @@ log = { workspace = true }
 memchr = { workspace = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true, features = ["async_tokio"] }
 rand = { workspace = true }
 

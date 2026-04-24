@@ -33,7 +33,7 @@ use crate::joins::hash_join::partitioned_hash_eval::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
@@ -42,7 +42,7 @@ use datafusion_physical_expr::expressions::{
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
 use parking_lot::Mutex;
-use tokio::sync::Barrier;
+use tokio::sync::Notify;
 
 /// Represents the minimum and maximum values for a specific column.
 /// Used in dynamic filter pushdown to establish value boundaries.
@@ -183,6 +183,25 @@ fn create_bounds_predicate(
     }
 }
 
+/// Combines a membership predicate and a bounds predicate with logical AND.
+///
+/// Returns `None` when neither is available; callers decide the fallback (e.g.
+/// skip updating the filter vs. emit a `lit(true)` branch inside a CASE).
+fn combine_membership_and_bounds(
+    membership_expr: Option<Arc<dyn PhysicalExpr>>,
+    bounds_expr: Option<Arc<dyn PhysicalExpr>>,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    match (membership_expr, bounds_expr) {
+        (Some(membership), Some(bounds)) => {
+            Some(Arc::new(BinaryExpr::new(bounds, Operator::And, membership))
+                as Arc<dyn PhysicalExpr>)
+        }
+        (Some(membership), None) => Some(membership),
+        (None, Some(bounds)) => Some(bounds),
+        (None, None) => None,
+    }
+}
+
 /// Coordinates build-side information collection across multiple partitions
 ///
 /// This structure collects information from the build side (hash tables and/or bounds) and
@@ -193,9 +212,12 @@ fn create_bounds_predicate(
 /// ## Synchronization Strategy
 ///
 /// 1. Each partition computes information from its build-side data (hash maps and/or bounds)
-/// 2. Information is stored in the shared state
-/// 3. A barrier tracks how many partitions have reported
-/// 4. When the last partition reports, information is merged and the filter is updated exactly once
+/// 2. Information is stored in the shared state, which tracks how many partitions have reported
+/// 3. When the last partition reports, one waiter is elected as the finalizer; it merges the
+///    collected information, updates the dynamic filter exactly once, and publishes the
+///    terminal result by transitioning [`CompletionState`] to `Ready`
+/// 4. A [`tokio::sync::Notify`] wakes any other partitions parked in `wait_for_completion`,
+///    which then observe the `Ready` state under the mutex and return immediately
 ///
 /// ## Hash Map vs Bounds
 ///
@@ -215,8 +237,14 @@ fn create_bounds_predicate(
 /// partition executions.
 pub(crate) struct SharedBuildAccumulator {
     /// Build-side data protected by a single mutex to avoid ordering concerns
-    inner: Mutex<AccumulatedBuildData>,
-    barrier: Barrier,
+    inner: Mutex<AccumulatorState>,
+    /// Wakes every partition that is parked in [`Self::wait_for_completion`]
+    /// once [`AccumulatorState::completion`] transitions to
+    /// [`CompletionState::Ready`]. Notifications are fired once per
+    /// accumulator lifetime (the elected finalizer publishes the terminal
+    /// result, then broadcasts), so late subscribers simply re-check the
+    /// state under the mutex and return immediately.
+    completion_notify: Notify,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter expressions
@@ -262,11 +290,38 @@ struct PartitionData {
 /// Build-side data organized by partition mode
 enum AccumulatedBuildData {
     Partitioned {
-        partitions: Vec<Option<PartitionData>>,
+        partitions: Vec<PartitionStatus>,
+        completed_partitions: usize,
     },
     CollectLeft {
-        data: Option<PartitionData>,
+        data: PartitionStatus,
+        reported_count: usize,
+        expected_reports: usize,
     },
+}
+
+enum CompletionState {
+    Pending,
+    Finalizing,
+    Ready(SharedResult<()>),
+}
+
+struct AccumulatorState {
+    data: AccumulatedBuildData,
+    completion: CompletionState,
+}
+
+#[derive(Clone)]
+enum PartitionStatus {
+    Pending,
+    Reported(PartitionData),
+    CanceledUnknown,
+}
+
+#[derive(Clone)]
+enum FinalizeInput {
+    Partitioned(Vec<PartitionStatus>),
+    CollectLeft(PartitionStatus),
 }
 
 impl SharedBuildAccumulator {
@@ -323,21 +378,27 @@ impl SharedBuildAccumulator {
         let mode_data = match partition_mode {
             PartitionMode::Partitioned => AccumulatedBuildData::Partitioned {
                 partitions: vec![
-                    None;
+                    PartitionStatus::Pending;
                     left_child.output_partitioning().partition_count()
                 ],
+                completed_partitions: 0,
             },
-            PartitionMode::CollectLeft => {
-                AccumulatedBuildData::CollectLeft { data: None }
-            }
+            PartitionMode::CollectLeft => AccumulatedBuildData::CollectLeft {
+                data: PartitionStatus::Pending,
+                reported_count: 0,
+                expected_reports: expected_calls,
+            },
             PartitionMode::Auto => unreachable!(
                 "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
             ),
         };
 
         Self {
-            inner: Mutex::new(mode_data),
-            barrier: Barrier::new(expected_calls),
+            inner: Mutex::new(AccumulatorState {
+                data: mode_data,
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
             dynamic_filter,
             on_right,
             repartition_random_state,
@@ -358,229 +419,273 @@ impl SharedBuildAccumulator {
     /// # Returns
     /// * `Result<()>` - Ok if successful, Err if filter update failed or mode mismatch
     pub(crate) async fn report_build_data(&self, data: PartitionBuildData) -> Result<()> {
-        // Store data in the accumulator
-        {
+        let finalize_input = {
             let mut guard = self.inner.lock();
+            self.store_build_data(&mut guard, data)?;
+            self.take_finalize_input_if_ready(&mut guard)
+        };
 
-            match (data, &mut *guard) {
-                // Partitioned mode
-                (
-                    PartitionBuildData::Partitioned {
-                        partition_id,
-                        pushdown,
-                        bounds,
-                    },
-                    AccumulatedBuildData::Partitioned { partitions },
-                ) => {
-                    partitions[partition_id] = Some(PartitionData { pushdown, bounds });
-                }
-                // CollectLeft mode (store once, deduplicate across partitions)
-                (
-                    PartitionBuildData::CollectLeft { pushdown, bounds },
-                    AccumulatedBuildData::CollectLeft { data },
-                ) => {
-                    // Deduplicate - all partitions report the same data in CollectLeft
-                    if data.is_none() {
-                        *data = Some(PartitionData { pushdown, bounds });
-                    }
-                }
-                // Mismatched modes - should never happen
-                _ => {
-                    return datafusion_common::internal_err!(
-                        "Build data mode mismatch in report_build_data"
-                    );
-                }
-            }
+        if let Some(finalize_input) = finalize_input {
+            self.finish(finalize_input);
         }
 
-        // Wait for all partitions to report
-        if self.barrier.wait().await.is_leader() {
-            // All partitions have reported, so we can create and update the filter
-            let inner = self.inner.lock();
+        self.wait_for_completion().await
+    }
 
-            match &*inner {
-                // CollectLeft: Simple conjunction of bounds and membership check
-                AccumulatedBuildData::CollectLeft { data } => {
-                    if let Some(partition_data) = data {
-                        // Create membership predicate (InList for small build sides, hash lookup otherwise)
-                        let membership_expr = create_membership_predicate(
-                            &self.on_right,
-                            partition_data.pushdown.clone(),
-                            &HASH_JOIN_SEED,
-                            self.probe_schema.as_ref(),
-                        )?;
+    pub(crate) fn report_canceled_partition(&self, partition_id: usize) {
+        let finalize_input = {
+            let mut guard = self.inner.lock();
+            self.store_canceled_partition(&mut guard, partition_id);
+            self.take_finalize_input_if_ready(&mut guard)
+        };
 
-                        // Create bounds check expression (if bounds available)
-                        let bounds_expr = create_bounds_predicate(
-                            &self.on_right,
-                            &partition_data.bounds,
-                        );
+        if let Some(finalize_input) = finalize_input {
+            self.finish(finalize_input);
+        }
+    }
 
-                        // Combine membership and bounds expressions for multi-layer optimization:
-                        // - Bounds (min/max): Enable statistics-based pruning (Parquet row group/file skipping)
-                        // - Membership (InList/hash lookup): Enables:
-                        //   * Precise filtering (exact value matching)
-                        //   * Bloom filter utilization (if present in Parquet files)
-                        //   * Better pruning for data types where min/max isn't effective (e.g., UUIDs)
-                        // Together, they provide complementary benefits and maximize data skipping.
-                        // Only update the filter if we have something to push down
-                        if let Some(filter_expr) = match (membership_expr, bounds_expr) {
-                            (Some(membership), Some(bounds)) => {
-                                // Both available: combine with AND
-                                Some(Arc::new(BinaryExpr::new(
-                                    bounds,
-                                    Operator::And,
-                                    membership,
-                                ))
-                                    as Arc<dyn PhysicalExpr>)
-                            }
-                            (Some(membership), None) => {
-                                // Membership available but no bounds
-                                // This is reachable when we have data but bounds aren't available
-                                // (e.g., unsupported data types or no columns with bounds)
-                                Some(membership)
-                            }
-                            (None, Some(bounds)) => {
-                                // Bounds available but no membership.
-                                // This should be unreachable in practice: we can always push down a reference
-                                // to the hash table.
-                                // But it seems safer to handle it defensively.
-                                Some(bounds)
-                            }
-                            (None, None) => {
-                                // No filter available (e.g., empty build side)
-                                // Don't update the filter, but continue to mark complete
-                                None
-                            }
-                        } {
-                            self.dynamic_filter.update(filter_expr)?;
-                        }
+    fn store_build_data(
+        &self,
+        guard: &mut AccumulatorState,
+        data: PartitionBuildData,
+    ) -> Result<()> {
+        match (data, &mut guard.data) {
+            (
+                PartitionBuildData::Partitioned {
+                    partition_id,
+                    pushdown,
+                    bounds,
+                },
+                AccumulatedBuildData::Partitioned {
+                    partitions,
+                    completed_partitions,
+                },
+            ) => {
+                if matches!(partitions[partition_id], PartitionStatus::Pending) {
+                    *completed_partitions += 1;
+                }
+                partitions[partition_id] =
+                    PartitionStatus::Reported(PartitionData { pushdown, bounds });
+            }
+            (
+                PartitionBuildData::CollectLeft { pushdown, bounds },
+                AccumulatedBuildData::CollectLeft {
+                    data,
+                    reported_count,
+                    ..
+                },
+            ) => {
+                if matches!(data, PartitionStatus::Pending) {
+                    *data = PartitionStatus::Reported(PartitionData { pushdown, bounds });
+                }
+                *reported_count += 1;
+            }
+            _ => {
+                return datafusion_common::internal_err!(
+                    "Build data mode mismatch in report_build_data"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn store_canceled_partition(
+        &self,
+        guard: &mut AccumulatorState,
+        partition_id: usize,
+    ) {
+        if let AccumulatedBuildData::Partitioned {
+            partitions,
+            completed_partitions,
+        } = &mut guard.data
+            && matches!(partitions[partition_id], PartitionStatus::Pending)
+        {
+            partitions[partition_id] = PartitionStatus::CanceledUnknown;
+            *completed_partitions += 1;
+        }
+    }
+
+    fn take_finalize_input_if_ready(
+        &self,
+        guard: &mut AccumulatorState,
+    ) -> Option<FinalizeInput> {
+        if !matches!(guard.completion, CompletionState::Pending) {
+            return None;
+        }
+
+        let finalize_input = match &guard.data {
+            AccumulatedBuildData::Partitioned {
+                partitions,
+                completed_partitions,
+            } if *completed_partitions == partitions.len() => {
+                Some(FinalizeInput::Partitioned(partitions.clone()))
+            }
+            AccumulatedBuildData::CollectLeft {
+                data,
+                reported_count,
+                expected_reports,
+            } if *reported_count == *expected_reports => {
+                Some(FinalizeInput::CollectLeft(data.clone()))
+            }
+            _ => None,
+        }?;
+
+        guard.completion = CompletionState::Finalizing;
+        Some(finalize_input)
+    }
+
+    fn finish(&self, finalize_input: FinalizeInput) {
+        let result = self.build_filter(finalize_input).map_err(Arc::new);
+        self.dynamic_filter.mark_complete();
+
+        let mut guard = self.inner.lock();
+        guard.completion = CompletionState::Ready(result);
+        drop(guard);
+        self.completion_notify.notify_waiters();
+    }
+
+    async fn wait_for_completion(&self) -> Result<()> {
+        loop {
+            let notified = {
+                let guard = self.inner.lock();
+                match &guard.completion {
+                    CompletionState::Ready(Ok(())) => return Ok(()),
+                    CompletionState::Ready(Err(err)) => {
+                        return Err(DataFusionError::Shared(Arc::clone(err)));
+                    }
+                    CompletionState::Pending | CompletionState::Finalizing => {
+                        self.completion_notify.notified()
                     }
                 }
-                // Partitioned: CASE expression routing to per-partition filters
-                AccumulatedBuildData::Partitioned { partitions } => {
-                    // Collect all partition data (should all be Some at this point)
-                    let partition_data: Vec<_> =
-                        partitions.iter().filter_map(|p| p.as_ref()).collect();
+            };
+            notified.await;
+        }
+    }
 
-                    if !partition_data.is_empty() {
-                        // Build a CASE expression that combines range checks AND membership checks
-                        // CASE (hash_repartition(join_keys) % num_partitions)
-                        //   WHEN 0 THEN (col >= min_0 AND col <= max_0 AND ...) AND membership_check_0
-                        //   WHEN 1 THEN (col >= min_1 AND col <= max_1 AND ...) AND membership_check_1
-                        //   ...
-                        //   ELSE false
-                        // END
+    fn build_filter(&self, finalize_input: FinalizeInput) -> Result<()> {
+        match finalize_input {
+            FinalizeInput::CollectLeft(partition) => match partition {
+                PartitionStatus::Reported(partition_data) => {
+                    let membership_expr = create_membership_predicate(
+                        &self.on_right,
+                        partition_data.pushdown.clone(),
+                        &HASH_JOIN_SEED,
+                        self.probe_schema.as_ref(),
+                    )?;
+                    let bounds_expr =
+                        create_bounds_predicate(&self.on_right, &partition_data.bounds);
 
-                        let num_partitions = partition_data.len();
-
-                        // Create base expression: hash_repartition(join_keys) % num_partitions
-                        let routing_hash_expr = Arc::new(HashExpr::new(
-                            self.on_right.clone(),
-                            self.repartition_random_state.clone(),
-                            "hash_repartition".to_string(),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
-
-                        let modulo_expr = Arc::new(BinaryExpr::new(
-                            routing_hash_expr,
-                            Operator::Modulo,
-                            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
-
-                        // Create WHEN branches for each partition
-                        let when_then_branches: Vec<(
-                            Arc<dyn PhysicalExpr>,
-                            Arc<dyn PhysicalExpr>,
-                        )> = partitions
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(partition_id, partition_opt)| {
-                                partition_opt.as_ref().and_then(|partition| {
-                                    // Skip empty partitions - they would always return false anyway
-                                    match &partition.pushdown {
-                                        PushdownStrategy::Empty => None,
-                                        _ => Some((partition_id, partition)),
-                                    }
-                                })
-                            })
-                            .map(|(partition_id, partition)| -> Result<_> {
-                                // WHEN partition_id
-                                let when_expr =
-                                    lit(ScalarValue::UInt64(Some(partition_id as u64)));
-
-                                // THEN: Combine bounds check AND membership predicate
-
-                                // 1. Create membership predicate (InList for small build sides, hash lookup otherwise)
-                                let membership_expr = create_membership_predicate(
-                                    &self.on_right,
-                                    partition.pushdown.clone(),
-                                    &HASH_JOIN_SEED,
-                                    self.probe_schema.as_ref(),
-                                )?;
-
-                                // 2. Create bounds check expression for this partition (if bounds available)
-                                let bounds_expr = create_bounds_predicate(
-                                    &self.on_right,
-                                    &partition.bounds,
-                                );
-
-                                // 3. Combine membership and bounds expressions
-                                let then_expr = match (membership_expr, bounds_expr) {
-                                    (Some(membership), Some(bounds)) => {
-                                        // Both available: combine with AND
-                                        Arc::new(BinaryExpr::new(
-                                            bounds,
-                                            Operator::And,
-                                            membership,
-                                        ))
-                                            as Arc<dyn PhysicalExpr>
-                                    }
-                                    (Some(membership), None) => {
-                                        // Membership available but no bounds (e.g., unsupported data types)
-                                        membership
-                                    }
-                                    (None, Some(bounds)) => {
-                                        // Bounds available but no membership.
-                                        // This should be unreachable in practice: we can always push down a reference
-                                        // to the hash table.
-                                        // But it seems safer to handle it defensively.
-                                        bounds
-                                    }
-                                    (None, None) => {
-                                        // No filter for this partition - should not happen due to filter_map above
-                                        // but handle defensively by returning a "true" literal
-                                        lit(true)
-                                    }
-                                };
-
-                                Ok((when_expr, then_expr))
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-
-                        // Optimize for single partition: skip CASE expression entirely
-                        let filter_expr = if when_then_branches.is_empty() {
-                            // All partitions are empty: no rows can match
-                            lit(false)
-                        } else if when_then_branches.len() == 1 {
-                            // Single partition: just use the condition directly
-                            // since hash % 1 == 0 always, the WHEN 0 branch will always match
-                            Arc::clone(&when_then_branches[0].1)
-                        } else {
-                            // Multiple partitions: create CASE expression
-                            Arc::new(CaseExpr::try_new(
-                                Some(modulo_expr),
-                                when_then_branches,
-                                Some(lit(false)), // ELSE false
-                            )?) as Arc<dyn PhysicalExpr>
-                        };
-
+                    if let Some(filter_expr) =
+                        combine_membership_and_bounds(membership_expr, bounds_expr)
+                    {
                         self.dynamic_filter.update(filter_expr)?;
                     }
                 }
+                PartitionStatus::Pending => {
+                    return datafusion_common::internal_err!(
+                        "attempted to finalize collect-left dynamic filter without reported build data"
+                    );
+                }
+                PartitionStatus::CanceledUnknown => {
+                    return datafusion_common::internal_err!(
+                        "collect-left dynamic filter cannot finalize with canceled build data"
+                    );
+                }
+            },
+            FinalizeInput::Partitioned(partitions) => {
+                let num_partitions = partitions.len();
+                let routing_hash_expr = Arc::new(HashExpr::new(
+                    self.on_right.clone(),
+                    self.repartition_random_state.clone(),
+                    "hash_repartition".to_string(),
+                )) as Arc<dyn PhysicalExpr>;
+
+                let modulo_expr = Arc::new(BinaryExpr::new(
+                    routing_hash_expr,
+                    Operator::Modulo,
+                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+                )) as Arc<dyn PhysicalExpr>;
+
+                let mut real_branches = Vec::new();
+                let mut empty_partition_ids = Vec::new();
+                let mut has_canceled_unknown = false;
+
+                for (partition_id, partition) in partitions.iter().enumerate() {
+                    match partition {
+                        PartitionStatus::Reported(partition)
+                            if matches!(partition.pushdown, PushdownStrategy::Empty) =>
+                        {
+                            empty_partition_ids.push(partition_id);
+                        }
+                        PartitionStatus::Reported(partition) => {
+                            let membership_expr = create_membership_predicate(
+                                &self.on_right,
+                                partition.pushdown.clone(),
+                                &HASH_JOIN_SEED,
+                                self.probe_schema.as_ref(),
+                            )?;
+                            let bounds_expr = create_bounds_predicate(
+                                &self.on_right,
+                                &partition.bounds,
+                            );
+                            let then_expr = combine_membership_and_bounds(
+                                membership_expr,
+                                bounds_expr,
+                            )
+                            .unwrap_or_else(|| lit(true));
+                            real_branches.push((
+                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                                then_expr,
+                            ));
+                        }
+                        PartitionStatus::CanceledUnknown => {
+                            has_canceled_unknown = true;
+                        }
+                        PartitionStatus::Pending => {
+                            return datafusion_common::internal_err!(
+                                "attempted to finalize dynamic filter with pending partition"
+                            );
+                        }
+                    }
+                }
+
+                let filter_expr = if has_canceled_unknown {
+                    let mut when_then_branches = empty_partition_ids
+                        .into_iter()
+                        .map(|partition_id| {
+                            (
+                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                                lit(false),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    when_then_branches.extend(real_branches);
+
+                    if when_then_branches.is_empty() {
+                        lit(true)
+                    } else {
+                        Arc::new(CaseExpr::try_new(
+                            Some(modulo_expr),
+                            when_then_branches,
+                            Some(lit(true)),
+                        )?) as Arc<dyn PhysicalExpr>
+                    }
+                } else if real_branches.is_empty() {
+                    lit(false)
+                } else if real_branches.len() == 1
+                    && empty_partition_ids.len() + 1 == num_partitions
+                {
+                    Arc::clone(&real_branches[0].1)
+                } else {
+                    Arc::new(CaseExpr::try_new(
+                        Some(modulo_expr),
+                        real_branches,
+                        Some(lit(false)),
+                    )?) as Arc<dyn PhysicalExpr>
+                };
+
+                self.dynamic_filter.update(filter_expr)?;
             }
-            self.dynamic_filter.mark_complete();
         }
 
         Ok(())
@@ -590,5 +695,102 @@ impl SharedBuildAccumulator {
 impl fmt::Debug for SharedBuildAccumulator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SharedBuildAccumulator")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_partitioned_accumulator(num_partitions: usize) -> SharedBuildAccumulator {
+        let probe_schema = Arc::new(Schema::new(vec![Field::new(
+            "probe_key",
+            DataType::Int32,
+            false,
+        )]));
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::Partitioned {
+                    partitions: vec![PartitionStatus::Pending; num_partitions],
+                    completed_partitions: 0,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter,
+            on_right: vec![],
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema,
+        }
+    }
+
+    fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
+        let guard = acc.inner.lock();
+        let AccumulatedBuildData::Partitioned {
+            partitions,
+            completed_partitions,
+        } = &guard.data
+        else {
+            panic!("expected partitioned accumulator");
+        };
+        (partitions.clone(), *completed_partitions)
+    }
+
+    // Regression guard for the build-report lifecycle fix: on `Drop`, a stream
+    // in `BuildReportState::ReportScheduled` still calls `report_canceled_partition`
+    // because it cannot tell whether the coordinator has already observed the
+    // report (first poll of the `OnceFut` runs `store_build_data` synchronously
+    // before the future's first `.await`, but the stream doesn't learn that
+    // until `get_shared` returns `Ok`). Correctness therefore relies on
+    // `store_canceled_partition` being a no-op when the partition is already
+    // `Reported`. This test pins that invariant.
+    #[test]
+    fn report_canceled_partition_is_noop_after_report() {
+        let acc = make_partitioned_accumulator(2);
+
+        {
+            let mut guard = acc.inner.lock();
+            acc.store_build_data(
+                &mut guard,
+                PartitionBuildData::Partitioned {
+                    partition_id: 0,
+                    pushdown: PushdownStrategy::Empty,
+                    bounds: PartitionBounds::new(vec![]),
+                },
+            )
+            .unwrap();
+        }
+        let (partitions, completed) = partitioned_state(&acc);
+        assert!(matches!(partitions[0], PartitionStatus::Reported(_)));
+        assert_eq!(completed, 1);
+
+        acc.report_canceled_partition(0);
+        let (partitions, completed) = partitioned_state(&acc);
+        assert!(
+            matches!(partitions[0], PartitionStatus::Reported(_)),
+            "late cancel must not overwrite a prior Reported status"
+        );
+        assert_eq!(completed, 1, "late cancel must not double-count completion");
+    }
+
+    // Drop from the `NotReported` (or first-poll-never-ran) state must
+    // transition `Pending` -> `CanceledUnknown` and bump `completed_partitions`,
+    // which is what unblocks sibling partitions waiting on the coordinator.
+    #[test]
+    fn report_canceled_partition_marks_pending_partition_canceled() {
+        let acc = make_partitioned_accumulator(2);
+
+        acc.report_canceled_partition(0);
+        let (partitions, completed) = partitioned_state(&acc);
+        assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
+        assert_eq!(completed, 1);
+
+        // Idempotent: a second cancel (e.g. a stray double-drop) must not
+        // double-count completion.
+        acc.report_canceled_partition(0);
+        let (partitions, completed) = partitioned_state(&acc);
+        assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
+        assert_eq!(completed, 1);
     }
 }

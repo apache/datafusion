@@ -215,12 +215,11 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         buf: &mut Vec<u8>,
         node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
-        let options =
-            if let Some(csv_factory) = node.as_any().downcast_ref::<CsvFormatFactory>() {
-                csv_factory.options.clone().unwrap_or_default()
-            } else {
-                return exec_err!("{}", "Unsupported FileFormatFactory type".to_string());
-            };
+        let options = if let Some(csv_factory) = node.downcast_ref::<CsvFormatFactory>() {
+            csv_factory.options.clone().unwrap_or_default()
+        } else {
+            return exec_err!("{}", "Unsupported FileFormatFactory type".to_string());
+        };
 
         let proto = CsvOptionsProto::from_factory(&CsvFormatFactory {
             options: Some(options),
@@ -326,8 +325,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         buf: &mut Vec<u8>,
         node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
-        let options = if let Some(json_factory) =
-            node.as_any().downcast_ref::<JsonFormatFactory>()
+        let options = if let Some(json_factory) = node.downcast_ref::<JsonFormatFactory>()
         {
             json_factory.options.clone().unwrap_or_default()
         } else {
@@ -674,7 +672,7 @@ mod parquet {
             use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
             let options = if let Some(parquet_factory) =
-                node.as_any().downcast_ref::<ParquetFormatFactory>()
+                node.downcast_ref::<ParquetFormatFactory>()
             {
                 parquet_factory.options.clone().unwrap_or_default()
             } else {
