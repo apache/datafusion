@@ -48,9 +48,9 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{OUTER_REFERENCE_COLUMN_PREFIX, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    Aggregate, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
-    UserDefinedLogicalNode, expr::Alias,
+    UserDefinedLogicalNode, Window, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::{sync::Arc, vec};
@@ -475,6 +475,80 @@ impl Unparser<'_> {
         }
 
         Ok(false)
+    }
+
+    fn project_window_output(
+        &self,
+        window_expr: &[Expr],
+        select: &mut SelectBuilder,
+        agg: Option<&Aggregate>,
+    ) -> Result<()> {
+        let mut items = if select.already_projected() {
+            select.pop_projections()
+        } else {
+            vec![ast::SelectItem::Wildcard(
+                ast::WildcardAdditionalOptions::default(),
+            )]
+        };
+
+        items.extend(
+            window_expr
+                .iter()
+                .map(|expr| {
+                    let expr = if let Some(agg) = agg {
+                        unproject_agg_exprs(expr.clone(), agg, None)?
+                    } else {
+                        expr.clone()
+                    };
+                    self.select_item_to_sql(&expr)
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+        select.projection(items);
+
+        Ok(())
+    }
+
+    fn window_input_requires_derived_subquery(plan: &LogicalPlan) -> bool {
+        // These operators either produce a SELECT list or apply SQL clauses
+        // that are evaluated after window functions in a single SELECT block.
+        // Keep them below the Window node by emitting a derived table.
+        matches!(
+            plan,
+            LogicalPlan::Projection(_)
+                | LogicalPlan::Distinct(_)
+                | LogicalPlan::Limit(_)
+                | LogicalPlan::Sort(_)
+                | LogicalPlan::Union(_)
+        )
+    }
+
+    fn window_to_sql_with_derived_input(
+        &self,
+        window: &Window,
+        select: &mut SelectBuilder,
+        relation: &mut RelationBuilder,
+    ) -> Result<()> {
+        let input_alias = "derived_window_input";
+        self.derive(
+            window.input.as_ref(),
+            relation,
+            Some(self.new_table_alias(input_alias.to_string(), vec![])),
+            false,
+        )?;
+
+        let input_schema = window.input.schema();
+        let mut alias_rewriter = TableAliasRewriter {
+            table_schema: input_schema.as_arrow(),
+            alias_name: TableReference::bare(input_alias),
+        };
+        let window_expr = window
+            .window_expr
+            .iter()
+            .map(|expr| expr.clone().rewrite(&mut alias_rewriter).data())
+            .collect::<Result<Vec<_>>>()?;
+
+        self.project_window_output(&window_expr, select, None)
     }
 
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
@@ -1165,6 +1239,13 @@ impl Unparser<'_> {
                 // Window nodes without an enclosing Projection, so in that case
                 // the Window node itself must contribute its output expressions.
                 let project_window_output = !select.already_projected();
+                if project_window_output
+                    && Self::window_input_requires_derived_subquery(window.input.as_ref())
+                {
+                    return self
+                        .window_to_sql_with_derived_input(window, select, relation);
+                }
+
                 let agg = if project_window_output {
                     find_agg_node_within_select(plan, false)
                 } else {
@@ -1179,29 +1260,7 @@ impl Unparser<'_> {
                 )?;
 
                 if project_window_output {
-                    let mut items = if select.already_projected() {
-                        select.pop_projections()
-                    } else {
-                        vec![ast::SelectItem::Wildcard(
-                            ast::WildcardAdditionalOptions::default(),
-                        )]
-                    };
-
-                    items.extend(
-                        window
-                            .window_expr
-                            .iter()
-                            .map(|expr| {
-                                let expr = if let Some(agg) = agg {
-                                    unproject_agg_exprs(expr.clone(), agg, None)?
-                                } else {
-                                    expr.clone()
-                                };
-                                self.select_item_to_sql(&expr)
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                    );
-                    select.projection(items);
+                    self.project_window_output(&window.window_expr, select, agg)?;
                 }
 
                 Ok(())
