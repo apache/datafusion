@@ -822,31 +822,23 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
     })
 }
 
-/// Finds the min/max by scanning logical rows via `ScalarValue::try_from_array`.
-///
-/// Callers are responsible for routing dictionary arrays to this helper.
-/// Passing `dictionary.values()` is semantically incorrect because it can
-/// include unreferenced dictionary entries and ignore null key positions.
-fn min_max_batch_generic(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
-    let mut index = 0;
-    let mut extreme = loop {
-        if index == values.len() {
-            return ScalarValue::try_from(values.data_type());
+/// Generic min/max implementation for complex types
+fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
+    if array.len() == array.null_count() {
+        return ScalarValue::try_from(array.data_type());
+    }
+    let mut extreme = ScalarValue::try_from_array(array, 0)?;
+    for i in 1..array.len() {
+        let current = ScalarValue::try_from_array(array, i)?;
+        if current.is_null() {
+            continue;
         }
-
-        let current = ScalarValue::try_from_array(values, index)?;
-        index += 1;
-
-        if !current.is_null() {
-            break current;
+        if extreme.is_null() {
+            extreme = current;
+            continue;
         }
-    };
-
-    while index < values.len() {
-        let current = ScalarValue::try_from_array(values, index)?;
-        index += 1;
-
-        if !current.is_null() && extreme.try_cmp(&current)? == ordering {
+        let cmp = extreme.try_cmp(&current)?;
+        if cmp == ordering {
             extreme = current;
         }
     }
