@@ -377,15 +377,11 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
         args: HigherOrderReturnFieldArgs,
     ) -> Result<FieldRef>;
 
-    /// Whether List, LargeList and FixedSizeList arguments should have it's
-    /// non-empty null sublists cleaned with [remove_list_null_values]
-    /// before invoking this function
+    /// Whether List or LargeList arguments should have it's non-empty null
+    /// sublists cleaned with [remove_list_null_values] before invoking this function
     ///
     /// The default implementation always returns true and should only be implemented
     /// if you want to handle non-empty null sublists yourself
-    ///
-    /// Fully null fixed size list arrays should always be handled regardless of
-    /// the return of this function
     ///
     /// [remove_list_null_values]: datafusion_common::utils::remove_list_null_values
     // todo: extend this to listview and maps when remove_list_null_values supports it

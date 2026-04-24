@@ -18,7 +18,7 @@
 //! [`HigherOrderUDF`] definitions for array_transform function.
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray},
+    array::{Array, ArrayRef, AsArray, LargeListArray, ListArray},
     datatypes::{DataType, Field, FieldRef},
 };
 use datafusion_common::{
@@ -104,10 +104,10 @@ impl HigherOrderUDF for ArrayTransform {
         };
 
         let coerced = match list {
-            DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _) => list.clone(),
-            DataType::ListView(field) => DataType::List(Arc::clone(field)),
+            DataType::List(_) | DataType::LargeList(_) => list.clone(),
+            DataType::ListView(field) | DataType::FixedSizeList(field, _) => {
+                DataType::List(Arc::clone(field))
+            }
             DataType::LargeListView(field) => DataType::LargeList(Arc::clone(field)),
             _ => {
                 return plan_err!(
@@ -135,7 +135,6 @@ impl HigherOrderUDF for ArrayTransform {
         let field = match list.data_type() {
             DataType::List(field) => field,
             DataType::LargeList(field) => field,
-            DataType::FixedSizeList(field, _) => field,
             _ => return plan_err!("expected list, got {list}"),
         };
 
@@ -163,7 +162,6 @@ impl HigherOrderUDF for ArrayTransform {
         let return_type = match list.data_type() {
             DataType::List(_) => DataType::List(field),
             DataType::LargeList(_) => DataType::LargeList(field),
-            DataType::FixedSizeList(_, size) => DataType::FixedSizeList(field, *size),
             other => plan_err!("expected list, got {other}")?,
         };
 
@@ -175,8 +173,7 @@ impl HigherOrderUDF for ArrayTransform {
 
         let list_array = list.to_array(args.number_rows)?;
 
-        // Fast path for fully null input array and also the only way to safely work with
-        // a fully null fixed size list array as it can't be handled by remove_list_null_values below
+        // Fast path for fully null input array
         if list_array.null_count() == list_array.len() {
             return Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
                 args.return_type(),
@@ -211,9 +208,7 @@ impl HigherOrderUDF for ArrayTransform {
             .into_array(list_values.len())?;
 
         let field = match args.return_field.data_type() {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _) => Arc::clone(field),
+            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             _ => {
                 return exec_err!(
                     "{} expected ScalarFunctionArgs.return_field to be a list, got {}",
@@ -252,14 +247,6 @@ impl HigherOrderUDF for ArrayTransform {
                     large_list.nulls().cloned(),
                 ))
             }
-            DataType::FixedSizeList(_, value_length) => {
-                Arc::new(FixedSizeListArray::new(
-                    field,
-                    *value_length,
-                    transformed_values,
-                    list_array.as_fixed_size_list().nulls().cloned(),
-                ))
-            }
             other => exec_err!("expected list, got {other}")?,
         };
 
@@ -292,10 +279,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::{
-        array::{
-            Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, ListArray,
-            RecordBatch,
-        },
+        array::{Array, ArrayRef, AsArray, Int32Array, ListArray, RecordBatch},
         buffer::{NullBuffer, OffsetBuffer},
         datatypes::{DataType, Field},
     };
@@ -316,19 +300,6 @@ mod tests {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
 
         ListArray::new(list_field, offsets, Arc::new(values.into()), nulls)
-    }
-
-    fn create_i32_fsl(
-        size: i32,
-        values: Vec<i32>,
-        nulls: Option<NullBuffer>,
-    ) -> FixedSizeListArray {
-        FixedSizeListArray::new(
-            Arc::new(Field::new_list_field(DataType::Int32, true)),
-            size,
-            Arc::new(Int32Array::from(values)),
-            nulls,
-        )
     }
 
     fn divide_100_by(list: impl Array + Clone + 'static) -> Result<ArrayRef> {
@@ -395,27 +366,6 @@ mod tests {
     }
 
     #[test]
-    fn transform_on_sliced_fsl_should_not_evaluate_on_unreachable_values() {
-        let list = create_i32_fsl(
-            3,
-            vec![
-                // Have 0 here so if the expression is called on data that it will fail
-                0, 4, 100, 25, 20, 5, 2, 1, 10,
-            ],
-            None,
-        )
-        .slice(1, 2);
-
-        let res = divide_100_by(list).unwrap();
-
-        let actual_list = res.as_fixed_size_list();
-
-        let expected_list = create_i32_fsl(3, vec![4, 5, 20, 50, 100, 10], None);
-
-        assert_eq!(actual_list, &expected_list);
-    }
-
-    #[test]
     fn transform_function_should_not_be_evaluated_on_values_underlying_null() {
         let list = create_i32_list(
             // 0 here for one of the values behind null, so if it will be evaluated
@@ -436,31 +386,6 @@ mod tests {
         );
 
         assert_eq!(actual_list.data_type(), expected_list.data_type());
-        assert_eq!(actual_list, &expected_list);
-    }
-
-    #[test]
-    fn transform_function_should_not_be_evaluated_on_values_underlying_null_fsl() {
-        let list = create_i32_fsl(
-            3,
-            // 0 here for one of the values behind null, so if it will be evaluated
-            // it will fail due to divide by 0
-            vec![100, 20, 10, 0, 1, 2, 0, 1, 50, 2, 4, 5],
-            Some(NullBuffer::from(vec![true, false, false, true])),
-        );
-
-        let res = divide_100_by(list).unwrap();
-
-        let actual_list = res.as_fixed_size_list();
-
-        // null sublists are replaced with the values of the first valid sublist,
-        // in this case, [100, 20, 10], that when dividing 100, result in [1, 5, 10]
-        let expected_list = create_i32_fsl(
-            3,
-            vec![1, 5, 10, 1, 5, 10, 1, 5, 10, 50, 25, 20],
-            Some(NullBuffer::from(vec![true, false, false, true])),
-        );
-
         assert_eq!(actual_list, &expected_list);
     }
 }

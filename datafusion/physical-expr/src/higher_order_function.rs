@@ -334,7 +334,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                     let value = arg.evaluate(batch)?;
 
                     let value =
-                        if self.fun.clear_null_values() && value.data_type().is_list() {
+                        if self.fun.clear_null_values() && matches!(value.data_type(), DataType::List(_) | DataType::LargeList(_)) {
                             ColumnarValue::Array(remove_list_null_values(
                                 &value.into_array(batch.num_rows())?,
                             )?)
