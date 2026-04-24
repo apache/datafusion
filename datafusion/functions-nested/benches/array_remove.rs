@@ -16,12 +16,11 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeBinaryArray, ListArray,
-    StringArray,
+    Array, ArrayRef, BinaryArray, BooleanArray, Decimal128Array, FixedSizeBinaryArray,
+    Float64Array, Int64Array, ListArray, StringArray,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Decimal128Type, Field, Float64Type, Int64Type};
-use arrow::util::bench_util::create_primitive_list_array_with_seed;
+use arrow::datatypes::{DataType, Field};
 use criterion::{
     criterion_group, criterion_main, {BenchmarkId, Criterion},
 };
@@ -56,15 +55,7 @@ fn bench_array_remove_int64(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_remove_int64");
 
     for &array_size in ARRAY_SIZES {
-        let list_array: ArrayRef =
-            Arc::new(create_primitive_list_array_with_seed::<i32, Int64Type>(
-                NUM_ROWS,
-                0.0,
-                NULL_DENSITY as f32,
-                array_size,
-                SEED,
-            ));
-
+        let list_array = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
         let element_to_remove = ScalarValue::Int64(Some(1));
         let args = create_args(list_array.clone(), element_to_remove.clone());
 
@@ -105,14 +96,7 @@ fn bench_array_remove_f64(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_remove_f64");
 
     for &array_size in ARRAY_SIZES {
-        let list_array: ArrayRef =
-            Arc::new(create_primitive_list_array_with_seed::<i32, Float64Type>(
-                NUM_ROWS,
-                0.0,
-                NULL_DENSITY as f32,
-                array_size,
-                SEED,
-            ));
+        let list_array = create_f64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
         let element_to_remove = ScalarValue::Float64(Some(1.0));
         let args = create_args(list_array.clone(), element_to_remove.clone());
 
@@ -276,17 +260,8 @@ fn bench_array_remove_decimal64(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_remove_decimal64");
 
     for &array_size in ARRAY_SIZES {
-        let list_array: ArrayRef = Arc::new(create_primitive_list_array_with_seed::<
-            i32,
-            Decimal128Type,
-        >(
-            NUM_ROWS,
-            0.0,
-            NULL_DENSITY as f32,
-            array_size,
-            SEED,
-        ));
-        let element_to_remove = ScalarValue::Decimal128(Some(100_i128), 38, 10);
+        let list_array = create_decimal64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
+        let element_to_remove = ScalarValue::Decimal128(Some(100_i128), 10, 2);
         let args = create_args(list_array.clone(), element_to_remove.clone());
 
         group.bench_with_input(
@@ -301,7 +276,7 @@ fn bench_array_remove_decimal64(c: &mut Criterion) {
                             arg_fields: vec![
                                 Field::new("arr", list_array.data_type().clone(), false)
                                     .into(),
-                                Field::new("el", DataType::Decimal128(38, 10), false)
+                                Field::new("el", DataType::Decimal128(10, 2), false)
                                     .into(),
                             ],
                             number_rows: NUM_ROWS,
@@ -371,6 +346,66 @@ fn create_args(list_array: ArrayRef, element: ScalarValue) -> Vec<ColumnarValue>
         ColumnarValue::Array(list_array),
         ColumnarValue::Scalar(element),
     ]
+}
+
+fn create_int64_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED);
+    let values = (0..num_rows * array_size)
+        .map(|_| {
+            if rng.random::<f64>() < null_density {
+                None
+            } else {
+                Some(rng.random_range(0..array_size as i64))
+            }
+        })
+        .collect::<Int64Array>();
+    let offsets = (0..=num_rows)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
+
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Int64, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+fn create_f64_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED);
+    let values = (0..num_rows * array_size)
+        .map(|_| {
+            if rng.random::<f64>() < null_density {
+                None
+            } else {
+                Some(rng.random_range(0..array_size as i64) as f64)
+            }
+        })
+        .collect::<Float64Array>();
+    let offsets = (0..=num_rows)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
+
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Float64, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )
+        .unwrap(),
+    )
 }
 
 fn create_string_list_array(
@@ -457,6 +492,38 @@ fn create_boolean_list_array(
     Arc::new(
         ListArray::try_new(
             Arc::new(Field::new("item", DataType::Boolean, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+fn create_decimal64_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED);
+    let values = (0..num_rows * array_size)
+        .map(|_| {
+            if rng.random::<f64>() < null_density {
+                None
+            } else {
+                Some(rng.random_range(0..array_size) as i128 * 100)
+            }
+        })
+        .collect::<Decimal128Array>()
+        .with_precision_and_scale(10, 2)
+        .unwrap();
+    let offsets = (0..=num_rows)
+        .map(|i| (i * array_size) as i32)
+        .collect::<Vec<i32>>();
+
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Decimal128(10, 2), true)),
             OffsetBuffer::new(offsets.into()),
             Arc::new(values),
             None,
