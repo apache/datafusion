@@ -43,8 +43,10 @@ use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
+    tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -76,6 +78,29 @@ use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+
+// Replace each partition-index dynamic filter with the concrete filter for the
+// execution partition currently opening a file. This must happen before
+// partition-column literal replacement so partition-specific predicates can be
+// simplified against this file's partition values.
+fn rewrite_partition_index_dynamic_filters(
+    predicate: Arc<dyn PhysicalExpr>,
+    partition_index: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    predicate
+        .transform_up(|expr| {
+            let Some(dyn_filter) = expr.downcast_ref::<DynamicFilterPhysicalExpr>()
+            else {
+                return Ok(Transformed::no(expr));
+            };
+
+            match dyn_filter.partition_filter(partition_index)? {
+                Some(partition_expr) => Ok(Transformed::yes(partition_expr)),
+                None => Ok(Transformed::no(expr)),
+            }
+        })
+        .data()
+}
 
 /// Stateless Parquet morselizer implementation.
 ///
@@ -597,7 +622,12 @@ impl ParquetMorselizer {
         ));
 
         let mut projection = self.projection.clone();
-        let mut predicate = self.predicate.clone();
+        let mut predicate = self
+            .predicate
+            .clone()
+            .map(|p| rewrite_partition_index_dynamic_filters(p, self.partition_index))
+            .transpose()?;
+
         if !literal_columns.is_empty() {
             projection = projection.try_map_exprs(|expr| {
                 replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
@@ -1634,10 +1664,10 @@ mod test {
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema};
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{Operator, col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
-        expressions::{Column, DynamicFilterPhysicalExpr, Literal},
+        expressions::{BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal},
         planner::logical2physical,
         projection::ProjectionExprs,
     };
@@ -1732,6 +1762,12 @@ mod test {
         /// Set the predicate.
         fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
             self.predicate = Some(predicate);
+            self
+        }
+
+        /// Set the opener partition index.
+        fn with_partition_index(mut self, partition_index: usize) -> Self {
+            self.partition_index = partition_index;
             self
         }
 
@@ -2009,6 +2045,197 @@ mod test {
             expr.children().into_iter().map(Arc::clone).collect(),
             expr,
         ))
+    }
+
+    fn make_partitioned_dynamic_filter(
+        children: Vec<Arc<dyn PhysicalExpr>>,
+        global_expr: Arc<dyn PhysicalExpr>,
+        partition_exprs: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    ) -> Arc<DynamicFilterPhysicalExpr> {
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            children,
+            datafusion_physical_expr::expressions::lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+        dynamic_filter
+            .update_partitioned(global_expr, partition_exprs)
+            .unwrap();
+        dynamic_filter
+    }
+
+    #[test]
+    fn rewrite_partition_index_dynamic_filters_root() {
+        let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let part_0 = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            Operator::Gt,
+            datafusion_physical_expr::expressions::lit(10i32) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let dynamic_filter = make_partitioned_dynamic_filter(
+            vec![Arc::clone(&col_a)],
+            Arc::clone(&part_0),
+            vec![Some(Arc::clone(&part_0))],
+        );
+
+        let rewritten = rewrite_partition_index_dynamic_filters(
+            dynamic_filter as Arc<dyn PhysicalExpr>,
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(format!("{rewritten}"), format!("{part_0}"));
+    }
+
+    #[test]
+    fn rewrite_partition_index_dynamic_filters_nested() {
+        let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let static_expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            Operator::Eq,
+            datafusion_physical_expr::expressions::lit(12i32) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+        let part_0 = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            Operator::Gt,
+            datafusion_physical_expr::expressions::lit(10i32) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let dynamic_filter = make_partitioned_dynamic_filter(
+            vec![Arc::clone(&col_a)],
+            Arc::clone(&part_0),
+            vec![Some(Arc::clone(&part_0))],
+        );
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::clone(&static_expr),
+            Operator::And,
+            dynamic_filter as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let rewritten = rewrite_partition_index_dynamic_filters(predicate, 0).unwrap();
+        let expected = Arc::new(BinaryExpr::new(static_expr, Operator::And, part_0))
+            as Arc<dyn PhysicalExpr>;
+
+        assert_eq!(format!("{rewritten}"), format!("{expected}"));
+    }
+
+    #[test]
+    fn partition_index_rewrite_happens_before_literal_replacement() {
+        let col_part = Arc::new(Column::new("part", 0)) as Arc<dyn PhysicalExpr>;
+        let col_a = Arc::new(Column::new("a", 1)) as Arc<dyn PhysicalExpr>;
+        let part_0 = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_part),
+                Operator::Eq,
+                datafusion_physical_expr::expressions::lit(1i32) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                Operator::Gt,
+                datafusion_physical_expr::expressions::lit(10i32)
+                    as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let dynamic_filter = make_partitioned_dynamic_filter(
+            vec![Arc::clone(&col_part), Arc::clone(&col_a)],
+            Arc::clone(&part_0),
+            vec![Some(Arc::clone(&part_0))],
+        );
+
+        let rewritten = rewrite_partition_index_dynamic_filters(
+            dynamic_filter as Arc<dyn PhysicalExpr>,
+            0,
+        )
+        .unwrap();
+
+        let mut literal_columns = ConstantColumns::new();
+        literal_columns.insert("part".to_string(), ScalarValue::Int32(Some(1)));
+        let rewritten =
+            replace_columns_with_literals(rewritten, &literal_columns).unwrap();
+        let rewritten_str = format!("{rewritten}");
+
+        assert!(
+            !rewritten_str.contains("part@0"),
+            "partition column should be replaced in rewritten filter: {rewritten_str}"
+        );
+        assert!(
+            rewritten_str.contains("a@1 > 10"),
+            "data filter should remain after literal replacement: {rewritten_str}"
+        );
+    }
+
+    #[test]
+    fn partition_index_rewrite_empty_partition_becomes_false() {
+        let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let global = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            Operator::Gt,
+            datafusion_physical_expr::expressions::lit(10i32) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let dynamic_filter =
+            make_partitioned_dynamic_filter(vec![Arc::clone(&col_a)], global, vec![None]);
+
+        let rewritten = rewrite_partition_index_dynamic_filters(
+            dynamic_filter as Arc<dyn PhysicalExpr>,
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(format!("{rewritten}"), "false");
+    }
+
+    #[tokio::test]
+    async fn test_partition_index_rewrite_in_opener_with_nested_predicate() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "part=1/file.parquet", batch.clone()).await;
+
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "part=1/file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        file.partition_values = vec![ScalarValue::Int32(Some(1))];
+
+        let logical_schema = Arc::new(Schema::new(vec![
+            Field::new("part", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        let table_schema_for_opener = TableSchema::new(
+            Arc::clone(&file_schema),
+            vec![Arc::new(Field::new("part", DataType::Int32, false))],
+        );
+
+        let child_a = logical2physical(&col("a"), &logical_schema);
+        let partition_expr = logical2physical(&col("a").eq(lit(2)), &logical_schema);
+        let dynamic_filter = make_partitioned_dynamic_filter(
+            vec![child_a],
+            Arc::clone(&partition_expr),
+            vec![Some(partition_expr)],
+        );
+        let static_expr = logical2physical(&col("part").eq(lit(1)), &logical_schema);
+        let predicate = Arc::new(BinaryExpr::new(
+            static_expr,
+            Operator::And,
+            dynamic_filter as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema_for_opener)
+            .with_projection_indices(&[0])
+            .with_partition_index(0)
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .build();
+
+        let stream = open_file(&opener, file).await.unwrap();
+        let values = collect_int32_values(stream).await;
+        assert_eq!(values, vec![2]);
     }
 
     #[tokio::test]

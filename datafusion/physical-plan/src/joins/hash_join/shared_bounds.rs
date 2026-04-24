@@ -252,6 +252,9 @@ pub(crate) struct SharedBuildAccumulator {
     /// Random state for partitioning (RepartitionExec's hash function with 0,0,0,0 seeds)
     /// Used for PartitionedHashLookupPhysicalExpr
     repartition_random_state: SeededRandomState,
+    /// Whether to use partition-index routing (PartitionIndex mode) instead of
+    /// CASE-hash routing (CaseHash mode) in Partitioned joins.
+    use_partition_index: bool,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
 }
@@ -335,15 +338,14 @@ impl SharedBuildAccumulator {
     ///
     /// - **CollectLeft**: Build side is collected ONCE from partition 0 and shared via `OnceFut`
     ///   across all output partitions. Each output partition calls `collect_build_side` to access the shared build data.
-    ///   Although this results in multiple invocations, the  `report_partition_bounds` function contains deduplication logic to handle them safely.
+    ///   Although this results in multiple invocations, the  `report_build_data` function contains deduplication logic to handle them safely.
     ///   Expected calls = number of output partitions.
     ///
     ///
     /// - **Partitioned**: Each partition independently builds its own hash table by calling
     ///   `collect_build_side` once. Expected calls = number of build partitions.
     ///
-    /// - **Auto**: Placeholder mode resolved during optimization. Uses 1 as safe default since
-    ///   the actual mode will be determined and a new accumulator created before execution.
+    /// - **Auto**: Placeholder mode resolved during optimization and must not reach execution.
     ///
     /// ## Why This Matters
     ///
@@ -357,6 +359,7 @@ impl SharedBuildAccumulator {
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
+        use_partition_index: bool,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -402,6 +405,7 @@ impl SharedBuildAccumulator {
             dynamic_filter,
             on_right,
             repartition_random_state,
+            use_partition_index,
             probe_schema: right_child.schema(),
         }
     }
@@ -411,7 +415,7 @@ impl SharedBuildAccumulator {
     /// This unified method handles both CollectLeft and Partitioned modes. When all partitions
     /// have reported (barrier wait), the leader builds the appropriate filter expression:
     /// - CollectLeft: Simple conjunction of bounds and membership check
-    /// - Partitioned: CASE expression routing to per-partition filters
+    /// - Partitioned: CASE-hash or partition-index routing, depending on join mode
     ///
     /// # Arguments
     /// * `data` - Build data including hash map, pushdown strategy, and bounds
@@ -593,6 +597,22 @@ impl SharedBuildAccumulator {
                 }
             },
             FinalizeInput::Partitioned(partitions) => {
+                if self.use_partition_index {
+                    let partition_filters: Vec<Option<Arc<dyn PhysicalExpr>>> =
+                        partitions
+                            .iter()
+                            .map(|partition| self.build_partition_filter(partition))
+                            .collect::<Result<_>>()?;
+
+                    let global_expr =
+                        Self::combine_or(partition_filters.iter().flatten().cloned())
+                            .unwrap_or_else(|| lit(false));
+
+                    self.dynamic_filter
+                        .update_partitioned(global_expr, partition_filters)?;
+                    return Ok(());
+                }
+
                 let num_partitions = partitions.len();
                 let routing_hash_expr = Arc::new(HashExpr::new(
                     self.on_right.clone(),
@@ -690,6 +710,63 @@ impl SharedBuildAccumulator {
 
         Ok(())
     }
+
+    /// Build a filter expression for a single partition (bounds AND membership).
+    fn build_filter_expr(
+        &self,
+        pushdown: &PushdownStrategy,
+        bounds: &PartitionBounds,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let membership_expr = create_membership_predicate(
+            &self.on_right,
+            pushdown.clone(),
+            &HASH_JOIN_SEED,
+            self.probe_schema.as_ref(),
+        )?;
+        let bounds_expr = create_bounds_predicate(&self.on_right, bounds);
+
+        Ok(match (membership_expr, bounds_expr) {
+            (Some(membership), Some(bounds)) => {
+                Arc::new(BinaryExpr::new(bounds, Operator::And, membership))
+                    as Arc<dyn PhysicalExpr>
+            }
+            (Some(membership), None) => membership,
+            (None, Some(bounds)) => bounds,
+            (None, None) => lit(true),
+        })
+    }
+
+    /// Build an optional filter expression for a partition slot.
+    /// Returns None for empty partitions, `lit(true)` for canceled-unknown partitions,
+    /// and errors on pending partitions.
+    fn build_partition_filter(
+        &self,
+        partition: &PartitionStatus,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        match partition {
+            PartitionStatus::Reported(partition)
+                if matches!(partition.pushdown, PushdownStrategy::Empty) =>
+            {
+                Ok(None)
+            }
+            PartitionStatus::Reported(partition) => self
+                .build_filter_expr(&partition.pushdown, &partition.bounds)
+                .map(Some),
+            PartitionStatus::CanceledUnknown => Ok(Some(lit(true))),
+            PartitionStatus::Pending => datafusion_common::internal_err!(
+                "attempted to build partition-index dynamic filter with pending partition"
+            ),
+        }
+    }
+
+    /// Combine filter expressions with OR.
+    fn combine_or(
+        filters: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
+    ) -> Option<Arc<dyn PhysicalExpr>> {
+        filters.reduce(|acc, expr| {
+            Arc::new(BinaryExpr::new(acc, Operator::Or, expr)) as Arc<dyn PhysicalExpr>
+        })
+    }
 }
 
 impl fmt::Debug for SharedBuildAccumulator {
@@ -721,6 +798,7 @@ mod tests {
             dynamic_filter,
             on_right: vec![],
             repartition_random_state: SeededRandomState::with_seed(1),
+            use_partition_index: false,
             probe_schema,
         }
     }

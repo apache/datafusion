@@ -293,6 +293,7 @@ impl HashJoinExecBuilder {
                 column_indices: vec![],
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
+                dynamic_filter_routing_mode: DynamicFilterRoutingMode::CaseHash,
                 dynamic_filter: None,
                 // Will be computed at when plan will be built.
                 cache: stub_properties(),
@@ -358,6 +359,15 @@ impl HashJoinExecBuilder {
     /// Set fetch property.
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.exec.fetch = fetch;
+        self
+    }
+
+    /// Set dynamic filter routing mode for Partitioned joins.
+    pub fn with_dynamic_filter_routing_mode(
+        mut self,
+        mode: DynamicFilterRoutingMode,
+    ) -> Self {
+        self.exec.dynamic_filter_routing_mode = mode;
         self
     }
 
@@ -437,6 +447,7 @@ impl HashJoinExecBuilder {
             null_equality,
             null_aware,
             dynamic_filter,
+            dynamic_filter_routing_mode,
             fetch,
             // Recomputed.
             join_schema: _,
@@ -484,6 +495,7 @@ impl HashJoinExecBuilder {
             column_indices,
             null_equality,
             null_aware,
+            dynamic_filter_routing_mode,
             cache: Arc::new(cache),
             dynamic_filter,
             fetch,
@@ -514,6 +526,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
                 column_indices: exec.column_indices.clone(),
                 null_equality: exec.null_equality,
                 null_aware: exec.null_aware,
+                dynamic_filter_routing_mode: exec.dynamic_filter_routing_mode,
                 cache: Arc::clone(&exec.cache),
                 dynamic_filter: exec.dynamic_filter.clone(),
                 fetch: exec.fetch,
@@ -715,6 +728,17 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// Note this structure includes a [`OnceAsync`] that is used to coordinate the
 /// loading of the left side with the processing in each output stream.
 /// Therefore it can not be [`Clone`]
+/// Determines how dynamic filters are routed to probe-side partitions in Partitioned mode.
+/// Set by `enforce_distribution` based on whether `RepartitionExec` was inserted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DynamicFilterRoutingMode {
+    /// Route probe rows by hash (CASE expression). Used when both sides are hash-repartitioned.
+    CaseHash,
+    /// Route by partition index. Used when both sides satisfy the
+    /// join's distribution without repartitioning (e.g., file-partitioned data).
+    PartitionIndex,
+}
+
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
     pub left: Arc<dyn ExecutionPlan>,
@@ -750,6 +774,8 @@ pub struct HashJoinExec {
     pub null_equality: NullEquality,
     /// Flag to indicate if this is a null-aware anti join
     pub null_aware: bool,
+    /// How dynamic filters are routed in Partitioned mode.
+    pub dynamic_filter_routing_mode: DynamicFilterRoutingMode,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
     /// Dynamic filter for pushing down to the probe side
@@ -842,23 +868,7 @@ impl HashJoinExec {
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
         let (_, probe_preserved) = self.join_type.on_lr_is_preserved();
-        if !probe_preserved || !config.optimizer.enable_join_dynamic_filter_pushdown {
-            return false;
-        }
-
-        // `preserve_file_partitions` can report Hash partitioning for Hive-style
-        // file groups, but those partitions are not actually hash-distributed.
-        // Partitioned dynamic filters rely on hash routing, so disable them in
-        // this mode to avoid incorrect results. Follow-up work: enable dynamic
-        // filtering for preserve_file_partitioned scans (issue #20195).
-        // https://github.com/apache/datafusion/issues/20195
-        if config.optimizer.preserve_file_partitions > 0
-            && self.mode == PartitionMode::Partitioned
-        {
-            return false;
-        }
-
-        true
+        probe_preserved && config.optimizer.enable_join_dynamic_filter_pushdown
     }
 
     /// left (build) side which gets hashed
@@ -1319,6 +1329,8 @@ impl ExecutionPlan for HashJoinExec {
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
+        let use_partition_index =
+            self.dynamic_filter_routing_mode == DynamicFilterRoutingMode::PartitionIndex;
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -1336,6 +1348,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            use_partition_index,
                         ))
                     })))
                 })
