@@ -437,7 +437,8 @@ impl ConcatLargeStringBuilder {
 //
 // For a row known to be null, call `append_placeholder` to advance the row
 // count without touching the value buffer; the caller MUST ensure that the
-// corresponding bit is set in the null buffer passed to `finish`.
+// corresponding bit is cleared (0 = null) in the null buffer passed to
+// `finish`.
 // ----------------------------------------------------------------------------
 
 /// Builder for a [`GenericStringArray<O>`] that defers null tracking to
@@ -826,6 +827,19 @@ mod tests {
     }
 
     #[test]
+    fn string_array_builder_all_placeholders() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(3, 0);
+        builder.append_placeholder();
+        builder.append_placeholder();
+        builder.append_placeholder();
+        let nulls = NullBuffer::from(vec![false, false, false]);
+        let array = builder.finish(Some(nulls)).unwrap();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.null_count(), 3);
+        assert!((0..3).all(|i| array.is_null(i)));
+    }
+
+    #[test]
     fn large_string_array_builder_with_nulls() {
         let mut builder = GenericStringArrayBuilder::<i64>::with_capacity(3, 8);
         builder.append_value("a");
@@ -873,6 +887,19 @@ mod tests {
         assert!(array.is_null(1));
         assert_eq!(array.value(2), "short");
         assert!(array.is_null(3));
+    }
+
+    #[test]
+    fn string_view_array_builder_all_placeholders() {
+        let mut builder = StringViewArrayBuilder::with_capacity(3);
+        builder.append_placeholder();
+        builder.append_placeholder();
+        builder.append_placeholder();
+        let nulls = NullBuffer::from(vec![false, false, false]);
+        let array = builder.finish(Some(nulls)).unwrap();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.null_count(), 3);
+        assert!((0..3).all(|i| array.is_null(i)));
     }
 
     #[test]
