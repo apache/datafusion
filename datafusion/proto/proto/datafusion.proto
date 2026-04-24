@@ -1154,6 +1154,11 @@ enum PartitionMode {
   AUTO = 2;
 }
 
+enum DynamicFilterRoutingMode {
+  CASE_HASH = 0;
+  PARTITION_INDEX = 1;
+}
+
 message HashJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
@@ -1164,6 +1169,7 @@ message HashJoinExecNode {
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
   bool null_aware = 10;
+  DynamicFilterRoutingMode dynamic_filter_routing_mode = 11;
 }
 
 enum StreamPartitionMode {

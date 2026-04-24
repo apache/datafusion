@@ -66,8 +66,8 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
-    StreamJoinPartitionMode, SymmetricHashJoinExec,
+    DynamicFilterRoutingMode, HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec,
+    PartitionMode, SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::metrics::MetricType;
@@ -305,6 +305,44 @@ fn roundtrip_hash_join() -> Result<()> {
             )?))?;
         }
     }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_hash_join_preserves_dynamic_filter_routing_mode() -> Result<()> {
+    let field = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field]));
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    let join = Arc::new(
+        HashJoinExecBuilder::new(
+            Arc::new(EmptyExec::new(Arc::clone(&schema_left))),
+            Arc::new(EmptyExec::new(Arc::clone(&schema_right))),
+            on,
+            JoinType::Inner,
+        )
+        .with_partition_mode(PartitionMode::Partitioned)
+        .with_null_equality(NullEquality::NullEqualsNothing)
+        .with_dynamic_filter_routing_mode(DynamicFilterRoutingMode::PartitionIndex)
+        .build()?,
+    );
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtripped = roundtrip_test_and_return(join, &ctx, &codec, &proto_converter)?;
+    let hash_join = roundtripped
+        .downcast_ref::<HashJoinExec>()
+        .expect("expected HashJoinExec after roundtrip");
+
+    assert_eq!(
+        hash_join.dynamic_filter_routing_mode,
+        DynamicFilterRoutingMode::PartitionIndex
+    );
     Ok(())
 }
 
