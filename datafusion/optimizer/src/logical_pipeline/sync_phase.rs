@@ -131,7 +131,7 @@ impl SyncAnalysisPhase {
         }
 
         plan.check_invariants(InvariantLevel::Always)
-            .map_err(|e| e.context("Invalid input plan passed to analysis phase"))?;
+            .map_err(|e| e.context("Invalid input plan passed to Analyzer"))?;
 
         let passes = match &self.strategy {
             Strategy::Once => 1,
@@ -168,7 +168,7 @@ impl SyncAnalysisPhase {
         }
 
         plan.check_invariants(InvariantLevel::Executable)
-            .map_err(|e| e.context("Invalid plan after analysis phase"))?;
+            .map_err(|e| e.context("Invalid (non-executable) plan after Analyzer"))?;
 
         Ok(plan)
     }
@@ -185,7 +185,7 @@ impl SyncAnalysisPhase {
         }
 
         plan.check_invariants(InvariantLevel::Always)
-            .map_err(|e| e.context("Invalid input plan passed to analysis phase"))?;
+            .map_err(|e| e.context("Invalid input plan passed to Analyzer"))?;
 
         let passes = match &self.strategy {
             Strategy::Once => 1,
@@ -224,7 +224,7 @@ impl SyncAnalysisPhase {
         }
 
         plan.check_invariants(InvariantLevel::Executable)
-            .map_err(|e| e.context("Invalid plan after analysis phase"))?;
+            .map_err(|e| e.context("Invalid (non-executable) plan after Analyzer"))?;
 
         Ok(plan)
     }
