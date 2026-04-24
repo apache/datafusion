@@ -443,7 +443,7 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
         }
     }
 
-    /// Coerce arguments of a function call to types that the function can evaluate.
+    /// Coerce value arguments of a function call to types that the function can evaluate.
     ///
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
