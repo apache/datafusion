@@ -33,6 +33,7 @@ use datafusion_physical_expr_common::physical_expr::{
 };
 
 use crate::joins::Map;
+use crate::repartition::hash_to_partition;
 
 /// RandomState wrapper that preserves the seed used to create it.
 ///
@@ -194,6 +195,127 @@ impl PhysicalExpr for HashExpr {
         Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
             hashes_buffer,
         ))))
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.description)
+    }
+}
+
+/// Physical expression that computes the output partition id for hash repartitioning.
+///
+/// This expression must stay aligned with `RepartitionExec` because partitioned
+/// dynamic filters use it to route probe rows to the build-side hash table for
+/// the matching hash partition.
+pub(crate) struct HashPartitionExpr {
+    /// Columns to hash
+    on_columns: Vec<PhysicalExprRef>,
+    /// Random state for hashing (with seeds preserved for serialization)
+    random_state: SeededRandomState,
+    /// Number of output partitions
+    partition_count: usize,
+    /// Description for display
+    description: String,
+}
+
+impl HashPartitionExpr {
+    pub(crate) fn new(
+        on_columns: Vec<PhysicalExprRef>,
+        random_state: SeededRandomState,
+        partition_count: usize,
+        description: String,
+    ) -> Self {
+        Self {
+            on_columns,
+            random_state,
+            partition_count,
+            description,
+        }
+    }
+}
+
+impl std::fmt::Debug for HashPartitionExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cols = self
+            .on_columns
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let seed = self.random_state.seed();
+        let partition_count = self.partition_count;
+        write!(
+            f,
+            "{}({cols}, [{seed}], partitions={partition_count})",
+            self.description
+        )
+    }
+}
+
+impl Hash for HashPartitionExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.on_columns.dyn_hash(state);
+        self.description.hash(state);
+        self.random_state.seed().hash(state);
+        self.partition_count.hash(state);
+    }
+}
+
+impl PartialEq for HashPartitionExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.on_columns == other.on_columns
+            && self.description == other.description
+            && self.random_state.seed() == other.random_state.seed()
+            && self.partition_count == other.partition_count
+    }
+}
+
+impl Eq for HashPartitionExpr {}
+
+impl Display for HashPartitionExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.description)
+    }
+}
+
+impl PhysicalExpr for HashPartitionExpr {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        self.on_columns.iter().collect()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(HashPartitionExpr::new(
+            children,
+            self.random_state.clone(),
+            self.partition_count,
+            self.description.clone(),
+        )))
+    }
+
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::UInt64)
+    }
+
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let keys_values = evaluate_columns(&self.on_columns, batch)?;
+
+        with_hashes(&keys_values, self.random_state.random_state(), |hashes| {
+            let partitions = hashes
+                .iter()
+                .map(|hash| hash_to_partition(*hash, self.partition_count) as u64)
+                .collect::<Vec<_>>();
+
+            Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
+                partitions,
+            ))))
+        })
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

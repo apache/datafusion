@@ -438,6 +438,10 @@ enum BatchPartitionerState {
 /// executions and runs.
 pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
+pub(crate) fn hash_to_partition(hash: u64, partitions: usize) -> usize {
+    (((hash as u128) * (partitions as u128)) >> 64) as usize
+}
+
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
     ///
@@ -597,8 +601,7 @@ impl BatchPartitioner {
                     indices.iter_mut().for_each(|v| v.clear());
 
                     for (index, hash) in hash_buffer.iter().enumerate() {
-                        let part =
-                            (((*hash as u128) * (*partitions as u128)) >> 64) as usize;
+                        let part = hash_to_partition(*hash, *partitions);
                         indices[part].push(index as u32);
                     }
 

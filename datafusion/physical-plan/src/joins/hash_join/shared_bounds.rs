@@ -28,7 +28,7 @@ use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
-    HashExpr, HashTableLookupExpr, SeededRandomState,
+    HashPartitionExpr, HashTableLookupExpr, SeededRandomState,
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -249,8 +249,7 @@ pub(crate) struct SharedBuildAccumulator {
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter expressions
     on_right: Vec<PhysicalExprRef>,
-    /// Random state for partitioning (RepartitionExec's hash function with 0,0,0,0 seeds)
-    /// Used for PartitionedHashLookupPhysicalExpr
+    /// Random state for partitioning, matching RepartitionExec's hash function.
     repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
@@ -594,16 +593,11 @@ impl SharedBuildAccumulator {
             },
             FinalizeInput::Partitioned(partitions) => {
                 let num_partitions = partitions.len();
-                let routing_hash_expr = Arc::new(HashExpr::new(
+                let partition_expr = Arc::new(HashPartitionExpr::new(
                     self.on_right.clone(),
                     self.repartition_random_state.clone(),
+                    num_partitions,
                     "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let modulo_expr = Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
                 )) as Arc<dyn PhysicalExpr>;
 
                 let mut real_branches = Vec::new();
@@ -665,7 +659,7 @@ impl SharedBuildAccumulator {
                         lit(true)
                     } else {
                         Arc::new(CaseExpr::try_new(
-                            Some(modulo_expr),
+                            Some(Arc::clone(&partition_expr)),
                             when_then_branches,
                             Some(lit(true)),
                         )?) as Arc<dyn PhysicalExpr>
@@ -678,7 +672,7 @@ impl SharedBuildAccumulator {
                     Arc::clone(&real_branches[0].1)
                 } else {
                     Arc::new(CaseExpr::try_new(
-                        Some(modulo_expr),
+                        Some(partition_expr),
                         real_branches,
                         Some(lit(false)),
                     )?) as Arc<dyn PhysicalExpr>
