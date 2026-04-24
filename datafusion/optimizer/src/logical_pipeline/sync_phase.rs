@@ -34,15 +34,15 @@ use super::Strategy;
 
 /// A named, activatable phase whose rules are applied synchronously.
 ///
-/// Use [`SyncAnalysisPhase`] for [`AnalyzerRule`]s and
-/// [`SyncOptimizationPhase`] for [`OptimizerRule`]s.
+/// Use [`SyncOptimizationPhase`] for [`OptimizerRule`]s.
+/// For analysis rules use [`SyncAnalysisPhase`], which is a concrete struct
+/// rather than a type alias so it can carry its own `function_rewrites` field
+/// without polluting this generic type.
 pub struct SyncPhase<T: ?Sized> {
     pub(super) name: String,
     pub enabled: bool,
     pub strategy: Strategy,
     pub rules: Vec<Arc<T>>,
-    /// [`FunctionRewrite`]s applied before analysis rules (only used by [`SyncAnalysisPhase`]).
-    pub function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,
 }
 
 impl<T: ?Sized> Clone for SyncPhase<T> {
@@ -52,7 +52,6 @@ impl<T: ?Sized> Clone for SyncPhase<T> {
             enabled: self.enabled,
             strategy: self.strategy.clone(),
             rules: self.rules.clone(),
-            function_rewrites: self.function_rewrites.clone(),
         }
     }
 }
@@ -64,12 +63,44 @@ impl<T: ?Sized + Debug> Debug for SyncPhase<T> {
             .field("enabled", &self.enabled)
             .field("strategy", &self.strategy)
             .field("rules", &self.rules)
-            .field("function_rewrites", &self.function_rewrites)
             .finish()
     }
 }
 
 impl<T: ?Sized> SyncPhase<T> {
+    pub fn new(name: impl Into<String>, strategy: Strategy) -> Self {
+        Self {
+            name: name.into(),
+            enabled: true,
+            strategy,
+            rules: Vec::new(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// Synchronous analysis phase: runs [`AnalyzerRule`]s and optional
+/// [`FunctionRewrite`]s in order.
+///
+/// This is a concrete struct rather than a type alias over [`SyncPhase`] so
+/// that `function_rewrites` lives here exclusively and does not appear on the
+/// generic [`SyncPhase<T>`] (which is also used for optimization rules that
+/// have no need for function rewrites).
+#[derive(Clone, Debug)]
+pub struct SyncAnalysisPhase {
+    pub(super) name: String,
+    pub enabled: bool,
+    pub strategy: Strategy,
+    pub rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
+    /// [`FunctionRewrite`]s prepended before analysis rules each pass so that
+    /// `TypeCoercion` operates on already-rewritten expressions.
+    pub function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,
+}
+
+impl SyncAnalysisPhase {
     pub fn new(name: impl Into<String>, strategy: Strategy) -> Self {
         Self {
             name: name.into(),
@@ -83,19 +114,13 @@ impl<T: ?Sized> SyncPhase<T> {
     pub fn name(&self) -> &str {
         &self.name
     }
-}
 
-impl SyncPhase<dyn AnalyzerRule + Send + Sync> {
     /// Apply all analysis rules in order, repeating per [`Strategy`].
     ///
     /// Checks plan invariants before and after applying rules.
-    /// [`FunctionRewrite`]s in `self.function_rewrites` run first so that
-    /// `TypeCoercion` operates on already-rewritten expressions.
-    pub fn apply(
-        &self,
-        plan: LogicalPlan,
-        config: &ConfigOptions,
-    ) -> Result<LogicalPlan> {
+    /// [`FunctionRewrite`]s run first each pass so that `TypeCoercion`
+    /// operates on already-rewritten expressions.
+    pub fn apply(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
         if !self.enabled || (self.rules.is_empty() && self.function_rewrites.is_empty()) {
             return Ok(plan);
         }
@@ -108,7 +133,6 @@ impl SyncPhase<dyn AnalyzerRule + Send + Sync> {
             Strategy::FixedPoint { max_passes } => max_passes.unwrap_or(8),
         };
 
-        // Prepend function rewrites as an analyzer rule when present.
         let fn_rewrite_rule: Option<Arc<dyn AnalyzerRule + Send + Sync>> =
             if self.function_rewrites.is_empty() {
                 None
@@ -325,7 +349,6 @@ impl SyncPhase<dyn OptimizerRule + Send + Sync> {
     }
 }
 
-pub type SyncAnalysisPhase = SyncPhase<dyn AnalyzerRule + Send + Sync>;
 pub type SyncOptimizationPhase = SyncPhase<dyn OptimizerRule + Send + Sync>;
 
 /// [`TreeNodeRewriter`] wrapper that applies a single [`OptimizerRule`] with
