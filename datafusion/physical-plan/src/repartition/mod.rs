@@ -438,6 +438,11 @@ enum BatchPartitionerState {
 /// executions and runs.
 pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
+/// Map a 64-bit hash to a partition index in `[0, partitions)` using Lemire's
+/// fastrange (<https://github.com/lemire/fastrange>, see also
+/// <https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/>).
+/// The `mulhi`+shift pair replaces a 64-bit division and preserves the input
+/// hash's uniformity as long as `partitions` is much smaller than `2^64`.
 pub(crate) fn hash_to_partition(hash: u64, partitions: usize) -> usize {
     (((hash as u128) * (partitions as u128)) >> 64) as usize
 }
