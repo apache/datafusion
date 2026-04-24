@@ -24,6 +24,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{InvariantLevel, LogicalPlan, assert_expected_schema};
+use log::warn;
 
 use crate::analyzer::AnalyzerRule;
 use crate::analyzer::function_rewrite::ApplyFunctionRewrites;
@@ -261,28 +262,58 @@ impl SyncPhase<dyn OptimizerRule + Send + Sync> {
 
         'outer: for _ in 0..passes {
             for rule in &self.rules {
+                let prev_plan = config
+                    .options()
+                    .optimizer
+                    .skip_failed_rules
+                    .then(|| plan.clone());
+
                 let rule_starting_schema = Arc::clone(plan.schema());
-                let result: Transformed<LogicalPlan> = match rule.apply_order() {
-                    Some(order) => plan.rewrite_with_subqueries(
-                        &mut RuleRewriter::new(order, rule.as_ref(), config),
-                    )?,
-                    None => rule.rewrite(plan, config)?,
-                };
-                plan = result.data;
-                assert_expected_schema(&rule_starting_schema, &plan).map_err(|e| {
-                    e.context(format!(
-                        "Optimizer rule '{}' changed the schema",
-                        rule.name()
-                    ))
-                })?;
-                #[cfg(debug_assertions)]
-                plan.check_invariants(InvariantLevel::Executable)
-                    .map_err(|e| {
-                        e.context(format!(
-                            "Invalid plan after optimizer rule '{}'",
+                let result =
+                    match rule.apply_order() {
+                        Some(order) => plan.rewrite_with_subqueries(
+                            &mut RuleRewriter::new(order, rule.as_ref(), config),
+                        ),
+                        None => rule.rewrite(plan, config),
+                    }
+                    .and_then(|t| {
+                        assert_expected_schema(&rule_starting_schema, &t.data).map_err(
+                            |e| {
+                                e.context(format!(
+                                    "Optimizer rule '{}' changed the schema",
+                                    rule.name()
+                                ))
+                            },
+                        )?;
+                        #[cfg(debug_assertions)]
+                        t.data
+                            .check_invariants(InvariantLevel::Executable)
+                            .map_err(|e| {
+                                e.context(format!(
+                                    "Invalid plan after optimizer rule '{}'",
+                                    rule.name()
+                                ))
+                            })?;
+                        Ok(t)
+                    });
+
+                match (result, prev_plan) {
+                    (Ok(t), _) => plan = t.data,
+                    (Err(e), Some(orig)) => {
+                        warn!(
+                            "Skipping optimizer rule '{}' due to unexpected error: {}",
+                            rule.name(),
+                            e
+                        );
+                        plan = orig;
+                    }
+                    (Err(e), None) => {
+                        return Err(e.context(format!(
+                            "Optimizer rule '{}' failed",
                             rule.name()
-                        ))
-                    })?;
+                        )));
+                    }
+                }
             }
             let plan_is_fresh = previous_plans.insert(LogicalPlanSignature::new(&plan));
             if !plan_is_fresh {
@@ -324,29 +355,61 @@ impl SyncPhase<dyn OptimizerRule + Send + Sync> {
 
         'outer: for _ in 0..passes {
             for rule in &self.rules {
+                let prev_plan = config
+                    .options()
+                    .optimizer
+                    .skip_failed_rules
+                    .then(|| plan.clone());
+
                 let rule_starting_schema = Arc::clone(plan.schema());
-                let result: Transformed<LogicalPlan> = match rule.apply_order() {
-                    Some(order) => plan.rewrite_with_subqueries(
-                        &mut RuleRewriter::new(order, rule.as_ref(), config),
-                    )?,
-                    None => rule.rewrite(plan, config)?,
-                };
-                plan = result.data;
-                assert_expected_schema(&rule_starting_schema, &plan).map_err(|e| {
-                    e.context(format!(
-                        "Optimizer rule '{}' changed the schema",
-                        rule.name()
-                    ))
-                })?;
-                #[cfg(debug_assertions)]
-                plan.check_invariants(InvariantLevel::Executable)
-                    .map_err(|e| {
-                        e.context(format!(
-                            "Invalid plan after optimizer rule '{}'",
+                let result =
+                    match rule.apply_order() {
+                        Some(order) => plan.rewrite_with_subqueries(
+                            &mut RuleRewriter::new(order, rule.as_ref(), config),
+                        ),
+                        None => rule.rewrite(plan, config),
+                    }
+                    .and_then(|t| {
+                        assert_expected_schema(&rule_starting_schema, &t.data).map_err(
+                            |e| {
+                                e.context(format!(
+                                    "Optimizer rule '{}' changed the schema",
+                                    rule.name()
+                                ))
+                            },
+                        )?;
+                        #[cfg(debug_assertions)]
+                        t.data
+                            .check_invariants(InvariantLevel::Executable)
+                            .map_err(|e| {
+                                e.context(format!(
+                                    "Invalid plan after optimizer rule '{}'",
+                                    rule.name()
+                                ))
+                            })?;
+                        Ok(t)
+                    });
+
+                match (result, prev_plan) {
+                    (Ok(t), _) => {
+                        plan = t.data;
+                        observer(&plan, rule.name());
+                    }
+                    (Err(e), Some(orig)) => {
+                        warn!(
+                            "Skipping optimizer rule '{}' due to unexpected error: {}",
+                            rule.name(),
+                            e
+                        );
+                        plan = orig;
+                    }
+                    (Err(e), None) => {
+                        return Err(e.context(format!(
+                            "Optimizer rule '{}' failed",
                             rule.name()
-                        ))
-                    })?;
-                observer(&plan, rule.name());
+                        )));
+                    }
+                }
             }
             let plan_is_fresh = previous_plans.insert(LogicalPlanSignature::new(&plan));
             if !plan_is_fresh {
