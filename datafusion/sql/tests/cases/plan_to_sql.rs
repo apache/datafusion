@@ -29,7 +29,8 @@ use datafusion_expr::{
     ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
     ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Union,
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
-    WindowFunctionDefinition, cast, col, lit, scalar_subquery, table_scan, wildcard,
+    WindowFunctionDefinition, cast, col, exists, in_subquery, lit, scalar_subquery,
+    table_scan, wildcard,
 };
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
@@ -1932,6 +1933,70 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     assert_snapshot!(
         sql,
         @r#"SELECT left_table.id, left_table."name" FROM left_table INNER JOIN right_table ON left_table.id = right_table.id WHERE (right_table.id = (SELECT max(subquery_table.id) FROM subquery_table))"#
+    );
+
+    // Inner join with an IN subquery in table_scan_filters.
+    let subquery_plan_in = table_scan(Some("subquery_table"), &schema_subquery, None)?
+        .project(vec![col("subquery_table.id")])?
+        .build()?;
+    let right_plan_with_in = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![in_subquery(
+            col("right_table.id"),
+            Arc::new(subquery_plan_in),
+        )],
+    )?
+    .build()?;
+
+    let left_plan_in =
+        table_scan(Some("left_table"), &schema_left, Some(vec![0, 1]))?.build()?;
+
+    let join_plan_in_subquery = LogicalPlanBuilder::from(left_plan_in)
+        .join(
+            right_plan_with_in,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left_table.id"], vec!["right_table.id"]),
+            None,
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_in_subquery)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT left_table.id, left_table."name" FROM left_table INNER JOIN right_table ON left_table.id = right_table.id WHERE right_table.id IN (SELECT subquery_table.id FROM subquery_table)"#
+    );
+
+    // Inner join with an EXISTS subquery in table_scan_filters.
+    let subquery_plan_exists =
+        table_scan(Some("subquery_table"), &schema_subquery, None)?
+            .filter(col("subquery_table.id").eq(col("right_table.id")))?
+            .build()?;
+    let right_plan_with_exists = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![exists(Arc::new(subquery_plan_exists))],
+    )?
+    .build()?;
+
+    let left_plan_exists =
+        table_scan(Some("left_table"), &schema_left, Some(vec![0, 1]))?.build()?;
+
+    let join_plan_exists = LogicalPlanBuilder::from(left_plan_exists)
+        .join(
+            right_plan_with_exists,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left_table.id"], vec!["right_table.id"]),
+            None,
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_exists)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT left_table.id, left_table."name" FROM left_table INNER JOIN right_table ON left_table.id = right_table.id WHERE EXISTS (SELECT * FROM subquery_table WHERE (subquery_table.id = right_table.id))"#
     );
 
     Ok(())

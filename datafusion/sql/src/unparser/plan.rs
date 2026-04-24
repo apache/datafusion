@@ -863,41 +863,15 @@ impl Unparser<'_> {
                     &mut right_relation,
                 )?;
 
-                let join_filters = if table_scan_filters.is_empty() {
-                    join.filter.clone()
-                } else if join.join_type == JoinType::Inner {
-                    // For inner joins, ON and WHERE are semantically equivalent. Place table_scan_filters in WHERE because they may contain
-                    // subquery expressions, which break dialects that reject subqueries in JOIN ON (e.g. BigQuery).
-                    for filter in table_scan_filters {
-                        let filter_expr = self.expr_to_sql(&filter)?;
-                        select.selection(Some(filter_expr));
-                    }
-                    join.filter.clone()
-                } else {
-                    // Combine `table_scan_filters` into a single filter using `AND`
-                    let combined_filters =
-                        table_scan_filters.into_iter().reduce(|acc, filter| {
-                            Expr::BinaryExpr(BinaryExpr {
-                                left: Box::new(acc),
-                                op: Operator::And,
-                                right: Box::new(filter),
-                            })
-                        });
-
-                    // Combine `join.filter` with `combined_filters` using `AND`
-                    match (&join.filter, combined_filters) {
-                        (Some(filter), Some(combined)) => {
-                            Some(Expr::BinaryExpr(BinaryExpr {
-                                left: Box::new(filter.clone()),
-                                op: Operator::And,
-                                right: Box::new(combined),
-                            }))
-                        }
-                        (Some(filter), None) => Some(filter.clone()),
-                        (None, Some(combined)) => Some(combined),
-                        (None, None) => None,
-                    }
-                };
+                let (join_filters, where_filters) = Self::split_join_on_and_where_filters(
+                    join.join_type,
+                    &join.filter,
+                    table_scan_filters,
+                );
+                for filter in where_filters {
+                    let filter_expr = self.expr_to_sql(&filter)?;
+                    select.selection(Some(filter_expr));
+                }
 
                 let join_constraint = self.join_constraint_to_sql(
                     join.join_constraint,
@@ -1944,6 +1918,52 @@ impl Unparser<'_> {
         } else {
             vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
         }
+    }
+
+    /// Decides where extracted table-scan filters belong in the unparsed SQL:
+    /// in the `JOIN ON` clause or in `WHERE`.
+    ///
+    /// For inner joins the two are semantically equivalent, so filters go to
+    /// `WHERE` (some dialects reject subqueries inside `JOIN ON`).
+    /// For outer joins the filters are AND-folded into `ON` to preserve correctness.
+    ///
+    /// Returns `(on_filter, where_filters)`.
+    fn split_join_on_and_where_filters(
+        join_type: JoinType,
+        join_filter: &Option<Expr>,
+        table_scan_filters: Vec<Expr>,
+    ) -> (Option<Expr>, Vec<Expr>) {
+        if table_scan_filters.is_empty() {
+            return (join_filter.clone(), vec![]);
+        }
+
+        if join_type == JoinType::Inner {
+            // ON and WHERE are equivalent for inner joins; prefer WHERE
+            // because some dialects reject subqueries inside JOIN ON.
+            return (join_filter.clone(), table_scan_filters);
+        }
+
+        // Outer joins: fold table-scan filters into ON to preserve semantics.
+        let combined = table_scan_filters.into_iter().reduce(|acc, filter| {
+            Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(acc),
+                op: Operator::And,
+                right: Box::new(filter),
+            })
+        });
+
+        let on_filter = match (join_filter, combined) {
+            (Some(jf), Some(c)) => Some(Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(jf.clone()),
+                op: Operator::And,
+                right: Box::new(c),
+            })),
+            (Some(jf), None) => Some(jf.clone()),
+            (None, Some(c)) => Some(c),
+            (None, None) => None,
+        };
+
+        (on_filter, vec![])
     }
 }
 
