@@ -597,7 +597,9 @@ impl BatchPartitioner {
                     indices.iter_mut().for_each(|v| v.clear());
 
                     for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize].push(index as u32);
+                        let part =
+                            (((*hash as u128) * (*partitions as u128)) >> 64) as usize;
+                        indices[part].push(index as u32);
                     }
 
                     // Finished building index-arrays for output partitions
