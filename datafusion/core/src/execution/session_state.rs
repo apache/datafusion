@@ -624,19 +624,24 @@ impl SessionState {
     }
 
     /// Returns the [`Analyzer`] for this session, reconstructed from the DEFAULT_ANALYSIS_PHASE pipeline phase.
+    ///
+    /// Both the analysis rules and the function rewrites registered on the phase
+    /// are included so that the returned [`Analyzer`] behaves identically to the
+    /// pipeline phase when run directly.
     pub fn analyzer(&self) -> Analyzer {
-        let rules = self
-            .logical_pipeline
+        self.logical_pipeline
             .phase(DEFAULT_ANALYSIS_PHASE)
             .and_then(|p| {
                 if let Phase::SyncAnalysis(a) = p {
-                    Some(a.rules.clone())
+                    Some(Analyzer {
+                        function_rewrites: a.function_rewrites.clone(),
+                        rules: a.rules.clone(),
+                    })
                 } else {
                     None
                 }
             })
-            .unwrap_or_default();
-        Analyzer::with_rules(rules)
+            .unwrap_or_default()
     }
 
     /// Returns the [`Optimizer`] for this session, reconstructed from the DEFAULT_OPTIMIZATION_PHASE pipeline phase.
