@@ -21,7 +21,11 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 
-mapfile -t MARKDOWN_FILES < <(
+
+MARKDOWN_FILES=()
+while IFS= read -r file; do
+  MARKDOWN_FILES+=("${file}")
+done < <(
   git -C "${ROOT_DIR}" ls-files 'README.md' 'CONTRIBUTING.md' 'docs/**/*.md' 'datafusion-cli/README.md' 'datafusion-examples/README.md' 'dev/**/*.md'
 )
 
