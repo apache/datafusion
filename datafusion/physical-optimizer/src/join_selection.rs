@@ -25,23 +25,30 @@
 
 use crate::PhysicalOptimizerRule;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinSide, JoinType, internal_err};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
+use datafusion_common::{JoinSide, JoinType, NullEquality, internal_err};
 use datafusion_expr_common::sort_properties::SortProperties;
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{LexOrdering, PhysicalExprRef};
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
+    CrossJoinExec, HashJoinExec, JoinOn, NestedLoopJoinExec, PartitionMode,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
+
+const MAX_DP_JOIN_REORDER_INPUTS: usize = 8;
+const UNKNOWN_JOIN_REORDER_COST: f64 = 1_000_000_000_000.0;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -114,6 +121,482 @@ pub(crate) fn should_swap_join_order(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct LeafColumn {
+    input: usize,
+    index: usize,
+}
+
+#[derive(Clone)]
+struct JoinInput {
+    plan: Arc<dyn ExecutionPlan>,
+    columns: Vec<LeafColumn>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct JoinEdge {
+    left: LeafColumn,
+    right: LeafColumn,
+}
+
+struct JoinIsland {
+    inputs: Vec<JoinInput>,
+    edges: Vec<JoinEdge>,
+    output_columns: Vec<LeafColumn>,
+    output_schema: SchemaRef,
+    null_equality: NullEquality,
+}
+
+#[derive(Clone)]
+struct JoinDpEntry {
+    plan: Arc<dyn ExecutionPlan>,
+    columns: Vec<LeafColumn>,
+    rows: Option<f64>,
+    bytes: Option<f64>,
+    cost: f64,
+}
+
+fn reorder_inner_hash_join_island_subrule(
+    plan: Arc<dyn ExecutionPlan>,
+    config: &ConfigOptions,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    if !config.optimizer.join_reordering {
+        return Ok(Transformed::no(plan));
+    }
+
+    let Some(island) = collect_join_island(&plan) else {
+        return Ok(Transformed::no(plan));
+    };
+
+    if island.inputs.len() < 3 || island.inputs.len() > MAX_DP_JOIN_REORDER_INPUTS {
+        return Ok(Transformed::no(plan));
+    }
+
+    let Some(best) = reorder_join_island_with_dp(&island, registry)? else {
+        return Ok(Transformed::no(plan));
+    };
+
+    let original_cost = estimate_existing_join_cost(&plan, registry)?;
+    if best.cost >= original_cost * 0.99 {
+        return Ok(Transformed::no(plan));
+    }
+
+    let projected = project_to_original_schema(
+        best.plan,
+        &best.columns,
+        &island.output_columns,
+        &island.output_schema,
+    )?;
+
+    Ok(Transformed::new(projected, true, TreeNodeRecursion::Jump))
+}
+
+fn collect_join_island(plan: &Arc<dyn ExecutionPlan>) -> Option<JoinIsland> {
+    let root = plan.downcast_ref::<HashJoinExec>()?;
+    if !is_reorderable_hash_join(root, None) {
+        return None;
+    }
+
+    let null_equality = root.null_equality();
+    let mut inputs = vec![];
+    let mut edges = vec![];
+    let output_columns =
+        collect_join_island_input(plan, null_equality, &mut inputs, &mut edges)?;
+
+    // Join schema metadata is merged from child schemas and can be sensitive to
+    // join tree shape. ProjectionExec preserves input metadata, so skip these
+    // rare cases rather than changing the output schema metadata.
+    if inputs
+        .iter()
+        .any(|input| !input.plan.schema().metadata().is_empty())
+    {
+        return None;
+    }
+
+    // Every input must participate in at least one join predicate. This avoids
+    // introducing cross joins as part of join reordering.
+    if inputs.iter().enumerate().any(|(idx, _)| {
+        !edges
+            .iter()
+            .any(|edge| edge.left.input == idx || edge.right.input == idx)
+    }) {
+        return None;
+    }
+
+    Some(JoinIsland {
+        inputs,
+        edges,
+        output_columns,
+        output_schema: plan.schema(),
+        null_equality,
+    })
+}
+
+fn collect_join_island_input(
+    plan: &Arc<dyn ExecutionPlan>,
+    null_equality: NullEquality,
+    inputs: &mut Vec<JoinInput>,
+    edges: &mut Vec<JoinEdge>,
+) -> Option<Vec<LeafColumn>> {
+    if let Some(join) = plan.downcast_ref::<HashJoinExec>()
+        && is_reorderable_hash_join(join, Some(null_equality))
+    {
+        let left_columns =
+            collect_join_island_input(join.left(), null_equality, inputs, edges)?;
+        let right_columns =
+            collect_join_island_input(join.right(), null_equality, inputs, edges)?;
+
+        for (left, right) in join.on() {
+            let left = left.downcast_ref::<Column>()?;
+            let right = right.downcast_ref::<Column>()?;
+            edges.push(JoinEdge {
+                left: *left_columns.get(left.index())?,
+                right: *right_columns.get(right.index())?,
+            });
+        }
+
+        let joined_columns: Vec<_> =
+            left_columns.into_iter().chain(right_columns).collect();
+        return match &join.projection {
+            Some(projection) => projection
+                .iter()
+                .map(|idx| joined_columns.get(*idx).copied())
+                .collect(),
+            None => Some(joined_columns),
+        };
+    }
+
+    let input = inputs.len();
+    let columns = (0..plan.schema().fields().len())
+        .map(|index| LeafColumn { input, index })
+        .collect::<Vec<_>>();
+    inputs.push(JoinInput {
+        plan: Arc::clone(plan),
+        columns: columns.clone(),
+    });
+    Some(columns)
+}
+
+fn is_reorderable_hash_join(
+    join: &HashJoinExec,
+    null_equality: Option<NullEquality>,
+) -> bool {
+    matches!(join.join_type(), JoinType::Inner)
+        && join.filter().is_none()
+        && !join.null_aware
+        && !join.on().is_empty()
+        && null_equality.is_none_or(|expected| join.null_equality() == expected)
+        && join.on().iter().all(|(left, right)| {
+            left.downcast_ref::<Column>().is_some()
+                && right.downcast_ref::<Column>().is_some()
+        })
+}
+
+fn reorder_join_island_with_dp(
+    island: &JoinIsland,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<Option<JoinDpEntry>> {
+    let input_count = island.inputs.len();
+    let full_mask = (1usize << input_count) - 1;
+    let mut best: Vec<Option<JoinDpEntry>> = vec![None; full_mask + 1];
+
+    for (idx, input) in island.inputs.iter().enumerate() {
+        let mask = 1usize << idx;
+        best[mask] = Some(JoinDpEntry::leaf(
+            Arc::clone(&input.plan),
+            input.columns.clone(),
+            registry,
+        )?);
+    }
+
+    for mask in 1usize..=full_mask {
+        if mask.count_ones() < 2 {
+            continue;
+        }
+
+        let first_bit = 1usize << mask.trailing_zeros();
+        let mut left_mask = (mask - 1) & mask;
+        while left_mask > 0 {
+            let right_mask = mask ^ left_mask;
+            // Keep enumeration deterministic and avoid considering both
+            // equivalent subset partitions. Join orientation is considered
+            // separately below.
+            if left_mask & first_bit == 0 || right_mask == 0 {
+                left_mask = (left_mask - 1) & mask;
+                continue;
+            }
+
+            if let (Some(left), Some(right)) =
+                (best[left_mask].clone(), best[right_mask].clone())
+            {
+                if let Some(candidate) =
+                    build_join_dp_entry(&left, &right, island, registry)?
+                {
+                    update_best_join(&mut best[mask], candidate);
+                }
+
+                if let Some(candidate) =
+                    build_join_dp_entry(&right, &left, island, registry)?
+                {
+                    update_best_join(&mut best[mask], candidate);
+                }
+            }
+
+            left_mask = (left_mask - 1) & mask;
+        }
+    }
+
+    Ok(best[full_mask].clone())
+}
+
+fn update_best_join(best: &mut Option<JoinDpEntry>, candidate: JoinDpEntry) {
+    if best
+        .as_ref()
+        .is_none_or(|current| candidate.cost < current.cost)
+    {
+        *best = Some(candidate);
+    }
+}
+
+fn build_join_dp_entry(
+    left: &JoinDpEntry,
+    right: &JoinDpEntry,
+    island: &JoinIsland,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<Option<JoinDpEntry>> {
+    let on = join_keys_between(left, right, &island.edges);
+    if on.is_empty() {
+        return Ok(None);
+    }
+
+    let plan = Arc::new(HashJoinExec::try_new(
+        Arc::clone(&left.plan),
+        Arc::clone(&right.plan),
+        on,
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::Auto,
+        island.null_equality,
+        false,
+    )?) as Arc<dyn ExecutionPlan>;
+
+    let columns = left
+        .columns
+        .iter()
+        .chain(right.columns.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    let (rows, bytes) = estimate_join_rows_and_bytes(&plan, left, right, registry)?;
+    let left_bytes = entry_bytes(left);
+    let right_bytes = entry_bytes(right);
+    let output_bytes = bytes.unwrap_or(UNKNOWN_JOIN_REORDER_COST);
+    let build_bytes = left_bytes;
+    let cost =
+        left.cost + right.cost + left_bytes + right_bytes + build_bytes + output_bytes;
+
+    Ok(Some(JoinDpEntry {
+        plan,
+        columns,
+        rows,
+        bytes: Some(output_bytes),
+        cost,
+    }))
+}
+
+fn join_keys_between(
+    left: &JoinDpEntry,
+    right: &JoinDpEntry,
+    edges: &[JoinEdge],
+) -> JoinOn {
+    edges
+        .iter()
+        .filter_map(|edge| {
+            if let (Some(left_idx), Some(right_idx)) = (
+                column_position(&left.columns, edge.left),
+                column_position(&right.columns, edge.right),
+            ) {
+                Some(make_join_key(left, right, left_idx, right_idx))
+            } else if let (Some(left_idx), Some(right_idx)) = (
+                column_position(&left.columns, edge.right),
+                column_position(&right.columns, edge.left),
+            ) {
+                Some(make_join_key(left, right, left_idx, right_idx))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn make_join_key(
+    left: &JoinDpEntry,
+    right: &JoinDpEntry,
+    left_idx: usize,
+    right_idx: usize,
+) -> (PhysicalExprRef, PhysicalExprRef) {
+    let left_schema = left.plan.schema();
+    let right_schema = right.plan.schema();
+    (
+        Arc::new(Column::new(left_schema.field(left_idx).name(), left_idx)),
+        Arc::new(Column::new(right_schema.field(right_idx).name(), right_idx)),
+    )
+}
+
+fn column_position(columns: &[LeafColumn], needle: LeafColumn) -> Option<usize> {
+    columns.iter().position(|column| *column == needle)
+}
+
+impl JoinDpEntry {
+    fn leaf(
+        plan: Arc<dyn ExecutionPlan>,
+        columns: Vec<LeafColumn>,
+        registry: Option<&StatisticsRegistry>,
+    ) -> Result<Self> {
+        let (rows, bytes) = estimate_plan_rows_and_bytes(&*plan, registry)?;
+        let bytes =
+            bytes.or_else(|| rows.map(|rows| rows * schema_row_width(&plan.schema())));
+        Ok(Self {
+            plan,
+            columns,
+            rows,
+            bytes,
+            cost: bytes.unwrap_or(UNKNOWN_JOIN_REORDER_COST),
+        })
+    }
+}
+
+fn estimate_join_rows_and_bytes(
+    plan: &Arc<dyn ExecutionPlan>,
+    left: &JoinDpEntry,
+    right: &JoinDpEntry,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<(Option<f64>, Option<f64>)> {
+    let (rows, bytes) = estimate_plan_rows_and_bytes(&**plan, registry)?;
+    let rows = rows.or_else(|| match (left.rows, right.rows) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(rows), None) | (None, Some(rows)) => Some(rows),
+        (None, None) => None,
+    });
+    let bytes =
+        bytes.or_else(|| rows.map(|rows| rows * schema_row_width(&plan.schema())));
+    Ok((rows, bytes))
+}
+
+fn estimate_plan_rows_and_bytes(
+    plan: &dyn ExecutionPlan,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<(Option<f64>, Option<f64>)> {
+    let stats = get_stats(plan, registry)?;
+    let rows = stats.num_rows.get_value().map(|rows| *rows as f64);
+    let bytes = stats.total_byte_size.get_value().map(|bytes| *bytes as f64);
+    let row_width = schema_row_width(&plan.schema());
+    let rows = rows.or_else(|| bytes.map(|bytes| bytes / row_width.max(1.0)));
+    let bytes = bytes.or_else(|| rows.map(|rows| rows * row_width));
+    Ok((rows, bytes))
+}
+
+fn estimate_existing_join_cost(
+    plan: &Arc<dyn ExecutionPlan>,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<f64> {
+    if let Some(join) = plan.downcast_ref::<HashJoinExec>()
+        && is_reorderable_hash_join(join, None)
+    {
+        let left_cost = estimate_existing_join_cost(join.left(), registry)?;
+        let right_cost = estimate_existing_join_cost(join.right(), registry)?;
+        let (_, bytes) = estimate_plan_rows_and_bytes(&**plan, registry)?;
+        let (_, left_bytes) = estimate_plan_rows_and_bytes(&**join.left(), registry)?;
+        let (_, right_bytes) = estimate_plan_rows_and_bytes(&**join.right(), registry)?;
+        let left_bytes = left_bytes.unwrap_or(UNKNOWN_JOIN_REORDER_COST);
+        let right_bytes = right_bytes.unwrap_or(UNKNOWN_JOIN_REORDER_COST);
+        let build_bytes = left_bytes;
+        return Ok(left_cost
+            + right_cost
+            + left_bytes
+            + right_bytes
+            + build_bytes
+            + bytes.unwrap_or(UNKNOWN_JOIN_REORDER_COST));
+    }
+
+    let (_, bytes) = estimate_plan_rows_and_bytes(&**plan, registry)?;
+    Ok(bytes.unwrap_or(UNKNOWN_JOIN_REORDER_COST))
+}
+
+fn entry_bytes(entry: &JoinDpEntry) -> f64 {
+    entry.bytes.unwrap_or(UNKNOWN_JOIN_REORDER_COST)
+}
+
+fn project_to_original_schema(
+    plan: Arc<dyn ExecutionPlan>,
+    columns: &[LeafColumn],
+    output_columns: &[LeafColumn],
+    output_schema: &SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if columns == output_columns && plan.schema().as_ref() == output_schema.as_ref() {
+        return Ok(plan);
+    }
+
+    let input_schema = plan.schema();
+    let mut projection = Vec::with_capacity(output_columns.len());
+    for (output_idx, output_column) in output_columns.iter().enumerate() {
+        let Some(input_idx) = column_position(columns, *output_column) else {
+            return internal_err!(
+                "Unable to preserve join output column during join reordering"
+            );
+        };
+        projection.push(ProjectionExpr {
+            expr: Arc::new(Column::new(input_schema.field(input_idx).name(), input_idx))
+                as PhysicalExprRef,
+            alias: output_schema.field(output_idx).name().clone(),
+        });
+    }
+
+    Ok(Arc::new(ProjectionExec::try_new(projection, plan)?))
+}
+
+fn schema_row_width(schema: &Schema) -> f64 {
+    schema
+        .fields()
+        .iter()
+        .map(|field| data_type_width(field.data_type()) as f64)
+        .sum::<f64>()
+        .max(1.0)
+}
+
+fn data_type_width(data_type: &DataType) -> usize {
+    if let Some(width) = data_type.primitive_width() {
+        return width;
+    }
+
+    match data_type {
+        DataType::Boolean => 1,
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::List(_)
+        | DataType::ListView(_)
+        | DataType::LargeList(_)
+        | DataType::LargeListView(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Map(_, _) => 16,
+        DataType::FixedSizeBinary(size) => *size as usize,
+        DataType::Dictionary(_, value_type) => data_type_width(value_type),
+        DataType::Struct(fields) => fields
+            .iter()
+            .map(|field| data_type_width(field.data_type()))
+            .sum::<usize>()
+            .max(1),
+        DataType::Union(_, _) | DataType::RunEndEncoded(_, _) => 16,
+        DataType::Null => 1,
+        _ => 8,
+    }
+}
+
 fn supports_collect_by_thresholds(
     plan: &dyn ExecutionPlan,
     threshold_byte_size: usize,
@@ -162,11 +645,16 @@ impl PhysicalOptimizerRule for JoinSelection {
             } else {
                 None
             };
+        let new_plan = plan
+            .transform_down(|plan| {
+                reorder_inner_hash_join_island_subrule(plan, config, registry)
+            })
+            .data()?;
         let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let new_plan = plan
+        let new_plan = new_plan
             .transform_up(|p| apply_subrules(p, &subrules, config))
             .data()?;
         new_plan

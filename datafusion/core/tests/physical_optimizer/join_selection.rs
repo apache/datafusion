@@ -205,6 +205,55 @@ fn create_nested_with_min_max() -> (
     (big, medium, small)
 }
 
+fn statistics_with_distinct_counts(
+    num_rows: usize,
+    distinct_counts: &[usize],
+) -> Statistics {
+    Statistics {
+        num_rows: Precision::Inexact(num_rows),
+        total_byte_size: Precision::Absent,
+        column_statistics: distinct_counts
+            .iter()
+            .map(|distinct_count| ColumnStatistics {
+                distinct_count: Precision::Inexact(*distinct_count),
+                ..Default::default()
+            })
+            .collect(),
+    }
+}
+
+/// Returns three plans connected as a chain:
+/// * big.b_m_key = medium.m_b_key
+/// * medium.m_s_key = small.s_m_key
+fn create_reorderable_join_chain() -> (
+    Arc<dyn ExecutionPlan>,
+    Arc<dyn ExecutionPlan>,
+    Arc<dyn ExecutionPlan>,
+) {
+    let big = Arc::new(StatisticsExec::new(
+        statistics_with_distinct_counts(100_000, &[100_000, 100_000]),
+        Schema::new(vec![
+            Field::new("b_m_key", DataType::Int32, false),
+            Field::new("b_payload", DataType::Int32, false),
+        ]),
+    ));
+
+    let medium = Arc::new(StatisticsExec::new(
+        statistics_with_distinct_counts(10_000, &[10_000, 10_000]),
+        Schema::new(vec![
+            Field::new("m_b_key", DataType::Int32, false),
+            Field::new("m_s_key", DataType::Int32, false),
+        ]),
+    ));
+
+    let small = Arc::new(StatisticsExec::new(
+        statistics_with_distinct_counts(100, &[100]),
+        Schema::new(vec![Field::new("s_m_key", DataType::Int32, false)]),
+    ));
+
+    (big, medium, small)
+}
+
 #[tokio::test]
 async fn test_join_with_swap() {
     let (big, small) = create_big_and_small();
@@ -495,6 +544,56 @@ async fn test_nested_join_swap() {
             StatisticsExec: col_count=1, row_count=Inexact(1000)
             StatisticsExec: col_count=1, row_count=Inexact(100000)
         StatisticsExec: col_count=1, row_count=Inexact(10000)
+    "
+    );
+}
+
+#[tokio::test]
+async fn test_inner_hash_join_dp_reorders_chain() {
+    let (big, medium, small) = create_reorderable_join_chain();
+
+    let child_join = HashJoinExec::try_new(
+        Arc::clone(&big),
+        Arc::clone(&medium),
+        vec![(
+            col("b_m_key", &big.schema()).unwrap(),
+            col("m_b_key", &medium.schema()).unwrap(),
+        )],
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::Auto,
+        NullEquality::NullEqualsNothing,
+        false,
+    )
+    .unwrap();
+    let child_schema = child_join.schema();
+
+    let join = HashJoinExec::try_new(
+        Arc::new(child_join),
+        Arc::clone(&small),
+        vec![(
+            col("m_s_key", &child_schema).unwrap(),
+            col("s_m_key", &small.schema()).unwrap(),
+        )],
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::Auto,
+        NullEquality::NullEqualsNothing,
+        false,
+    )
+    .unwrap();
+
+    assert_optimized!(
+        join,
+        @r"
+    ProjectionExec: expr=[b_m_key@3 as b_m_key, b_payload@4 as b_payload, m_b_key@1 as m_b_key, m_s_key@2 as m_s_key, s_m_key@0 as s_m_key]
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(m_b_key@1, b_m_key@0)]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(s_m_key@0, m_s_key@1)]
+          StatisticsExec: col_count=1, row_count=Inexact(100)
+          StatisticsExec: col_count=2, row_count=Inexact(10000)
+        StatisticsExec: col_count=2, row_count=Inexact(100000)
     "
     );
 }
