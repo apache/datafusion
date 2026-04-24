@@ -22,7 +22,6 @@ use arrow::array::{
     cast::AsArray,
     types::{Float64Type, Int64Type},
 };
-use arrow::buffer::NullBuffer;
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::{NativeType, logical_float64};
@@ -32,6 +31,9 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
     Signature, TypeSignatureClass, Volatility,
+};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
+    filtered_null_mask, set_nulls,
 };
 use std::sync::Arc;
 
@@ -294,19 +296,19 @@ where
         // first batch is partial sums, second is counts
         let partial_sums = values[0].as_primitive::<T>();
         let partial_counts = values[1].as_primitive::<Int64Type>();
-        // update counts with partial counts
-        self.counts.resize(total_num_groups, 0);
-        let iter1 = group_indices.iter().zip(partial_counts.values().iter());
-        for (&group_index, &partial_count) in iter1 {
-            self.counts[group_index] += partial_count;
-        }
 
-        // update sums
+        self.counts.resize(total_num_groups, 0);
         self.sums.resize(total_num_groups, T::default_value());
-        let iter2 = group_indices.iter().zip(partial_sums.values().iter());
-        for (&group_index, &new_value) in iter2 {
+
+        for (idx, &group_index) in group_indices.iter().enumerate() {
+            // Skip null state entries emitted by convert_to_state for
+            // filtered / null input rows.
+            if partial_counts.is_null(idx) || partial_sums.is_null(idx) {
+                continue;
+            }
+            self.counts[group_index] += partial_counts.value(idx);
             let sum = &mut self.sums[group_index];
-            *sum = sum.add_wrapping(new_value);
+            *sum = sum.add_wrapping(partial_sums.value(idx));
         }
 
         Ok(())
@@ -354,22 +356,11 @@ where
             .as_primitive::<T>()
             .clone()
             .with_data_type(self.return_data_type.clone());
-
         let counts = Int64Array::from_value(1, sums.len());
 
-        // null out filtered / null input rows
-        let filter_nulls = opt_filter.map(|f| {
-            let (bools, nulls) = f.clone().into_parts();
-            NullBuffer::union(Some(&NullBuffer::from(bools)), nulls.as_ref())
-                .expect("at least one input is Some")
-        });
-        let nulls =
-            NullBuffer::union(filter_nulls.as_ref(), sums.logical_nulls().as_ref());
-
-        let (dt, buf, _) = sums.into_parts();
-        let sums = PrimitiveArray::<T>::new(buf, nulls.clone()).with_data_type(dt);
-        let (_, buf, _) = counts.into_parts();
-        let counts = Int64Array::new(buf, nulls);
+        let nulls = filtered_null_mask(opt_filter, &sums);
+        let counts = set_nulls(counts, nulls.clone());
+        let sums = set_nulls(sums, nulls);
 
         // [sum, count] - must match state() and merge_batch()
         Ok(vec![
@@ -481,5 +472,24 @@ mod tests {
         let result = acc.evaluate(EmitTo::All).unwrap();
         let result = result.as_primitive::<Float64Type>();
         assert_eq!(result.value(0), 20.0); // (10+20+30)/3
+    }
+
+    #[test]
+    fn convert_to_state_null_merge_matches_direct() {
+        // avg([1.0, NULL, 3.0]) must be 2.0 after a convert_to_state → merge_batch
+        // round-trip. Before the merge-path null fix this leaked the backing
+        // buffer value at the null slot and produced the wrong average.
+        let mut acc = make_acc();
+        let input: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(3.0),
+        ]))];
+        let state = acc.convert_to_state(&input, None).unwrap();
+        acc.merge_batch(&state, &[0, 0, 0], None, 1).unwrap();
+
+        let result = acc.evaluate(EmitTo::All).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert_eq!(result.value(0), 2.0);
     }
 }

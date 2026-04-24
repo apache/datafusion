@@ -2600,6 +2600,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
  "datafusion-functions-nested",
  "log",
  "num-traits",
