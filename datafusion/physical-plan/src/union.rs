@@ -612,13 +612,21 @@ impl ExecutionPlan for InterleaveExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // New children are no longer interleavable, which might be a bug of optimization rewrite.
-        assert_or_internal_err!(
-            can_interleave(children.iter()),
-            "Can not create InterleaveExec: new children can not be interleaved"
-        );
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(InterleaveExec::try_new(children)?))
+        // After optimizer rewrites (e.g. join_selection changing join modes,
+        // or additional EnforceDistribution passes), children may no longer
+        // have consistent hash partitioning. Fall back to UnionExec instead
+        // of panicking — correctness is preserved, only the interleave
+        // optimization is lost.
+        if can_interleave(children.iter()) {
+            check_if_same_properties!(self, children);
+            Ok(Arc::new(InterleaveExec::try_new(children)?))
+        } else {
+            warn!(
+                "InterleaveExec children no longer interleavable after optimizer rewrite, \
+                 falling back to UnionExec"
+            );
+            UnionExec::try_new(children)
+        }
     }
 
     fn execute(
@@ -1450,6 +1458,89 @@ mod tests {
             union.cardinality_effect(),
             CardinalityEffect::GreaterEqual
         ));
+        Ok(())
+    }
+
+    use crate::repartition::RepartitionExec;
+
+    /// Test that InterleaveExec::with_new_children falls back to UnionExec
+    /// when children's partitioning diverges after optimizer rewrites.
+    #[tokio::test]
+    async fn test_interleave_fallback_to_union_on_partitioning_mismatch() -> Result<()> {
+        let schema = create_test_schema()?;
+        let memory_exec1 = TestMemoryExec::try_new_exec(&[], Arc::clone(&schema), None)?;
+        let memory_exec2 = TestMemoryExec::try_new_exec(&[], Arc::clone(&schema), None)?;
+
+        // Wrap in RepartitionExec to get Hash partitioning
+        let hash_child1 = Arc::new(RepartitionExec::try_new(
+            memory_exec1,
+            Partitioning::Hash(vec![col("a", &schema)?], 8),
+        )?);
+        let hash_child2 = Arc::new(RepartitionExec::try_new(
+            memory_exec2,
+            Partitioning::Hash(vec![col("a", &schema)?], 8),
+        )?);
+
+        // Create InterleaveExec — should succeed
+        let interleave = Arc::new(InterleaveExec::try_new(vec![
+            Arc::clone(&hash_child1) as _,
+            Arc::clone(&hash_child2) as _,
+        ])?);
+        assert_eq!(interleave.name(), "InterleaveExec");
+
+        // Simulate optimizer rewrite: one child changed to RoundRobin
+        let memory_exec3 = TestMemoryExec::try_new_exec(&[], Arc::clone(&schema), None)?;
+        let mismatched_child = Arc::new(RepartitionExec::try_new(
+            memory_exec3,
+            Partitioning::RoundRobinBatch(8),
+        )?);
+
+        // with_new_children should NOT panic — falls back to UnionExec
+        let result = interleave
+            .with_new_children(vec![hash_child1 as _, mismatched_child as _])?;
+
+        assert_eq!(result.name(), "UnionExec");
+        Ok(())
+    }
+
+    /// Test that InterleaveExec::with_new_children preserves InterleaveExec
+    /// when children's partitioning remains consistent.
+    #[tokio::test]
+    async fn test_interleave_preserved_when_partitioning_matches() -> Result<()> {
+        let schema = create_test_schema()?;
+        let memory_exec1 = TestMemoryExec::try_new_exec(&[], Arc::clone(&schema), None)?;
+        let memory_exec2 = TestMemoryExec::try_new_exec(&[], Arc::clone(&schema), None)?;
+
+        let hash_child1 = Arc::new(RepartitionExec::try_new(
+            memory_exec1,
+            Partitioning::Hash(vec![col("a", &schema)?], 8),
+        )?);
+        let hash_child2 = Arc::new(RepartitionExec::try_new(
+            memory_exec2,
+            Partitioning::Hash(vec![col("a", &schema)?], 8),
+        )?);
+
+        let interleave = Arc::new(InterleaveExec::try_new(vec![
+            Arc::clone(&hash_child1) as _,
+            Arc::clone(&hash_child2) as _,
+        ])?);
+
+        // New children with same Hash partitioning
+        let memory_exec3 = TestMemoryExec::try_new_exec(&[], Arc::clone(&schema), None)?;
+        let memory_exec4 = TestMemoryExec::try_new_exec(&[], Arc::clone(&schema), None)?;
+        let new_child1 = Arc::new(RepartitionExec::try_new(
+            memory_exec3,
+            Partitioning::Hash(vec![col("a", &schema)?], 8),
+        )?);
+        let new_child2 = Arc::new(RepartitionExec::try_new(
+            memory_exec4,
+            Partitioning::Hash(vec![col("a", &schema)?], 8),
+        )?);
+
+        let result =
+            interleave.with_new_children(vec![new_child1 as _, new_child2 as _])?;
+
+        assert_eq!(result.name(), "InterleaveExec");
         Ok(())
     }
 }
