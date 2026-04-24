@@ -237,10 +237,8 @@ pub struct HigherOrderReturnFieldArgs<'a> {
     /// lambda if evaluated with the parameters returned from [`HigherOrderUDF::lambda_parameters`]
     ///
     /// For example, with `array_transform([1], v -> v == 5)`
-    /// this field will be `[
-    ///     ValueOrLambda::Value(Field::new("", DataType::List(DataType::Int32), false)),
-    ///     ValueOrLambda::Lambda(Field::new("", DataType::Boolean, false))
-    /// ]`
+    /// this field will be
+    /// 
     pub arg_fields: &'a [ValueOrLambda<FieldRef, FieldRef>],
     /// Is argument `i` to the function a scalar (constant)?
     ///

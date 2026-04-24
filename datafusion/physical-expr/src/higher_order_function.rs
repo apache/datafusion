@@ -69,7 +69,7 @@ pub struct HigherOrderFunctionExpr {
     ///             left:
     ///                 LambdaVariableExpression("v", Field::new("", Int32, false))
     ///             right:
-    ///                 LiteralExpression("2")
+    ///                 LiteralExpression(2)
     /// ```
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Positions in `args` where lambdas were top level arguments during try_new_with_schema
