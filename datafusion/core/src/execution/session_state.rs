@@ -1345,20 +1345,38 @@ impl SessionStateBuilder {
     }
 
     /// Insert a phase immediately before the named anchor phase.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no phase named `anchor` exists in the pipeline. Use
+    /// [`LogicalPlanningPipeline::insert_before`] directly if you need to
+    /// handle the not-found case without panicking.
     pub fn with_phase_before(mut self, anchor: &str, phase: Phase) -> Self {
         let pipeline = self
             .logical_pipeline
             .get_or_insert_with(LogicalPlanningPipeline::default);
-        pipeline.insert_before(anchor, phase);
+        assert!(
+            pipeline.insert_before(anchor, phase),
+            "with_phase_before: no phase named '{anchor}' found in the pipeline",
+        );
         self
     }
 
     /// Insert a phase immediately after the named anchor phase.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no phase named `anchor` exists in the pipeline. Use
+    /// [`LogicalPlanningPipeline::insert_after`] directly if you need to
+    /// handle the not-found case without panicking.
     pub fn with_phase_after(mut self, anchor: &str, phase: Phase) -> Self {
         let pipeline = self
             .logical_pipeline
             .get_or_insert_with(LogicalPlanningPipeline::default);
-        pipeline.insert_after(anchor, phase);
+        assert!(
+            pipeline.insert_after(anchor, phase),
+            "with_phase_after: no phase named '{anchor}' found in the pipeline",
+        );
         self
     }
 

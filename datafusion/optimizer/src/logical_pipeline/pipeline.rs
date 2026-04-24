@@ -88,7 +88,10 @@ impl LogicalPlanningPipeline {
     }
 
     /// Insert `phase` immediately before the phase named `anchor`.
-    /// Returns `false` if `anchor` is not found.
+    ///
+    /// Returns `false` if `anchor` is not found; the phase is not inserted.
+    /// Use the return value to detect misconfiguration.
+    #[must_use]
     pub fn insert_before(&mut self, anchor: &str, phase: Phase) -> bool {
         if let Some(pos) = self.phases.iter().position(|p| p.name() == anchor) {
             self.phases.insert(pos, phase);
@@ -99,7 +102,10 @@ impl LogicalPlanningPipeline {
     }
 
     /// Insert `phase` immediately after the phase named `anchor`.
-    /// Returns `false` if `anchor` is not found.
+    ///
+    /// Returns `false` if `anchor` is not found; the phase is not inserted.
+    /// Use the return value to detect misconfiguration.
+    #[must_use]
     pub fn insert_after(&mut self, anchor: &str, phase: Phase) -> bool {
         if let Some(pos) = self.phases.iter().position(|p| p.name() == anchor) {
             self.phases.insert(pos + 1, phase);
