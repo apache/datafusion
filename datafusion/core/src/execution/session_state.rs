@@ -140,8 +140,6 @@ pub struct SessionState {
     session_id: String,
     /// Ordered pipeline of named analysis and optimization phases.
     logical_pipeline: LogicalPlanningPipeline,
-    /// Expression-level function rewrites applied before physical expr creation.
-    function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,
     /// Provides support for customizing the SQL planner, e.g. to add support for custom operators like `->>` or `?`
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     #[cfg(feature = "sql")]
@@ -813,7 +811,18 @@ impl SessionState {
         let mut expr = simplifier.coerce(expr, df_schema)?;
 
         // rewrite Exprs to functions if necessary
-        for rewrite in &self.function_rewrites {
+        let function_rewrites = self
+            .logical_pipeline
+            .phase(DEFAULT_ANALYSIS_PHASE)
+            .and_then(|p| {
+                if let Phase::SyncAnalysis(a) = p {
+                    Some(a.function_rewrites.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        for rewrite in &function_rewrites {
             expr = expr
                 .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
                 .data;
@@ -1074,7 +1083,6 @@ pub struct SessionStateBuilder {
     statistics_registry: Option<StatisticsRegistry>,
     // fields to support convenience functions
     physical_optimizer_rules: Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
-    function_rewrites: Option<Vec<Arc<dyn FunctionRewrite + Send + Sync>>>,
 }
 
 impl SessionStateBuilder {
@@ -1114,7 +1122,6 @@ impl SessionStateBuilder {
             statistics_registry: None,
             // fields to support convenience functions
             physical_optimizer_rules: None,
-            function_rewrites: None,
         }
     }
 
@@ -1169,7 +1176,6 @@ impl SessionStateBuilder {
             statistics_registry: existing.statistics_registry,
             // fields to support convenience functions
             physical_optimizer_rules: None,
-            function_rewrites: Some(existing.function_rewrites),
         }
     }
 
@@ -1635,7 +1641,6 @@ impl SessionStateBuilder {
             cache_factory,
             statistics_registry,
             physical_optimizer_rules,
-            function_rewrites,
         } = self;
 
         let config = config.unwrap_or_default();
@@ -1644,7 +1649,6 @@ impl SessionStateBuilder {
         let mut state = SessionState {
             session_id: session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
             logical_pipeline: logical_pipeline.unwrap_or_default(),
-            function_rewrites: function_rewrites.unwrap_or_default(),
             expr_planners: expr_planners.unwrap_or_default(),
             #[cfg(feature = "sql")]
             relation_planners: relation_planners.unwrap_or_default(),
@@ -1750,17 +1754,6 @@ impl SessionStateBuilder {
             if existing_default_catalog.is_some() {
                 debug!("Overwrote the default catalog");
             }
-        }
-
-        // Sync function_rewrites into the analysis phase so they run before
-        // TypeCoercion (matches original Analyzer::execute_and_check behavior).
-        // Always overwrite to avoid duplication when rebuilding from an existing state.
-        if let Some(Phase::SyncAnalysis(p)) =
-            state.logical_pipeline.phase_mut(DEFAULT_ANALYSIS_PHASE)
-        {
-            p.function_rewrites.clear();
-            p.function_rewrites
-                .extend(state.function_rewrites.iter().map(Arc::clone));
         }
 
         if let Some(physical_optimizer_rules) = physical_optimizer_rules {
@@ -2197,7 +2190,6 @@ impl FunctionRegistry for SessionState {
         &mut self,
         rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
     ) -> datafusion_common::Result<()> {
-        self.function_rewrites.push(Arc::clone(&rewrite));
         if let Some(Phase::SyncAnalysis(p)) =
             self.logical_pipeline.phase_mut(DEFAULT_ANALYSIS_PHASE)
         {
