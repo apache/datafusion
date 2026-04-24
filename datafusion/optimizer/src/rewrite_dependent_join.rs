@@ -1128,7 +1128,6 @@ fn normalize_negated_subqueries(expr: &Expr) -> Result<Expr> {
 }
 
 /// Optimizer rule for rewriting subqueries to dependent join.
-#[expect(dead_code)]
 #[derive(Debug)]
 pub struct RewriteDependentJoin {}
 
@@ -1183,7 +1182,10 @@ mod tests {
         and, binary_expr, exists, expr::InSubquery, expr_fn::col, in_subquery, lit,
         not_exists, out_ref_col, scalar_subquery,
     };
-    use datafusion_functions_aggregate::{count::count, sum::sum};
+    use datafusion_functions_aggregate::{
+        count::{count, count_all},
+        sum::sum,
+    };
     use insta::assert_snapshot;
     use std::sync::Arc;
 
@@ -1212,7 +1214,8 @@ mod tests {
             @ $expected:literal $(,)?
         ) => {{
             let mut index = DependentJoinRewriter::new(Arc::new(AliasGenerator::new()));
-            let transformed = index.rewrite_subqueries_into_dependent_joins($plan)?;
+            let plan = Arc::unwrap_or_clone($plan.into());
+            let transformed = index.rewrite_subqueries_into_dependent_joins(plan)?;
             assert!(transformed.transformed);
             let display = transformed.data.display_indent_schema();
             assert_snapshot!(
@@ -1249,10 +1252,10 @@ mod tests {
         // Inner Join:  Filter: Boolean(true)
         //   TableScan: outer_table
         //   Subquery:
-        //     Filter: inner_table_lv1.c = outer_ref(outer_table.c)
+        //     Filter: inner_table_lv1.c = 1
         //       TableScan: inner_table_lv1
 
-        let rewriter = assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @r"
         DependentJoin on [] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
           TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
           Filter: inner_table_lv1.c = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
@@ -1274,6 +1277,7 @@ mod tests {
                 )?
                 .build()?,
         );
+        //
 
         let plan = LogicalPlanBuilder::from(outer_table.clone())
             .join_on(
@@ -2561,7 +2565,104 @@ mod tests {
         Ok(())
     }
 
-    fn test_query_in_paper() -> Result<()> {
+    // This simulates the query used in paper (Improving Unnesting of Complex Queries)
+    #[test]
+    fn nested_scalar_subquery_having_a_nested_scalar_subquery() -> Result<()> {
+        let customer = test_table_with_columns(
+            "customer",
+            &[
+                ("c_custkey", DataType::Int32),
+                ("c_mktsegment", DataType::Utf8),
+            ],
+        )?;
+
+        let orders = test_table_with_columns(
+            "orders",
+            &[
+                ("o_orderkey", DataType::Int32),
+                ("o_custkey", DataType::Int32),
+            ],
+        )?;
+        let lineitem = test_table_with_columns(
+            "lineitem",
+            &[
+                ("l_orderkey", DataType::Int32),
+                ("l_extendedprice", DataType::Int32),
+                ("l_custkey", DataType::Int32),
+            ],
+        )?;
+
+        let scalar_sq_level2 = Arc::new(
+            LogicalPlanBuilder::from(lineitem.clone())
+                .filter(
+                    col("lineitem.l_orderkey")
+                        .eq(out_ref_col(DataType::UInt32, "orders.o_orderkey"))
+                        .and(
+                            col("lineitem.l_custkey")
+                                .eq(out_ref_col(DataType::UInt32, "customer.c_custkey")),
+                        ),
+                )?
+                .aggregate(
+                    Vec::<Expr>::new(),
+                    vec![count(col("lineitem.l_extendedprice"))],
+                )?
+                .build()?,
+        );
+        let scalar_sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(orders.clone())
+                .filter(
+                    col("orders.o_custkey")
+                        .eq(out_ref_col(DataType::UInt32, "customer.c_custkey"))
+                        .and(scalar_subquery(scalar_sq_level2).gt(lit(30000))),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count_all()])?
+                .build()?,
+        );
+
+        let main_query = Arc::new(
+            LogicalPlanBuilder::from(customer.clone())
+                .filter(col("customer.c_mktsegment").eq(lit("AUTOMOBILE")))?
+                .filter(scalar_subquery(scalar_sq_level1).gt(lit(5)))?
+                .build()?,
+        );
+
+        let index = assert_dependent_join_rewrite!(
+            main_query,
+            @r#"
+        Projection: customer.c_custkey, customer.c_mktsegment [c_custkey:Int32;N, c_mktsegment:Utf8;N]
+          Filter: __scalar_sq_2 > Int32(5) [c_custkey:Int32;N, c_mktsegment:Utf8;N, __scalar_sq_2:Int64]
+            DependentJoin on [customer.c_custkey lvl 2 provided by 10] with expr (<subquery>) depth 1 [c_custkey:Int32;N, c_mktsegment:Utf8;N, __scalar_sq_2:Int64]
+              Filter: customer.c_mktsegment = Utf8("AUTOMOBILE") [c_custkey:Int32;N, c_mktsegment:Utf8;N]
+                TableScan: customer [c_custkey:Int32;N, c_mktsegment:Utf8;N]
+              Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64]
+                Projection: orders.o_orderkey, orders.o_custkey [o_orderkey:Int32;N, o_custkey:Int32;N]
+                  Filter: __scalar_sq_1 > Int32(30000) [o_orderkey:Int32;N, o_custkey:Int32;N, __scalar_sq_1:Int64]
+                    DependentJoin on [orders.o_orderkey lvl 2 provided by 8] with expr (<subquery>) depth 2 [o_orderkey:Int32;N, o_custkey:Int32;N, __scalar_sq_1:Int64]
+                      Filter: orders.o_custkey = outer_ref(customer.c_custkey) [o_orderkey:Int32;N, o_custkey:Int32;N]
+                        TableScan: orders [o_orderkey:Int32;N, o_custkey:Int32;N]
+                      Aggregate: groupBy=[[]], aggr=[[count(lineitem.l_extendedprice)]] [count(lineitem.l_extendedprice):Int64]
+                        Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_custkey = outer_ref(customer.c_custkey) [l_orderkey:Int32;N, l_extendedprice:Int32;N, l_custkey:Int32;N]
+                          TableScan: lineitem [l_orderkey:Int32;N, l_extendedprice:Int32;N, l_custkey:Int32;N]
+        "#
+        );
+        let node_8 = index.domain_columns_provider_nodes.get(&8).unwrap();
+        assert_snapshot!(
+            node_8.display_indent_schema(),
+            @r#"
+            Filter: orders.o_custkey = outer_ref(customer.c_custkey) [o_orderkey:Int32;N, o_custkey:Int32;N]
+              TableScan: orders [o_orderkey:Int32;N, o_custkey:Int32;N]
+            "#
+        );
+        let node_10 = index.domain_columns_provider_nodes.get(&10).unwrap();
+        assert_snapshot!(
+            node_10.display_indent_schema(),
+            @r#"
+            Filter: customer.c_mktsegment = Utf8("AUTOMOBILE") [c_custkey:Int32;N, c_mktsegment:Utf8;N]
+              TableScan: customer [c_custkey:Int32;N, c_mktsegment:Utf8;N]
+            "#
+        );
+        assert_eq!(2, index.domain_columns_provider_nodes.len());
+
         Ok(())
     }
 }
