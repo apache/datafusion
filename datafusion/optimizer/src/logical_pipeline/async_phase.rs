@@ -98,6 +98,32 @@ impl AsyncPhase<dyn AsyncAnalyzerRule + Send + Sync> {
         }
         Ok(plan)
     }
+
+    /// Like [`Self::apply`] but calls `observer` after each rule for EXPLAIN output.
+    pub async fn apply_observed(
+        &self,
+        plan: LogicalPlan,
+        config: &ConfigOptions,
+        observer: &mut (dyn FnMut(&LogicalPlan, &str) + Send),
+    ) -> Result<LogicalPlan> {
+        if !self.enabled || self.rules.is_empty() {
+            return Ok(plan);
+        }
+        let passes = match &self.strategy {
+            Strategy::Once => 1,
+            Strategy::FixedPoint { max_passes } => {
+                max_passes.unwrap_or_else(|| config.optimizer.max_passes)
+            }
+        };
+        let mut plan = plan;
+        for _ in 0..passes {
+            for rule in &self.rules {
+                plan = rule.analyze(plan, config).await?;
+                observer(&plan, rule.name());
+            }
+        }
+        Ok(plan)
+    }
 }
 
 impl AsyncPhase<dyn AsyncOptimizerRule + Send + Sync> {
@@ -119,6 +145,32 @@ impl AsyncPhase<dyn AsyncOptimizerRule + Send + Sync> {
         for _ in 0..passes {
             for rule in &self.rules {
                 plan = rule.rewrite(plan, config).await?;
+            }
+        }
+        Ok(plan)
+    }
+
+    /// Like [`Self::apply`] but calls `observer` after each rule for EXPLAIN output.
+    pub async fn apply_observed(
+        &self,
+        plan: LogicalPlan,
+        config: &ConfigOptions,
+        observer: &mut (dyn FnMut(&LogicalPlan, &str) + Send),
+    ) -> Result<LogicalPlan> {
+        if !self.enabled || self.rules.is_empty() {
+            return Ok(plan);
+        }
+        let passes = match &self.strategy {
+            Strategy::Once => 1,
+            Strategy::FixedPoint { max_passes } => {
+                max_passes.unwrap_or_else(|| config.optimizer.max_passes)
+            }
+        };
+        let mut plan = plan;
+        for _ in 0..passes {
+            for rule in &self.rules {
+                plan = rule.rewrite(plan, config).await?;
+                observer(&plan, rule.name());
             }
         }
         Ok(plan)

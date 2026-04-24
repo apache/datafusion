@@ -247,4 +247,89 @@ impl LogicalPlanningPipeline {
         }
         Ok(plan)
     }
+
+    /// Run all phases (including async), capturing per-rule intermediate plans
+    /// for EXPLAIN output.
+    ///
+    /// Returns `(optimized_plan, stringified_plans)` where `stringified_plans`
+    /// contains [`PlanType::AnalyzedLogicalPlan`], [`PlanType::FinalAnalyzedLogicalPlan`],
+    /// and [`PlanType::OptimizedLogicalPlan`] entries in application order across
+    /// both sync and async phases.
+    pub async fn apply_explained(
+        &self,
+        plan: LogicalPlan,
+        config: &(dyn OptimizerConfig + Sync),
+    ) -> Result<(LogicalPlan, Vec<StringifiedPlan>)> {
+        let config_opts = config.options();
+        let mut plan = plan;
+        let mut stringified: Vec<StringifiedPlan> = Vec::new();
+        let mut pending_final_analyzed = false;
+
+        for phase in &self.phases {
+            if !phase.is_enabled() {
+                continue;
+            }
+            match phase {
+                Phase::SyncAnalysis(p) => {
+                    plan =
+                        p.apply_observed(plan, &config_opts, &mut |p, rule_name| {
+                            stringified.push(p.to_stringified(
+                                PlanType::AnalyzedLogicalPlan {
+                                    analyzer_name: rule_name.to_string(),
+                                },
+                            ));
+                        })?;
+                    pending_final_analyzed = true;
+                }
+                Phase::AsyncAnalysis(p) => {
+                    plan = p
+                        .apply_observed(plan, &config_opts, &mut |p, rule_name| {
+                            stringified.push(p.to_stringified(
+                                PlanType::AnalyzedLogicalPlan {
+                                    analyzer_name: rule_name.to_string(),
+                                },
+                            ));
+                        })
+                        .await?;
+                    pending_final_analyzed = true;
+                }
+                Phase::SyncOptimization(p) => {
+                    if pending_final_analyzed {
+                        stringified.push(
+                            plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan),
+                        );
+                        pending_final_analyzed = false;
+                    }
+                    plan = p.apply_observed(plan, config, &mut |p, rule_name| {
+                        stringified.push(p.to_stringified(
+                            PlanType::OptimizedLogicalPlan {
+                                optimizer_name: rule_name.to_string(),
+                            },
+                        ));
+                    })?;
+                }
+                Phase::AsyncOptimization(p) => {
+                    if pending_final_analyzed {
+                        stringified.push(
+                            plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan),
+                        );
+                        pending_final_analyzed = false;
+                    }
+                    plan = p
+                        .apply_observed(plan, &config_opts, &mut |p, rule_name| {
+                            stringified.push(p.to_stringified(
+                                PlanType::OptimizedLogicalPlan {
+                                    optimizer_name: rule_name.to_string(),
+                                },
+                            ));
+                        })
+                        .await?;
+                }
+            }
+        }
+        if pending_final_analyzed {
+            stringified.push(plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
+        }
+        Ok((plan, stringified))
+    }
 }

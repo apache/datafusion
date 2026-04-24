@@ -746,31 +746,28 @@ impl SessionState {
     /// `CREATE TABLE`, which do not have corresponding physical plans and must
     /// be handled by another layer, typically [`SessionContext`].
     ///
-    /// # EXPLAIN and async phases
-    ///
-    /// `EXPLAIN` queries require per-rule plan capture (see
-    /// [`LogicalPlanningPipeline::apply_sync_explained`]), which is only
-    /// available on the synchronous path. If any enabled async phase is
-    /// registered, `EXPLAIN` will return an error rather than silently
-    /// skipping those phases. Non-`EXPLAIN` queries always use the async
-    /// path, so all phases run normally.
-    ///
     /// [`SessionContext`]: crate::execution::context::SessionContext
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let plan = if matches!(logical_plan, LogicalPlan::Explain(_)) {
-            // EXPLAIN uses the sync path to capture per-rule StringifiedPlans.
-            // Fail fast if async phases are registered: they cannot be captured
-            // and silently skipping them would produce misleading EXPLAIN output.
-            if self.logical_pipeline.has_async() {
-                return datafusion_common::plan_err!(
-                    "EXPLAIN is not supported when async pipeline phases are registered; \
-                     disable async phases or use a non-EXPLAIN query"
-                );
-            }
-            self.optimize(logical_plan)?
+        let plan = if let LogicalPlan::Explain(e) = logical_plan {
+            // EXPLAIN uses apply_explained so per-rule StringifiedPlans are
+            // captured across both sync and async phases.
+            let mut stringified_plans = e.stringified_plans.clone();
+            let (inner, new_stringified) = self
+                .logical_pipeline
+                .apply_explained(e.plan.as_ref().clone(), self)
+                .await?;
+            stringified_plans.extend(new_stringified);
+            LogicalPlan::Explain(datafusion_expr::logical_plan::Explain {
+                verbose: e.verbose,
+                explain_format: e.explain_format.clone(),
+                plan: Arc::new(inner),
+                stringified_plans,
+                schema: Arc::clone(&e.schema),
+                logical_optimization_succeeded: true,
+            })
         } else {
             self.logical_pipeline
                 .apply(logical_plan.clone(), self)
