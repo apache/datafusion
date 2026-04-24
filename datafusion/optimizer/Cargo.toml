@@ -53,6 +53,7 @@ recursive_protection = ["dep:recursive"]
 # traits).
 [dependencies]
 arrow = { workspace = true }
+async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
@@ -61,7 +62,6 @@ datafusion-physical-expr = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
-async-trait = { workspace = true }
 recursive = { workspace = true, optional = true }
 regex = { workspace = true }
 regex-syntax = "0.8.9"

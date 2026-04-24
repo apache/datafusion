@@ -152,10 +152,14 @@ impl SyncAnalysisPhase {
 
         'outer: for _ in 0..passes {
             if let Some(rule) = &fn_rewrite_rule {
-                plan = rule.analyze(plan, config)?;
+                plan = rule
+                    .analyze(plan, config)
+                    .map_err(|e| e.context(rule.name()))?;
             }
             for rule in &self.rules {
-                plan = rule.analyze(plan, config)?;
+                plan = rule
+                    .analyze(plan, config)
+                    .map_err(|e| e.context(rule.name()))?;
             }
             if !previous_plans.insert(LogicalPlanSignature::new(&plan)) {
                 break 'outer;
@@ -202,11 +206,15 @@ impl SyncAnalysisPhase {
 
         'outer: for _ in 0..passes {
             if let Some(rule) = &fn_rewrite_rule {
-                plan = rule.analyze(plan, config)?;
+                plan = rule
+                    .analyze(plan, config)
+                    .map_err(|e| e.context(rule.name()))?;
                 observer(&plan, rule.name());
             }
             for rule in &self.rules {
-                plan = rule.analyze(plan, config)?;
+                plan = rule
+                    .analyze(plan, config)
+                    .map_err(|e| e.context(rule.name()))?;
                 observer(&plan, rule.name());
             }
             if !previous_plans.insert(LogicalPlanSignature::new(&plan)) {
@@ -224,7 +232,7 @@ impl SyncAnalysisPhase {
 impl SyncPhase<dyn OptimizerRule + Send + Sync> {
     /// Apply all optimization rules in order, respecting [`ApplyOrder`] recursion.
     ///
-    /// Uses [`LogicalPlanSignature`] to detect fixpoint convergence early.
+    /// Uses a plan signature hash to detect fixpoint convergence early.
     /// Checks plan invariants before the first pass and schema invariants after
     /// each rule.
     pub fn apply(

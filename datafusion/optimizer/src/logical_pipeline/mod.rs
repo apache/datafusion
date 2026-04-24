@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`LogicalPlanningPipeline`]: an ordered sequence of named [`Phase`]s that
-//! transform a [`LogicalPlan`] before physical planning.
+//! transform a `LogicalPlan` before physical planning.
 //!
 //! Inspired by Spark SQL's `Batch(name, strategy, rules)` model.
 
@@ -55,12 +55,10 @@ pub enum Strategy {
     /// Apply each rule exactly once. No convergence check is performed.
     Once,
     /// Repeat until the plan stops changing or `max_passes` iterations are
-    /// reached. Convergence is detected via [`LogicalPlanSignature`] so the
+    /// reached. Convergence is detected via a plan signature hash so the
     /// loop exits early as soon as a full pass produces no change.
     ///
     /// `max_passes: None` defers to `config.optimizer.max_passes` at runtime.
-    ///
-    /// [`LogicalPlanSignature`]: crate::plan_signature::LogicalPlanSignature
     FixedPoint { max_passes: Option<usize> },
 }
 
