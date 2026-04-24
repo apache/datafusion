@@ -1106,6 +1106,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
+/// After normalization with [normalize_ident], check whether all params are unique
+///
+/// [normalize_ident]: crate::utils::normalize_ident
 fn all_unique(params: &[sqlparser::ast::Ident]) -> bool {
     match params.len() {
         0 | 1 => true,
