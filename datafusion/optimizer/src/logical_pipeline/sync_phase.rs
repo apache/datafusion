@@ -120,7 +120,11 @@ impl SyncAnalysisPhase {
     /// Checks plan invariants before and after applying rules.
     /// [`FunctionRewrite`]s run first each pass so that `TypeCoercion`
     /// operates on already-rewritten expressions.
-    pub fn apply(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
+    pub fn apply(
+        &self,
+        plan: LogicalPlan,
+        config: &ConfigOptions,
+    ) -> Result<LogicalPlan> {
         if !self.enabled || (self.rules.is_empty() && self.function_rewrites.is_empty()) {
             return Ok(plan);
         }
