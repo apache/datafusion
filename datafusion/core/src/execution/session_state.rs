@@ -1073,8 +1073,6 @@ pub struct SessionStateBuilder {
     cache_factory: Option<Arc<dyn CacheFactory>>,
     statistics_registry: Option<StatisticsRegistry>,
     // fields to support convenience functions
-    analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
-    optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
     physical_optimizer_rules: Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
     function_rewrites: Option<Vec<Arc<dyn FunctionRewrite + Send + Sync>>>,
 }
@@ -1115,8 +1113,6 @@ impl SessionStateBuilder {
             cache_factory: None,
             statistics_registry: None,
             // fields to support convenience functions
-            analyzer_rules: None,
-            optimizer_rules: None,
             physical_optimizer_rules: None,
             function_rewrites: None,
         }
@@ -1172,8 +1168,6 @@ impl SessionStateBuilder {
             cache_factory: existing.cache_factory,
             statistics_registry: existing.statistics_registry,
             // fields to support convenience functions
-            analyzer_rules: None,
-            optimizer_rules: None,
             physical_optimizer_rules: None,
             function_rewrites: Some(existing.function_rewrites),
         }
@@ -1266,9 +1260,12 @@ impl SessionStateBuilder {
         mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
     ) -> Self {
-        let mut rules = self.analyzer_rules.unwrap_or_default();
-        rules.push(analyzer_rule);
-        self.analyzer_rules = Some(rules);
+        let pipeline = self
+            .logical_pipeline
+            .get_or_insert_with(LogicalPlanningPipeline::default);
+        if let Some(Phase::SyncAnalysis(p)) = pipeline.phase_mut(DEFAULT_ANALYSIS_PHASE) {
+            p.rules.push(analyzer_rule);
+        }
         self
     }
 
@@ -1294,9 +1291,14 @@ impl SessionStateBuilder {
         mut self,
         optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
     ) -> Self {
-        let mut rules = self.optimizer_rules.unwrap_or_default();
-        rules.push(optimizer_rule);
-        self.optimizer_rules = Some(rules);
+        let pipeline = self
+            .logical_pipeline
+            .get_or_insert_with(LogicalPlanningPipeline::default);
+        if let Some(Phase::SyncOptimization(p)) =
+            pipeline.phase_mut(DEFAULT_OPTIMIZATION_PHASE)
+        {
+            p.rules.push(optimizer_rule);
+        }
         self
     }
 
@@ -1632,8 +1634,6 @@ impl SessionStateBuilder {
             function_factory,
             cache_factory,
             statistics_registry,
-            analyzer_rules,
-            optimizer_rules,
             physical_optimizer_rules,
             function_rewrites,
         } = self;
@@ -1763,24 +1763,6 @@ impl SessionStateBuilder {
                 .extend(state.function_rewrites.iter().map(Arc::clone));
         }
 
-        if let (Some(rules), Some(Phase::SyncAnalysis(p))) = (
-            analyzer_rules,
-            state.logical_pipeline.phase_mut(DEFAULT_ANALYSIS_PHASE),
-        ) {
-            for rule in rules {
-                p.rules.push(rule);
-            }
-        }
-
-        if let (Some(rules), Some(Phase::SyncOptimization(p))) = (
-            optimizer_rules,
-            state.logical_pipeline.phase_mut(DEFAULT_OPTIMIZATION_PHASE),
-        ) {
-            for rule in rules {
-                p.rules.push(rule);
-            }
-        }
-
         if let Some(physical_optimizer_rules) = physical_optimizer_rules {
             for physical_optimizer_rule in physical_optimizer_rules {
                 state
@@ -1904,20 +1886,6 @@ impl SessionStateBuilder {
         &mut self.cache_factory
     }
 
-    /// Returns the current analyzer_rules value
-    pub fn analyzer_rules(
-        &mut self,
-    ) -> &mut Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>> {
-        &mut self.analyzer_rules
-    }
-
-    /// Returns the current optimizer_rules value
-    pub fn optimizer_rules(
-        &mut self,
-    ) -> &mut Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>> {
-        &mut self.optimizer_rules
-    }
-
     /// Returns the current physical_optimizer_rules value
     pub fn physical_optimizer_rules(
         &mut self,
@@ -1948,8 +1916,6 @@ impl Debug for SessionStateBuilder {
         let ret = ret.field("type_planner", &self.type_planner);
         ret.field("query_planners", &self.query_planner)
             .field("logical_pipeline", &self.logical_pipeline)
-            .field("analyzer_rules", &self.analyzer_rules)
-            .field("optimizer_rules", &self.optimizer_rules)
             .field("physical_optimizer_rules", &self.physical_optimizer_rules)
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
