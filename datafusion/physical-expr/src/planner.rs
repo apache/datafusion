@@ -454,7 +454,7 @@ pub fn create_physical_expr(
                 None => Arc::new(ConfigOptions::default()),
             };
 
-            Ok(Arc::new(HigherOrderFunctionExpr::try_new(
+            Ok(Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
                 Arc::clone(func),
                 physical_args,
                 input_schema,

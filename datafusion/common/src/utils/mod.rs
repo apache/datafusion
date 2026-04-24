@@ -1595,17 +1595,77 @@ mod tests {
     fn test_remove_list_null_values_fsl() {
         let list = Arc::new(create_i32_fsl(
             3,
-            vec![100, 20, 10, 0, 0, 0, 0, 0, 0],
-            Some(NullBuffer::from(vec![true, false, false])),
+            vec![100, 20, 10, 0, 0, 0],
+            Some(NullBuffer::from(vec![true, false])),
         )) as ArrayRef;
 
         let res = remove_list_null_values(&list).unwrap();
 
         let expected = Arc::new(create_i32_fsl(
             3,
-            vec![100, 20, 10, 100, 20, 10, 100, 20, 10],
-            Some(NullBuffer::from(vec![true, false, false])),
+            vec![100, 20, 10, 100, 20, 10],
+            Some(NullBuffer::from(vec![true, false])),
         )) as ArrayRef;
+
+        assert_eq!(&res, &expected);
+        // check above skips inner value of nulls
+        assert_eq!(
+            res.as_fixed_size_list().values(),
+            expected.as_fixed_size_list().values()
+        );
+    }
+
+    #[test]
+    fn test_remove_list_null_values_fsl_no_valid_value() {
+        let list = Arc::new(create_i32_fsl(
+            3,
+            vec![100, 20, 10, 0, 0, 0],
+            Some(NullBuffer::from(vec![false, false])),
+        )) as ArrayRef;
+
+        let res = remove_list_null_values(&list).unwrap();
+
+        let expected = Arc::new(create_i32_fsl(
+            3,
+            vec![100, 20, 10, 0, 0, 0],
+            Some(NullBuffer::from(vec![false, false])),
+        )) as ArrayRef;
+
+        assert_eq!(&res, &expected);
+        // check above skips inner value of nulls
+        assert_eq!(
+            res.as_fixed_size_list().values(),
+            expected.as_fixed_size_list().values()
+        );
+    }
+
+    #[test]
+    fn test_remove_list_null_values_empty_fsl() {
+        let list = Arc::new(create_i32_fsl(3, vec![], Some(NullBuffer::from(vec![]))))
+            as ArrayRef;
+
+        let res = remove_list_null_values(&list).unwrap();
+
+        let expected = Arc::new(create_i32_fsl(3, vec![], Some(NullBuffer::from(vec![]))))
+            as ArrayRef;
+
+        assert_eq!(&res, &expected);
+        // check above skips inner value of nulls
+        assert_eq!(
+            res.as_fixed_size_list().values(),
+            expected.as_fixed_size_list().values()
+        );
+    }
+
+    #[test]
+    fn test_remove_list_null_values_zero_sized_fsl() {
+        let list = Arc::new(create_i32_fsl(0, vec![], Some(NullBuffer::from(vec![]))))
+            as ArrayRef;
+
+        let res = remove_list_null_values(&list).unwrap();
+
+        let expected = Arc::new(create_i32_fsl(0, vec![], Some(NullBuffer::from(vec![]))))
+            as ArrayRef;
 
         assert_eq!(&res, &expected);
         // check above skips inner value of nulls

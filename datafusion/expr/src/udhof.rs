@@ -313,6 +313,8 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Tip: If you have a [`HigherOrderFunction`] invocation, you can call the helper
     /// [`HigherOrderFunction::lambda_parameters`] instead of this method directly
     ///
+    /// The name of the returned [`Field`]'s are ignored.
+    ///
     /// [`HigherOrderFunction`]: crate::expr::HigherOrderFunction
     /// [`HigherOrderFunction::lambda_parameters`]: crate::expr::HigherOrderFunction::lambda_parameters
     ///
@@ -331,7 +333,7 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ///         // the lambda supported parameters, regardless of how many are actually used
     ///         vec![
     ///             // the value being transformed
-    ///             Field::new("", DataType::Float32, false),
+    ///             Field::new("ignored_name", DataType::Float32, false),
     ///             // the 1-based index being transformed, not used on the example above,
     ///             //but implementations doesn't need to care about it
     ///             Field::new("", DataType::Int32, false),
@@ -373,13 +375,16 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ) -> Result<FieldRef>;
 
     /// Whether List, LargeList and FixedSizeList arguments should have it's
-    /// non-empty null sublists cleaned by Datafusion before invoking this function
+    /// non-empty null sublists cleaned with [remove_list_null_values]
+    /// before invoking this function
     ///
     /// The default implementation always returns true and should only be implemented
     /// if you want to handle non-empty null sublists yourself
     ///
-    /// fully null fixed size list arrays should always be handled regardless of
+    /// Fully null fixed size list arrays should always be handled regardless of
     /// the return of this function
+    ///
+    /// [remove_list_null_values]: datafusion_common::utils::remove_list_null_values
     // todo: extend this to listview and maps when remove_list_null_values supports it
     fn clear_null_values(&self) -> bool {
         true
@@ -410,8 +415,10 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
         false
     }
 
-    /// Determines which of the arguments passed to this function are evaluated eagerly
-    /// and which may be evaluated lazily.
+    /// Determines which of the arguments passed to *this higher-order function*
+    /// are evaluated eagerly and which may be evaluated lazily. Note that this
+    /// does *not* applies to the arguments that *lambda functions* pass to it's
+    /// body expression
     ///
     /// If this function returns `None`, all arguments are eagerly evaluated.
     /// Returning `None` is a micro optimization that saves a needless `Vec`

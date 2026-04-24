@@ -18,14 +18,11 @@
 //! [`HigherOrderUDF`] definitions for array_transform function.
 
 use arrow::{
-    array::{
-        Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray,
-        new_null_array,
-    },
+    array::{Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray},
     datatypes::{DataType, Field, FieldRef},
 };
 use datafusion_common::{
-    Result, exec_err, plan_err,
+    Result, ScalarValue, exec_err, plan_err,
     utils::{adjust_offsets_for_slice, list_values, take_function_args},
 };
 use datafusion_expr::{
@@ -144,10 +141,7 @@ impl HigherOrderUDF for ArrayTransform {
 
         // we don't need to check whether the lambda contains more than two parameters,
         // e.g. array_transform([], (v, i, j) -> v+i+j), as datafusion will do that for us
-        let value = Field::new("", field.data_type().clone(), field.is_nullable())
-            .with_metadata(field.metadata().clone());
-
-        Ok(vec![vec![value]])
+        Ok(vec![vec![field.as_ref().clone()]])
     }
 
     fn return_field_from_args(
@@ -184,16 +178,29 @@ impl HigherOrderUDF for ArrayTransform {
         // Fast path for fully null input array and also the only way to safely work with
         // a fully null fixed size list array as it can't be handled by remove_list_null_values below
         if list_array.null_count() == list_array.len() {
-            return Ok(ColumnarValue::Array(new_null_array(
+            return Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
                 args.return_type(),
-                list_array.len(),
-            )));
+            )?));
         }
 
         // as per list_values docs, if list_array is sliced, list_values will be sliced too,
         // so before constructing the transformed array below, we must adjust the list offsets with
         // adjust_offsets_for_slice
         let list_values = list_values(&list_array)?;
+
+        // fast path: when every sublist is empty and non-null we can return a scalar of an non-null empty sublist.
+        // If every sublist is null have already been handled above
+        if list_values.is_empty()
+            && list_array.null_count() == 0
+            && matches!(
+                args.return_type(),
+                DataType::List(_) | DataType::LargeList(_)
+            )
+        {
+            return Ok(ColumnarValue::Scalar(ScalarValue::new_default(
+                args.return_type(),
+            )?));
+        }
 
         // by passing closures, lambda.evaluate can evaluate only those actually needed
         let values_param = || Ok(Arc::clone(&list_values));
@@ -438,18 +445,20 @@ mod tests {
             3,
             // 0 here for one of the values behind null, so if it will be evaluated
             // it will fail due to divide by 0
-            vec![100, 20, 10, 0, 1, 2, 0, 1, 50],
-            Some(NullBuffer::from(vec![true, false, false])),
+            vec![100, 20, 10, 0, 1, 2, 0, 1, 50, 2, 4, 5],
+            Some(NullBuffer::from(vec![true, false, false, true])),
         );
 
         let res = divide_100_by(list).unwrap();
 
         let actual_list = res.as_fixed_size_list();
 
+        // null sublists are replaced with the values of the first valid sublist,
+        // in this case, [100, 20, 10], that when dividing 100, result in [1, 5, 10]
         let expected_list = create_i32_fsl(
             3,
-            vec![1, 5, 10, 1, 5, 10, 1, 5, 10],
-            Some(NullBuffer::from(vec![true, false, false])),
+            vec![1, 5, 10, 1, 5, 10, 1, 5, 10, 50, 25, 20],
+            Some(NullBuffer::from(vec![true, false, false, true])),
         );
 
         assert_eq!(actual_list, &expected_list);

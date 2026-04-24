@@ -72,7 +72,12 @@ pub struct HigherOrderFunctionExpr {
     ///                 LiteralExpression("2")
     /// ```
     args: Vec<Arc<dyn PhysicalExpr>>,
-    /// Positions in `args` where lambdas can be found, either wrapped or not
+    /// Positions in `args` where lambdas were top level arguments during try_new_with_schema
+    /// but may have been wrapped by tree node rewrites via with_new_children, like:
+    ///
+    /// ```ignore
+    /// expr.transform(|expr| Ok(Transformed::yes(Arc::new(DebugExpr::new(expr)))))
+    /// ```
     ///
     /// For example, for `array_transform([2, 3], v -> v != 2)`, this will be `vec![1]`
     lambda_positions: Vec<usize>,
@@ -102,7 +107,7 @@ impl HigherOrderFunctionExpr {
     ///
     /// Note that lambda arguments must be present directly in args as [LambdaExpr],
     /// and not as a wrapped child of any arg
-    pub fn try_new(
+    pub fn try_new_with_schema(
         fun: Arc<dyn HigherOrderUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         schema: &Schema,
@@ -245,7 +250,10 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             .map(|(i, e)| {
                 if self.lambda_positions.contains(&i) {
                     let lambda = wrapped_lambda(e).ok_or_else(|| {
-                        exec_datafusion_err!("unable to unwrap lambda from {e}")
+                        exec_datafusion_err!(
+                            "{} unable to unwrap lambda from {e} at position {i}",
+                            self.name()
+                        )
                     })?;
 
                     Ok(ValueOrLambda::Lambda(
@@ -294,7 +302,10 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             .map(|(i, arg)| {
                 if self.lambda_positions.contains(&i) {
                     let lambda = wrapped_lambda(arg).ok_or_else(|| {
-                        exec_datafusion_err!("unable to unwrap lambda from {arg}")
+                        exec_datafusion_err!(
+                            "{} unable to unwrap lambda from {arg} at position {i}",
+                            self.name()
+                        )
                     })?;
 
                     let lambda_params = lambda_parameters.next().ok_or_else(|| {
@@ -390,9 +401,20 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             );
         }
 
-        for i in &self.lambda_positions {
-            if wrapped_lambda(&children[*i]).is_none() {
-                return plan_err!("unable to unwrap lambda from {}", &children[*i]);
+        for (i, child) in children.iter().enumerate() {
+            if self.lambda_positions.contains(&i) {
+                if wrapped_lambda(child).is_none() {
+                    return plan_err!(
+                        "{} unable to unwrap lambda from {} at position {i}",
+                        &children[i],
+                        self.name()
+                    );
+                }
+            } else if child.is::<LambdaExpr>() {
+                return plan_err!(
+                    "{} received a lambda via with_new_children at position {i} that wasn't a lambda before",
+                    self.name()
+                );
             }
         }
 
@@ -428,6 +450,8 @@ fn wrapped_lambda(expr: &Arc<dyn PhysicalExpr>) -> Option<&LambdaExpr> {
     loop {
         if let Some(lambda) = current.downcast_ref::<LambdaExpr>() {
             return Some(lambda);
+        } else if current.is::<HigherOrderFunctionExpr>() {
+            return None;
         }
 
         match current.children().as_slice() {
@@ -444,6 +468,7 @@ mod tests {
     use super::*;
     use crate::HigherOrderFunctionExpr;
     use crate::expressions::Column;
+    use crate::expressions::NoOp;
     use crate::expressions::lambda;
     use crate::expressions::not;
     use arrow::array::NullArray;
@@ -521,7 +546,7 @@ mod tests {
         let config_options = Arc::new(ConfigOptions::new());
 
         // Test volatile function
-        let volatile_expr = HigherOrderFunctionExpr::try_new(
+        let volatile_expr = HigherOrderFunctionExpr::try_new_with_schema(
             volatile_udf,
             args.clone(),
             &schema,
@@ -534,9 +559,13 @@ mod tests {
         assert!(is_volatile(&volatile_arc));
 
         // Test non-volatile function
-        let stable_expr =
-            HigherOrderFunctionExpr::try_new(stable_udf, args, &schema, config_options)
-                .unwrap();
+        let stable_expr = HigherOrderFunctionExpr::try_new_with_schema(
+            stable_udf,
+            args,
+            &schema,
+            config_options,
+        )
+        .unwrap();
 
         assert!(!stable_expr.is_volatile_node());
         let stable_arc: Arc<dyn PhysicalExpr> = Arc::new(stable_expr);
@@ -551,7 +580,7 @@ mod tests {
 
         let expected = ScalarValue::Int32(Some(42));
 
-        let hof = HigherOrderFunctionExpr::try_new(
+        let hof = HigherOrderFunctionExpr::try_new_with_schema(
             fun,
             vec![lambda(["a"], Arc::new(Literal::new(expected.clone()))).unwrap()],
             &Schema::empty(),
@@ -586,7 +615,7 @@ mod tests {
             signature: HigherOrderSignature::variadic_any(Volatility::Stable),
         });
 
-        let hof = HigherOrderFunctionExpr::try_new(
+        let hof = HigherOrderFunctionExpr::try_new_with_schema(
             fun,
             vec![
                 not(
@@ -614,6 +643,30 @@ mod tests {
         assert_contains!(
             result.to_string(),
             "LambdaExpr::evaluate() should not be called"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_unexpected_lambda() {
+        let fun = Arc::new(MockHigherOrderUDF {
+            signature: HigherOrderSignature::variadic_any(Volatility::Stable),
+        });
+
+        let hof = HigherOrderFunctionExpr::try_new_with_schema(
+            fun,
+            vec![Arc::new(NoOp::new())],
+            &Schema::empty(),
+            Arc::new(ConfigOptions::new()),
+        )
+        .unwrap();
+
+        let result = Arc::new(hof)
+            .with_new_children(vec![lambda(["a"], Arc::new(NoOp::new())).unwrap()])
+            .unwrap_err();
+
+        assert_contains!(
+            result.to_string(),
+            "mock_function received a lambda via with_new_children at position 0 that wasn't a lambda before"
         );
     }
 }
