@@ -21,9 +21,9 @@ use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::Physic
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
-    PartitionedFile, file::FileSource, file_scan_config::FileScanConfig,
-    file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
-    file_stream::FileOpener, source::DataSourceExec,
+    PartitionedFile, file::FileSource, file_groups::FileGroup,
+    file_scan_config::FileScanConfig, file_scan_config::FileScanConfigBuilder,
+    file_stream::FileOpenFuture, file_stream::FileOpener, source::DataSourceExec,
 };
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -104,19 +104,23 @@ pub struct TestSource {
     support: bool,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     batch_size: Option<usize>,
-    batches: Vec<RecordBatch>,
+    partition_batches: Vec<Vec<RecordBatch>>,
     metrics: ExecutionPlanMetricsSet,
     projection: Option<ProjectionExprs>,
     table_schema: datafusion_datasource::TableSchema,
 }
 
 impl TestSource {
-    pub fn new(schema: SchemaRef, support: bool, batches: Vec<RecordBatch>) -> Self {
+    pub fn new(
+        schema: SchemaRef,
+        support: bool,
+        partition_batches: Vec<Vec<RecordBatch>>,
+    ) -> Self {
         let table_schema = datafusion_datasource::TableSchema::new(schema, vec![]);
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),
-            batches,
+            partition_batches,
             predicate: None,
             batch_size: None,
             projection: None,
@@ -130,10 +134,13 @@ impl FileSource for TestSource {
         &self,
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
-        _partition: usize,
+        partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
+        let Some(batches) = self.partition_batches.get(partition).cloned() else {
+            return internal_err!("missing test batches for partition {partition}");
+        };
         Ok(Arc::new(TestOpener {
-            batches: self.batches.clone(),
+            batches,
             batch_size: self.batch_size,
             projection: self.projection.clone(),
             predicate: self.predicate.clone(),
@@ -259,7 +266,7 @@ impl FileSource for TestSource {
 #[derive(Debug, Clone)]
 pub struct TestScanBuilder {
     support: bool,
-    batches: Vec<RecordBatch>,
+    partition_batches: Vec<Vec<RecordBatch>>,
     schema: SchemaRef,
 }
 
@@ -267,7 +274,7 @@ impl TestScanBuilder {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             support: false,
-            batches: vec![],
+            partition_batches: vec![vec![]],
             schema,
         }
     }
@@ -278,20 +285,39 @@ impl TestScanBuilder {
     }
 
     pub fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
-        self.batches = batches;
+        self.partition_batches = vec![batches];
+        self
+    }
+
+    pub fn with_partition_batches(
+        mut self,
+        partition_batches: Vec<Vec<RecordBatch>>,
+    ) -> Self {
+        self.partition_batches = partition_batches;
         self
     }
 
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
+        let partition_count = self.partition_batches.len();
         let source = Arc::new(TestSource::new(
             Arc::clone(&self.schema),
             self.support,
-            self.batches,
+            self.partition_batches,
         ));
-        let base_config =
+        let builder =
             FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source)
-                .with_file(PartitionedFile::new("test.parquet", 123))
-                .build();
+                .with_partitioned_by_file_group(partition_count > 1);
+        let file_groups = (0..partition_count)
+            .map(|idx| {
+                let path = if partition_count == 1 {
+                    "test.parquet".to_string()
+                } else {
+                    format!("test_{idx}.parquet")
+                };
+                FileGroup::new(vec![PartitionedFile::new(path, 123)])
+            })
+            .collect();
+        let base_config = builder.with_file_groups(file_groups).build();
         DataSourceExec::from_data_source(base_config)
     }
 }

@@ -37,14 +37,17 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::ScalarValue;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
+use datafusion_common::{NullEquality, ScalarValue};
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::file_scan_config::{
+    FileScanConfigBuilder, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
+};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -67,12 +70,17 @@ use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
+use datafusion_physical_plan::joins::{
+    DynamicFilterRoutingMode, HashJoinExec, PartitionMode,
+};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlanProperties, Partitioning, PlanProperties,
+    displayable,
 };
 use insta::Settings;
 
@@ -537,6 +545,76 @@ fn hash_join_exec(
     .unwrap()
 }
 
+fn parquet_exec_with_date_partition(
+    partitioned_by_file_group: bool,
+) -> Arc<DataSourceExec> {
+    let table_schema = TableSchema::new(
+        schema(),
+        vec![Arc::new(Field::new(
+            "date",
+            wrap_partition_type_in_dict(DataType::Utf8),
+            false,
+        ))],
+    );
+    let partition_values: &[&str] = if partitioned_by_file_group {
+        &["2026-04-21", "2026-04-22"]
+    } else {
+        &["2026-04-21"]
+    };
+    let file_groups = partition_values
+        .iter()
+        .enumerate()
+        .map(|(idx, value)| {
+            FileGroup::new(vec![
+                PartitionedFile::new(format!("partition_{idx}.parquet"), 100)
+                    .with_partition_values(vec![wrap_partition_value_in_dict(
+                        ScalarValue::Utf8(Some((*value).to_string())),
+                    )]),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    let builder = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(table_schema)),
+    )
+    .with_file_groups(file_groups);
+
+    let builder = if partitioned_by_file_group {
+        builder.with_partitioned_by_file_group(true)
+    } else {
+        builder
+    };
+
+    DataSourceExec::from_data_source(builder.build())
+}
+
+fn join_on_column(
+    left: &dyn ExecutionPlan,
+    right: &dyn ExecutionPlan,
+    column_name: &str,
+) -> JoinOn {
+    vec![(
+        Arc::new(Column::new_with_schema(column_name, &left.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new_with_schema(column_name, &right.schema()).unwrap())
+            as Arc<dyn PhysicalExpr>,
+    )]
+}
+
+fn add_hash_repartition(
+    input: Arc<dyn ExecutionPlan>,
+    column_name: &str,
+    partition_count: usize,
+) -> Arc<dyn ExecutionPlan> {
+    let expr = Arc::new(Column::new_with_schema(column_name, &input.schema()).unwrap())
+        as Arc<dyn PhysicalExpr>;
+    Arc::new(
+        RepartitionExec::try_new(input, Partitioning::Hash(vec![expr], partition_count))
+            .unwrap(),
+    )
+}
+
 fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let predicate = Arc::new(BinaryExpr::new(
         col("c", &schema()).unwrap(),
@@ -574,6 +652,26 @@ fn ensure_distribution_helper(
     config.optimizer.repartition_file_min_size = 1024;
     config.optimizer.prefer_existing_sort = prefer_existing_sort;
     ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
+}
+
+fn dynamic_filter_routing_mode(
+    plan: Arc<dyn ExecutionPlan>,
+    target_partitions: usize,
+) -> Result<DynamicFilterRoutingMode> {
+    let distribution_context = DistributionContext::new_default(plan);
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = target_partitions;
+    config.optimizer.enable_round_robin_repartition = false;
+    config.optimizer.repartition_file_scans = false;
+    config.optimizer.repartition_file_min_size = 1024;
+    config.optimizer.prefer_existing_sort = false;
+    let optimized = distribution_context
+        .transform_up(|node| ensure_distribution(node, &config))
+        .map(|item| item.data.plan)?;
+    let hash_join = optimized
+        .downcast_ref::<HashJoinExec>()
+        .expect("expected HashJoinExec");
+    Ok(hash_join.dynamic_filter_routing_mode)
 }
 
 fn test_suite_default_config_options() -> ConfigOptions {
@@ -1089,6 +1187,133 @@ fn join_after_agg_alias() -> Result<()> {
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
+}
+
+#[test]
+fn partitioned_hash_join_uses_partition_index_for_file_groups() -> Result<()> {
+    let left = parquet_exec_with_date_partition(true);
+    let right = parquet_exec_with_date_partition(true);
+    let join_on = join_on_column(left.as_ref(), right.as_ref(), "date");
+
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+    assert_eq!(
+        dynamic_filter_routing_mode(join, 2)?,
+        DynamicFilterRoutingMode::PartitionIndex,
+    );
+    Ok(())
+}
+
+#[test]
+fn partitioned_hash_join_uses_case_hash_for_repartitioned_inputs() -> Result<()> {
+    let direct_left = add_hash_repartition(parquet_exec(), "a", 4);
+    let direct_right = add_hash_repartition(parquet_exec(), "a", 4);
+    let projected_left = projection_exec_with_alias(
+        add_hash_repartition(parquet_exec(), "a", 4),
+        vec![("a".to_string(), "a".to_string())],
+    );
+    let projected_right = projection_exec_with_alias(
+        add_hash_repartition(parquet_exec(), "a", 4),
+        vec![("a".to_string(), "a".to_string())],
+    );
+
+    for (left, right) in [
+        (direct_left, direct_right),
+        (projected_left, projected_right),
+    ] {
+        let join_on = join_on_column(left.as_ref(), right.as_ref(), "a");
+        let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+        assert_eq!(
+            dynamic_filter_routing_mode(join, 4)?,
+            DynamicFilterRoutingMode::CaseHash,
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn partitioned_hash_join_uses_case_hash_through_collect_left() -> Result<()> {
+    // In `CollectLeft` mode, `RightSemi` preserves the right child's output
+    // partitioning. The parent join should inherit repartition provenance from
+    // that side rather than from child 0.
+    let subtree_left = parquet_exec();
+    let subtree_right = add_hash_repartition(parquet_exec(), "a", 4);
+    let subtree_join_on =
+        join_on_column(subtree_left.as_ref(), subtree_right.as_ref(), "a");
+    let subtree = Arc::new(
+        HashJoinExec::try_new(
+            subtree_left,
+            subtree_right,
+            subtree_join_on,
+            None,
+            &JoinType::RightSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+
+    let right = add_hash_repartition(parquet_exec(), "a", 4);
+    let join_on = join_on_column(subtree.as_ref(), right.as_ref(), "a");
+
+    let join = hash_join_exec(subtree, right, &join_on, &JoinType::Inner);
+    assert_eq!(
+        dynamic_filter_routing_mode(join, 4)?,
+        DynamicFilterRoutingMode::CaseHash,
+    );
+    Ok(())
+}
+
+#[test]
+fn partitioned_hash_join_uses_case_hash_for_single_partition() -> Result<()> {
+    for (left, right) in [
+        (parquet_exec_multiple(), parquet_exec()),
+        (parquet_exec(), parquet_exec_multiple()),
+    ] {
+        let join_on = join_on_column(left.as_ref(), right.as_ref(), "a");
+        let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+        assert_eq!(
+            dynamic_filter_routing_mode(join, 1)?,
+            DynamicFilterRoutingMode::CaseHash,
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn partitioned_hash_join_errors_when_only_one_side_is_file_group_partitioned() {
+    for (left, right, left_repartitioned, right_repartitioned) in [
+        (
+            parquet_exec_with_date_partition(true),
+            parquet_exec_with_date_partition(false),
+            false,
+            true,
+        ),
+        (
+            parquet_exec_with_date_partition(false),
+            parquet_exec_with_date_partition(true),
+            true,
+            false,
+        ),
+    ] {
+        let join_on = join_on_column(left.as_ref(), right.as_ref(), "date");
+        let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+        let err = dynamic_filter_routing_mode(join, 2).unwrap_err();
+        let err = err.to_string();
+        assert!(
+            err.contains("Partitioned hash join has misaligned partitioning"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.contains(&format!("left repartitioned={left_repartitioned}")),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.contains(&format!("right repartitioned={right_repartitioned}")),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 #[test]
@@ -3883,8 +4108,18 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     // Create distribution context
     let dist_context = DistributionContext::new(
         spm_exec,
-        true,
-        vec![DistributionContext::new(parquet_exec, false, vec![])],
+        DistFlags {
+            dist_changing: true,
+            repartitioned: false,
+        },
+        vec![DistributionContext::new(
+            parquet_exec,
+            DistFlags {
+                dist_changing: false,
+                repartitioned: false,
+            },
+            vec![],
+        )],
     );
 
     // Apply the function

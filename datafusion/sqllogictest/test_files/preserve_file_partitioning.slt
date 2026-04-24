@@ -659,8 +659,8 @@ C prod 2017.6
 # TEST 12: Partitioned Join with Matching Partition Counts - With Optimization
 # Both tables have 3 partitions matching target_partitions=3
 # No RepartitionExec needed for join - partitions already satisfy the requirement
-# Dynamic filter pushdown is disabled in this mode because preserve_file_partitions
-# reports Hash partitioning for Hive-style file groups, which are not hash-routed.
+# Dynamic filter pushdown is enabled in this mode because scan partition P maps
+# directly to join partition P, so PartitionIndex routing is safe.
 ##########
 
 statement ok
@@ -686,7 +686,7 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[f_dkey@1 as f_dkey, env@2 as env], aggr=[sum(f.value)]
 04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(d_dkey@1, f_dkey@1)], projection=[value@2, f_dkey@3, env@0]
 05)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=C/data.parquet]]}, projection=[env, d_dkey], file_type=parquet
-06)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], file_type=parquet
+06)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 query TTR rowsort
 SELECT f.f_dkey, d.env, sum(f.value)
@@ -699,7 +699,48 @@ B prod 614.4
 C prod 2017.6
 
 ##########
-# TEST 13: Partitioned Join where Number of File Groups is less than target_partitions
+# TEST 13: PartitionIndex dynamic filter with an additional static probe predicate
+# The probe-side scan should keep both predicates conjoined and still avoid repartitioning.
+##########
+
+query TT
+EXPLAIN SELECT f.f_dkey, d.env, sum(f.value)
+FROM fact_table f
+INNER JOIN dimension_table_partitioned d ON f.f_dkey = d.d_dkey
+WHERE f.value > 90
+GROUP BY f.f_dkey, d.env;
+----
+logical_plan
+01)Aggregate: groupBy=[[f.f_dkey, d.env]], aggr=[[sum(f.value)]]
+02)--Projection: f.value, f.f_dkey, d.env
+03)----Inner Join: f.f_dkey = d.d_dkey
+04)------SubqueryAlias: f
+05)--------Filter: fact_table.value > Float64(90)
+06)----------TableScan: fact_table projection=[value, f_dkey], partial_filters=[fact_table.value > Float64(90)]
+07)------SubqueryAlias: d
+08)--------TableScan: dimension_table_partitioned projection=[env, d_dkey]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey, env@1 as env], aggr=[sum(f.value)]
+02)--RepartitionExec: partitioning=Hash([f_dkey@0, env@1], 3), input_partitions=3
+03)----AggregateExec: mode=Partial, gby=[f_dkey@1 as f_dkey, env@2 as env], aggr=[sum(f.value)]
+04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(d_dkey@1, f_dkey@1)], projection=[value@2, f_dkey@3, env@0]
+05)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension_partitioned/d_dkey=C/data.parquet]]}, projection=[env, d_dkey], file_type=parquet
+06)--------FilterExec: value@0 > 90
+07)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], file_type=parquet, predicate=value@1 > 90 AND DynamicFilter [ empty ], pruning_predicate=value_null_count@1 != row_count@2 AND value_max@0 > 90, required_guarantees=[]
+
+query TTR rowsort
+SELECT f.f_dkey, d.env, sum(f.value)
+FROM fact_table f
+INNER JOIN dimension_table_partitioned d ON f.f_dkey = d.d_dkey
+WHERE f.value > 90
+GROUP BY f.f_dkey, d.env;
+----
+A dev 772.4
+B prod 212.3
+C prod 2017.6
+
+##########
+# TEST 14: Partitioned Join where Number of File Groups is less than target_partitions
 # With preserve_file_partitions enabled, we should still avoid repartitioning
 ##########
 
