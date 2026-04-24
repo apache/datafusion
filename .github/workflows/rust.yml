@@ -59,7 +59,7 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
+          shared-key: "amd-ci"
           save-if: ${{ github.ref_name == 'main' }}
       - name: Prepare cargo build
         run: |
@@ -147,6 +147,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Check datafusion-proto (default features)
         run: cargo check --profile ci --all-targets -p datafusion-proto
       #
@@ -244,6 +249,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Check datafusion-functions (default features)
         run: cargo check --profile ci --all-targets -p datafusion-functions
       #
@@ -367,8 +377,8 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          save-if: ${{ github.ref_name == 'main' }}
-          shared-key: "amd-ci-linux-test-example"
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run examples
         run: |
           # test datafusion-sql examples
@@ -395,6 +405,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run doctests
         run: cargo test --profile ci --doc --features avro,json
       - name: Verify Working Directory Clean
@@ -414,6 +429,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run cargo doc
         run: ci/scripts/rust_docs.sh
 
@@ -458,7 +478,21 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
+      - name: Cache TPCH data
+        id: cache-tpch-data
+        uses: actions/cache@v4
+        with:
+          path: datafusion/sqllogictest/test_files/tpch/data
+          # Bump the suffix (e.g. v1 -> v2) to force regeneration
+          # if the dbgen source or scale factor below changes.
+          key: tpch-data-databricks-dbgen-sf0.1-v1
       - name: Generate benchmark data and expected query results
+        if: steps.cache-tpch-data.outputs.cache-hit != 'true'
         run: |
           mkdir -p datafusion/sqllogictest/test_files/tpch/data
           git clone https://github.com/databricks/tpch-dbgen.git
@@ -506,6 +540,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run sqllogictest
         run: |
           cd datafusion/sqllogictest
@@ -531,6 +570,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run sqllogictest
         # TODO: Right now several tests are failing in Substrait round-trip mode, so this
         #  command cannot be run for all the .slt files. Run it for just one that works (limit.slt)
@@ -582,6 +626,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run gen
         run: ./regen.sh
         working-directory: ./datafusion/proto
@@ -667,8 +716,8 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          save-if: ${{ github.ref_name == 'main' }}
-          shared-key: "amd-ci-clippy"
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
 
@@ -688,7 +737,9 @@ jobs:
         with:
           rust-version: stable
       - name: Install taplo
-        run: cargo +stable install taplo-cli --version ^0.9 --locked
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486  # v2.75.18
+        with:
+          tool: taplo-cli
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
       - name: Check Cargo.toml formatting
         run: taplo format --check
@@ -709,6 +760,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
         with:
           node-version: "20"
