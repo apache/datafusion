@@ -39,8 +39,9 @@ INNER JOIN generate_series(1, 1) AS t2(v2)
 100000 1 100000
 
 # --- Verify spill metrics via EXPLAIN ANALYZE ---
-# The NestedLoopJoinExec line should show spill_count=1, confirming
-# the memory-limited fallback path was taken and right side was spilled.
+# The NestedLoopJoinExec line should show spill_count=2, confirming
+# the memory-limited fallback path was taken (left side spilled once,
+# right side spilled once).
 query TT
 EXPLAIN ANALYZE SELECT count(*)
 FROM generate_series(1, 100000) AS t1(v1)
@@ -50,7 +51,7 @@ INNER JOIN generate_series(1, 1) AS t2(v2)
 Plan with Metrics
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
 02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
-03)----NestedLoopJoinExec: join_type=Inner, filter=v1@0 + v2@1 > 0, projection=[], metrics=[output_rows=100.0 K, <slt:ignore> spill_count=1, <slt:ignore>]
+03)----NestedLoopJoinExec: join_type=Inner, filter=v1@0 + v2@1 > 0, projection=[], metrics=[output_rows=100.0 K, <slt:ignore> spill_count=2, <slt:ignore>]
 04)------ProjectionExec: expr=[value@0 as v1], metrics=[<slt:ignore>]
 05)--------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192], metrics=[<slt:ignore>]
 06)------ProjectionExec: expr=[value@0 as v2], metrics=[<slt:ignore>]

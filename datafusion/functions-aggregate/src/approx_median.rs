@@ -74,16 +74,11 @@ impl ApproxMedian {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
-                        TypeSignatureClass::Integer,
-                    )]),
-                    TypeSignature::Coercible(vec![Coercion::new_implicit(
-                        TypeSignatureClass::Float,
-                        vec![TypeSignatureClass::Decimal],
-                        NativeType::Float64,
-                    )]),
-                ],
+                vec![TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Float,
+                    vec![TypeSignatureClass::Numeric],
+                    NativeType::Float64,
+                )])],
                 Volatility::Immutable,
             ),
         }

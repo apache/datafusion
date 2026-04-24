@@ -294,9 +294,12 @@ pub enum LogicalPlan {
 
 impl Default for LogicalPlan {
     fn default() -> Self {
+        // `Default` is used as a transient placeholder on hot paths (e.g.
+        // `Box`/`Arc` `map_elements`), so use a shared empty schema to avoid
+        // allocating.
         LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::empty()),
+            schema: Arc::clone(DFSchema::empty_ref()),
         })
     }
 }

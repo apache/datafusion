@@ -34,7 +34,8 @@ use arrow::array::{
     BooleanArray, Datum, GenericListArray, Int32Array, Int64Array, MutableArrayData,
     Scalar, make_array,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::array::{LargeListViewArray, ListViewArray};
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cmp::neq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -485,6 +486,34 @@ impl SingleRowListArrayBuilder {
     /// Build a single element [`FixedSizeListArray`] and wrap as [`ScalarValue::FixedSizeList`]
     pub fn build_fixed_size_list_scalar(self, list_size: usize) -> ScalarValue {
         ScalarValue::FixedSizeList(Arc::new(self.build_fixed_size_list_array(list_size)))
+    }
+
+    /// Build a single element [`ListViewArray`]
+    pub fn build_list_view_array(self) -> ListViewArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = ScalarBuffer::from(vec![0]);
+        let sizes = ScalarBuffer::from(vec![i32::try_from(arr.len()).expect(
+            "Trying to construct a ListView where element length exceeds i32::MAX",
+        )]);
+        ListViewArray::new(field, offsets, sizes, arr, None)
+    }
+
+    /// Build a single element [`ListViewArray`] and wrap as [`ScalarValue::ListView`]
+    pub fn build_list_view_scalar(self) -> ScalarValue {
+        ScalarValue::ListView(Arc::new(self.build_list_view_array()))
+    }
+
+    /// Build a single element [`LargeListViewArray`]
+    pub fn build_large_list_view_array(self) -> LargeListViewArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = ScalarBuffer::from(vec![0]);
+        let sizes = ScalarBuffer::from(vec![arr.len() as i64]);
+        LargeListViewArray::new(field, offsets, sizes, arr, None)
+    }
+
+    /// Build a single element [`LargeListViewArray`] and wrap as [`ScalarValue::LargeListView`]
+    pub fn build_large_list_view_scalar(self) -> ScalarValue {
+        ScalarValue::LargeListView(Arc::new(self.build_large_list_view_array()))
     }
 
     /// Helper function: convert this builder into a tuple of field and array

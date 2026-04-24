@@ -314,8 +314,9 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
                         break;
                     }
                 }
+            } else {
+                i += 1;
             }
-            i += 1;
         }
         Ok(())
     }
