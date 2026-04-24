@@ -142,10 +142,21 @@ pub trait OptimizerRule: Debug {
 /// Unlike the sync [`Optimizer`], async rules run exactly once (no fixed-point
 /// loop).
 ///
+/// # Limitations
+///
+/// `rewrite` receives [`ConfigOptions`] rather than [`OptimizerConfig`], so
+/// the following are unavailable to async rules:
+/// - `query_execution_start_time` — the timestamp used to evaluate `now()`.
+/// - `alias_generator` — the shared alias counter for deterministic subquery names.
+/// - `function_registry` — access to registered UDFs.
+///
+/// If any of these are required, implement [`OptimizerRule`] instead and
+/// register it in the synchronous optimization phase.
+///
 /// [`SessionState::create_physical_plan`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.create_physical_plan
 #[async_trait]
 pub trait AsyncOptimizerRule: Debug + Send + Sync {
-    /// Try to rewrite `plan`. Called exactly once per query.
+    /// Try to rewrite `plan`.
     async fn rewrite(
         &self,
         plan: LogicalPlan,

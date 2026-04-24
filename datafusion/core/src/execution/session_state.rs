@@ -746,14 +746,30 @@ impl SessionState {
     /// `CREATE TABLE`, which do not have corresponding physical plans and must
     /// be handled by another layer, typically [`SessionContext`].
     ///
+    /// # EXPLAIN and async phases
+    ///
+    /// `EXPLAIN` queries require per-rule plan capture (see
+    /// [`LogicalPlanningPipeline::apply_sync_explained`]), which is only
+    /// available on the synchronous path. If any enabled async phase is
+    /// registered, `EXPLAIN` will return an error rather than silently
+    /// skipping those phases. Non-`EXPLAIN` queries always use the async
+    /// path, so all phases run normally.
+    ///
     /// [`SessionContext`]: crate::execution::context::SessionContext
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        // Explain nodes require special per-rule capturing via the sync path.
-        // Non-explain plans use the async path so async phases can run.
         let plan = if matches!(logical_plan, LogicalPlan::Explain(_)) {
+            // EXPLAIN uses the sync path to capture per-rule StringifiedPlans.
+            // Fail fast if async phases are registered: they cannot be captured
+            // and silently skipping them would produce misleading EXPLAIN output.
+            if self.logical_pipeline.has_async() {
+                return datafusion_common::plan_err!(
+                    "EXPLAIN is not supported when async pipeline phases are registered; \
+                     disable async phases or use a non-EXPLAIN query"
+                );
+            }
             self.optimize(logical_plan)?
         } else {
             self.logical_pipeline

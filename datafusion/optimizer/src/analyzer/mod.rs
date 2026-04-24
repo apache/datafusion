@@ -69,6 +69,15 @@ pub trait AnalyzerRule: Debug {
 /// [`SessionState::create_physical_plan`], before the synchronous [`Analyzer`].
 /// By default no rules are registered, so the phase is a no-op.
 ///
+/// # Limitations
+///
+/// `analyze` receives [`ConfigOptions`] rather than [`OptimizerConfig`], so
+/// `query_execution_start_time`, `alias_generator`, and `function_registry`
+/// are not available. Async rules that need those should be registered as
+/// async optimization rules or re-expressed as sync rules.
+///
+/// [`ConfigOptions`]: datafusion_common::config::ConfigOptions
+/// [`OptimizerConfig`]: crate::optimizer::OptimizerConfig
 /// [`SessionState::create_physical_plan`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.create_physical_plan
 #[async_trait]
 pub trait AsyncAnalyzerRule: Debug + Send + Sync {
