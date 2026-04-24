@@ -436,8 +436,8 @@ impl ConcatLargeStringBuilder {
 // string-related UDFs), this can be significantly more efficient.
 //
 // For a row known to be null, call `append_placeholder` to advance the row
-// count without touching the value buffer; the placeholder slot will be
-// masked by the caller-supplied null buffer.
+// count without touching the value buffer; the caller MUST ensure that the
+// corresponding bit is set in the null buffer passed to `finish`.
 // ----------------------------------------------------------------------------
 
 /// Builder for a [`GenericStringArray<O>`] that defers null tracking to
@@ -537,8 +537,8 @@ const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
 ///
 /// Modeled on Arrow's [`arrow::array::builder::StringViewBuilder`] but
 /// without per-row [`arrow::array::builder::NullBufferBuilder`] maintenance.
-/// Long strings (> 12 bytes) are appended into an in-progress data block;
-/// short strings are inlined into the view itself. When the in-progress block
+/// Short strings (≤ 12 bytes) are inlined into the view itself; long strings
+/// are appended into an in-progress data block. When the in-progress block
 /// fills up it is flushed into `completed` and a new block — double the size
 /// of the last, capped at [`MAX_BLOCK_SIZE`] — is started.
 pub(crate) struct StringViewArrayBuilder {
