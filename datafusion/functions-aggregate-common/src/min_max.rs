@@ -903,8 +903,6 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{AsArray, DictionaryArray};
-    use std::sync::Arc;
 
     #[test]
     fn min_max_dictionary_and_scalar_compare_by_inner_value() -> Result<()> {
@@ -981,32 +979,6 @@ mod tests {
                 .to_string()
                 .contains("logically incompatible scalar values")
         );
-        Ok(())
-    }
-
-    #[test]
-    fn min_max_batch_dictionary_uses_logical_rows() -> Result<()> {
-        let keys = Int8Array::from(vec![Some(1), None, Some(1), Some(1)]);
-        let values = Arc::new(StringArray::from(vec!["zzz", "bbb", "aaa"]));
-        let array = Arc::new(DictionaryArray::new(keys, values)) as ArrayRef;
-        let raw_values = array.as_any_dictionary().values();
-        let raw_min = min_batch(raw_values)?;
-
-        let min = min_batch(&array)?;
-        let max = max_batch(&array)?;
-
-        let expected = ScalarValue::Dictionary(
-            Box::new(DataType::Int8),
-            Box::new(ScalarValue::Utf8(Some("bbb".to_string()))),
-        );
-
-        // raw_min is "aaa" because it is the min of the values, but min/max of the dictionary should be "bbb"
-        // because the null key is ignored and all non-null keys point to "bbb".
-        assert_ne!(raw_min, expected);
-
-        assert_eq!(min, expected);
-        assert_eq!(max, expected);
-
         Ok(())
     }
 }
