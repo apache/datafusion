@@ -186,6 +186,14 @@ tested in the same way using the [doc_comment] crate. See the end of
 [doc_comment]: https://docs.rs/doc-comment/latest/doc_comment
 [core/src/lib.rs]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583
 
+## Documentation Link Checks
+
+Run the internal markdown link check locally:
+
+```shell
+bash ci/scripts/markdown_link_check.sh
+```
+
 ## Benchmarks
 
 ### Criterion Benchmarks

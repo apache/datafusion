@@ -17,8 +17,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file defines centralized tool versions used by CI and development scripts.
-# It is intended to be sourced by other scripts and should not be executed directly.
+set -euo pipefail
 
-PRETTIER_VERSION="2.7.1"
-LYCHEE_VERSION="0.23.0"
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+
+mapfile -t MARKDOWN_FILES < <(
+  git -C "${ROOT_DIR}" ls-files 'README.md' 'CONTRIBUTING.md' 'docs/**/*.md' 'datafusion-cli/README.md' 'datafusion-examples/README.md' 'dev/**/*.md'
+)
+
+lychee --no-progress --config "${ROOT_DIR}/lychee.toml" "${MARKDOWN_FILES[@]}"

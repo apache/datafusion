@@ -51,6 +51,18 @@ jobs:
       # if you encounter error, see instructions inside the script
         run: ci/scripts/doc_prettier_check.sh
 
+  markdown-link-check:
+    name: Check Markdown Links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Install lychee
+        run: |
+          source ci/scripts/utils/tool_versions.sh
+          cargo install lychee --locked --version "${LYCHEE_VERSION}"
+      - name: Run markdown link check
+        run: bash ci/scripts/markdown_link_check.sh
+
   asf-yaml-check:
     name: Validate required_status_checks in .asf.yaml
     runs-on: ubuntu-latest
