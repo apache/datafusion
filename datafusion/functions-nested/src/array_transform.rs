@@ -32,12 +32,12 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::{fmt::Debug, sync::Arc};
 
-make_udhof_expr_and_func!(
+make_higher_order_function_expr_and_func!(
     ArrayTransform,
     array_transform,
     array lambda,
     "transforms the values of an array",
-    array_transform_udhof
+    array_transform_higher_order_function
 );
 
 #[user_doc(
@@ -306,7 +306,7 @@ mod tests {
     };
     use datafusion_physical_expr::create_physical_expr;
 
-    use crate::array_transform::array_transform_udhof;
+    use crate::array_transform::array_transform_higher_order_function;
 
     fn create_i32_list(
         values: impl Into<Int32Array>,
@@ -332,7 +332,7 @@ mod tests {
     }
 
     fn divide_100_by(list: impl Array + Clone + 'static) -> Result<ArrayRef> {
-        let array_transform = array_transform_udhof();
+        let array_transform = array_transform_higher_order_function();
 
         let schema = DFSchema::from_unqualified_fields(
             vec![Field::new(

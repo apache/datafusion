@@ -1978,8 +1978,8 @@ impl FunctionRegistry for SessionContext {
         self.state.read().udf(name)
     }
 
-    fn udhof(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
-        self.state.read().udhof(name)
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+        self.state.read().higher_order_function(name)
     }
 
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
@@ -1994,11 +1994,11 @@ impl FunctionRegistry for SessionContext {
         self.state.write().register_udf(udf)
     }
 
-    fn register_udhof(
+    fn register_higher_order_function(
         &mut self,
-        udhof: Arc<dyn HigherOrderUDF>,
+        function: Arc<dyn HigherOrderUDF>,
     ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
-        self.state.write().register_udhof(udhof)
+        self.state.write().register_higher_order_function(function)
     }
 
     fn register_udaf(
@@ -2030,8 +2030,8 @@ impl FunctionRegistry for SessionContext {
         self.state.write().register_expr_planner(expr_planner)
     }
 
-    fn udhofs(&self) -> HashSet<String> {
-        self.state.read().udhofs()
+    fn higher_order_function_names(&self) -> HashSet<String> {
+        self.state.read().higher_order_function_names()
     }
 
     fn udafs(&self) -> HashSet<String> {

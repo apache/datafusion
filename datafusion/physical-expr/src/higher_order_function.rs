@@ -316,7 +316,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
 
                     if lambda.params().len() > lambda_params.len() {
                         return exec_err!(
-                            "lambda defined {} params but UDHOF support only {}",
+                            "lambda defined {} params but higher-order function support only {}",
                             lambda.params().len(),
                             lambda_params.len()
                         );
@@ -371,7 +371,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                 ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
             } else {
                 internal_err!(
-                    "UDHOF {} returned a different number of rows than expected. Expected: {}, Got: {}",
+                    "higher-order function {} returned a different number of rows than expected. Expected: {}, Got: {}",
                     self.name,
                     batch.num_rows(),
                     array.len()

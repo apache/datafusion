@@ -123,7 +123,7 @@ impl Serializeable for Expr {
                 )))
             }
 
-            fn udhof(
+            fn higher_order_function(
                 &self,
                 name: &str,
             ) -> Result<Arc<dyn datafusion_expr::HigherOrderUDF>> {
@@ -207,12 +207,12 @@ impl Serializeable for Expr {
                     "register_udf called in Placeholder Registry!"
                 )
             }
-            fn register_udhof(
+            fn register_higher_order_function(
                 &mut self,
-                _udhof: Arc<dyn datafusion_expr::HigherOrderUDF>,
+                _function: Arc<dyn datafusion_expr::HigherOrderUDF>,
             ) -> Result<Option<Arc<dyn datafusion_expr::HigherOrderUDF>>> {
                 datafusion_common::internal_err!(
-                    "register_udhof called in Placeholder Registry!"
+                    "register_higher_order_function called in Placeholder Registry!"
                 )
             }
             fn register_udwf(
@@ -228,7 +228,7 @@ impl Serializeable for Expr {
                 vec![]
             }
 
-            fn udhofs(&self) -> std::collections::HashSet<String> {
+            fn higher_order_function_names(&self) -> std::collections::HashSet<String> {
                 std::collections::HashSet::default()
             }
 

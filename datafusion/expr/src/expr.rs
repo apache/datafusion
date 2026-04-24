@@ -26,9 +26,9 @@ use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
+use crate::higher_order_function::HigherOrderUDF;
 use crate::logical_plan::Subquery;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf;
-use crate::udhof::HigherOrderUDF;
 use crate::{AggregateUDF, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 

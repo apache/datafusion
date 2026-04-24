@@ -1693,7 +1693,7 @@ mod tests {
 
     impl HigherOrderUDF for MockHigherOrderUDF {
         fn name(&self) -> &str {
-            "mock_udhof"
+            "mock_higher_order_function"
         }
 
         fn signature(&self) -> &HigherOrderSignature {
@@ -1703,7 +1703,7 @@ mod tests {
         fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
             if arg_types.len() != 1 {
                 return plan_err!(
-                    "mock_udhof expects 1 value arguments, got {}",
+                    "mock_higher_order_function expects 1 value arguments, got {}",
                     arg_types.len()
                 );
             }
@@ -1714,21 +1714,21 @@ mod tests {
             &self,
             _value_fields: &[FieldRef],
         ) -> Result<Vec<Vec<Field>>> {
-            unimplemented!("mock udhof")
+            unimplemented!("mock_higher_order_function")
         }
 
         fn return_field_from_args(
             &self,
             _args: HigherOrderReturnFieldArgs,
         ) -> Result<FieldRef> {
-            unimplemented!("mock udhof")
+            unimplemented!("mock_higher_order_function")
         }
 
         fn invoke_with_args(
             &self,
             _args: HigherOrderFunctionArgs,
         ) -> Result<ColumnarValue> {
-            unimplemented!("mock udhof")
+            unimplemented!("mock_higher_order_function")
         }
     }
 
@@ -1777,7 +1777,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "mock_udhof expects 1 value arguments, got 0"
+            "mock_higher_order_function expects 1 value arguments, got 0"
         );
     }
 
@@ -1800,7 +1800,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "mock_udhof coerce_value_types should have returned 1 items but returned 2"
+            "mock_higher_order_function coerce_value_types should have returned 1 items but returned 2"
         );
     }
 
@@ -1830,7 +1830,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "The function 'mock_udhof' expected 1 arguments but received 0"
+            "The function 'mock_higher_order_function' expected 1 arguments but received 0"
         );
     }
 }

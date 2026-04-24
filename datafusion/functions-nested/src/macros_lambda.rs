@@ -45,9 +45,9 @@
 ///   automatically resolves to `$UDF::new()`.
 ///
 /// [`HigherOrderUDF`]: datafusion_expr::HigherOrderUDF
-macro_rules! make_udhof_expr_and_func {
+macro_rules! make_higher_order_function_expr_and_func {
     ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $HIGHER_ORDER_UDF_FN:ident) => {
-        make_udhof_expr_and_func!($UDF, $EXPR_FN, $($arg)*, $DOC, $HIGHER_ORDER_UDF_FN, $UDF::new);
+        make_higher_order_function_expr_and_func!($UDF, $EXPR_FN, $($arg)*, $DOC, $HIGHER_ORDER_UDF_FN, $UDF::new);
     };
     ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $HIGHER_ORDER_UDF_FN:ident, $CTOR:path) => {
         // "fluent expr_fn" style function
@@ -61,7 +61,7 @@ macro_rules! make_udhof_expr_and_func {
         create_higher_order!($UDF, $HIGHER_ORDER_UDF_FN, $CTOR);
     };
     ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $HIGHER_ORDER_UDF_FN:ident) => {
-        make_udhof_expr_and_func!($UDF, $EXPR_FN, $DOC, $HIGHER_ORDER_UDF_FN, $UDF::new);
+        make_higher_order_function_expr_and_func!($UDF, $EXPR_FN, $DOC, $HIGHER_ORDER_UDF_FN, $UDF::new);
     };
     ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $HIGHER_ORDER_UDF_FN:ident, $CTOR:path) => {
         // "fluent expr_fn" style function

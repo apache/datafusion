@@ -1939,7 +1939,7 @@ mod tests {
 
     impl HigherOrderUDF for DummyHigherOrderUDF {
         fn name(&self) -> &str {
-            "dummy_udhof"
+            "dummy_higher_order_function"
         }
 
         fn signature(&self) -> &datafusion_expr::HigherOrderSignature {
@@ -2066,7 +2066,7 @@ mod tests {
                         ),
                     ],
                 )),
-                r#"dummy_udhof(a, (v) -> -v)"#,
+                r#"dummy_higher_order_function(a, (v) -> -v)"#,
             ),
             (
                 Expr::Like(Like {

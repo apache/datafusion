@@ -18,8 +18,8 @@
 //! FunctionRegistry trait
 
 use crate::expr_rewriter::FunctionRewrite;
+use crate::higher_order_function::HigherOrderUDF;
 use crate::planner::ExprPlanner;
-use crate::udhof::HigherOrderUDF;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use arrow::datatypes::Field;
 use arrow_schema::DataType;
@@ -42,7 +42,7 @@ pub trait FunctionRegistry {
     fn udfs(&self) -> HashSet<String>;
 
     /// Returns names of all available higher order user defined functions.
-    fn udhofs(&self) -> HashSet<String>;
+    fn higher_order_function_names(&self) -> HashSet<String>;
 
     /// Returns names of all available aggregate user defined functions.
     fn udafs(&self) -> HashSet<String>;
@@ -54,9 +54,9 @@ pub trait FunctionRegistry {
     /// `name`.
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
 
-    /// Returns a reference to the user defined higher order function (udhof) named
+    /// Returns a reference to the user defined higher order function named
     /// `name`.
-    fn udhof(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>>;
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>>;
 
     /// Returns a reference to the user defined aggregate function (udaf) named
     /// `name`.
@@ -79,9 +79,9 @@ pub trait FunctionRegistry {
     ///
     /// Returns an error (the default) if the function can not be registered,
     /// for example if the registry is read only.
-    fn register_udhof(
+    fn register_higher_order_function(
         &mut self,
-        _udhof: Arc<dyn HigherOrderUDF>,
+        _function: Arc<dyn HigherOrderUDF>,
     ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
         not_impl_err!("Registering HigherOrderUDF")
     }
@@ -119,7 +119,7 @@ pub trait FunctionRegistry {
     ///
     /// Returns an error (the default) if the function can not be deregistered,
     /// for example if the registry is read only.
-    fn deregister_udhof(
+    fn deregister_higher_order_function(
         &mut self,
         _name: &str,
     ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
@@ -193,12 +193,12 @@ pub trait SerializerRegistry: Debug + Send + Sync {
 pub struct MemoryFunctionRegistry {
     /// Scalar Functions
     udfs: HashMap<String, Arc<ScalarUDF>>,
-    /// Higher Order Functions
-    udhof: HashMap<String, Arc<dyn HigherOrderUDF>>,
     /// Aggregate Functions
     udafs: HashMap<String, Arc<AggregateUDF>>,
     /// Window Functions
     udwfs: HashMap<String, Arc<WindowUDF>>,
+    /// Higher Order Functions
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
 }
 
 impl MemoryFunctionRegistry {
@@ -219,8 +219,8 @@ impl FunctionRegistry for MemoryFunctionRegistry {
             .ok_or_else(|| plan_datafusion_err!("Function {name} not found"))
     }
 
-    fn udhof(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
-        self.udhof
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+        self.higher_order_functions
             .get(name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("Higher Order Function {name} not found"))
@@ -243,11 +243,13 @@ impl FunctionRegistry for MemoryFunctionRegistry {
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         Ok(self.udfs.insert(udf.name().to_string(), udf))
     }
-    fn register_udhof(
+    fn register_higher_order_function(
         &mut self,
-        udhof: Arc<dyn HigherOrderUDF>,
+        function: Arc<dyn HigherOrderUDF>,
     ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
-        Ok(self.udhof.insert(udhof.name().into(), udhof))
+        Ok(self
+            .higher_order_functions
+            .insert(function.name().into(), function))
     }
     fn register_udaf(
         &mut self,
@@ -263,8 +265,8 @@ impl FunctionRegistry for MemoryFunctionRegistry {
         vec![]
     }
 
-    fn udhofs(&self) -> HashSet<String> {
-        self.udhof.keys().cloned().collect()
+    fn higher_order_function_names(&self) -> HashSet<String> {
+        self.higher_order_functions.keys().cloned().collect()
     }
 
     fn udafs(&self) -> HashSet<String> {

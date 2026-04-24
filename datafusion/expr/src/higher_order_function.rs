@@ -238,7 +238,7 @@ pub struct HigherOrderReturnFieldArgs<'a> {
     ///
     /// For example, with `array_transform([1], v -> v == 5)`
     /// this field will be
-    /// 
+    ///
     pub arg_fields: &'a [ValueOrLambda<FieldRef, FieldRef>],
     /// Is argument `i` to the function a scalar (constant)?
     ///

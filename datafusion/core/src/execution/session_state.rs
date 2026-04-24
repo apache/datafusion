@@ -1646,16 +1646,23 @@ impl SessionStateBuilder {
         }
 
         if let Some(higher_order_functions) = higher_order_functions {
-            for udhof in higher_order_functions {
-                match state.register_udhof(Arc::clone(&udhof)) {
+            for function in higher_order_functions {
+                match state.register_higher_order_function(Arc::clone(&function)) {
                     Ok(Some(existing)) => {
-                        debug!("Overwrote existing UDHOF '{}'", existing.name());
+                        debug!(
+                            "Overwrote existing higher-order function '{}'",
+                            existing.name()
+                        );
                     }
                     Ok(None) => {
-                        debug!("Registered UDHOF '{}'", udhof.name());
+                        debug!("Registered higher-order function '{}'", function.name());
                     }
                     Err(err) => {
-                        debug!("Failed to register UDHOF '{}': {}", udhof.name(), err);
+                        debug!(
+                            "Failed to register higher-order function '{}': {}",
+                            function.name(),
+                            err
+                        );
                     }
                 }
             }
@@ -2096,7 +2103,10 @@ impl FunctionRegistry for SessionState {
         })
     }
 
-    fn udhof(&self, name: &str) -> datafusion_common::Result<Arc<dyn HigherOrderUDF>> {
+    fn higher_order_function(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<Arc<dyn HigherOrderUDF>> {
         self.higher_order_functions
             .get(name)
             .cloned()
@@ -2130,17 +2140,17 @@ impl FunctionRegistry for SessionState {
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 
-    fn register_udhof(
+    fn register_higher_order_function(
         &mut self,
-        udhof: Arc<dyn HigherOrderUDF>,
+        function: Arc<dyn HigherOrderUDF>,
     ) -> datafusion_common::Result<Option<Arc<dyn HigherOrderUDF>>> {
-        udhof.aliases().iter().for_each(|alias| {
+        function.aliases().iter().for_each(|alias| {
             self.higher_order_functions
-                .insert(alias.clone(), Arc::clone(&udhof));
+                .insert(alias.clone(), Arc::clone(&function));
         });
         Ok(self
             .higher_order_functions
-            .insert(udhof.name().into(), udhof))
+            .insert(function.name().into(), function))
     }
 
     fn register_udaf(
@@ -2178,17 +2188,17 @@ impl FunctionRegistry for SessionState {
         Ok(udf)
     }
 
-    fn deregister_udhof(
+    fn deregister_higher_order_function(
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<dyn HigherOrderUDF>>> {
-        let udhof = self.higher_order_functions.remove(name);
-        if let Some(udhof) = &udhof {
-            for alias in udhof.aliases() {
+        let function = self.higher_order_functions.remove(name);
+        if let Some(function) = &function {
+            for alias in function.aliases() {
                 self.higher_order_functions.remove(alias);
             }
         }
-        Ok(udhof)
+        Ok(function)
     }
 
     fn deregister_udaf(
@@ -2237,7 +2247,7 @@ impl FunctionRegistry for SessionState {
         Ok(())
     }
 
-    fn udhofs(&self) -> HashSet<String> {
+    fn higher_order_function_names(&self) -> HashSet<String> {
         self.higher_order_functions.keys().cloned().collect()
     }
 

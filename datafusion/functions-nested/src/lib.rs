@@ -187,7 +187,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
 }
 
 pub fn all_default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
-    vec![array_transform::array_transform_udhof()]
+    vec![array_transform::array_transform_higher_order_function()]
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
@@ -202,10 +202,13 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     })?;
 
     let functions: Vec<Arc<dyn HigherOrderUDF>> = all_default_higher_order_functions();
-    functions.into_iter().try_for_each(|udhof| {
-        let existing_udhof = registry.register_udhof(udhof)?;
-        if let Some(existing_udhof) = existing_udhof {
-            debug!("Overwrite existing UDHOF: {}", existing_udhof.name());
+    functions.into_iter().try_for_each(|function| {
+        let existing_function = registry.register_higher_order_function(function)?;
+        if let Some(existing_function) = existing_function {
+            debug!(
+                "Overwrite existing higher-order function: {}",
+                existing_function.name()
+            );
         }
         Ok(()) as Result<()>
     })?;

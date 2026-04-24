@@ -38,7 +38,10 @@ impl FunctionRegistry for NoRegistry {
         )
     }
 
-    fn udhof(&self, name: &str) -> Result<Arc<dyn datafusion_expr::HigherOrderUDF>> {
+    fn higher_order_function(
+        &self,
+        name: &str,
+    ) -> Result<Arc<dyn datafusion_expr::HigherOrderUDF>> {
         plan_err!(
             "No function registry provided to deserialize, so can not deserialize User Defined Higher Order Function '{name}'"
         )
@@ -81,7 +84,7 @@ impl FunctionRegistry for NoRegistry {
         vec![]
     }
 
-    fn udhofs(&self) -> HashSet<String> {
+    fn higher_order_function_names(&self) -> HashSet<String> {
         HashSet::new()
     }
 

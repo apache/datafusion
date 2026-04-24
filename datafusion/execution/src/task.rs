@@ -166,11 +166,13 @@ impl FunctionRegistry for TaskContext {
         })
     }
 
-    fn udhof(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
         let result = self.higher_order_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDHOF named \"{name}\" in the TaskContext")
+            plan_datafusion_err!(
+                "There is no higher-order function named \"{name}\" in the TaskContext"
+            )
         })
     }
 
@@ -216,24 +218,24 @@ impl FunctionRegistry for TaskContext {
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 
-    fn register_udhof(
+    fn register_higher_order_function(
         &mut self,
-        udhof: Arc<dyn HigherOrderUDF>,
+        function: Arc<dyn HigherOrderUDF>,
     ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
-        udhof.aliases().iter().for_each(|alias| {
+        function.aliases().iter().for_each(|alias| {
             self.higher_order_functions
-                .insert(alias.clone(), Arc::clone(&udhof));
+                .insert(alias.clone(), Arc::clone(&function));
         });
         Ok(self
             .higher_order_functions
-            .insert(udhof.name().into(), udhof))
+            .insert(function.name().into(), function))
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
     }
 
-    fn udhofs(&self) -> HashSet<String> {
+    fn higher_order_function_names(&self) -> HashSet<String> {
         self.higher_order_functions.keys().cloned().collect()
     }
 

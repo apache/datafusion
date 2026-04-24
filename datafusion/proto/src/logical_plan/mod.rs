@@ -156,7 +156,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
         Ok(())
     }
 
-    fn try_decode_udhof(
+    fn try_decode_higher_order_function(
         &self,
         name: &str,
         _buf: &[u8],
@@ -166,7 +166,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
         )
     }
 
-    fn try_encode_udhof(
+    fn try_encode_higher_order_function(
         &self,
         _node: &dyn HigherOrderUDF,
         _buf: &mut Vec<u8>,
