@@ -3625,7 +3625,6 @@ impl Aggregate {
     ///
     /// This method should only be called when you are absolutely sure that the schema being
     /// provided is correct for the aggregate. If in doubt, call [try_new](Self::try_new) instead.
-    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
@@ -3651,7 +3650,7 @@ impl Aggregate {
 
         let aggregate_func_dependencies =
             calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
-        let new_schema = schema.as_ref().clone();
+        let new_schema = Arc::unwrap_or_clone(schema);
         let schema = Arc::new(
             new_schema.with_functional_dependencies(aggregate_func_dependencies)?,
         );
