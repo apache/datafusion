@@ -3280,6 +3280,7 @@ _Alias of [current_date](#current_date)._
 - [arrays_overlap](#arrays_overlap)
 - [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
+- [cosine_distance](#cosine_distance)
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
@@ -4468,6 +4469,30 @@ cardinality(array)
 +--------------------------------------+
 | 8                                    |
 +--------------------------------------+
+```
+
+### `cosine_distance`
+
+Returns the cosine distance between two input arrays of equal length. The cosine distance is defined as 1 - cosine_similarity, i.e. `1 - dot(a,b) / (||a|| * ||b||)`. Returns NULL if either array is NULL or contains only zeros.
+
+```sql
+cosine_distance(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select cosine_distance([1.0, 0.0], [0.0, 1.0]);
++-----------------------------------------------+
+| cosine_distance(List([1.0,0.0]),List([0.0,1.0])) |
++-----------------------------------------------+
+| 1.0                                           |
++-----------------------------------------------+
 ```
 
 ### `empty`

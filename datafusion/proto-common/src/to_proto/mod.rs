@@ -23,7 +23,7 @@ use crate::protobuf_common::{
     EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::csv::WriterBuilder;
+use arrow::csv::{QuoteStyle, WriterBuilder};
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     SchemaRef, TimeUnit, UnionMode,
@@ -31,6 +31,7 @@ use arrow::datatypes::{
 use arrow::ipc::writer::{
     CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
 };
+use datafusion_common::parsers::CsvQuoteStyle;
 use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics,
@@ -852,6 +853,29 @@ impl From<&CompressionTypeVariant> for protobuf::CompressionTypeVariant {
     }
 }
 
+impl From<CsvQuoteStyle> for protobuf::CsvQuoteStyle {
+    fn from(value: CsvQuoteStyle) -> Self {
+        match value {
+            CsvQuoteStyle::Necessary => Self::Necessary,
+            CsvQuoteStyle::Always => Self::Always,
+            CsvQuoteStyle::NonNumeric => Self::NonNumeric,
+            CsvQuoteStyle::Never => Self::Never,
+        }
+    }
+}
+
+impl From<QuoteStyle> for protobuf::CsvQuoteStyle {
+    fn from(value: QuoteStyle) -> Self {
+        match value {
+            QuoteStyle::Necessary => Self::Necessary,
+            QuoteStyle::Always => Self::Always,
+            QuoteStyle::NonNumeric => Self::NonNumeric,
+            QuoteStyle::Never => Self::Never,
+            _ => Self::Necessary,
+        }
+    }
+}
+
 impl TryFrom<&CsvWriterOptions> for protobuf::CsvWriterOptions {
     type Error = DataFusionError;
 
@@ -995,6 +1019,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
 
     fn try_from(opts: &CsvOptions) -> datafusion_common::Result<Self, Self::Error> {
         let compression: protobuf::CompressionTypeVariant = opts.compression.into();
+        let quote_style: protobuf::CsvQuoteStyle = opts.quote_style.into();
         Ok(protobuf::CsvOptions {
             has_header: opts.has_header.map_or_else(Vec::new, |h| vec![h as u8]),
             delimiter: vec![opts.delimiter],
@@ -1017,6 +1042,13 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
             truncated_rows: opts.truncated_rows.map_or_else(Vec::new, |h| vec![h as u8]),
             compression_level: opts.compression_level,
+            quote_style: quote_style.into(),
+            ignore_leading_whitespace: opts
+                .ignore_leading_whitespace
+                .map_or_else(Vec::new, |h| vec![h as u8]),
+            ignore_trailing_whitespace: opts
+                .ignore_trailing_whitespace
+                .map_or_else(Vec::new, |h| vec![h as u8]),
         })
     }
 }
@@ -1154,6 +1186,7 @@ pub(crate) fn csv_writer_options_to_proto(
     compression: &CompressionTypeVariant,
 ) -> protobuf::CsvWriterOptions {
     let compression: protobuf::CompressionTypeVariant = compression.into();
+    let quote_style: protobuf::CsvQuoteStyle = csv_options.quote_style().into();
     protobuf::CsvWriterOptions {
         compression: compression.into(),
         delimiter: (csv_options.delimiter() as char).to_string(),
@@ -1166,5 +1199,8 @@ pub(crate) fn csv_writer_options_to_proto(
         quote: (csv_options.quote() as char).to_string(),
         escape: (csv_options.escape() as char).to_string(),
         double_quote: csv_options.double_quote(),
+        quote_style: quote_style.into(),
+        ignore_leading_whitespace: csv_options.ignore_leading_whitespace(),
+        ignore_trailing_whitespace: csv_options.ignore_trailing_whitespace(),
     }
 }

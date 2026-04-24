@@ -3008,6 +3008,55 @@ fn test_unparse_manual_join_with_subquery_aggregate() -> Result<()> {
     Ok(())
 }
 
+/// Regression test for https://github.com/apache/datafusion/issues/21490
+///
+/// When the outer Projection excludes a Sort column whose definition only
+/// exists as an alias in the inner Projection, the Unparser must inline the
+/// underlying expression into ORDER BY rather than emitting the now-missing
+/// alias name.
+#[test]
+fn test_sort_on_aliased_column_dropped_by_outer_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("X", DataType::Utf8, true),
+        Field::new("Y", DataType::Utf8, true),
+        Field::new("Z", DataType::Utf8, true),
+    ]);
+
+    // Build:
+    //   Projection: [a, b]                         -- outer: excludes sort column "c"
+    //     Sort: [c DESC, fetch=1]                   -- references alias "c"
+    //       Projection: [X AS a, Y AS b, Z AS c]    -- defines alias "c"
+    //         SubqueryAlias: t
+    //           TableScan: phys_table [X, Y, Z]
+    let plan = table_scan(Some("phys_table"), &schema, None)?
+        .alias("t")?
+        .project(vec![
+            Expr::Column(Column::new(Some(TableReference::bare("t")), "X")).alias("a"),
+            Expr::Column(Column::new(Some(TableReference::bare("t")), "Y")).alias("b"),
+            Expr::Column(Column::new(Some(TableReference::bare("t")), "Z")).alias("c"),
+        ])?
+        .sort_with_limit(
+            vec![Expr::Column(Column::new_unqualified("c")).sort(false, true)],
+            Some(1),
+        )?
+        .project(vec![
+            Expr::Column(Column::new_unqualified("a")),
+            Expr::Column(Column::new_unqualified("b")),
+        ])?
+        .build()?;
+
+    let unparser = Unparser::default();
+    let sql = unparser.plan_to_sql(&plan)?;
+
+    // ORDER BY must reference the physical column, not the dropped alias.
+    assert_snapshot!(
+        sql,
+        @r#"SELECT t."X" AS a, t."Y" AS b FROM phys_table AS t ORDER BY t."Z" DESC NULLS FIRST LIMIT 1"#
+    );
+
+    Ok(())
+}
+
 #[test]
 fn snowflake_unnest_to_lateral_flatten_simple() -> Result<(), DataFusionError> {
     let snowflake = SnowflakeDialect::new();
