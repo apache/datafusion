@@ -18,11 +18,13 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
-    GenericStringBuilder, OffsetSizeTrait, PrimitiveArray,
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
+    PrimitiveArray,
 };
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 
+use crate::strings::GenericStringArrayBuilder;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::TypeSignature::Exact;
@@ -176,71 +178,79 @@ where
     T::Native: OffsetSizeTrait,
 {
     let num_rows = string_array.len();
-    let mut builder = GenericStringBuilder::<T::Native>::with_capacity(num_rows, 0);
-    let string_iter = ArrayIter::new(string_array);
-    let delimiter_array_iter = ArrayIter::new(delimiter_array);
-    let count_array_iter = ArrayIter::new(count_array);
-    string_iter
-        .zip(delimiter_array_iter)
-        .zip(count_array_iter)
-        .for_each(|((string, delimiter), n)| match (string, delimiter, n) {
-            (Some(string), Some(delimiter), Some(n)) => {
-                // In MySQL, these cases will return an empty string.
-                if n == 0 || string.is_empty() || delimiter.is_empty() {
-                    builder.append_value("");
-                    return;
-                }
+    let mut builder = GenericStringArrayBuilder::<T::Native>::with_capacity(num_rows, 0);
+    // Output is null IFF any input row is null. Combine the input null
+    // buffers in bulk rather than tracking nulls per row in the builder.
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_array.nulls(), delimiter_array.nulls()).as_ref(),
+        count_array.nulls(),
+    );
 
-                let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
-                let result_idx = if delimiter.len() == 1 {
-                    // Fast path: use byte-level search for single-character delimiters
-                    let d_byte = delimiter.as_bytes()[0];
-                    let bytes = string.as_bytes();
+    for i in 0..num_rows {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            builder.append_placeholder();
+            continue;
+        }
+        // SAFETY: `i < num_rows`, and the union of input nulls is non-null at i,
+        // so each input is also non-null at i.
+        let string = unsafe { string_array.value_unchecked(i) };
+        let delimiter = unsafe { delimiter_array.value_unchecked(i) };
+        let n = unsafe { count_array.value_unchecked(i) };
 
-                    if n > 0 {
-                        bytes
-                            .iter()
-                            .enumerate()
-                            .filter(|&(_, &b)| b == d_byte)
-                            .nth(occurrences - 1)
-                            .map(|(idx, _)| idx)
-                    } else {
-                        bytes
-                            .iter()
-                            .enumerate()
-                            .rev()
-                            .filter(|&(_, &b)| b == d_byte)
-                            .nth(occurrences - 1)
-                            .map(|(idx, _)| idx + 1)
-                    }
-                } else if n > 0 {
-                    // Multi-byte path: forward search for n-th occurrence
-                    string
-                        .match_indices(delimiter)
-                        .nth(occurrences - 1)
-                        .map(|(idx, _)| idx)
+        // In MySQL, these cases will return an empty string.
+        if n == 0 || string.is_empty() || delimiter.is_empty() {
+            builder.append_value("");
+            continue;
+        }
+
+        let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
+        let result_idx = if delimiter.len() == 1 {
+            // Fast path: use byte-level search for single-character delimiters
+            let d_byte = delimiter.as_bytes()[0];
+            let bytes = string.as_bytes();
+
+            if n > 0 {
+                bytes
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &b)| b == d_byte)
+                    .nth(occurrences - 1)
+                    .map(|(idx, _)| idx)
+            } else {
+                bytes
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter(|&(_, &b)| b == d_byte)
+                    .nth(occurrences - 1)
+                    .map(|(idx, _)| idx + 1)
+            }
+        } else if n > 0 {
+            // Multi-byte path: forward search for n-th occurrence
+            string
+                .match_indices(delimiter)
+                .nth(occurrences - 1)
+                .map(|(idx, _)| idx)
+        } else {
+            // Multi-byte path: backward search for n-th occurrence from the right
+            string
+                .rmatch_indices(delimiter)
+                .nth(occurrences - 1)
+                .map(|(idx, _)| idx + delimiter.len())
+        };
+        match result_idx {
+            Some(idx) => {
+                if n > 0 {
+                    builder.append_value(&string[..idx]);
                 } else {
-                    // Multi-byte path: backward search for n-th occurrence from the right
-                    string
-                        .rmatch_indices(delimiter)
-                        .nth(occurrences - 1)
-                        .map(|(idx, _)| idx + delimiter.len())
-                };
-                match result_idx {
-                    Some(idx) => {
-                        if n > 0 {
-                            builder.append_value(&string[..idx]);
-                        } else {
-                            builder.append_value(&string[idx..]);
-                        }
-                    }
-                    None => builder.append_value(string),
+                    builder.append_value(&string[idx..]);
                 }
             }
-            _ => builder.append_null(),
-        });
+            None => builder.append_value(string),
+        }
+    }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
 #[cfg(test)]
