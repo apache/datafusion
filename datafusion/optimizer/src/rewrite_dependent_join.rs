@@ -2040,7 +2040,7 @@ mod tests {
         // Build main query with table alias i1
         let plan = LogicalPlanBuilder::from(integers)
             .alias("i1")? // Alias the table as i1
-            .filter(
+            .project(vec![
                 // i = ANY(subquery)
                 Expr::InSubquery(InSubquery {
                     expr: Box::new(col("i1.i")),
@@ -2051,35 +2051,37 @@ mod tests {
                     },
                     negated: false,
                 }),
-            )?
+            ])?
             .sort(vec![SortExpr::new(col("i1.i"), false, false)])? // ORDER BY i
             .build()?;
+        println!("{plan}");
 
         // original plan:
-        // Sort: i1.i DESC NULLS LAST
-        //   Filter: i1.i IN (<subquery>)
-        //     Subquery:
-        //       Projection: integers.i
-        //         Filter: integers.i = outer_ref(i1.i)
-        //           TableScan: integers
-        //     SubqueryAlias: i1
-        //       TableScan: integers
+        // Projection: IN
+        //   Sort: i1.i DESC NULLS LAST
+        //     Projection: i1.i IN (<subquery>), i1.i
+        //       Subquery:
+        //         Projection: integers.i
+        //           Filter: integers.i = outer_ref(i1.i)
+        //             TableScan: integers
+        //       SubqueryAlias: i1
+        //         TableScan: integers
 
         // Verify the rewrite result
         assert_dependent_join_rewrite!(
             plan,
             @"
-        Sort: i1.i DESC NULLS LAST [i:Int32;N]
-          Projection: i1.i [i:Int32;N]
-            Filter: __in_sq_1 [i:Int32;N, __in_sq_1:Boolean]
-              DependentJoin on [i1.i lvl 1 provided by 6] with expr i1.i IN (<subquery>) depth 1 [i:Int32;N, __in_sq_1:Boolean]
+        Projection: IN [IN:Boolean;N]
+          Sort: i1.i DESC NULLS LAST [__in_sq_1:Boolean, i:Int32;N]
+            Projection: __in_sq_1, i1.i [__in_sq_1:Boolean, i:Int32;N]
+              DependentJoin on [i1.i lvl 1 provided by 7] with expr i1.i IN (<subquery>) depth 1 [i:Int32;N, __in_sq_1:Boolean]
                 SubqueryAlias: i1 [i:Int32;N]
                   TableScan: integers [i:Int32;N]
                 Projection: integers.i [i:Int32;N]
                   Filter: integers.i = outer_ref(i1.i) [i:Int32;N]
                     TableScan: integers [i:Int32;N]
         ---
-        6:
+        7:
         SubqueryAlias: i1 [i:Int32;N]
           TableScan: integers [i:Int32;N]
         "
@@ -2111,7 +2113,7 @@ mod tests {
         // Build derived table subquery:
         // SELECT count(*) GROUP BY t0.c0
         let derived_table = Arc::new(
-            LogicalPlanBuilder::from(t1.clone())
+            LogicalPlanBuilder::empty(true)
                 .aggregate(
                     vec![out_ref_col(DataType::Int32, "t0.c0")], // GROUP BY t0.c0
                     vec![count(lit(1))],                         // count(*)
@@ -2159,7 +2161,7 @@ mod tests {
         //         TableScan: t1
         //         Subquery:
         //           Aggregate: groupBy=[[outer_ref(t0.c0)]], aggr=[[count(Int32(1))]]
-        //             TableScan: t1
+        //             EmptyRelation: rows=1
         //   TableScan: t0
 
         // Verify the rewrite result
@@ -2174,7 +2176,7 @@ mod tests {
                 DependentJoin on [] lateral Inner join with Boolean(true) depth 2 [c0:Int32;N]
                   TableScan: t1 [c0:Int32;N]
                   Aggregate: groupBy=[[outer_ref(t0.c0)]], aggr=[[count(Int32(1))]] [outer_ref(t0.c0):Int32;N, count(Int32(1)):Int64]
-                    TableScan: t1 [c0:Int32;N]
+                    EmptyRelation: rows=1 []
         ---
         8:
         TableScan: t0 [c0:Int32;N]
