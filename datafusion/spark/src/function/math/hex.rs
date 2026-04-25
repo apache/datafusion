@@ -510,8 +510,8 @@ mod test {
         let payload: Vec<u8> = (0u8..=255).collect();
         let bin_array = BinaryArray::from(vec![Some(payload.as_slice())]);
 
-        let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(bin_array))])
-            .unwrap();
+        let result =
+            super::spark_hex(&[ColumnarValue::Array(Arc::new(bin_array))]).unwrap();
         let array = match result {
             ColumnarValue::Array(array) => array,
             _ => panic!("Expected array"),
