@@ -1187,6 +1187,7 @@ mod tests {
         sum::sum,
     };
     use insta::assert_snapshot;
+    use itertools::Itertools;
     use std::sync::Arc;
 
     macro_rules! assert_dependent_join_rewrite_err {
@@ -1217,9 +1218,27 @@ mod tests {
             let plan = Arc::unwrap_or_clone($plan.into());
             let transformed = index.rewrite_subqueries_into_dependent_joins(plan)?;
             assert!(transformed.transformed);
-            let display = transformed.data.display_indent_schema();
+            let display = transformed.data.display_indent_schema().to_string();
+
+
+            assert_eq!(0, index.unresolved_outer_ref_columns.len());
+
+            let mut actual = display;
+            if index.domain_columns_provider_nodes.len() > 0 {
+                actual.push_str("\n---\n");
+            }
+            // get all the provider plan and append to the actual logical plan
+            // this makes the macro be able to also assert the plan
+            // of the correlated columns providers
+            let nodes = index
+                .domain_columns_provider_nodes
+                .iter()
+                .map(|(id, plan)| format!("{id}:\n{}", plan.display_indent_schema()))
+                .join("\n");
+
+            actual.push_str(&nodes);
             assert_snapshot!(
-                display,
+                actual,
                 @ $expected,
             );
             index
@@ -1305,6 +1324,9 @@ mod tests {
           TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
           Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ---
+        4:
+        TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
     }
@@ -1381,6 +1403,12 @@ mod tests {
                   Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
                     Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
                       TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
+        ---
+        8:
+        Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        10:
+        TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
     }
@@ -1437,6 +1465,12 @@ mod tests {
                 Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
                   Filter: inner_table_lv1.a = outer_ref(outer_left_table.a) + outer_ref(outer_right_table.a) [a:UInt32, b:UInt32, c:UInt32]
                     TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ---
+        6:
+        Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          Left Join:  Filter: outer_left_table.a = outer_right_table.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+            TableScan: outer_right_table [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: outer_left_table [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
     }
@@ -1540,6 +1574,15 @@ mod tests {
                     Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
                       Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
                         TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
+        ---
+        8:
+        Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        17:
+        Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        19:
+        TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
     }
@@ -1609,11 +1652,21 @@ mod tests {
                       Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
                         Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
                           TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
+        ---
+        8:
+        Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        10:
+        Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
         ");
+        // Note: 8 even though is a column provider, it is still correlated (i.e containing outer_ref expr)
+        // The decorrelation framework will decorrelate it later.
         Ok(())
     }
+
     #[test]
-    fn two_subqueries_in_the_same_filter_expr() -> Result<()> {
+    fn two_uncorrelated_subqueries_in_the_same_filter_expr() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let in_sq_level1 = Arc::new(
@@ -1715,6 +1768,10 @@ mod tests {
                 Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
                   Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
                     TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ---
+        6:
+        Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
     }
@@ -1764,6 +1821,10 @@ mod tests {
               Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
                 Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ---
+        5:
+        Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
     }
@@ -1891,6 +1952,10 @@ mod tests {
               Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
                 Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ---
+        5:
+        Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
     }
@@ -1939,6 +2004,11 @@ mod tests {
                 Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
                   Filter: inner_table_lv1.a = outer_ref(outer_table_alias.a) [a:UInt32, b:UInt32, c:UInt32]
                     TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ---
+        6:
+        Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+          SubqueryAlias: outer_table_alias [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
     }
@@ -2008,6 +2078,10 @@ mod tests {
                 Projection: integers.i [i:Int32;N]
                   Filter: integers.i = outer_ref(i1.i) [i:Int32;N]
                     TableScan: integers [i:Int32;N]
+        ---
+        6:
+        SubqueryAlias: i1 [i:Int32;N]
+          TableScan: integers [i:Int32;N]
         "
         );
 
@@ -2101,6 +2175,9 @@ mod tests {
                   TableScan: t1 [c0:Int32;N]
                   Aggregate: groupBy=[[outer_ref(t0.c0)]], aggr=[[count(Int32(1))]] [outer_ref(t0.c0):Int32;N, count(Int32(1)):Int64]
                     TableScan: t1 [c0:Int32;N]
+        ---
+        8:
+        TableScan: t0 [c0:Int32;N]
         "
         );
 
@@ -2165,6 +2242,10 @@ mod tests {
               Filter: t2.a = outer_ref(t1.a) [a:Int32;N, b:Int32;N]
                 SubqueryAlias: t2 [a:Int32;N, b:Int32;N]
                   TableScan: t [a:Int32;N, b:Int32;N]
+        ---
+        6:
+        SubqueryAlias: t1 [a:Int32;N, b:Int32;N]
+          TableScan: t [a:Int32;N, b:Int32;N]
         "
         );
 
@@ -2231,6 +2312,10 @@ mod tests {
                 Filter: t2.a = outer_ref(t1.a) [a:Int32;N, b:Int32;N]
                   SubqueryAlias: t2 [a:Int32;N, b:Int32;N]
                     TableScan: t [a:Int32;N, b:Int32;N]
+        ---
+        6:
+        SubqueryAlias: t1 [a:Int32;N, b:Int32;N]
+          TableScan: t [a:Int32;N, b:Int32;N]
         "
         );
 
@@ -2345,6 +2430,9 @@ mod tests {
             Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]] [count(Int32(1)):Int64]
               Filter: t3.id = outer_ref(t1.id) [id:Int32;N, val:Int32;N]
                 TableScan: t3 [id:Int32;N, val:Int32;N]
+        ---
+        5:
+        TableScan: t1 [key:Int32;N, id:Int32;N, val:Int32;N]
         "
         );
 
@@ -2496,6 +2584,11 @@ mod tests {
                   TableScan: t3 [id:Int32;N, val:Int32;N]
             Filter: t3.id = outer_ref(t2.key) [id:Int32;N, val:Int32;N]
               TableScan: t3 [id:Int32;N, val:Int32;N]
+        ---
+        8:
+        TableScan: t1 [key:Int32;N, id:Int32;N, val:Int32;N]
+        9:
+        TableScan: t2 [key:Int32;N, val:Int32;N]
         "
         );
 
@@ -2559,6 +2652,9 @@ mod tests {
                     TableScan: t2 [id:Int32;N, value:Int32;N]
                 Filter: t2.value = outer_ref(t1.id) [id:Int32;N, value:Int32;N]
                   TableScan: t2 [id:Int32;N, value:Int32;N]
+        ---
+        8:
+        TableScan: t1 [id:Int32;N, value:Int32;N]
         "
         );
 
@@ -2626,7 +2722,7 @@ mod tests {
                 .build()?,
         );
 
-        let index = assert_dependent_join_rewrite!(
+        let _index = assert_dependent_join_rewrite!(
             main_query,
             @r#"
         Projection: customer.c_custkey, customer.c_mktsegment [c_custkey:Int32;N, c_mktsegment:Utf8;N]
@@ -2643,25 +2739,15 @@ mod tests {
                       Aggregate: groupBy=[[]], aggr=[[count(lineitem.l_extendedprice)]] [count(lineitem.l_extendedprice):Int64]
                         Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_custkey = outer_ref(customer.c_custkey) [l_orderkey:Int32;N, l_extendedprice:Int32;N, l_custkey:Int32;N]
                           TableScan: lineitem [l_orderkey:Int32;N, l_extendedprice:Int32;N, l_custkey:Int32;N]
+        ---
+        8:
+        Filter: orders.o_custkey = outer_ref(customer.c_custkey) [o_orderkey:Int32;N, o_custkey:Int32;N]
+          TableScan: orders [o_orderkey:Int32;N, o_custkey:Int32;N]
+        10:
+        Filter: customer.c_mktsegment = Utf8("AUTOMOBILE") [c_custkey:Int32;N, c_mktsegment:Utf8;N]
+          TableScan: customer [c_custkey:Int32;N, c_mktsegment:Utf8;N]
         "#
         );
-        let node_8 = index.domain_columns_provider_nodes.get(&8).unwrap();
-        assert_snapshot!(
-            node_8.display_indent_schema(),
-            @r#"
-            Filter: orders.o_custkey = outer_ref(customer.c_custkey) [o_orderkey:Int32;N, o_custkey:Int32;N]
-              TableScan: orders [o_orderkey:Int32;N, o_custkey:Int32;N]
-            "#
-        );
-        let node_10 = index.domain_columns_provider_nodes.get(&10).unwrap();
-        assert_snapshot!(
-            node_10.display_indent_schema(),
-            @r#"
-            Filter: customer.c_mktsegment = Utf8("AUTOMOBILE") [c_custkey:Int32;N, c_mktsegment:Utf8;N]
-              TableScan: customer [c_custkey:Int32;N, c_mktsegment:Utf8;N]
-            "#
-        );
-        assert_eq!(2, index.domain_columns_provider_nodes.len());
 
         Ok(())
     }
