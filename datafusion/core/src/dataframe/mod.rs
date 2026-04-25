@@ -1123,13 +1123,7 @@ impl DataFrame {
                                     Arc::new(StringArray::from(vec!["null"]))
                                 } else if field.data_type().is_numeric() {
                                     cast(column, &DataType::Float64)?
-                                } else if matches!(
-                                    field.data_type(),
-                                    DataType::Binary
-                                        | DataType::LargeBinary
-                                        | DataType::BinaryView
-                                        | DataType::FixedSizeBinary(..)
-                                ) {
+                                } else if field.data_type().is_binary() {
                                     let formatter = ArrayFormatter::try_new(
                                         column.as_ref(),
                                         &FormatOptions::default(),
