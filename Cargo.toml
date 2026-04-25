@@ -105,7 +105,10 @@ arrow-flight = { version = "58.2.0", features = [
     "flight-sql-experimental",
 ] }
 arrow-ipc = { version = "58.2.0", default-features = false, features = [
+# Both codecs are required here to make sure that code paths like
+# file-spilling have access to all compression codecs.
     "lz4",
+    "zstd",
 ] }
 arrow-ord = { version = "58.2.0", default-features = false }
 arrow-schema = { version = "58.2.0", default-features = false }
