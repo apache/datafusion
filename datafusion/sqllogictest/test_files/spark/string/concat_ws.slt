@@ -207,3 +207,111 @@ SELECT concat_ws(sep, a, b) AS result FROM VALUES
 a,b
 NULL
 x|y
+
+## ── Spark cross-checked extras ──────────────────────────────
+
+## Zero arguments → error (Spark: WRONG_NUM_ARGS)
+query error
+SELECT concat_ws();
+
+## Numeric separator coerced to string
+query T
+SELECT concat_ws(1, 'a', 'b');
+----
+a1b
+
+## Only numeric separator, no values → empty string
+query T
+SELECT concat_ws(123);
+----
+(empty)
+
+## Numeric values coerced to string
+query T
+SELECT concat_ws(',', 1, 2, 3);
+----
+1,2,3
+
+## Float values
+query T
+SELECT concat_ws(',', 1.5, 2.5);
+----
+1.5,2.5
+
+## Boolean values
+query T
+SELECT concat_ws(',', true, false);
+----
+true,false
+
+## Mixed numeric and string
+query T
+SELECT concat_ws(',', CAST(1 AS BIGINT), 'a');
+----
+1,a
+
+## Date values
+query T
+SELECT concat_ws(',', DATE '2024-01-01', 'x');
+----
+2024-01-01,x
+
+## Multi-byte UTF-8 separator
+query T
+SELECT concat_ws('é', 'a', 'b');
+----
+aéb
+
+## Nested concat_ws
+query T
+SELECT concat_ws('|', concat_ws(',', 'a', 'b'), concat_ws(',', 'c', 'd'));
+----
+a,b|c,d
+
+## All-NULL elements in array → empty string
+query T
+SELECT concat_ws(',', array(CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING)));
+----
+(empty)
+
+## Empty-string elements in arrays are NOT skipped
+query T
+SELECT concat_ws(',', array(''), array(''));
+----
+,
+
+## Multiple arrays interleaved with scalars and NULLs
+query T
+SELECT concat_ws(',', array('a', 'b'), 'c', CAST(NULL AS STRING), array('d'), '', 'e');
+----
+a,b,c,d,,e
+
+## Long argument list (variadic)
+query T
+SELECT concat_ws('-', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j');
+----
+a-b-c-d-e-f-g-h-i-j
+
+## Long array
+query T
+SELECT concat_ws(',', array('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'));
+----
+a,b,c,d,e,f,g,h,i,j
+
+## All-empty arguments
+query T
+SELECT concat_ws('', '', '', '');
+----
+(empty)
+
+## Empty separator with all NULLs
+query T
+SELECT concat_ws('', CAST(NULL AS STRING), CAST(NULL AS STRING));
+----
+(empty)
+
+## Long string preserved (length sanity)
+query I
+SELECT length(concat_ws(',', repeat('x', 1000), repeat('y', 1000)));
+----
+2001
