@@ -65,11 +65,9 @@ select
 
 #TODO: https://github.com/apache/datafusion/issues/7142
 # follow PostgreSQL behavior
-#query ?
-#select
-#  array_remove(NULL, 1)
-#----
-#NULL
+# expected to return null
+query error DataFusion error: Execution error: array_remove does not support type 'Null'
+select array_remove(NULL, 1)
 
 query ??
 select
@@ -383,10 +381,9 @@ select array_remove_n(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], 
 
 #TODO: https://github.com/apache/datafusion/issues/7142
 # array_remove_all with NULL elements
-#query ?
-#select array_remove_all(NULL, 1);
-#----
-#NULL
+# expected to return null
+query error DataFusion error: Execution error: array_remove_all does not support type 'Null'
+select array_remove_all(NULL, 1);
 
 query ?
 select array_remove_all(make_array(1, 2, 2, 1, 1), NULL);
@@ -536,5 +533,29 @@ select array_remove_all(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12]
 [[1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [28, 29, 30], [22, 23, 24]] [[19, 20, 21], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]]
 [[1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [19, 20, 21], [22, 23, 24]] [[28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]]
 
+# TODO: what is expected behaviour when count is null?
+query ?
+select array_remove_n([1, 2], 1, null);
+----
+[1, 2]
+
+query ?
+select array_remove([], 1)
+----
+[]
+
+query T??? rowsort
+select id, array_remove(haystack, needle), array_remove_n(haystack, needle, 2), array_remove_all(haystack, needle)
+from values
+  ('01', [[0], [], [null], null], [0]),
+  ('02', [[0], [], [null], null], []),
+  ('03', [[0], [], [null], null], [null]),
+  ('04', [[0], [], [null], null], null)
+t(id, haystack, needle)
+----
+01 [[], [NULL], NULL] [[], [NULL], NULL] [[], [NULL], NULL]
+02 [[0], [NULL], NULL] [[0], [NULL], NULL] [[0], [NULL], NULL]
+03 [[0], [], NULL] [[0], [], NULL] [[0], [], NULL]
+04 NULL NULL NULL
 
 include ./cleanup.slt.part

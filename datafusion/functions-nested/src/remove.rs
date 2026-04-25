@@ -19,12 +19,12 @@
 
 use crate::utils;
 use crate::utils::make_scalar_function;
-use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
-    cast::AsArray, make_array,
-};
+use arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, cast::AsArray};
+use arrow::array::{BooleanArray, UInt64Array, new_empty_array};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::compute::take;
 use arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::assert_eq_or_internal_err;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
@@ -33,6 +33,8 @@ use datafusion_expr::{
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
+use itertools::Itertools;
+use std::ops::Range;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -317,151 +319,204 @@ impl ScalarUDFImpl for ArrayRemoveAll {
 }
 
 fn array_remove_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [array, element] = take_function_args("array_remove", args)?;
+    let [haystack, needle] = take_function_args("array_remove", args)?;
 
-    let arr_n = vec![1; array.len()];
-    array_remove_internal(array, element, &arr_n)
-}
+    let copy_row_indices = |matches_array: &BooleanArray,
+                            take_indices: &mut Vec<u64>,
+                            range: Range<usize>,
+                            _row_index: usize| {
+        copy_with_n_exclusions(matches_array, take_indices, range, 1)
+    };
 
-fn array_remove_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [array, element, max] = take_function_args("array_remove_n", args)?;
-
-    let arr_n = as_int64_array(max)?.values().to_vec();
-    array_remove_internal(array, element, &arr_n)
-}
-
-fn array_remove_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [array, element] = take_function_args("array_remove_all", args)?;
-
-    let arr_n = vec![i64::MAX; array.len()];
-    array_remove_internal(array, element, &arr_n)
-}
-
-fn array_remove_internal(
-    array: &ArrayRef,
-    element_array: &ArrayRef,
-    arr_n: &[i64],
-) -> Result<ArrayRef> {
-    match array.data_type() {
+    match haystack.data_type() {
+        DataType::List(field) if field.data_type().is_list() => {
+            remove_generic::<i32, true>(haystack, needle, copy_row_indices)
+        }
+        DataType::LargeList(field) if field.data_type().is_list() => {
+            remove_generic::<i64, true>(haystack, needle, copy_row_indices)
+        }
         DataType::List(_) => {
-            let list_array = array.as_list::<i32>();
-            general_remove::<i32>(list_array, element_array, arr_n)
+            remove_generic::<i32, false>(haystack, needle, copy_row_indices)
         }
         DataType::LargeList(_) => {
-            let list_array = array.as_list::<i64>();
-            general_remove::<i64>(list_array, element_array, arr_n)
+            remove_generic::<i64, false>(haystack, needle, copy_row_indices)
         }
-        array_type => {
-            exec_err!("array_remove_all does not support type '{array_type}'.")
+        dt => {
+            exec_err!("array_remove does not support type '{dt}'.")
         }
     }
 }
 
-/// For each element of `list_array[i]`, removed up to `arr_n[i]` occurrences
-/// of `element_array[i]`.
-///
-/// The type of each **element** in `list_array` must be the same as the type of
-/// `element_array`. This function also handles nested arrays
-/// ([`arrow::array::ListArray`] of [`arrow::array::ListArray`]s)
-///
-/// For example, when called to remove a list array (where each element is a
-/// list of int32s, the second argument are int32 arrays, and the
-/// third argument is the number of occurrences to remove
-///
-/// ```text
-/// general_remove(
-///   [1, 2, 3, 2], 2, 1    ==> [1, 3, 2]   (only the first 2 is removed)
-///   [4, 5, 6, 5], 5, 2    ==> [4, 6]  (both 5s are removed)
-/// )
-/// ```
-fn general_remove<OffsetSize: OffsetSizeTrait>(
-    list_array: &GenericListArray<OffsetSize>,
-    element_array: &ArrayRef,
-    arr_n: &[i64],
-) -> Result<ArrayRef> {
-    let list_field = match list_array.data_type() {
-        DataType::List(field) | DataType::LargeList(field) => field,
-        _ => {
-            return exec_err!(
-                "Expected List or LargeList data type, got {:?}",
-                list_array.data_type()
-            );
-        }
-    };
-    let original_data = list_array.values().to_data();
-    // Build up the offsets for the final output array
-    let mut offsets = Vec::<OffsetSize>::with_capacity(arr_n.len() + 1);
-    offsets.push(OffsetSize::zero());
+fn array_remove_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [haystack, needle, n_array] = take_function_args("array_remove_n", args)?;
 
-    let mut mutable = MutableArrayData::with_capacities(
-        vec![&original_data],
-        false,
-        Capacities::Array(original_data.len()),
+    // TODO: null handling
+    let n_array = as_int64_array(n_array)?.values();
+
+    let copy_row_indices = |matches_array: &BooleanArray,
+                            take_indices: &mut Vec<u64>,
+                            range: Range<usize>,
+                            row_index: usize| {
+        copy_with_n_exclusions(
+            matches_array,
+            take_indices,
+            range,
+            n_array[row_index] as usize,
+        )
+    };
+
+    match haystack.data_type() {
+        DataType::List(field) if field.data_type().is_list() => {
+            remove_generic::<i32, true>(haystack, needle, copy_row_indices)
+        }
+        DataType::LargeList(field) if field.data_type().is_list() => {
+            remove_generic::<i64, true>(haystack, needle, copy_row_indices)
+        }
+        DataType::List(_) => {
+            remove_generic::<i32, false>(haystack, needle, copy_row_indices)
+        }
+        DataType::LargeList(_) => {
+            remove_generic::<i64, false>(haystack, needle, copy_row_indices)
+        }
+        dt => {
+            exec_err!("array_remove_n does not support type '{dt}'.")
+        }
+    }
+}
+
+fn array_remove_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [haystack, needle] = take_function_args("array_remove_all", args)?;
+
+    let copy_row_indices = |matches_array: &BooleanArray,
+                            take_indices: &mut Vec<u64>,
+                            range: Range<usize>,
+                            _row_index: usize| {
+        copy_with_n_exclusions(matches_array, take_indices, range, matches_array.len())
+    };
+
+    match haystack.data_type() {
+        DataType::List(field) if field.data_type().is_list() => {
+            remove_generic::<i32, true>(haystack, needle, copy_row_indices)
+        }
+        DataType::LargeList(field) if field.data_type().is_list() => {
+            remove_generic::<i64, true>(haystack, needle, copy_row_indices)
+        }
+        DataType::List(_) => {
+            remove_generic::<i32, false>(haystack, needle, copy_row_indices)
+        }
+        DataType::LargeList(_) => {
+            remove_generic::<i64, false>(haystack, needle, copy_row_indices)
+        }
+        dt => {
+            exec_err!("array_remove_all does not support type '{dt}'.")
+        }
+    }
+}
+
+/// Given a range of `indices`, copy them into `take_indices` excluding the
+/// first `n` values which are marked as `true` in `matches_array`.
+fn copy_with_n_exclusions(
+    matches_array: &BooleanArray,
+    take_indices: &mut Vec<u64>,
+    indices: Range<usize>,
+    n: usize,
+) -> usize {
+    let (start, end) = (indices.start, indices.end);
+    let before_len = take_indices.len();
+    // Represents the start of the range gap between elements to remove;
+    // if there are consecutive elements to remove then the range we create
+    // to copy would be empty and we copy no elements.
+    let mut to_copy_from = start as u64;
+    for index in matches_array
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| (e == Some(true)).then_some(i))
+        .take(n)
+    {
+        let index = start + index;
+        take_indices.extend(to_copy_from..index as u64);
+        to_copy_from = index as u64 + 1;
+    }
+    // Flush any leftover elements after last element we removed
+    take_indices.extend(to_copy_from..end as u64);
+    take_indices.len() - before_len
+}
+
+/// Given a `haystack` list array (which may be nested), for each corresponding
+/// `needle[i]` element find any occurrences in the list of `haystack[i]` and
+/// remove them according to the logic in `copy_with_removals`.
+///
+/// `copy_row_indices` is intended to copy indices of elements to preserve in
+/// `haystack[i]` for `output[i]`.
+fn remove_generic<OffsetSize: OffsetSizeTrait, const IS_NESTED: bool>(
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
+    // (matches_array, take_indices, start..end, row_index) -> no_of_elements_copied
+    copy_row_indices: impl Fn(&BooleanArray, &mut Vec<u64>, Range<usize>, usize) -> usize,
+) -> Result<ArrayRef> {
+    let haystack = haystack.as_list::<OffsetSize>();
+    assert_eq_or_internal_err!(
+        &haystack.value_type(),
+        needle.data_type(),
+        "remove_generic must be called with equivalent value types"
     );
 
-    // Pre-compute combined null bitmap
-    let nulls = NullBuffer::union(list_array.nulls(), element_array.nulls());
+    let offsets_buffer = haystack.offsets();
+    // Safe unwraps since offset buffer must always have at least one offset
+    let max_values_length = offsets_buffer.last().unwrap().as_usize()
+        - offsets_buffer.first().unwrap().as_usize();
+    let mut take_indices: Vec<u64> = Vec::with_capacity(max_values_length);
 
-    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+    let nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
+    let mut offsets = Vec::<OffsetSize>::with_capacity(offsets_buffer.len());
+    offsets.push(OffsetSize::zero());
+
+    for (row_index, (start, end)) in offsets_buffer.iter().tuple_windows().enumerate() {
         if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row_index)) {
             offsets.push(offsets[row_index]);
             continue;
         }
 
-        let start = offset_window[0].to_usize().unwrap();
-        let end = offset_window[1].to_usize().unwrap();
-        // n is the number of elements to remove in this row
-        let n = arr_n[row_index];
-
-        // compare each element in the list, `false` means the element matches and should be removed
-        let eq_array = utils::compare_element_to_list(
-            &list_array.value(row_index),
-            element_array,
+        // For list element of haystack, find all occurrences of needle[row_index].
+        // true in output is match and must be removed.
+        let matches_array = utils::compare_element_to_list_fixed::<IS_NESTED>(
+            &haystack.value(row_index),
+            needle,
             row_index,
-            false,
         )?;
 
-        let num_to_remove = eq_array.false_count();
+        let start = start.to_usize().unwrap();
+        let end = end.to_usize().unwrap();
 
-        // Fast path: no elements to remove, copy entire row
-        if num_to_remove == 0 {
-            mutable.extend(0, start, end);
+        if matches_array.has_true() {
+            // Copy indices into take_indices based on whether we remove one,
+            // all or N matching elements
+            let len = copy_row_indices(
+                &matches_array,
+                &mut take_indices,
+                start..end,
+                row_index,
+            );
+            offsets.push(offsets[row_index] + OffsetSize::usize_as(len));
+        } else {
+            // Fast path: no elements to remove, copy entire row
+            take_indices.extend(start as u64..end as u64);
             offsets.push(offsets[row_index] + OffsetSize::usize_as(end - start));
-            continue;
         }
-
-        // Remove at most `n` matching elements
-        let max_removals = n.min(num_to_remove as i64);
-        let mut removed = 0i64;
-        let mut copied = 0usize;
-        // marks the beginning of a range of elements pending to be copied.
-        let mut pending_batch_to_retain: Option<usize> = None;
-        for (i, keep) in eq_array.iter().enumerate() {
-            if keep == Some(false) && removed < max_removals {
-                // Flush pending batch before skipping this element
-                if let Some(bs) = pending_batch_to_retain {
-                    mutable.extend(0, start + bs, start + i);
-                    copied += i - bs;
-                    pending_batch_to_retain = None;
-                }
-                removed += 1;
-            } else if pending_batch_to_retain.is_none() {
-                pending_batch_to_retain = Some(i);
-            }
-        }
-
-        // Flush remaining batch
-        if let Some(bs) = pending_batch_to_retain {
-            mutable.extend(0, start + bs, start + eq_array.len());
-            copied += eq_array.len() - bs;
-        }
-
-        offsets.push(offsets[row_index] + OffsetSize::usize_as(copied));
     }
 
-    let new_values = make_array(mutable.freeze());
+    let new_values = if take_indices.is_empty() {
+        new_empty_array(&haystack.value_type())
+    } else {
+        take(haystack.values(), &UInt64Array::from(take_indices), None)?
+    };
+
+    let (DataType::List(field) | DataType::LargeList(field)) = haystack.data_type()
+    else {
+        unreachable!("GenericListArray must have DataType List or LargeList")
+    };
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        Arc::clone(list_field),
+        Arc::clone(field),
         OffsetBuffer::new(offsets.into()),
         new_values,
         nulls,
