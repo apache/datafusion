@@ -29,7 +29,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result, not_impl_err, plan_err};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -90,6 +90,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("SORT BY");
         }
 
+        // Capture and clear set expression schema so it doesn't leak
+        // into subqueries planned during FROM clause handling.
+        let set_expr_left_schema = planner_context.set_set_expr_left_schema(None);
+
         // Process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
@@ -110,7 +114,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )?;
 
         // Having and group by clause may reference aliases defined in select projection
-        let projected_plan = self.project(base_plan.clone(), select_exprs)?;
+        let projected_plan =
+            self.project(base_plan.clone(), select_exprs, set_expr_left_schema)?;
         let select_exprs = projected_plan.expressions();
 
         let order_by =
@@ -592,9 +597,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } else {
                 let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
 
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut projection_exprs = match &aggr_expr_using_columns {
                     Some(exprs) => (*exprs).clone(),
                     None => {
+                        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                         let mut columns = HashSet::new();
                         for expr in &aggr_expr {
                             expr.apply(|expr| {
@@ -892,18 +900,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         input: LogicalPlan,
         expr: Vec<SelectExpr>,
+        set_expr_left_schema: Option<DFSchemaRef>,
     ) -> Result<LogicalPlan> {
         // convert to Expr for validate_schema_satisfies_exprs
-        let exprs = expr
+        let plain_exprs = expr
             .iter()
             .filter_map(|e| match e {
                 SelectExpr::Expression(expr) => Some(expr.to_owned()),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        self.validate_schema_satisfies_exprs(input.schema(), &exprs)?;
+        self.validate_schema_satisfies_exprs(input.schema(), &plain_exprs)?;
 
-        LogicalPlanBuilder::from(input).project(expr)?.build()
+        // When inside a set expression, pass the left-most schema so
+        // that expressions get aliased to match, avoiding duplicate
+        // name errors from expressions like `count(*), count(*)`.
+        let builder = LogicalPlanBuilder::from(input);
+        if let Some(left_schema) = set_expr_left_schema {
+            builder
+                .project_with_validation_and_schema(expr, &left_schema)?
+                .build()
+        } else {
+            builder.project(expr)?.build()
+        }
     }
 
     /// Create an aggregate plan.

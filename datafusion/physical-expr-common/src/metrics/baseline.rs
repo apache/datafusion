@@ -17,12 +17,16 @@
 
 //! Metrics common for almost all operators
 
-use std::task::Poll;
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc, task::Poll};
 
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, utils::memory::get_record_batch_memory_size};
 
-use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
+use super::{
+    Count, ExecutionPlanMetricsSet, Metric, MetricBuilder, MetricsSet, Time, Timestamp,
+};
+
+const OUTPUT_ROWS_SKEW_METRIC_NAME: &str = "output_rows_skew";
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator
@@ -125,6 +129,61 @@ impl BaselineMetrics {
         &self.output_batches
     }
 
+    /// Returns a derived metric that summarizes how unevenly `output_rows`
+    /// are distributed across partitions.
+    ///
+    /// The score is normalized to the range `[0%, 100%]`, where `0%`
+    /// indicates a perfectly balanced distribution and `100%` indicates the
+    /// most skewed distribution.
+    ///
+    /// The calculation is:
+    /// `effective_parallelism = square(sum(r_i)) / sum(square(r_i))`
+    /// `output_rows_skew = (1 - ((effective_parallelism - 1) / (partition_count - 1))) * 100%`
+    ///
+    /// Example: for 4 partitions with output rows `[10, 10, 10, 10]`,
+    /// `effective_parallelism = 40^2 / (10^2 + 10^2 + 10^2 + 10^2) = 4`,
+    /// so `output_rows_skew = 0%`. For `[40, 0, 0, 0]`, the score is `100%`.
+    pub fn output_rows_skew_metric(metrics: &MetricsSet) -> Option<Arc<Metric>> {
+        let output_rows = metrics
+            .iter()
+            .filter_map(|metric| match (metric.partition(), metric.value()) {
+                (Some(partition), super::MetricValue::OutputRows(count)) => {
+                    Some((partition, count.value() as u128))
+                }
+                _ => None,
+            })
+            .fold(
+                BTreeMap::<usize, u128>::new(),
+                |mut output_rows, (partition, rows)| {
+                    *output_rows.entry(partition).or_default() += rows;
+                    output_rows
+                },
+            )
+            .into_values()
+            .collect::<Vec<_>>();
+
+        if output_rows.is_empty() {
+            return None;
+        }
+
+        let ratio_metrics = super::RatioMetrics::new().with_display_raw_values(false);
+        if let Some(score) = output_rows_skew_score(&output_rows) {
+            ratio_metrics.set_part((score * 10_000.0).round() as usize);
+            ratio_metrics.set_total(10_000);
+        }
+
+        Some(Arc::new(
+            Metric::new(
+                super::MetricValue::Ratio {
+                    name: Cow::Borrowed(OUTPUT_ROWS_SKEW_METRIC_NAME),
+                    ratio_metrics,
+                },
+                None,
+            )
+            .with_type(super::MetricType::Dev),
+        ))
+    }
+
     /// Records the fact that this operator's execution is complete
     /// (recording the `end_time` metric).
     ///
@@ -176,6 +235,38 @@ impl Drop for BaselineMetrics {
     fn drop(&mut self) {
         self.try_done()
     }
+}
+
+/// See [`BaselineMetrics::output_rows_skew_metric`] for the algorithm.
+fn output_rows_skew_score(output_rows: &[u128]) -> Option<f64> {
+    if output_rows.is_empty() {
+        return None;
+    }
+
+    let partition_count = output_rows.len();
+    if partition_count == 1 {
+        return Some(0.0);
+    }
+
+    let (total_rows, sum_of_squares) =
+        output_rows
+            .iter()
+            .fold((0.0, 0.0), |(total_rows, sum_of_squares), rows| {
+                let rows = *rows as f64;
+                (total_rows + rows, sum_of_squares + rows.powi(2))
+            });
+    if total_rows == 0.0 {
+        return None;
+    }
+
+    if sum_of_squares == 0.0 {
+        return None;
+    }
+
+    let effective_parallelism = total_rows.powi(2) / sum_of_squares;
+    let balanced_score = (effective_parallelism - 1.0) / (partition_count as f64 - 1.0);
+
+    Some((1.0 - balanced_score).clamp(0.0, 1.0))
 }
 
 /// Helper for creating and tracking spill-related metrics for

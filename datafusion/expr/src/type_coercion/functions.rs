@@ -33,7 +33,7 @@ use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
-    type_coercion::binary::comparison_coercion_numeric,
+    type_coercion::binary::comparison_coercion,
     type_coercion::binary::string_coercion,
 };
 use itertools::Itertools as _;
@@ -593,7 +593,7 @@ fn get_valid_types(
             function_length_check(function_name, current_types.len(), *num)?;
             let mut target_type = current_types[0].to_owned();
             for data_type in current_types.iter().skip(1) {
-                if let Some(dt) = comparison_coercion_numeric(&target_type, data_type) {
+                if let Some(dt) = comparison_coercion(&target_type, data_type) {
                     target_type = dt;
                 } else {
                     return plan_err!(
@@ -888,6 +888,8 @@ fn coerced_from<'a>(
         (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
+        // We can go into a BinaryView from a Binary or LargeBinary
+        (BinaryView, Binary | LargeBinary | Null) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
         (List(_), FixedSizeList(_, _)) => Some(type_into.clone()),
@@ -956,6 +958,20 @@ mod tests {
         let cases = vec![
             (DataType::Utf8View, DataType::Utf8),
             (DataType::Utf8View, DataType::LargeUtf8),
+            (DataType::Utf8View, DataType::Null),
+        ];
+
+        for case in cases {
+            assert_eq!(coerced_from(&case.0, &case.1), Some(case.0));
+        }
+    }
+
+    #[test]
+    fn test_binary_conversion() {
+        let cases = vec![
+            (DataType::BinaryView, DataType::Binary),
+            (DataType::BinaryView, DataType::LargeBinary),
+            (DataType::BinaryView, DataType::Null),
         ];
 
         for case in cases {

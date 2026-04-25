@@ -762,13 +762,11 @@
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
 
-/// DataFusion crate version
-pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
-
 extern crate core;
-
 #[cfg(feature = "sql")]
 extern crate sqlparser;
+/// DataFusion crate version
+pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod dataframe;
 pub mod datasource;

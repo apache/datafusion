@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::utils::utf8_to_str_type;
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringArrayType, StringViewArray,
+    StringArrayType, StringLikeArrayBuilder, StringViewArray, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
@@ -91,6 +91,9 @@ impl ScalarUDFImpl for RepeatFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types[0] == Utf8View {
+            return Ok(Utf8View);
+        }
         utf8_to_str_type(&arg_types[0], "repeat")
     }
 
@@ -126,13 +129,12 @@ impl ScalarUDFImpl for RepeatFunc {
                 };
 
                 let result = match string_scalar {
-                    ScalarValue::Utf8(Some(s)) | ScalarValue::Utf8View(Some(s)) => {
-                        ScalarValue::Utf8(Some(compute_repeat(
-                            s,
-                            count,
-                            i32::MAX as usize,
-                        )?))
-                    }
+                    ScalarValue::Utf8View(Some(s)) => ScalarValue::Utf8View(Some(
+                        compute_repeat(s, count, i32::MAX as usize)?,
+                    )),
+                    ScalarValue::Utf8(Some(s)) => ScalarValue::Utf8(Some(
+                        compute_repeat(s, count, i32::MAX as usize)?,
+                    )),
                     ScalarValue::LargeUtf8(Some(s)) => ScalarValue::LargeUtf8(Some(
                         compute_repeat(s, count, i64::MAX as usize)?,
                     )),
@@ -183,26 +185,47 @@ fn repeat(string_array: &ArrayRef, count_array: &ArrayRef) -> Result<ArrayRef> {
     match string_array.data_type() {
         Utf8View => {
             let string_view_array = string_array.as_string_view();
-            repeat_impl::<i32, &StringViewArray>(
+            let (_, max_item_capacity) = calculate_capacities(
                 &string_view_array,
                 number_array,
                 i32::MAX as usize,
+            )?;
+            let builder = StringViewBuilder::with_capacity(string_array.len());
+            repeat_impl::<&StringViewArray, StringViewBuilder>(
+                &string_view_array,
+                number_array,
+                max_item_capacity,
+                builder,
             )
         }
         Utf8 => {
             let string_arr = string_array.as_string::<i32>();
-            repeat_impl::<i32, &GenericStringArray<i32>>(
+            let (total_capacity, max_item_capacity) =
+                calculate_capacities(&string_arr, number_array, i32::MAX as usize)?;
+            let builder = GenericStringBuilder::<i32>::with_capacity(
+                string_array.len(),
+                total_capacity,
+            );
+            repeat_impl::<&GenericStringArray<i32>, GenericStringBuilder<i32>>(
                 &string_arr,
                 number_array,
-                i32::MAX as usize,
+                max_item_capacity,
+                builder,
             )
         }
         LargeUtf8 => {
             let string_arr = string_array.as_string::<i64>();
-            repeat_impl::<i64, &GenericStringArray<i64>>(
+            let (total_capacity, max_item_capacity) =
+                calculate_capacities(&string_arr, number_array, i64::MAX as usize)?;
+            let builder = GenericStringBuilder::<i64>::with_capacity(
+                string_array.len(),
+                total_capacity,
+            );
+            repeat_impl::<&GenericStringArray<i64>, GenericStringBuilder<i64>>(
                 &string_arr,
                 number_array,
-                i64::MAX as usize,
+                max_item_capacity,
+                builder,
             )
         }
         other => exec_err!(
@@ -212,17 +235,17 @@ fn repeat(string_array: &ArrayRef, count_array: &ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-fn repeat_impl<'a, T, S>(
+fn calculate_capacities<'a, S>(
     string_array: &S,
     number_array: &Int64Array,
     max_str_len: usize,
-) -> Result<ArrayRef>
+) -> Result<(usize, usize)>
 where
-    T: OffsetSizeTrait,
-    S: StringArrayType<'a> + 'a,
+    S: StringArrayType<'a>,
 {
     let mut total_capacity = 0;
     let mut max_item_capacity = 0;
+
     string_array.iter().zip(number_array.iter()).try_for_each(
         |(string, number)| -> Result<(), DataFusionError> {
             match (string, number) {
@@ -244,9 +267,19 @@ where
         },
     )?;
 
-    let mut builder =
-        GenericStringBuilder::<T>::with_capacity(string_array.len(), total_capacity);
+    Ok((total_capacity, max_item_capacity))
+}
 
+fn repeat_impl<'a, S, B>(
+    string_array: &S,
+    number_array: &Int64Array,
+    max_item_capacity: usize,
+    mut builder: B,
+) -> Result<ArrayRef>
+where
+    S: StringArrayType<'a> + 'a,
+    B: StringLikeArrayBuilder,
+{
     // Reusable buffer to avoid allocations in string.repeat()
     let mut buffer = Vec::<u8>::with_capacity(max_item_capacity);
 
@@ -303,8 +336,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::array::{Array, LargeStringArray, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 
     use datafusion_common::ScalarValue;
     use datafusion_common::{Result, exec_err};
@@ -357,8 +390,8 @@ mod tests {
             ],
             Ok(Some("PgPgPgPg")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             RepeatFunc::new(),
@@ -368,8 +401,19 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            RepeatFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("Pg")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(None)),
+            ],
+            Ok(None),
+            &str,
+            LargeUtf8,
+            LargeStringArray
         );
         test_function!(
             RepeatFunc::new(),
@@ -379,8 +423,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             RepeatFunc::new(),

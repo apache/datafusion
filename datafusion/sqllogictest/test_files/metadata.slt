@@ -83,7 +83,7 @@ select count(distinct name) from table_with_metadata;
 2
 
 # Regression test: prevent field metadata loss per https://github.com/apache/datafusion/issues/12687
-query I
+query R
 select approx_median(distinct id) from table_with_metadata;
 ----
 2
@@ -220,6 +220,34 @@ FROM table_with_metadata;
 2020-09-08
 2020-09-08
 
+# Regression test: CAST should preserve source field metadata
+query DT
+SELECT
+    CAST(ts AS DATE) as casted,
+    arrow_metadata(CAST(ts AS DATE), 'metadata_key')
+FROM table_with_metadata;
+----
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+
+# Regression test: CAST preserves metadata on integer column
+query IT
+SELECT
+    CAST(id AS BIGINT) as casted,
+    arrow_metadata(CAST(id AS BIGINT), 'metadata_key')
+FROM table_with_metadata;
+----
+1 the id field
+NULL the id field
+3 the id field
+
+# Regression test: CAST with single-argument arrow_metadata (returns full map)
+query ?
+select arrow_metadata(CAST(id AS BIGINT)) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
+
 # Regression test: distinct with cast
 query D
 SELECT DISTINCT (ts::DATE) AS dist
@@ -346,6 +374,105 @@ query ?
 select arrow_metadata(id) from table_with_metadata limit 1;
 ----
 {metadata_key: the id field}
+
+# Regression test: TRY_CAST should preserve source field metadata
+query DT
+SELECT
+    TRY_CAST(ts AS DATE) as try_casted,
+    arrow_metadata(TRY_CAST(ts AS DATE), 'metadata_key')
+FROM table_with_metadata;
+----
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+
+# Regression test: TRY_CAST preserves metadata on integer column
+query IT
+SELECT
+    TRY_CAST(id AS BIGINT) as try_casted,
+    arrow_metadata(TRY_CAST(id AS BIGINT), 'metadata_key')
+FROM table_with_metadata;
+----
+1 the id field
+NULL the id field
+3 the id field
+
+# Regression test: TRY_CAST preserves metadata even when cast fails (returns NULL)
+query IT
+SELECT
+    TRY_CAST(name AS INT) as try_casted,
+    arrow_metadata(TRY_CAST(name AS INT), 'metadata_key')
+FROM table_with_metadata;
+----
+NULL the name field
+NULL the name field
+NULL the name field
+
+# Regression test: TRY_CAST with single-argument arrow_metadata (returns full map)
+query ?
+select arrow_metadata(TRY_CAST(id AS BIGINT)) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
+
+# with_metadata: attach a single key and read it back
+query T
+select arrow_metadata(with_metadata(id, 'unit', 'ms'), 'unit') from table_with_metadata limit 1;
+----
+ms
+
+# with_metadata: attach multiple keys in one call
+query ?
+select arrow_metadata(with_metadata(id, 'unit', 'ms', 'source', 'sensor')) from table_with_metadata limit 1;
+----
+{metadata_key: the id field, source: sensor, unit: ms}
+
+# with_metadata: merge with existing field metadata (preserves upstream keys)
+query T
+select arrow_metadata(with_metadata(id, 'unit', 'ms'), 'metadata_key') from table_with_metadata limit 1;
+----
+the id field
+
+# with_metadata: new keys overwrite existing on collision
+query T
+select arrow_metadata(with_metadata(id, 'metadata_key', 'overridden'), 'metadata_key') from table_with_metadata limit 1;
+----
+overridden
+
+# with_metadata: nesting composes (inner keys + outer keys, outer wins on collision)
+query ?
+select arrow_metadata(with_metadata(with_metadata(id, 'a', '1'), 'b', '2')) from table_with_metadata limit 1;
+----
+{a: 1, b: 2, metadata_key: the id field}
+
+# with_metadata: values pass through unchanged
+query I
+select with_metadata(id, 'unit', 'ms') from table_with_metadata order by id nulls last;
+----
+1
+3
+NULL
+
+# with_metadata: error on even arity (missing value for last key)
+statement error with_metadata requires an odd number of arguments
+select with_metadata(id, 'a', '1', 'b') from table_with_metadata;
+
+# with_metadata: error on too few args
+statement error with_metadata requires the input expression plus at least one
+select with_metadata(id) from table_with_metadata;
+
+# with_metadata: error on non-literal key
+statement error with_metadata requires argument 1 \(key\) to be a non-empty constant string
+select with_metadata(id, name, 'v') from table_with_metadata;
+
+# with_metadata: error on empty key
+statement error with_metadata requires argument 1 \(key\) to be a non-empty constant string
+select with_metadata(id, '', 'v') from table_with_metadata;
+
+# with_metadata: empty values are allowed
+query T
+select arrow_metadata(with_metadata(id, 'unit', ''), 'unit') from table_with_metadata limit 1;
+----
+(empty)
 
 statement ok
 drop table table_with_metadata;

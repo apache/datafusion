@@ -69,7 +69,7 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=Partial, gby=[c1@0 as c1]",
-        "reduction_factor=5.1% (5/99)"
+        "reduction_factor=5.05% (5/99)"
     );
 
     {
@@ -139,14 +139,14 @@ async fn explain_analyze_baseline_metrics() {
         use datafusion::physical_plan;
         use datafusion::physical_plan::sorts;
 
-        plan.as_any().downcast_ref::<sorts::sort::SortExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::aggregates::AggregateExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::limit::LocalLimitExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::coalesce_partitions::CoalescePartitionsExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::union::UnionExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::windows::WindowAggExec>().is_some()
+        plan.is::<sorts::sort::SortExec>()
+            || plan.is::<physical_plan::aggregates::AggregateExec>()
+            || plan.is::<physical_plan::filter::FilterExec>()
+            || plan.is::<physical_plan::limit::LocalLimitExec>()
+            || plan.is::<physical_plan::projection::ProjectionExec>()
+            || plan.is::<physical_plan::coalesce_partitions::CoalescePartitionsExec>()
+            || plan.is::<physical_plan::union::UnionExec>()
+            || plan.is::<physical_plan::windows::WindowAggExec>()
     }
 
     // Validate that the recorded elapsed compute time was more than
@@ -887,7 +887,8 @@ async fn parquet_explain_analyze() {
         &formatted,
         "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
     );
-    assert_contains!(&formatted, "scan_efficiency_ratio=14%");
+    assert_contains!(&formatted, "output_rows_skew=0%");
+    assert_contains!(&formatted, "scan_efficiency_ratio=13.99%");
 
     // The order of metrics is expected to be the same as the actual pruning order
     // (file-> row-group -> page)

@@ -39,7 +39,7 @@ use futures::StreamExt;
 #[derive(Debug, Args, Clone)]
 #[command(verbatim_doc_comment)]
 pub struct RunOpt {
-    /// Query number (between 1 and 23). If not specified, runs all queries
+    /// Query number (between 1 and 26). If not specified, runs all queries
     #[arg(short, long)]
     query: Option<usize>,
 
@@ -456,6 +456,72 @@ const SMJ_QUERIES: &[&str] = &[
           ON t1_sorted.key = t2_sorted.key
          AND t1_sorted.data + t2_sorted.data < 10000000
     "#,
+    // Q24: LEFT MARK 1M x 10M | 1:10 | 1%
+    r#"
+        WITH t1_sorted AS (
+            SELECT value % 100000 as key, value as data
+            FROM range(1000000)
+            ORDER BY key, data
+        ),
+        t2_sorted AS (
+            SELECT value % 100000 as key, value as data
+            FROM range(10000000)
+            ORDER BY key, data
+        )
+        SELECT t1_sorted.key, t1_sorted.data
+        FROM t1_sorted
+        WHERE t1_sorted.data < 0
+           OR EXISTS (
+            SELECT 1 FROM t2_sorted
+            WHERE t2_sorted.key = t1_sorted.key
+              AND t2_sorted.data <> t1_sorted.data
+              AND t2_sorted.data % 100 = 0
+        )
+    "#,
+    // Q25: LEFT MARK 1M x 10M | 1:10 | 50%
+    r#"
+        WITH t1_sorted AS (
+            SELECT value % 100000 as key, value as data
+            FROM range(1000000)
+            ORDER BY key, data
+        ),
+        t2_sorted AS (
+            SELECT value % 100000 as key, value as data
+            FROM range(10000000)
+            ORDER BY key, data
+        )
+        SELECT t1_sorted.key, t1_sorted.data
+        FROM t1_sorted
+        WHERE t1_sorted.data < 0
+           OR EXISTS (
+            SELECT 1 FROM t2_sorted
+            WHERE t2_sorted.key = t1_sorted.key
+              AND t2_sorted.data <> t1_sorted.data
+              AND t2_sorted.data % 2 = 0
+        )
+    "#,
+    // Q26: LEFT MARK 1M x 10M | 1:10 | 90%
+    r#"
+        WITH t1_sorted AS (
+            SELECT value % 100000 as key, value as data
+            FROM range(1000000)
+            ORDER BY key, data
+        ),
+        t2_sorted AS (
+            SELECT value % 100000 as key, value as data
+            FROM range(10000000)
+            ORDER BY key, data
+        )
+        SELECT t1_sorted.key, t1_sorted.data
+        FROM t1_sorted
+        WHERE t1_sorted.data < 0
+           OR EXISTS (
+            SELECT 1 FROM t2_sorted
+            WHERE t2_sorted.key = t1_sorted.key
+              AND t2_sorted.data <> t1_sorted.data
+              AND t2_sorted.data % 10 <> 0
+        )
+    "#,
 ];
 
 impl RunOpt {
@@ -489,7 +555,10 @@ impl RunOpt {
 
             let sql = SMJ_QUERIES[query_index];
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let query_run = self.benchmark_query(sql, &query_id.to_string(), &ctx).await;
+            let expect_mark = query_id >= 24;
+            let query_run = self
+                .benchmark_query(sql, &query_id.to_string(), expect_mark, &ctx)
+                .await;
             match query_run {
                 Ok(query_results) => {
                     for iter in query_results {
@@ -513,6 +582,7 @@ impl RunOpt {
         &self,
         sql: &str,
         query_name: &str,
+        expect_mark: bool,
         ctx: &SessionContext,
     ) -> Result<Vec<QueryResult>> {
         let mut query_results = vec![];
@@ -525,6 +595,12 @@ impl RunOpt {
         if !plan_string.contains("SortMergeJoinExec") {
             return Err(exec_datafusion_err!(
                 "Query {query_name} does not use Sort Merge Join. Physical plan: {plan_string}"
+            ));
+        }
+
+        if expect_mark && !plan_string.contains("LeftMark") {
+            return Err(exec_datafusion_err!(
+                "Query {query_name} expected LeftMark join. Physical plan: {plan_string}"
             ));
         }
 

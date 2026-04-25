@@ -69,7 +69,7 @@ datafusion-session = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 prost = { workspace = true }
-semver = "1.0.27"
+semver = "1.0.28"
 tokio = { workspace = true }
 
 [dev-dependencies]

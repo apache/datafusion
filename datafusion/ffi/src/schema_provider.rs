@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -91,12 +90,12 @@ unsafe impl Send for FFI_SchemaProvider {}
 unsafe impl Sync for FFI_SchemaProvider {}
 
 struct ProviderPrivateData {
-    provider: Arc<dyn SchemaProvider + Send>,
+    provider: Arc<dyn SchemaProvider>,
     runtime: Option<Handle>,
 }
 
 impl FFI_SchemaProvider {
-    unsafe fn inner(&self) -> &Arc<dyn SchemaProvider + Send> {
+    unsafe fn inner(&self) -> &Arc<dyn SchemaProvider> {
         unsafe {
             let private_data = self.private_data as *const ProviderPrivateData;
             &(*private_data).provider
@@ -238,7 +237,7 @@ impl Drop for FFI_SchemaProvider {
 impl FFI_SchemaProvider {
     /// Creates a new [`FFI_SchemaProvider`].
     pub fn new(
-        provider: Arc<dyn SchemaProvider + Send>,
+        provider: Arc<dyn SchemaProvider>,
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
         logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
@@ -255,12 +254,11 @@ impl FFI_SchemaProvider {
     }
 
     pub fn new_with_ffi_codec(
-        provider: Arc<dyn SchemaProvider + Send>,
+        provider: Arc<dyn SchemaProvider>,
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
-        if let Some(provider) = provider.as_any().downcast_ref::<ForeignSchemaProvider>()
-        {
+        if let Some(provider) = provider.downcast_ref::<ForeignSchemaProvider>() {
             return provider.0.clone();
         }
 
@@ -294,14 +292,13 @@ pub struct ForeignSchemaProvider(pub FFI_SchemaProvider);
 unsafe impl Send for ForeignSchemaProvider {}
 unsafe impl Sync for ForeignSchemaProvider {}
 
-impl From<&FFI_SchemaProvider> for Arc<dyn SchemaProvider + Send> {
+impl From<&FFI_SchemaProvider> for Arc<dyn SchemaProvider> {
     fn from(provider: &FFI_SchemaProvider) -> Self {
         if (provider.library_marker_id)() == crate::get_library_marker_id() {
             return Arc::clone(unsafe { provider.inner() });
         }
 
-        Arc::new(ForeignSchemaProvider(provider.clone()))
-            as Arc<dyn SchemaProvider + Send>
+        Arc::new(ForeignSchemaProvider(provider.clone())) as Arc<dyn SchemaProvider>
     }
 }
 
@@ -313,10 +310,6 @@ impl Clone for FFI_SchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for ForeignSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn owner_name(&self) -> Option<&str> {
         let name: Option<&RString> = self.0.owner_name.as_ref().into();
         name.map(|s| s.as_str())
@@ -351,7 +344,7 @@ impl SchemaProvider for ForeignSchemaProvider {
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         unsafe {
-            let ffi_table = match table.as_any().downcast_ref::<ForeignTableProvider>() {
+            let ffi_table = match table.downcast_ref::<ForeignTableProvider>() {
                 Some(t) => t.0.clone(),
                 None => FFI_TableProvider::new_with_ffi_codec(
                     table,
@@ -414,7 +407,7 @@ mod tests {
             FFI_SchemaProvider::new(schema_provider, None, task_ctx_provider, None);
         ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_schema_provider: Arc<dyn SchemaProvider + Send> =
+        let foreign_schema_provider: Arc<dyn SchemaProvider> =
             (&ffi_schema_provider).into();
 
         let prior_table_names = foreign_schema_provider.table_names();
@@ -467,20 +460,18 @@ mod tests {
             FFI_SchemaProvider::new(schema_provider, None, task_ctx_provider, None);
 
         // Verify local libraries can be downcast to their original
-        let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();
+        let foreign_schema: Arc<dyn SchemaProvider> = (&ffi_schema).into();
         assert!(
             foreign_schema
-                .as_any()
                 .downcast_ref::<MemorySchemaProvider>()
                 .is_some()
         );
 
         // Verify different library markers generate foreign providers
         ffi_schema.library_marker_id = crate::mock_foreign_marker_id;
-        let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();
+        let foreign_schema: Arc<dyn SchemaProvider> = (&ffi_schema).into();
         assert!(
             foreign_schema
-                .as_any()
                 .downcast_ref::<ForeignSchemaProvider>()
                 .is_some()
         );

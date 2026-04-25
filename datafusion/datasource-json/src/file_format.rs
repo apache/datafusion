@@ -17,7 +17,6 @@
 
 //! [`JsonFormat`]: Line delimited and array JSON [`FileFormat`] abstractions
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
@@ -111,10 +110,6 @@ impl FileFormatFactory for JsonFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(JsonFormat::default())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -241,10 +236,6 @@ fn infer_schema_from_json_array<R: Read>(
 
 #[async_trait]
 impl FileFormat for JsonFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         JsonFormatFactory::new().get_ext()
     }
@@ -488,10 +479,6 @@ impl FileSink for JsonSink {
 
 #[async_trait]
 impl DataSink for JsonSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }

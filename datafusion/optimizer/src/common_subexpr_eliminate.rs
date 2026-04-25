@@ -325,11 +325,7 @@ impl CommonSubexprEliminate {
                                 .map(|expr| Some(name_preserver.save(expr)))
                                 .collect::<Vec<_>>()
                         } else {
-                            new_aggr_expr
-                                .clone()
-                                .into_iter()
-                                .map(|_| None)
-                                .collect::<Vec<_>>()
+                            (0..new_aggr_expr.len()).map(|_| None).collect()
                         };
 
                         let mut agg_exprs = common_exprs

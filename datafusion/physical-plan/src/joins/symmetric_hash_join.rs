@@ -25,7 +25,6 @@
 //! This plan uses the [`OneSideHashJoiner`] object to facilitate join calculations
 //! for both its children.
 
-use std::any::Any;
 use std::fmt::{self, Debug};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -421,10 +420,6 @@ impl DisplayAs for SymmetricHashJoinExec {
 impl ExecutionPlan for SymmetricHashJoinExec {
     fn name(&self) -> &'static str {
         "SymmetricHashJoinExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

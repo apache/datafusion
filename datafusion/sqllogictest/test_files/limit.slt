@@ -385,6 +385,25 @@ SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 1
 
+# Verify that EXPLAIN FORMAT TREE shows fetch on FilterExec
+query TT
+EXPLAIN FORMAT TREE SELECT a FROM t1 WHERE a > 3 LIMIT 5;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│         FilterExec        │
+03)│    --------------------   │
+04)│          fetch: 5         │
+05)│      predicate: a > 3     │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│       DataSourceExec      │
+09)│    --------------------   │
+10)│         bytes: 160        │
+11)│       format: memory      │
+12)│          rows: 1          │
+13)└───────────────────────────┘
+
 # generate BIGINT data from 1 to 1000 in multiple partitions
 statement ok
 CREATE TABLE t1000 (i BIGINT) AS
@@ -867,7 +886,7 @@ limit 1000;
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

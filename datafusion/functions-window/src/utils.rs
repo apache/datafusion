@@ -39,7 +39,6 @@ pub(crate) fn get_scalar_value_from_args(
 ) -> Result<Option<ScalarValue>> {
     Ok(if let Some(field) = args.get(index) {
         let tmp = field
-            .as_any()
             .downcast_ref::<Literal>()
             .ok_or_else(|| DataFusionError::NotImplemented(
                 format!("There is only support Literal types for field at idx: {index} in Window Function"),

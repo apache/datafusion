@@ -23,8 +23,8 @@
 
 use std::borrow::Borrow;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{any::Any, sync::Arc};
 
 use super::{
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
@@ -225,10 +225,6 @@ impl ExecutionPlan for UnionExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -593,10 +589,6 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -1411,7 +1403,6 @@ mod tests {
 
         // Downcast to verify it's a UnionExec
         let union = union_plan
-            .as_any()
             .downcast_ref::<UnionExec>()
             .expect("Expected UnionExec");
 
@@ -1452,7 +1443,6 @@ mod tests {
 
         let union = UnionExec::try_new(vec![input1, input2])?;
         let union = union
-            .as_any()
             .downcast_ref::<UnionExec>()
             .expect("expected UnionExec for multiple inputs");
 

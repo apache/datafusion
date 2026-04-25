@@ -56,7 +56,7 @@ rand = { workspace = true }
 regex.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { workspace = true }
-snmalloc-rs = { version = "0.3", optional = true }
+snmalloc-rs = { version = "0.7", optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.17" }
 

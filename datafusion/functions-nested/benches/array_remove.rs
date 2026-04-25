@@ -389,7 +389,7 @@ fn create_f64_list_array(
             if rng.random::<f64>() < null_density {
                 None
             } else {
-                Some(rng.random_range(0.0..array_size as f64))
+                Some(rng.random_range(0..array_size as i64) as f64)
             }
         })
         .collect::<Float64Array>();

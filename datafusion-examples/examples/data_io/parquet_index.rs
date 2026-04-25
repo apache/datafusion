@@ -45,7 +45,6 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::fs;
@@ -208,10 +207,6 @@ impl IndexTableProvider {
 
 #[async_trait]
 impl TableProvider for IndexTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.index.schema().clone()
     }
@@ -462,7 +457,7 @@ impl PruningStatistics for ParquetMetadataIndex {
     }
 
     /// return the row counts for each file
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         Some(self.row_counts_ref().clone())
     }
 

@@ -34,6 +34,7 @@ pub use engines::DFColumnType;
 pub use engines::DFOutput;
 pub use engines::DFSqlLogicTestError;
 pub use engines::DataFusion;
+#[cfg(feature = "substrait")]
 pub use engines::DataFusionSubstraitRoundTrip;
 pub use engines::convert_batches;
 pub use engines::convert_schema_to_types;
