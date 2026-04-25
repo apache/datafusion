@@ -25,6 +25,9 @@ on:
   pull_request:
   merge_group:
 
+permissions:
+  contents: read
+
 jobs:
   check-files:
     runs-on: ubuntu-slim
