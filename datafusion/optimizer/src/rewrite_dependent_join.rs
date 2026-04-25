@@ -965,13 +965,11 @@ impl TreeNodeRewriter for DependentJoinRewriter {
     /// (i.e the node with at least one subquery expr)
     /// When all dependency information are already collected
     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        // if the node in the f_up meet any node in the stack, it means that node itself
-        // is a dependent join node,transformation by
-        // build a join based on
         let current_node = self.stack.pop().ok_or(internal_datafusion_err!(
             "stack cannot be empty during upward traversal"
         ))?;
         let is_top_node = self.stack.is_empty();
+        // only rewrite if the current node is a dependent join node.
         let node_info = if let Entry::Occupied(e) = self.nodes.entry(current_node) {
             let node_info = e.get();
             if !node_info.is_dependent_join_node {
@@ -1845,10 +1843,9 @@ mod tests {
 
     #[test]
     fn correlated_subquery_in_lateral_join_filter() -> Result<()> {
-        // Test demonstrates traversal order issue with subquery in JOIN condition
         // Query pattern:
         // SELECT * FROM t1
-        // JOIN t2 ON t2.key = t1.key
+        // JOIN LATERAL t2 ON t2.key = t1.key
         //   AND t2.val > (SELECT COUNT(*) FROM t3 WHERE t3.id = t1.id);
 
         let t1 = test_table_with_columns(
@@ -2076,7 +2073,6 @@ mod tests {
 
     #[test]
     fn correlated_subquery_in_join_filter() -> Result<()> {
-        // Test demonstrates traversal order issue with subquery in JOIN condition
         // Query pattern:
         // SELECT * FROM t1
         // JOIN t2 ON t2.key = t1.key
@@ -2110,15 +2106,14 @@ mod tests {
         );
 
         // Build join condition: t2.key = t1.key AND t2.val > scalar_sq AND EXISTS(exists_sq)
-        let join_condition = and(
-            col("t2.key").eq(col("t1.key")),
-            col("t2.val").gt(scalar_subquery(scalar_sq)),
-        );
+        let join_condition =
+            and(col("t2.key").eq(col("t1.key")), col("t1.val").eq(lit(1)))
+                .and(col("t2.val").gt(scalar_subquery(scalar_sq)));
         let plan = LogicalPlanBuilder::from(t1)
             .join_on(t2, JoinType::Inner, vec![join_condition])?
             .build()?;
 
-        // Inner Join:  Filter: t2.key = t1.key AND t2.val > (<subquery>)
+        // Inner Join:  Filter: t2.key = t1.key AND t1.val = 1 AND t2.val > (<subquery>)
         //   Subquery:
         //     Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
         //       Filter: t3.id = outer_ref(t1.id)
@@ -2129,7 +2124,7 @@ mod tests {
         assert_dependent_join_rewrite!(
             plan,
             @"
-        Filter: t2.key = t1.key AND t2.val > __scalar_sq_1 [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N, __scalar_sq_1:Int64]
+        Filter: t2.key = t1.key AND t1.val = Int32(1) AND t2.val > __scalar_sq_1 [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N, __scalar_sq_1:Int64]
           DependentJoin on [t1.id lvl 1 provided by 5] with expr (<subquery>) depth 1 [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N, __scalar_sq_1:Int64]
             Cross Join: [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N]
               TableScan: t1 [key:Int32;N, id:Int32;N, val:Int32;N]
@@ -2214,7 +2209,6 @@ mod tests {
 
     #[test]
     fn multiple_correlated_subqueries_in_join_filter() -> Result<()> {
-        // Test demonstrates traversal order issue with subquery in JOIN condition
         // Query pattern:
         // SELECT * FROM t1
         // JOIN t2 ON (t2.key = t1.key
@@ -2665,6 +2659,7 @@ mod tests {
         Ok(())
     }
 
+    // This test simulates the query mentioned in paper "Improving Unnesting of Complex Queries".
     #[test]
     fn nested_scalar_subquery_having_a_nested_scalar_subquery() -> Result<()> {
         let customer = test_table_with_columns(
@@ -2718,15 +2713,15 @@ mod tests {
                 .build()?,
         );
 
-        let main_query = Arc::new(
+        let plan = Arc::new(
             LogicalPlanBuilder::from(customer.clone())
                 .filter(col("customer.c_mktsegment").eq(lit("AUTOMOBILE")))?
                 .filter(scalar_subquery(scalar_sq_level1).gt(lit(5)))?
                 .build()?,
         );
 
-        let _index = assert_dependent_join_rewrite!(
-            main_query,
+        assert_dependent_join_rewrite!(
+            plan,
             @r#"
         Projection: customer.c_custkey, customer.c_mktsegment [c_custkey:Int32;N, c_mktsegment:Utf8;N]
           Filter: __scalar_sq_2 > Int32(5) [c_custkey:Int32;N, c_mktsegment:Utf8;N, __scalar_sq_2:Int64]
