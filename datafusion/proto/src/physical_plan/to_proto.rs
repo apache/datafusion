@@ -43,7 +43,9 @@ use datafusion_physical_plan::expressions::{
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
-use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion_physical_plan::{
+    PartitionRange, Partitioning, PhysicalExpr, RangeBound, RangePartitioning, WindowExpr,
+};
 
 use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
@@ -615,6 +617,11 @@ pub fn serialize_partitioning(
                 )),
             }
         }
+        Partitioning::Range(range) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::Range(
+                serialize_range_partitioning(range, codec, proto_converter)?,
+            )),
+        },
         Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
             partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
                 *partition_count as u64,
@@ -622,6 +629,41 @@ pub fn serialize_partitioning(
         },
     };
     Ok(serialized_partitioning)
+}
+
+fn serialize_range_partitioning(
+    range: &RangePartitioning,
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<protobuf::PhysicalRangePartitioning> {
+    Ok(protobuf::PhysicalRangePartitioning {
+        range_expr: serialize_physical_exprs(range.exprs(), codec, proto_converter)?,
+        ranges: range
+            .ranges()
+            .iter()
+            .map(serialize_partition_range)
+            .collect::<Result<Vec<_>>>()?,
+    })
+}
+
+fn serialize_partition_range(
+    range: &PartitionRange,
+) -> Result<protobuf::PhysicalPartitionRange> {
+    Ok(protobuf::PhysicalPartitionRange {
+        lower: range.lower().map(serialize_range_bound).transpose()?,
+        upper: range.upper().map(serialize_range_bound).transpose()?,
+    })
+}
+
+fn serialize_range_bound(bound: &RangeBound) -> Result<protobuf::PhysicalRangeBound> {
+    Ok(protobuf::PhysicalRangeBound {
+        values: bound
+            .values()
+            .iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, _>>()?,
+        inclusive: bound.is_inclusive(),
+    })
 }
 
 fn serialize_when_then_expr(

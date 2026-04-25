@@ -1372,6 +1372,21 @@ message PhysicalHashRepartition {
   uint64 partition_count = 2;
 }
 
+message PhysicalRangePartitioning {
+  repeated PhysicalExprNode range_expr = 1;
+  repeated PhysicalPartitionRange ranges = 2;
+}
+
+message PhysicalPartitionRange {
+  optional PhysicalRangeBound lower = 1;
+  optional PhysicalRangeBound upper = 2;
+}
+
+message PhysicalRangeBound {
+  repeated datafusion_common.ScalarValue values = 1;
+  bool inclusive = 2;
+}
+
 message RepartitionExecNode{
   PhysicalPlanNode input = 1;
   // oneof partition_method {
@@ -1388,6 +1403,7 @@ message Partitioning {
     uint64 round_robin = 1;
     PhysicalHashRepartition hash = 2;
     uint64 unknown = 3;
+    PhysicalRangePartitioning range = 4;
   }
 }
 

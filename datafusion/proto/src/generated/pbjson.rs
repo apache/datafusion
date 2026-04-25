@@ -15677,6 +15677,9 @@ impl serde::Serialize for Partitioning {
                     #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("unknown", ToString::to_string(&v).as_str())?;
                 }
+                partitioning::PartitionMethod::Range(v) => {
+                    struct_ser.serialize_field("range", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -15693,6 +15696,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
             "roundRobin",
             "hash",
             "unknown",
+            "range",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15700,6 +15704,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
             RoundRobin,
             Hash,
             Unknown,
+            Range,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15724,6 +15729,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
                             "roundRobin" | "round_robin" => Ok(GeneratedField::RoundRobin),
                             "hash" => Ok(GeneratedField::Hash),
                             "unknown" => Ok(GeneratedField::Unknown),
+                            "range" => Ok(GeneratedField::Range),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15764,6 +15770,13 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
                                 return Err(serde::de::Error::duplicate_field("unknown"));
                             }
                             partition_method__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| partitioning::PartitionMethod::Unknown(x.0));
+                        }
+                        GeneratedField::Range => {
+                            if partition_method__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("range"));
+                            }
+                            partition_method__ = map_.next_value::<::std::option::Option<_>>()?.map(partitioning::PartitionMethod::Range)
+;
                         }
                     }
                 }
@@ -18361,6 +18374,114 @@ impl<'de> serde::Deserialize<'de> for PhysicalNot {
         deserializer.deserialize_struct("datafusion.PhysicalNot", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PhysicalPartitionRange {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.lower.is_some() {
+            len += 1;
+        }
+        if self.upper.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalPartitionRange", len)?;
+        if let Some(v) = self.lower.as_ref() {
+            struct_ser.serialize_field("lower", v)?;
+        }
+        if let Some(v) = self.upper.as_ref() {
+            struct_ser.serialize_field("upper", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalPartitionRange {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "lower",
+            "upper",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Lower,
+            Upper,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "lower" => Ok(GeneratedField::Lower),
+                            "upper" => Ok(GeneratedField::Upper),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalPartitionRange;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalPartitionRange")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalPartitionRange, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut lower__ = None;
+                let mut upper__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Lower => {
+                            if lower__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lower"));
+                            }
+                            lower__ = map_.next_value()?;
+                        }
+                        GeneratedField::Upper => {
+                            if upper__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("upper"));
+                            }
+                            upper__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(PhysicalPartitionRange {
+                    lower: lower__,
+                    upper: upper__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalPartitionRange", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PhysicalPlanNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -18958,6 +19079,223 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalPlanNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PhysicalRangeBound {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.values.is_empty() {
+            len += 1;
+        }
+        if self.inclusive {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalRangeBound", len)?;
+        if !self.values.is_empty() {
+            struct_ser.serialize_field("values", &self.values)?;
+        }
+        if self.inclusive {
+            struct_ser.serialize_field("inclusive", &self.inclusive)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalRangeBound {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "values",
+            "inclusive",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Values,
+            Inclusive,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "values" => Ok(GeneratedField::Values),
+                            "inclusive" => Ok(GeneratedField::Inclusive),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalRangeBound;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalRangeBound")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalRangeBound, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut values__ = None;
+                let mut inclusive__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Values => {
+                            if values__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("values"));
+                            }
+                            values__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Inclusive => {
+                            if inclusive__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inclusive"));
+                            }
+                            inclusive__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PhysicalRangeBound {
+                    values: values__.unwrap_or_default(),
+                    inclusive: inclusive__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalRangeBound", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PhysicalRangePartitioning {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.range_expr.is_empty() {
+            len += 1;
+        }
+        if !self.ranges.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalRangePartitioning", len)?;
+        if !self.range_expr.is_empty() {
+            struct_ser.serialize_field("rangeExpr", &self.range_expr)?;
+        }
+        if !self.ranges.is_empty() {
+            struct_ser.serialize_field("ranges", &self.ranges)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "range_expr",
+            "rangeExpr",
+            "ranges",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            RangeExpr,
+            Ranges,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "rangeExpr" | "range_expr" => Ok(GeneratedField::RangeExpr),
+                            "ranges" => Ok(GeneratedField::Ranges),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalRangePartitioning;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalRangePartitioning")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalRangePartitioning, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut range_expr__ = None;
+                let mut ranges__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::RangeExpr => {
+                            if range_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rangeExpr"));
+                            }
+                            range_expr__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Ranges => {
+                            if ranges__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ranges"));
+                            }
+                            ranges__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PhysicalRangePartitioning {
+                    range_expr: range_expr__.unwrap_or_default(),
+                    ranges: ranges__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalRangePartitioning", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalScalarSubqueryExprNode {

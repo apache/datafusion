@@ -696,8 +696,24 @@ fn reorder_current_join_keys(
                 result => result,
             }
         }
+        (Some(Partitioning::Range(left_range)), _) => {
+            match try_reorder(join_keys, left_range.exprs(), left_equivalence_properties)
+            {
+                (join_keys, None) => reorder_current_join_keys(
+                    join_keys,
+                    None,
+                    right_partition,
+                    left_equivalence_properties,
+                    right_equivalence_properties,
+                ),
+                result => result,
+            }
+        }
         (_, Some(Partitioning::Hash(right_exprs, _))) => {
             try_reorder(join_keys, right_exprs, right_equivalence_properties)
+        }
+        (_, Some(Partitioning::Range(right_range))) => {
+            try_reorder(join_keys, right_range.exprs(), right_equivalence_properties)
         }
         _ => (join_keys, None),
     }

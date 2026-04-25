@@ -53,7 +53,7 @@ use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err,
-    internal_datafusion_err, internal_err,
+    internal_datafusion_err, internal_err, plan_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -1318,6 +1318,7 @@ impl ExecutionPlan for RepartitionExec {
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
+            Range(range) => Range(range),
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
         };
         Ok(Some(Arc::new(Self {
@@ -1338,6 +1339,10 @@ impl RepartitionExec {
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
     ) -> Result<Self> {
+        if matches!(partitioning, Partitioning::Range(_)) {
+            return plan_err!("RepartitionExec does not support range repartitioning");
+        }
+
         let preserve_order = false;
         let cache = Self::compute_properties(&input, partitioning, preserve_order);
         Ok(RepartitionExec {
