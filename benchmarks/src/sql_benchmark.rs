@@ -813,7 +813,7 @@ impl BenchmarkDirective {
                         break;
                     } else {
                         query.push_str(line);
-                        query.push(' ');
+                        query.push('\n');
                     }
                 }
                 Some(Err(e)) => return Err(e),
@@ -845,10 +845,11 @@ impl BenchmarkDirective {
             let query_file = query_file.replace("\r\n", "\n");
 
             // some files have multiple queries, split apart
-            for query in query_file
-                .split("\n\n")
-                .flat_map(|query| query.split(";\n"))
-            {
+            for query in split_query_statements(&query_file) {
+                bench.process_query(splits, query.to_string())?;
+            }
+        } else if directive == QueryDirective::Run {
+            for query in split_query_statements(&query) {
                 bench.process_query(splits, query.to_string())?;
             }
         } else {
@@ -1282,6 +1283,16 @@ fn starts_with_ignore_ascii_case(input: &str, prefix: &str) -> bool {
     input
         .get(..prefix.len())
         .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
+}
+
+fn split_query_statements(sql: &str) -> impl Iterator<Item = &str> {
+    sql.split("\n\n")
+        .flat_map(|query| {
+            query
+                .split_inclusive(";\n")
+                .map(|part| part.trim_end_matches('\n'))
+        })
+        .filter(|query| !query.trim().is_empty())
 }
 
 fn is_blank_line(line: &str) -> bool {
@@ -1909,6 +1920,32 @@ DROP VIEW v;
     }
 
     #[tokio::test]
+    async fn parser_splits_inline_run_block_on_semicolon_newline() {
+        let benchmark = parse_benchmark(
+            r#"
+run
+CREATE TABLE t AS SELECT 1 AS value;
+SELECT value + 1 AS value FROM t;
+DROP TABLE t;
+"#,
+        )
+        .await
+        .expect("benchmark should parse");
+
+        assert_eq!(
+            benchmark
+                .queries()
+                .get(&QueryDirective::Run)
+                .expect("run query"),
+            &vec![
+                "CREATE TABLE t AS SELECT 1 AS value;".to_string(),
+                "SELECT value + 1 AS value FROM t;".to_string(),
+                "DROP TABLE t;".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn parser_accepts_assert_with_expected_rows() {
         let benchmark = parse_benchmark(
             r#"
@@ -2153,9 +2190,9 @@ NULL|(empty)
                 .get(&QueryDirective::Run)
                 .expect("run queries"),
             &vec![
-                "SELECT 1 AS value".to_string(),
+                "SELECT 1 AS value;".to_string(),
                 "SELECT 2 AS value;".to_string(),
-                "WITH t AS (SELECT 3 AS value) SELECT * FROM t".to_string(),
+                "WITH t AS (SELECT 3 AS value) SELECT * FROM t;".to_string(),
             ]
         );
     }
@@ -2189,7 +2226,7 @@ NULL|(empty)
                 .queries()
                 .get(&QueryDirective::Run)
                 .expect("run query"),
-            &vec!["SELECT 5 AS value".to_string()]
+            &vec!["SELECT 5 AS value;".to_string()]
         );
     }
 
@@ -2325,8 +2362,8 @@ NULL|(empty)
                 .get(&QueryDirective::Run)
                 .expect("run queries"),
             &vec![
-                "SELECT 1 AS value".to_string(),
-                "SELECT 2 AS value".to_string()
+                "SELECT 1 AS value;".to_string(),
+                "SELECT 2 AS value;".to_string()
             ]
         );
     }
@@ -3044,6 +3081,20 @@ SELECT 1;
         let mut benchmark = parse_benchmark_file(&benchmark_path)
             .await
             .expect("benchmark should parse");
+        let ctx = SessionContext::new();
+
+        benchmark.run(&ctx, true).await.expect("run should succeed");
+
+        assert_eq!(formatted_last_results(&benchmark), vec![vec!["3"]]);
+    }
+
+    #[tokio::test]
+    async fn run_inline_multi_statement_only_keeps_last_select_or_with_result() {
+        let mut benchmark = parse_benchmark(
+            "run\nCREATE TABLE t AS SELECT 1 AS value;\nSELECT 2 AS value;\nWITH u AS (SELECT 3 AS value) SELECT value FROM u;\n",
+        )
+        .await
+        .expect("benchmark should parse");
         let ctx = SessionContext::new();
 
         benchmark.run(&ctx, true).await.expect("run should succeed");
