@@ -26,8 +26,7 @@ use arrow::array::{
     NullArray, OffsetSizeTrait, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::DataType;
-use arrow::datatypes::{DataType::Null, Field};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::binary::{
@@ -96,7 +95,7 @@ impl ScalarUDFImpl for MakeArray {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let element_type = if arg_types.is_empty() {
-            Null
+            DataType::Null
         } else {
             // At this point, all the type in array should be coerced to the same one.
             arg_types[0].to_owned()
@@ -130,20 +129,23 @@ impl ScalarUDFImpl for MakeArray {
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let data_type = arrays.iter().find_map(|arg| {
-        let arg_type = arg.data_type();
-        (!arg_type.is_null()).then_some(arg_type)
-    });
-
-    let data_type = data_type.unwrap_or(&Null);
-    if data_type.is_null() {
-        // Either an empty array or all nulls:
-        let length = arrays.iter().map(|a| a.len()).sum();
-        let array = new_null_array(&Null, length);
+    // Zero arguments are the only case that should build a scalar empty list.
+    if arrays.is_empty() {
+        let array = new_null_array(&DataType::Null, 0);
         Ok(Arc::new(
             SingleRowListArrayBuilder::new(array).build_list_array(),
         ))
     } else {
+        // All-null inputs still need to flow through `array_array()` so rows
+        // are built per input row instead of collapsing to one value.
+        let data_type = arrays
+            .iter()
+            .find_map(|arg| {
+                let arg_type = arg.data_type();
+                (!arg_type.is_null()).then_some(arg_type)
+            })
+            .unwrap_or(&DataType::Null);
+
         array_array::<i32>(arrays, data_type.clone(), Field::LIST_FIELD_DEFAULT_NAME)
     }
 }
@@ -254,5 +256,33 @@ pub fn coerce_types_inner(arg_types: &[DataType], name: &str) -> Result<Vec<Data
             name,
             arg_types.iter().join(", ")
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::ListArray;
+
+    #[test]
+    fn make_array_inner_all_null_arrays_preserves_row_count_and_width() {
+        let inputs = vec![
+            Arc::new(NullArray::new(3)) as ArrayRef,
+            Arc::new(NullArray::new(3)) as ArrayRef,
+        ];
+
+        let result = make_array_inner(&inputs).unwrap();
+        let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+
+        assert_eq!(list.len(), 3);
+        assert_eq!(list.value_type(), DataType::Null);
+        assert_eq!(list.values().len(), 6);
+
+        for row in 0..list.len() {
+            assert_eq!(list.value_length(row), 2);
+            let values = list.value(row);
+            assert_eq!(values.len(), 2);
+            assert_eq!(values.logical_null_count(), 2);
+        }
     }
 }

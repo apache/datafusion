@@ -43,6 +43,16 @@ SELECT array(null);
 ----
 [NULL]
 
+# array with null-array parameter preserves input rows and list-null value
+query I?I
+SELECT id, array(n), size(array(n))
+FROM (VALUES (1, NULL), (2, NULL), (3, NULL)) AS t(id, n)
+ORDER BY id;
+----
+1 [NULL] 1
+2 [NULL] 1
+3 [NULL] 1
+
 
 query ?
 SELECT array(1, NULL, 3);

@@ -175,6 +175,38 @@ async fn prepared_statement_type_coercion() -> Result<()> {
 }
 
 #[tokio::test]
+async fn make_array_null_typed_column_preserves_rows() -> Result<()> {
+    let ctx = SessionContext::new();
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
+        ("n", Arc::new(NullArray::new(3)) as ArrayRef),
+    ])?;
+    ctx.register_batch("test", batch)?;
+
+    let results = ctx
+        .sql(
+            "SELECT id, make_array(n) AS arr, array_length(make_array(n)) AS len \
+             FROM test \
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +----+-----+-----+
+    | id | arr | len |
+    +----+-----+-----+
+    | 1  | []  | 1   |
+    | 2  | []  | 1   |
+    | 3  | []  | 1   |
+    +----+-----+-----+
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_parameter_type_coercion() -> Result<()> {
     let ctx = SessionContext::new();
     let signed_ints: Int32Array = vec![-1, 0, 1].into();
