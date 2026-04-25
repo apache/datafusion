@@ -1876,13 +1876,13 @@ mod tests {
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
-    use datafusion_expr::expr::WildcardOptions;
+    use datafusion_expr::expr::{LambdaVariable, WildcardOptions};
     use datafusion_expr::{
         ColumnarValue, HigherOrderUDF, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col,
         cube, exists, grouping_set, interval_datetime_lit, interval_year_month_lit,
-        lambda, lambda_var, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when,
+        lambda, lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan,
+        try_cast, when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
@@ -2061,10 +2061,10 @@ mod tests {
                         col("a"),
                         lambda(
                             ["v"],
-                            -lambda_var(
-                                "v",
-                                Arc::new(Field::new("", DataType::Null, true)),
-                            ),
+                            -Expr::LambdaVariable(LambdaVariable::new(
+                                "v".to_string(),
+                                Some(Arc::new(Field::new("", DataType::Null, true))),
+                            )),
                         ),
                     ],
                 )),

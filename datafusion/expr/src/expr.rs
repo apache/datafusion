@@ -484,17 +484,19 @@ impl PartialEq for HigherOrderFunction {
 }
 
 /// A named reference to a lambda parameter which includes it's own [`FieldRef`],
-/// which is used to implement [`ExprSchemable`], for example
+/// which is used to implement [`ExprSchemable`], for example. Note the field must
+/// be set in order to create a physical lambda variable. A helper to automatically
+/// set them will be added in the future
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub struct LambdaVariable {
     pub name: String,
-    pub field: FieldRef,
+    pub field: Option<FieldRef>,
     pub spans: Spans,
 }
 
 impl LambdaVariable {
     /// Create a lambda variable from a name and a Field.
-    pub fn new(name: String, field: FieldRef) -> Self {
+    pub fn new(name: String, field: Option<FieldRef>) -> Self {
         Self {
             name,
             field,

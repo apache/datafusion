@@ -30,7 +30,7 @@ use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, ToDFSchema, exec_err, internal_datafusion_err,
-    not_impl_err, plan_err,
+    not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
@@ -477,6 +477,10 @@ pub fn create_physical_expr(
             field,
             spans: _,
         }) => {
+            let field = field.as_ref().ok_or_else(|| {
+                plan_datafusion_err!("unresolved LambdaVariable {name}")
+            })?;
+
             let index = input_dfschema.inner().index_of(name)?;
             let schema_field = input_dfschema.field(index);
 

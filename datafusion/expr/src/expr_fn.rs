@@ -728,9 +728,11 @@ pub fn lambda(params: impl IntoIterator<Item = impl Into<String>>, body: Expr) -
     ))
 }
 
-/// Create an lambda variable expression
-pub fn lambda_var(name: impl Into<String>, field: FieldRef) -> Expr {
-    Expr::LambdaVariable(LambdaVariable::new(name.into(), field))
+/// Create a lambda variable expression
+// todo: make this pub when support for optional field lands
+#[expect(unused)]
+fn lambda_var(name: impl Into<String>) -> Expr {
+    Expr::LambdaVariable(LambdaVariable::new(name.into(), None))
 }
 
 /// Extensions for configuring [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
