@@ -37,7 +37,7 @@ on:
   merge_group:
 
 permissions:
-  content: read
+  contents: read
 
 jobs:
   security_audit:
