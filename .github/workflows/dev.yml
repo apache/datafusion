@@ -56,10 +56,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - name: Install lychee
+      - name: Load tool versions
         run: |
           source ci/scripts/utils/tool_versions.sh
-          cargo install lychee --locked --version "${LYCHEE_VERSION}"
+          echo "LYCHEE_VERSION=${LYCHEE_VERSION}" >> "$GITHUB_ENV"
+      - name: Install lychee
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486  # v2.75.18
+        with:
+          tool: lychee@${{ env.LYCHEE_VERSION }}
       - name: Run markdown link check
         run: bash ci/scripts/markdown_link_check.sh
 
