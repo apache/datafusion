@@ -23,6 +23,9 @@ on:
   pull_request:
   merge_group:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
