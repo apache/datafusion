@@ -1042,6 +1042,22 @@ fn test_prepare_statement_unknown_hash_param() {
 }
 
 #[test]
+fn test_insert_infer_with_function_wrapped_placeholder() {
+    let plan = logical_plan(
+        "INSERT INTO person (id, first_name, age) VALUES ($1, character_length($2), $3)",
+    )
+    .unwrap();
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types: HashMap<String, Option<DataType>> = HashMap::from([
+        ("$1".to_string(), Some(DataType::UInt32)),
+        ("$2".to_string(), None),
+        ("$3".to_string(), Some(DataType::Int32)),
+    ]);
+    assert_eq!(actual_types, expected_types);
+}
+
+#[test]
 fn test_prepare_statement_bad_list_idx() {
     let sql = "SELECT id from person where id = $foo";
     let plan = logical_plan(sql).unwrap();

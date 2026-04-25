@@ -244,6 +244,21 @@ impl ContextProvider for MockContextProvider {
                     false,
                 ),
             ])),
+            "multi_array_table" => Ok(Schema::new(vec![
+                Field::new(
+                    "column_a",
+                    DataType::List(Arc::new(Field::new_list_field(
+                        DataType::Int64,
+                        true,
+                    ))),
+                    false,
+                ),
+                Field::new(
+                    "column_b",
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+                    false,
+                ),
+            ])),
             "@quoted_identifier_names_table" => Ok(Schema::new(vec![Field::new(
                 "@column",
                 DataType::UInt32,

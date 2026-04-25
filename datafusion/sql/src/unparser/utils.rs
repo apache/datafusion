@@ -22,8 +22,8 @@ use super::{
     rewrite::TableAliasRewriter,
 };
 use datafusion_common::{
-    Column, DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
-    internal_err,
+    Column, DataFusionError, Result, ScalarValue, TableReference,
+    assert_eq_or_internal_err, internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::{
@@ -181,6 +181,32 @@ pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr>
             Ok(Transformed::no(sub_expr))
 
         }).map(|e| e.data)
+}
+
+/// Like `unproject_unnest_expr`, but for Snowflake FLATTEN:
+/// transforms `__unnest_placeholder(...)` column references into
+/// `Expr::Column(Column { relation: Some(alias), name: "VALUE" })`.
+pub(crate) fn unproject_unnest_expr_as_flatten_value(
+    expr: Expr,
+    unnest: &Unnest,
+    flatten_alias: &str,
+) -> Result<Expr> {
+    expr.transform(|sub_expr| {
+        if let Expr::Column(col_ref) = &sub_expr
+            && unnest
+                .list_type_columns
+                .iter()
+                .any(|e| e.1.output_column.name == col_ref.name)
+        {
+            let value_col = Expr::Column(Column::new(
+                Some(TableReference::bare(flatten_alias)),
+                "VALUE",
+            ));
+            return Ok(Transformed::yes(value_col));
+        }
+        Ok(Transformed::no(sub_expr))
+    })
+    .map(|e| e.data)
 }
 
 /// Recursively identify all Column expressions and transform them into the appropriate
