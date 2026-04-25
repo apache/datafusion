@@ -58,9 +58,9 @@ mod tests {
         let results = df.collect().await?;
 
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0], create_record_batch(1, 5));
-        assert_eq!(results[1], create_record_batch(6, 1));
-        assert_eq!(results[2], create_record_batch(7, 5));
+        assert!(results.contains(&create_record_batch(1, 5)));
+        assert!(results.contains(&create_record_batch(6, 1)));
+        assert!(results.contains(&create_record_batch(7, 5)));
 
         Ok(())
     }

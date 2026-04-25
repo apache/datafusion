@@ -17,7 +17,6 @@
 
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::string::common::*;
@@ -102,10 +101,6 @@ impl LtrimFunc {
 }
 
 impl ScalarUDFImpl for LtrimFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "ltrim"
     }

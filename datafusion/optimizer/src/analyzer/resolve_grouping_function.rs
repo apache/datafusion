@@ -72,6 +72,7 @@ fn group_expr_to_bitmap_index(group_expr: &[Expr]) -> Result<HashMap<&Expr, usiz
         .collect::<HashMap<_, _>>())
 }
 
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn replace_grouping_exprs(
     input: Arc<LogicalPlan>,
     schema: &DFSchema,
@@ -96,17 +97,42 @@ fn replace_grouping_exprs(
         .into_iter()
         .zip(columns.into_iter().skip(group_expr_len + grouping_id_len))
     {
+        let grouping_id_type = is_grouping_set
+            .then(|| {
+                schema
+                    .field_with_name(None, Aggregate::INTERNAL_GROUPING_ID)
+                    .map(|f| f.data_type().clone())
+            })
+            .transpose()?;
         match expr {
             Expr::AggregateFunction(ref function) if is_grouping_function(&expr) => {
                 let grouping_expr = grouping_function_on_id(
                     function,
                     &group_expr_to_bitmap_index,
-                    is_grouping_set,
+                    grouping_id_type,
                 )?;
                 projection_exprs.push(Expr::Alias(Alias::new(
                     grouping_expr,
                     column.relation,
                     column.name,
+                )));
+            }
+            Expr::Alias(Alias {
+                ref relation,
+                ref name,
+                ..
+            }) if is_grouping_function(&expr) => {
+                let function = unwrap_alias_to_grouping_function(&expr)?;
+                let grouping_expr = grouping_function_on_id(
+                    function,
+                    &group_expr_to_bitmap_index,
+                    grouping_id_type,
+                )?;
+                // Preserve the outermost user-provided alias
+                projection_exprs.push(Expr::Alias(Alias::new(
+                    grouping_expr,
+                    relation.clone(),
+                    name.clone(),
                 )));
             }
             _ => {
@@ -147,10 +173,27 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     Ok(transformed_plan)
 }
 
+/// Recursively unwrap `Expr::Alias` nodes to reach the inner `AggregateFunction`.
+/// Returns an error if the innermost expression is not an `AggregateFunction`,
+/// which should not happen if `is_grouping_function` returned true.
+fn unwrap_alias_to_grouping_function(expr: &Expr) -> Result<&AggregateFunction> {
+    match expr {
+        Expr::AggregateFunction(function) => Ok(function),
+        Expr::Alias(Alias { expr, .. }) => unwrap_alias_to_grouping_function(expr),
+        _ => plan_err!("Expected grouping aggregate function inside alias, got {expr}"),
+    }
+}
+
 fn is_grouping_function(expr: &Expr) -> bool {
     // TODO: Do something better than name here should grouping be a built
     // in expression?
-    matches!(expr, Expr::AggregateFunction(AggregateFunction { func, .. }) if func.name() == "grouping")
+    match expr {
+        Expr::AggregateFunction(AggregateFunction { func, .. }) => {
+            func.name() == "grouping"
+        }
+        Expr::Alias(Alias { expr, .. }) => is_grouping_function(expr),
+        _ => false,
+    }
 }
 
 fn contains_grouping_function(exprs: &[Expr]) -> bool {
@@ -158,6 +201,7 @@ fn contains_grouping_function(exprs: &[Expr]) -> bool {
 }
 
 /// Validate that the arguments to the grouping function are in the group by clause.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn validate_args(
     function: &AggregateFunction,
     group_by_expr: &HashMap<&Expr, usize>,
@@ -178,43 +222,48 @@ fn validate_args(
     }
 }
 
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn grouping_function_on_id(
     function: &AggregateFunction,
     group_by_expr: &HashMap<&Expr, usize>,
-    is_grouping_set: bool,
+    // None means not a grouping set (result is always 0).
+    grouping_id_type: Option<DataType>,
 ) -> Result<Expr> {
     validate_args(function, group_by_expr)?;
     let args = &function.params.args;
 
     // Postgres allows grouping function for group by without grouping sets, the result is then
     // always 0
-    if !is_grouping_set {
+    let Some(grouping_id_type) = grouping_id_type else {
         return Ok(Expr::Literal(ScalarValue::from(0i32), None));
-    }
-
-    let group_by_expr_count = group_by_expr.len();
-    let literal = |value: usize| {
-        if group_by_expr_count < 8 {
-            Expr::Literal(ScalarValue::from(value as u8), None)
-        } else if group_by_expr_count < 16 {
-            Expr::Literal(ScalarValue::from(value as u16), None)
-        } else if group_by_expr_count < 32 {
-            Expr::Literal(ScalarValue::from(value as u32), None)
-        } else {
-            Expr::Literal(ScalarValue::from(value as u64), None)
-        }
     };
 
+    // Use the actual __grouping_id column type to size literals correctly. This
+    // accounts for duplicate-ordinal bits that `Aggregate::grouping_id_type`
+    // packs into the high bits of the column, which a simple count of grouping
+    // expressions would miss.
+    let literal = |value: usize| match &grouping_id_type {
+        DataType::UInt8 => Expr::Literal(ScalarValue::from(value as u8), None),
+        DataType::UInt16 => Expr::Literal(ScalarValue::from(value as u16), None),
+        DataType::UInt32 => Expr::Literal(ScalarValue::from(value as u32), None),
+        DataType::UInt64 => Expr::Literal(ScalarValue::from(value as u64), None),
+        other => panic!("unexpected __grouping_id type: {other}"),
+    };
     let grouping_id_column = Expr::Column(Column::from(Aggregate::INTERNAL_GROUPING_ID));
-    // The grouping call is exactly our internal grouping id
-    if args.len() == group_by_expr_count
+    if args.len() == group_by_expr.len()
         && args
             .iter()
             .rev()
             .enumerate()
             .all(|(idx, expr)| group_by_expr.get(expr) == Some(&idx))
     {
-        return Ok(cast(grouping_id_column, DataType::Int32));
+        let n = group_by_expr.len();
+        // Mask the ordinal bits above position `n` so only the semantic bitmask is visible.
+        // checked_shl returns None when n >= 64 (all bits are semantic), mapping to u64::MAX.
+        let semantic_mask: u64 = 1u64.checked_shl(n as u32).map_or(u64::MAX, |m| m - 1);
+        let masked_id =
+            bitwise_and(grouping_id_column.clone(), literal(semantic_mask as usize));
+        return Ok(cast(masked_id, DataType::Int32));
     }
 
     args.iter()

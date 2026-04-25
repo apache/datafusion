@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -62,10 +61,6 @@ impl FormatStringFunc {
 }
 
 impl ScalarUDFImpl for FormatStringFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "format_string"
     }
@@ -2361,7 +2356,6 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
 mod tests {
     use super::*;
     use arrow::datatypes::DataType::Utf8;
-    use datafusion_common::Result;
 
     #[test]
     fn test_format_string_nullability() -> Result<()> {

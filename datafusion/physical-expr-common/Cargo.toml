@@ -41,7 +41,6 @@ workspace = true
 name = "datafusion_physical_expr_common"
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
@@ -50,3 +49,11 @@ hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 parking_lot = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+rand = { workspace = true }
+
+[[bench]]
+harness = false
+name = "compare_nested"

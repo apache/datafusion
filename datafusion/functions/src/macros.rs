@@ -213,7 +213,7 @@ macro_rules! make_math_unary_udf {
         $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
-            use std::any::Any;
+
             use std::sync::Arc;
 
             use arrow::array::{ArrayRef, AsArray};
@@ -245,9 +245,6 @@ macro_rules! make_math_unary_udf {
             }
 
             impl ScalarUDFImpl for $UDF {
-                fn as_any(&self) -> &dyn Any {
-                    self
-                }
                 fn name(&self) -> &str {
                     stringify!($NAME)
                 }
@@ -327,7 +324,7 @@ macro_rules! make_math_binary_udf {
         $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
-            use std::any::Any;
+
             use std::sync::Arc;
 
             use arrow::array::{ArrayRef, AsArray};
@@ -362,9 +359,6 @@ macro_rules! make_math_binary_udf {
             }
 
             impl ScalarUDFImpl for $UDF {
-                fn as_any(&self) -> &dyn Any {
-                    self
-                }
                 fn name(&self) -> &str {
                     stringify!($NAME)
                 }

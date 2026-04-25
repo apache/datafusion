@@ -263,6 +263,32 @@ SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'LargeList(Utf8)'), a
 ----
 {POST: 41, HEAD: 33, PATCH: 30}
 
+query ?
+SELECT MAP(make_array(X'6162', X'6364'), make_array(1, 2));
+----
+{6162: 1, 6364: 2}
+
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[100, 117, 112\]
+SELECT MAP(make_array(X'647570', X'647570'), make_array(1, 2));
+
+# StringView test: map with StringView keys
+query ?
+SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'List(Utf8View)'), make_array(41, 33, 30));
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+
+query error DataFusion error: Execution error: map key cannot be null
+SELECT MAP(arrow_cast(make_array('POST', null, 'PATCH'), 'List(Utf8View)'), make_array(41, 33, 30));
+
+# BinaryView test: map with BinaryView keys
+query ?
+SELECT MAP(arrow_cast(make_array(X'6162', X'6364'), 'List(BinaryView)'), make_array(1, 2));
+----
+{6162: 1, 6364: 2}
+
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[100, 117, 112\]
+SELECT MAP(arrow_cast(make_array(X'647570', X'647570'), 'List(BinaryView)'), make_array(1, 2));
+
 statement ok
 create table t as values
 ('a', 1, 'k1', 10, ['k1', 'k2'], [1, 2], 'POST', [[1,2,3]], ['a']),

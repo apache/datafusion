@@ -19,7 +19,6 @@
 //!
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::{Seek, SeekFrom};
@@ -98,10 +97,6 @@ impl FileFormatFactory for ArrowFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ArrowFormat)
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 impl GetExt for ArrowFormatFactory {
@@ -117,10 +112,6 @@ pub struct ArrowFormat;
 
 #[async_trait]
 impl FileFormat for ArrowFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         ArrowFormatFactory::new().get_ext()
     }
@@ -374,10 +365,6 @@ impl DisplayAs for ArrowFileSink {
 
 #[async_trait]
 impl DataSink for ArrowFileSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }
@@ -549,15 +536,18 @@ async fn is_object_in_arrow_ipc_file_format(
 mod tests {
     use super::*;
 
+    use std::any::Any;
+
     use chrono::DateTime;
     use datafusion_common::DFSchema;
     use datafusion_common::config::TableOptions;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::registry::ExtensionTypeRegistryRef;
     use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
+    use object_store::{chunked::ChunkedStore, memory::InMemory};
 
     struct MockSession {
         config: SessionConfig,
@@ -607,6 +597,10 @@ mod tests {
         }
 
         fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
             unimplemented!()
         }
 

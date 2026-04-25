@@ -122,7 +122,6 @@ pub fn reverse_row_selection(
 mod tests {
     use crate::ParquetAccessPlan;
     use crate::RowGroupAccess;
-    use crate::opener::PreparedAccessPlan;
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::Bytes;
     use parquet::arrow::ArrowWriter;
@@ -169,9 +168,9 @@ mod tests {
         let access_plan = ParquetAccessPlan::new_all(3);
         let rg_metadata = metadata.row_groups();
 
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Verify original plan
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 1, 2]);
@@ -205,9 +204,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -255,9 +254,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -298,9 +297,9 @@ mod tests {
         }
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let reversed_plan = prepared_plan
             .reverse(&metadata)
@@ -338,9 +337,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -379,9 +378,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -435,9 +434,9 @@ mod tests {
         access_plan.scan_selection(2, RowSelection::from(vec![RowSelector::select(100)]));
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -502,9 +501,9 @@ mod tests {
         let rg_metadata = metadata.row_groups();
 
         // Step 1: Create PreparedAccessPlan
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Verify original plan
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 2, 3]);
@@ -594,9 +593,9 @@ mod tests {
         access_plan.scan_selection(2, RowSelection::from(vec![RowSelector::select(100)]));
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -647,9 +646,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -720,9 +719,9 @@ mod tests {
         let rg_metadata = metadata.row_groups();
 
         // Step 1: Create PreparedAccessPlan
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Verify original plan in detail
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 2, 3]);
@@ -862,9 +861,9 @@ mod tests {
         access_plan.scan_selection(2, RowSelection::from(vec![RowSelector::select(100)]));
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Verify original selection structure in detail
         let orig_selectors: Vec<_> = prepared_plan
@@ -944,9 +943,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan =
-            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-                .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan = access_plan
+            .prepare(rg_metadata)
+            .expect("Failed to create PreparedAccessPlan");
 
         // Original: [0, 2]
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 2]);

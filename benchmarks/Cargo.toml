@@ -40,6 +40,8 @@ mimalloc_extended = ["libmimalloc-sys/extended"]
 
 [dependencies]
 arrow = { workspace = true }
+async-trait = "0.1"
+bytes = { workspace = true }
 clap = { version = "4.5.60", features = ["derive"] }
 datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
@@ -54,7 +56,7 @@ rand = { workspace = true }
 regex.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { workspace = true }
-snmalloc-rs = { version = "0.3", optional = true }
+snmalloc-rs = { version = "0.7", optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.17" }
 

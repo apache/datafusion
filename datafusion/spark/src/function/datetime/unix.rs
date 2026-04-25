@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
@@ -55,10 +54,6 @@ impl SparkUnixDate {
 }
 
 impl ScalarUDFImpl for SparkUnixDate {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "unix_date"
     }
@@ -132,10 +127,6 @@ impl SparkUnixTimestamp {
 }
 
 impl ScalarUDFImpl for SparkUnixTimestamp {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.name
     }

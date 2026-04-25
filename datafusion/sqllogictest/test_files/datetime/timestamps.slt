@@ -5385,3 +5385,9 @@ SELECT to_timestamp(arrow_cast(100.5, 'Float16'), name) FROM test_to_timestamp_s
 
 statement ok
 drop table test_to_timestamp_scalar
+
+# date_bin with NULL interval should return NULL, not a planning error
+query P
+SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:00:00')
+----
+NULL

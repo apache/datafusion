@@ -42,8 +42,6 @@ physical_plan
 statement error DataFusion error: Error during planning: WITH query name "a" specified more than once
 WITH a AS (SELECT 1), a AS (SELECT 2) SELECT * FROM a;
 
-statement ok
-CREATE TABLE orders AS VALUES (1), (2);
 
 ##########
 ## CTE Reference Resolution
@@ -59,9 +57,13 @@ CREATE TABLE orders AS VALUES (1), (2);
 #
 # Refs: https://github.com/apache/datafusion/issues/18932
 #
-# NOTE: This test relies on a strict catalog/schema provider registered in
+# NOTE: This test relies on a strict schema provider registered in
 # `datafusion/sqllogictest/src/test_context.rs` that provides only the `orders`
 # table and panics on unexpected lookups.
+
+# Use the strict schema provider
+statement ok
+set datafusion.catalog.default_schema = "strict_schema";
 
 statement ok
 set datafusion.sql_parser.enable_ident_normalization = true;
@@ -98,6 +100,17 @@ with barbaz as (select * from orders) select * from barbaz;
 ----
 1
 2
+
+# Reset to default configs
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+statement ok
+set datafusion.catalog.default_schema = "public";
+
+## CTE reference resolution tests end ##
+
+
 
 # Test disabling recursive CTE
 statement ok
@@ -1015,7 +1028,7 @@ logical_plan
 04)----SubqueryAlias: cte
 05)------TableScan: person projection=[id]
 physical_plan
-01)HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
 03)--DataSourceExec: partitions=1, partition_sizes=[0]
 
@@ -1210,6 +1223,83 @@ physical_plan
 07)------RepartitionExec: partitioning=Hash([start@0], 4), input_partitions=1
 08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
 
+# Regression test: recursive CTE column-name stability under ORDER BY + LIMIT.
+#
+# The recursive CTE below has an anchor that aliases a computed column
+# (`upper(val) AS val`) while the recursive term leaves the same expression
+# un-aliased (`upper(r.val)`). RecursiveQueryExec declares its output schema
+# from the anchor, so the plan-level column is `val`; but if it forwards the
+# recursive term's batches without rebinding their schema to the anchor's,
+# downstream consumers that read `batch.schema().field(i).name()` observe
+# the leaked `upper(r.val)` name. The outer `ORDER BY ts LIMIT 10` routes
+# through the TopK path in SortExec, which passes batch schemas through
+# verbatim — so the leak surfaces there.
+#
+# sqllogictest compares row values and can't assert column names directly.
+# To surface the leak inside SLT, we `COPY` the result to a CSV file with a
+# header row (the CSV writer names header columns from each batch's own
+# schema) and then read the file back as headerless CSV so the header line
+# appears as a data row we can compare against the expected column names.
+statement ok
+CREATE TABLE cte_schema_records (
+    id VARCHAR NOT NULL,
+    parent_id VARCHAR,
+    ts TIMESTAMP NOT NULL,
+    val VARCHAR
+);
+
+statement ok
+INSERT INTO cte_schema_records VALUES
+  ('a00', NULL,  TIMESTAMP '2025-01-01 00:00:00', 'v_span'),
+  ('a01', 'a00', TIMESTAMP '2025-01-01 00:00:01', 'v_log_1'),
+  ('a02', 'a01', TIMESTAMP '2025-01-01 00:00:02', 'v_log_2'),
+  ('a03', 'a02', TIMESTAMP '2025-01-01 00:00:03', 'v_log_3'),
+  ('a04', 'a03', TIMESTAMP '2025-01-01 00:00:04', 'v_log_4'),
+  ('a05', 'a04', TIMESTAMP '2025-01-01 00:00:05', 'v_log_5');
+
+query I
+COPY (WITH RECURSIVE descendants AS (
+    SELECT id, parent_id, ts, upper(val) AS val
+      FROM cte_schema_records WHERE id = 'a00'
+    UNION ALL
+    SELECT r.id, r.parent_id, r.ts, upper(r.val)
+      FROM cte_schema_records r
+      INNER JOIN descendants d ON r.parent_id = d.id
+  )
+  SELECT id, parent_id, ts, val
+    FROM descendants
+    ORDER BY ts ASC
+    LIMIT 10)
+TO 'test_files/scratch/cte/recursive_order_limit_schema/'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE cte_schema_reread (
+    id VARCHAR, parent_id VARCHAR, ts VARCHAR, val VARCHAR
+)
+STORED AS CSV
+LOCATION 'test_files/scratch/cte/recursive_order_limit_schema/'
+OPTIONS ('format.has_header' 'false');
+
+# The CSV header row appears as a data row here because we re-read with
+# has_header='false'. It must match the CTE's declared column names; if
+# RecursiveQueryExec leaked the recursive branch's schema, the last field
+# would read `upper(r.val)` instead of `val`.
+query TTTT
+SELECT id, parent_id, ts, val
+  FROM cte_schema_reread
+  WHERE id = 'id';
+----
+id parent_id ts val
+
+statement ok
+DROP TABLE cte_schema_reread;
+
+statement ok
+DROP TABLE cte_schema_records;
+
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
 
@@ -1219,3 +1309,13 @@ explain WITH RECURSIVE numbers AS (
   UNION ALL
   select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
+
+# Config reset
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+RESET datafusion.execution.enable_recursive_ctes;
+
+statement ok
+RESET datafusion.sql_parser.enable_ident_normalization;

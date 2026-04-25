@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::{AggregateUDFImpl, ScalarUDFImpl, WindowUDFImpl};
+use std::any::Any;
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
@@ -83,7 +84,7 @@ trait UdfPointer: Deref {
 
 impl UdfPointer for Arc<dyn ScalarUDFImpl + '_> {
     fn equals(&self, other: &(dyn ScalarUDFImpl + '_)) -> bool {
-        self.as_ref().dyn_eq(other.as_any())
+        self.as_ref().dyn_eq(other as &dyn Any)
     }
 
     fn hash_value(&self) -> u64 {
@@ -95,7 +96,7 @@ impl UdfPointer for Arc<dyn ScalarUDFImpl + '_> {
 
 impl UdfPointer for Arc<dyn AggregateUDFImpl + '_> {
     fn equals(&self, other: &(dyn AggregateUDFImpl + '_)) -> bool {
-        self.as_ref().dyn_eq(other.as_any())
+        self.as_ref().dyn_eq(other)
     }
 
     fn hash_value(&self) -> u64 {
@@ -107,7 +108,7 @@ impl UdfPointer for Arc<dyn AggregateUDFImpl + '_> {
 
 impl UdfPointer for Arc<dyn WindowUDFImpl + '_> {
     fn equals(&self, other: &(dyn WindowUDFImpl + '_)) -> bool {
-        self.as_ref().dyn_eq(other.as_any())
+        self.as_ref().dyn_eq(other as &dyn Any)
     }
 
     fn hash_value(&self) -> u64 {
@@ -124,7 +125,6 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_expr_common::signature::{Signature, Volatility};
-    use std::any::Any;
     use std::hash::DefaultHasher;
 
     #[derive(Debug, PartialEq, Eq, Hash)]
@@ -133,10 +133,6 @@ mod tests {
         name: &'static str,
     }
     impl ScalarUDFImpl for TestScalarUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             self.name
         }

@@ -26,7 +26,7 @@ use datafusion_expr::{
     Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 /// Wrapper around datafusion date_part function to handle
 /// Spark behavior returning day of the week 1-indexed instead of 0-indexed and different part aliases.
@@ -65,10 +65,6 @@ impl SparkDatePart {
 }
 
 impl ScalarUDFImpl for SparkDatePart {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "date_part"
     }

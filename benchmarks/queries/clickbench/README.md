@@ -228,6 +228,22 @@ Results look like
 Elapsed 30.195 seconds.
 ```
 
+
+### Q9-Q12: FIRST_VALUE Aggregation Performance
+
+These queries test the performance of the `FIRST_VALUE` aggregation function with different data types and grouping cardinalities.
+
+| Query | `FIRST_VALUE` Column | Column Type | Group By Column | Group By Type | Number of Groups |
+|-------|----------------------|-------------|-----------------|---------------|------------------|
+| Q9    | `URL`                | `Utf8`      | `UserID`        | `Int64`       | 17,630,976       |
+| Q10    | `URL`                | `Utf8`      | `OS`            | `Int16`       | 91               |
+| Q11   | `WatchID`            | `Int64`     | `UserID`        | `Int64`       | 17,630,976       |
+| Q12   | `WatchID`            | `Int64`     | `OS`            | `Int16`       | 91               |
+
+
+
+
+
 ## Data Notes
 
 Here are some interesting statistics about the data used in the queries

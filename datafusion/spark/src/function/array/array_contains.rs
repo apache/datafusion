@@ -25,7 +25,6 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions_nested::array_has::array_has_udf;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `array_contains` function.
@@ -56,10 +55,6 @@ impl SparkArrayContains {
 }
 
 impl ScalarUDFImpl for SparkArrayContains {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_contains"
     }

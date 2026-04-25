@@ -21,7 +21,6 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{
     DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
     Decimal128Type, DecimalType, Field, IntervalUnit, TimeUnit,
@@ -158,7 +157,7 @@ pub enum Arity {
 pub enum TypeSignature {
     /// One or more arguments of a common type out of a list of valid types.
     ///
-    /// For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    /// For functions that take no arguments (e.g. `random()`), see [`TypeSignature::Nullary`].
     ///
     /// # Examples
     ///
@@ -184,7 +183,7 @@ pub enum TypeSignature {
     Uniform(usize, Vec<DataType>),
     /// One or more arguments with exactly the specified types in order.
     ///
-    /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
+    /// For functions that take no arguments (e.g. `random()`), use [`TypeSignature::Nullary`].
     Exact(Vec<DataType>),
     /// One or more arguments belonging to the [`TypeSignatureClass`], in order.
     ///
@@ -192,12 +191,12 @@ pub enum TypeSignature {
     /// casts. For example, if you expect a function has string type, but you
     /// also allow it to be casted from binary type.
     ///
-    /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
+    /// For functions that take no arguments (e.g. `random()`), see [`TypeSignature::Nullary`].
     Coercible(Vec<Coercion>),
     /// One or more arguments coercible to a single, comparable type.
     ///
     /// Each argument will be coerced to a single type using the
-    /// coercion rules described in [`comparison_coercion_numeric`].
+    /// coercion rules described in [`comparison_coercion`].
     ///
     /// # Examples
     ///
@@ -205,17 +204,18 @@ pub enum TypeSignature {
     /// the types will both be coerced to `i64` before the function is invoked.
     ///
     /// If the `nullif('1', 2)` function is called with `Utf8` and `i64` arguments
-    /// the types will both be coerced to `Utf8` before the function is invoked.
+    /// the types will both be coerced to `Int64` before the function is invoked
+    /// (numeric is preferred over string).
     ///
     /// Note:
-    /// - For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    /// - For functions that take no arguments (e.g. `random()`), see [`TypeSignature::Nullary`].
     /// - If all arguments have type [`DataType::Null`], they are coerced to `Utf8`
     ///
-    /// [`comparison_coercion_numeric`]: crate::type_coercion::binary::comparison_coercion_numeric
+    /// [`comparison_coercion`]: crate::type_coercion::binary::comparison_coercion
     Comparable(usize),
     /// One or more arguments of arbitrary types.
     ///
-    /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
+    /// For functions that take no arguments (e.g. `random()`), use [`TypeSignature::Nullary`].
     Any(usize),
     /// Matches exactly one of a list of [`TypeSignature`]s.
     ///
@@ -233,7 +233,7 @@ pub enum TypeSignature {
     ///
     /// See [`NativeType::is_numeric`] to know which type is considered numeric
     ///
-    /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
+    /// For functions that take no arguments (e.g. `random()`), use [`TypeSignature::Nullary`].
     ///
     /// [`NativeType::is_numeric`]: datafusion_common::types::NativeType::is_numeric
     Numeric(usize),
@@ -246,7 +246,7 @@ pub enum TypeSignature {
     /// For example, if a function is called with (utf8, large_utf8), all
     /// arguments will be coerced to  `LargeUtf8`
     ///
-    /// For functions that take no arguments (e.g. `random()` use [`TypeSignature::Nullary`]).
+    /// For functions that take no arguments (e.g. `random()`), use [`TypeSignature::Nullary`].
     String(usize),
     /// No arguments
     Nullary,
@@ -594,6 +594,20 @@ impl Display for ArrayFunctionArgument {
         }
     }
 }
+
+static NUMERICS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+    DataType::Float16,
+    DataType::Float32,
+    DataType::Float64,
+];
 
 impl TypeSignature {
     pub fn to_string_repr(&self) -> Vec<String> {

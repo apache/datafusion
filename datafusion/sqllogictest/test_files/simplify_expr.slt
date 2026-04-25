@@ -44,11 +44,26 @@ query TT
 explain select b from t where b !~ '.*'
 ----
 logical_plan
-01)Filter: t.b = Utf8View("")
+01)Filter: t.b IS NULL AND Boolean(NULL)
 02)--TableScan: t projection=[b]
 physical_plan
-01)FilterExec: b@0 =
+01)FilterExec: b@0 IS NULL AND NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TB
+WITH vals(id, col) AS (
+    VALUES
+      (1, 'foo'::text),
+      (2, ''::text),
+      (3, NULL::text)
+)
+SELECT col, col !~ '.*'
+FROM vals
+ORDER BY id
+----
+foo false
+(empty) false
+NULL NULL
 
 query T
 select b from t where b ~ '.*'

@@ -98,3 +98,7 @@ query B
 SELECT current_time() = current_time();
 ----
 true
+
+# Config reset
+statement ok
+RESET datafusion.execution.time_zone;

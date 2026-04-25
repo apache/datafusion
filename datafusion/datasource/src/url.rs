@@ -517,6 +517,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::registry::ExtensionTypeRegistryRef;
     use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
@@ -527,7 +528,6 @@ mod tests {
     use std::any::Any;
     use std::collections::HashMap;
     use std::ops::Range;
-    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[test]
@@ -536,7 +536,7 @@ mod tests {
         let root = root.to_string_lossy();
 
         let url = ListingTableUrl::parse(root).unwrap();
-        let child = url.prefix.child("partition").child("file");
+        let child = url.prefix.clone().join("partition").join("file");
 
         let prefix: Vec<_> = url.strip_prefix(&child).unwrap().collect();
         assert_eq!(prefix, vec!["partition", "file"]);
@@ -1213,6 +1213,10 @@ mod tests {
         }
 
         fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
             unimplemented!()
         }
 

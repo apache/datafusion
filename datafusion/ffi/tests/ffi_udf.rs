@@ -19,15 +19,17 @@
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-    use std::sync::Arc;
-
+    use arrow::array::{Array, AsArray};
     use arrow::datatypes::DataType;
     use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::logical_expr::{ScalarUDF, ScalarUDFImpl};
     use datafusion::prelude::{SessionContext, col};
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::lit;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
+    use std::sync::Arc;
 
     /// This test validates that we can load an external module and use a scalar
     /// udf defined in it via the foreign function interface. In this case we are
@@ -97,6 +99,48 @@ mod tests {
             result[0].column_by_name("time_now").unwrap().data_type(),
             &DataType::Float64
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_config_on_scalar_udf() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_udf =
+            module
+                .create_timezone_udf()
+                .ok_or(DataFusionError::NotImplemented(
+                    "External module failed to implement create_timezone_udf".to_string(),
+                ))?();
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
+
+        let udf = ScalarUDF::new_from_shared_impl(foreign_udf);
+
+        let ctx = SessionContext::default();
+
+        let df = ctx
+            .read_empty()?
+            .select(vec![udf.call(vec![lit("a")]).alias("a")])?;
+
+        let result = df.collect().await?;
+        assert!(result[0].column(0).as_string::<i32>().is_null(0));
+
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.time_zone = Some("AEST".into());
+
+        let ctx = SessionContext::new_with_config(config);
+
+        let df = ctx
+            .read_empty()?
+            .select(vec![udf.call(vec![lit("a")]).alias("a")])?;
+
+        let result = df.collect().await?;
+
+        assert!(result.len() == 1);
+        assert!(!result[0].column(0).as_string::<i32>().is_null(0));
+        let result = result[0].column(0).as_string::<i32>().value(0);
+        assert_eq!(result, "AEST");
 
         Ok(())
     }

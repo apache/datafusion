@@ -25,7 +25,6 @@ use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `space` expression
@@ -60,10 +59,6 @@ impl SparkSpace {
 }
 
 impl ScalarUDFImpl for SparkSpace {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "space"
     }

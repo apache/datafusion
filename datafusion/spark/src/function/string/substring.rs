@@ -33,7 +33,6 @@ use datafusion_expr::{
 };
 use datafusion_functions::unicode::substr::{enable_ascii_fast_path, get_true_start_end};
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `substring` expression
@@ -86,10 +85,6 @@ impl SparkSubstring {
 }
 
 impl ScalarUDFImpl for SparkSubstring {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "substring"
     }
@@ -244,12 +239,8 @@ where
 
         let adjusted_start = spark_start_to_datafusion_start(start, string_len);
 
-        let (byte_start, byte_end) = get_true_start_end(
-            string,
-            adjusted_start,
-            len_opt.map(|l| l as u64),
-            is_ascii,
-        );
+        let (byte_start, byte_end) =
+            get_true_start_end(string, adjusted_start, len_opt, is_ascii)?;
         let substr = &string[byte_start..byte_end];
         builder.append_value(substr);
     }

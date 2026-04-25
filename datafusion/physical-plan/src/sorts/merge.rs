@@ -53,6 +53,14 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// `fetch` limit.
     done: bool,
 
+    /// Whether buffered rows should be drained after `done` is set.
+    ///
+    /// This is enabled when we stop because the `fetch` limit has been
+    /// reached, allowing partial batches left over after overflow handling to
+    /// be emitted on subsequent polls. It remains disabled for terminal
+    /// errors so the stream does not yield data after returning `Err`.
+    drain_in_progress_on_done: bool,
+
     /// A loser tree that always produces the minimum cursor
     ///
     /// Node 0 stores the top winner, Nodes 1..num_streams store
@@ -164,6 +172,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             streams,
             metrics,
             done: false,
+            drain_in_progress_on_done: false,
             cursors: (0..stream_count).map(|_| None).collect(),
             prev_cursors: (0..stream_count).map(|_| None).collect(),
             round_robin_tie_breaker_mode: false,
@@ -203,11 +212,28 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
+    fn emit_in_progress_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let rows_before = self.in_progress.len();
+        let result = self.in_progress.build_record_batch();
+        self.produced += rows_before - self.in_progress.len();
+        result
+    }
+
     fn poll_next_inner(
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         if self.done {
+            // When `build_record_batch()` hits an i32 offset overflow (e.g.
+            // combined string offsets exceed 2 GB), it emits a partial batch
+            // and keeps the remaining rows in `self.in_progress.indices`.
+            // Drain those leftover rows before terminating the stream,
+            // otherwise they would be silently dropped.
+            // Repeated overflows are fine — each poll emits another partial
+            // batch until `in_progress` is fully drained.
+            if self.drain_in_progress_on_done && !self.in_progress.is_empty() {
+                return Poll::Ready(self.emit_in_progress_batch().transpose());
+            }
             return Poll::Ready(None);
         }
         // Once all partitions have set their corresponding cursors for the loser tree,
@@ -283,14 +309,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // stop sorting if fetch has been reached
                 if self.fetch_reached() {
                     self.done = true;
+                    self.drain_in_progress_on_done = true;
                 } else if self.in_progress.len() < self.batch_size {
                     continue;
                 }
             }
 
-            self.produced += self.in_progress.len();
-
-            return Poll::Ready(self.in_progress.build_record_batch().transpose());
+            return Poll::Ready(self.emit_in_progress_batch().transpose());
         }
     }
 
@@ -540,5 +565,97 @@ impl<C: CursorValues + Unpin> Stream for SortPreservingMergeStream<C> {
 impl<C: CursorValues + Unpin> RecordBatchStream for SortPreservingMergeStream<C> {
     fn schema(&self) -> SchemaRef {
         Arc::clone(self.in_progress.schema())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::ExecutionPlanMetricsSet;
+    use crate::sorts::stream::PartitionedStream;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_execution::memory_pool::{
+        MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
+    use futures::task::noop_waker_ref;
+    use std::cmp::Ordering;
+
+    #[derive(Debug)]
+    struct EmptyPartitionedStream;
+
+    impl PartitionedStream for EmptyPartitionedStream {
+        type Output = Result<(DummyValues, RecordBatch)>;
+
+        fn partitions(&self) -> usize {
+            1
+        }
+
+        fn poll_next(
+            &mut self,
+            _cx: &mut Context<'_>,
+            _stream_idx: usize,
+        ) -> Poll<Option<Self::Output>> {
+            Poll::Ready(None)
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyValues;
+
+    impl CursorValues for DummyValues {
+        fn len(&self) -> usize {
+            0
+        }
+
+        fn eq(_l: &Self, _l_idx: usize, _r: &Self, _r_idx: usize) -> bool {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn eq_to_previous(_cursor: &Self, _idx: usize) -> bool {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn compare(_l: &Self, _l_idx: usize, _r: &Self, _r_idx: usize) -> Ordering {
+            unreachable!("done-path test should not compare cursors")
+        }
+    }
+
+    #[test]
+    fn test_done_drains_buffered_rows() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let mut stream = SortPreservingMergeStream::<DummyValues>::new(
+            Box::new(EmptyPartitionedStream),
+            Arc::clone(&schema),
+            BaselineMetrics::new(&metrics, 0),
+            16,
+            Some(1),
+            reservation,
+            true,
+        );
+
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])
+                .unwrap();
+        stream.in_progress.push_batch(0, batch).unwrap();
+        stream.in_progress.push_row(0);
+        stream.done = true;
+        stream.drain_in_progress_on_done = true;
+
+        let waker = noop_waker_ref();
+        let mut cx = Context::from_waker(waker);
+
+        match stream.poll_next_inner(&mut cx) {
+            Poll::Ready(Some(Ok(batch))) => assert_eq!(batch.num_rows(), 1),
+            other => {
+                panic!("expected buffered rows to be drained after done, got {other:?}")
+            }
+        }
+        assert!(stream.in_progress.is_empty());
+        assert!(matches!(stream.poll_next_inner(&mut cx), Poll::Ready(None)));
     }
 }

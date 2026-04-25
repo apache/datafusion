@@ -17,7 +17,6 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -56,7 +55,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::metrics::{
-    ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+    ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet,
 };
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
@@ -151,10 +150,6 @@ impl FileFormatFactory for ParquetFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ParquetFormat::default())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -340,10 +335,6 @@ async fn get_file_decryption_properties(
 
 #[async_trait]
 impl FileFormat for ParquetFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         ParquetFormatFactory::new().get_ext()
     }
@@ -516,7 +507,6 @@ impl FileFormat for ParquetFormat {
 
         let mut source = conf
             .file_source()
-            .as_any()
             .downcast_ref::<ParquetSource>()
             .cloned()
             .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
@@ -1339,13 +1329,15 @@ impl FileSink for ParquetSink {
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
-        let rows_written_counter =
-            MetricBuilder::new(&self.metrics).global_counter("rows_written");
+        let rows_written_counter = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
+            .global_counter("rows_written");
         // Note: bytes_written is the sum of compressed row group sizes, which
         // may differ slightly from the actual on-disk file size (excludes footer,
         // page indexes, and other Parquet metadata overhead).
-        let bytes_written_counter =
-            MetricBuilder::new(&self.metrics).global_counter("bytes_written");
+        let bytes_written_counter = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Bytes)
+            .global_counter("bytes_written");
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
 
         let write_start = datafusion_common::instant::Instant::now();
@@ -1368,7 +1360,11 @@ impl FileSink for ParquetSink {
 
         while let Some((path, mut rx)) = file_stream_rx.recv().await {
             let parquet_props = self.create_writer_props(&runtime, &path).await?;
-            if !parquet_opts.global.allow_single_file_parallelism {
+            // CDC requires the sequential writer: the chunker state lives in ArrowWriter
+            // and persists across row groups. The parallel path bypasses ArrowWriter entirely.
+            if !parquet_opts.global.allow_single_file_parallelism
+                || parquet_opts.global.use_content_defined_chunking.is_some()
+            {
                 let mut writer = self
                     .create_async_arrow_writer(
                         &path,
@@ -1468,10 +1464,6 @@ impl FileSink for ParquetSink {
 
 #[async_trait]
 impl DataSink for ParquetSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -1808,11 +1800,9 @@ async fn output_single_parquet_file_parallelized(
 #[cfg(test)]
 mod tests {
     use parquet::arrow::parquet_to_arrow_schema;
-    use std::sync::Arc;
 
     use super::*;
 
-    use arrow::datatypes::DataType;
     use parquet::schema::parser::parse_message_type;
 
     #[test]

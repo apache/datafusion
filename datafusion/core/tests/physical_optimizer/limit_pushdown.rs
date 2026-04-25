@@ -682,3 +682,38 @@ fn preserves_skip_before_sort() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn no_limit_preserves_plan_identity() -> Result<()> {
+    // When there is no limit in the plan, the optimizer should return the
+    // exact same Arc (pointer-equal) for every node, avoiding unnecessary
+    // plan reconstruction and property recomputation.
+    let schema = create_schema();
+
+    let left = empty_exec(Arc::clone(&schema));
+    let right = empty_exec(Arc::clone(&schema));
+    let on = join_on_columns("c1", "c1");
+    let join = hash_join_exec(left, right, on, None, &JoinType::Inner)?;
+    let plan = filter_exec(Arc::clone(&schema), join)?;
+
+    let optimized =
+        LimitPushdown::new().optimize(Arc::clone(&plan), &ConfigOptions::new())?;
+
+    assert!(
+        Arc::ptr_eq(&plan, &optimized),
+        "Expected optimizer to return the same Arc when no limit is present"
+    );
+
+    let optimized = format_plan(&optimized);
+    insta::assert_snapshot!(
+        optimized,
+        @r"
+    FilterExec: c3@2 > 0
+      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c1@0)]
+        EmptyExec
+        EmptyExec
+    "
+    );
+
+    Ok(())
+}

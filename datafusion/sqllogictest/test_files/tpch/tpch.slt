@@ -28,3 +28,7 @@ set datafusion.optimizer.prefer_hash_join = false;
 include ./answers/q*.slt.part
 
 include ./drop_tables.slt.part
+
+# Config reset
+statement ok
+reset datafusion.optimizer.prefer_hash_join;

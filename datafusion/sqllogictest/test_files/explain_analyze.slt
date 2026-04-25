@@ -24,6 +24,109 @@ EXPLAIN ANALYZE SELECT * FROM generate_series(100);
 Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 
 # --------------------------------------------
+# Test parquet-only output_rows_skew metric
+# --------------------------------------------
+
+statement ok
+set datafusion.explain.analyze_level = dev;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query I
+COPY (
+  SELECT 1 AS x
+  UNION ALL SELECT 2
+  UNION ALL SELECT 3
+  UNION ALL SELECT 4
+)
+TO 'test_files/scratch/explain_analyze/output_rows_skew/f1.parquet'
+STORED AS PARQUET;
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE skew_parquet
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
+
+# All partition's output_rows: [4]
+query TT
+EXPLAIN ANALYZE SELECT * FROM skew_parquet;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=0%<slt:ignore>
+
+statement ok
+DROP TABLE skew_parquet;
+
+query I
+COPY (SELECT * FROM (SELECT 1 AS x) WHERE false)
+TO 'test_files/scratch/explain_analyze/output_rows_skew/f2.parquet'
+STORED AS PARQUET;
+----
+0
+
+# All partition's output_rows: [4, 0]
+statement ok
+CREATE EXTERNAL TABLE skew_parquet
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM skew_parquet;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=100%<slt:ignore>
+
+statement ok
+DROP TABLE skew_parquet;
+
+query I
+COPY (SELECT * FROM (SELECT 1 AS x))
+TO 'test_files/scratch/explain_analyze/output_rows_skew/f3.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT * FROM (SELECT 1 AS x) WHERE false)
+TO 'test_files/scratch/explain_analyze/output_rows_skew/f4.parquet'
+STORED AS PARQUET;
+----
+0
+
+# All partition's output_rows: [4, 0, 1, 0]
+statement ok
+CREATE EXTERNAL TABLE skew_parquet
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM skew_parquet;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=84.31%<slt:ignore>
+
+# All partition's output_rows: [0]
+statement ok
+CREATE EXTERNAL TABLE skew_parquet_single
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_analyze/output_rows_skew/f4.parquet';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM skew_parquet_single;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=0%<slt:ignore>
+
+statement ok
+DROP TABLE skew_parquet_single;
+
+statement ok
+DROP TABLE skew_parquet;
+
+# The SLT runner sets `target_partitions` to 4 for deterministic plans.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+# --------------------------------------------
 # Test ProjectionExec's per-expression metrics
 # --------------------------------------------
 
@@ -66,3 +169,134 @@ Plan with Metrics
 
 statement ok
 reset datafusion.explain.analyze_level;
+
+# ------------------------------------------------
+# Test analyze_categories: filter metrics by kind
+# ------------------------------------------------
+# Categories classify metrics by determinism:
+#   rows, bytes  — depend on plan + data, deterministic across runs
+#   timing       — varies run-to-run even on same hardware
+
+# --- Setup: create a small parquet table with multiple row groups ---
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+CREATE TABLE _cat_data AS VALUES
+  ('Anow Vole', 7),
+  ('Brown Bear', 133),
+  ('Gray Wolf', 82),
+  ('Lynx', 71),
+  ('Red Fox', 40),
+  ('Alpine Bat', 6),
+  ('Nlpine Ibex', 101),
+  ('Nlpine Goat', 76),
+  ('Nlpine Sheep', 83),
+  ('Europ. Mole', 4),
+  ('Polecat', 16),
+  ('Alpine Ibex', 97);
+
+statement ok
+COPY (SELECT column1 as species, column2 as s FROM _cat_data)
+TO 'test_files/scratch/explain_analyze/data.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '3');
+
+statement ok
+drop table _cat_data;
+
+statement ok
+CREATE EXTERNAL TABLE cat_tracking
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_analyze/data.parquet';
+
+# ---- categories = 'none': plan only, no metrics at all ----
+
+statement ok
+set datafusion.explain.analyze_level = summary;
+
+statement ok
+set datafusion.explain.analyze_categories = 'none';
+
+query TT
+explain analyze select * from cat_tracking where species > 'M' AND s >= 50 order by species limit 3;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=3), expr=[species@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[species@0 < Nlpine Sheep], metrics=[]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+# ---- categories = 'rows': deterministic row-count metrics only ----
+# Note: no elapsed_compute, no output_bytes, no bytes_scanned, no metadata_load_time
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+query TT
+explain analyze select * from cat_tracking where species > 'M' AND s >= 50 order by species limit 3;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=3), expr=[species@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[species@0 < Nlpine Sheep], metrics=[output_rows=3]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_pages_pruned=6 total → 6 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=22.13% (521/2.35 K)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+# ---- categories = 'rows,bytes': add byte metrics, still no timing ----
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows,bytes';
+
+query TT
+explain analyze select * from cat_tracking where species > 'M' AND s >= 50 order by species limit 3;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=3), expr=[species@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[species@0 < Nlpine Sheep], metrics=[output_rows=3, output_bytes=<slt:ignore>]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_pages_pruned=6 total → 6 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+# ---- categories = 'rows,bytes,uncategorized': everything except timing ----
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows,bytes,uncategorized';
+
+query TT
+explain analyze select * from cat_tracking where species > 'M' AND s >= 50 order by species limit 3;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=3), expr=[species@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[species@0 < Nlpine Sheep], metrics=[output_rows=3, output_bytes=<slt:ignore>]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_pages_pruned=6 total → 6 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+# ---- categories = 'timing': only timing metrics (non-deterministic) ----
+
+statement ok
+set datafusion.explain.analyze_categories = 'timing';
+
+query TT
+explain analyze select * from cat_tracking where species > 'M' AND s >= 50 order by species limit 3;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=3), expr=[species@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[species@0 < Nlpine Sheep], metrics=[elapsed_compute=<slt:ignore>]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[elapsed_compute=<slt:ignore>, metadata_load_time=<slt:ignore>]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+reset datafusion.explain.analyze_level;
+
+# --- Teardown ---
+
+statement ok
+drop table cat_tracking;
+
+statement ok
+reset datafusion.execution.parquet.pushdown_filters;

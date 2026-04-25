@@ -1,0 +1,254 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for casting integer types to timestamp using spark_cast
+
+# Test spark_cast from int8 to timestamp
+query P
+SELECT spark_cast(arrow_cast(0, 'Int8'), 'timestamp');
+----
+1970-01-01T00:00:00Z
+
+query P
+SELECT spark_cast(arrow_cast(1, 'Int8'), 'timestamp');
+----
+1970-01-01T00:00:01Z
+
+query P
+SELECT spark_cast(arrow_cast(-1, 'Int8'), 'timestamp');
+----
+1969-12-31T23:59:59Z
+
+# Test spark_cast from int16 to timestamp
+query P
+SELECT spark_cast(arrow_cast(0, 'Int16'), 'timestamp');
+----
+1970-01-01T00:00:00Z
+
+query P
+SELECT spark_cast(arrow_cast(3600, 'Int16'), 'timestamp');
+----
+1970-01-01T01:00:00Z
+
+# Test spark_cast from int32 to timestamp
+query P
+SELECT spark_cast(arrow_cast(0, 'Int32'), 'timestamp');
+----
+1970-01-01T00:00:00Z
+
+query P
+SELECT spark_cast(arrow_cast(1704067200, 'Int32'), 'timestamp');
+----
+2024-01-01T00:00:00Z
+
+# Test spark_cast from int64 to timestamp
+query P
+SELECT spark_cast(0::bigint, 'timestamp');
+----
+1970-01-01T00:00:00Z
+
+query P
+SELECT spark_cast(1704067200::bigint, 'timestamp');
+----
+2024-01-01T00:00:00Z
+
+# Test NULL handling
+query P
+SELECT spark_cast(arrow_cast(NULL, 'Int8'), 'timestamp');
+----
+NULL
+
+query P
+SELECT spark_cast(arrow_cast(NULL, 'Int16'), 'timestamp');
+----
+NULL
+
+query P
+SELECT spark_cast(arrow_cast(NULL, 'Int32'), 'timestamp');
+----
+NULL
+
+query P
+SELECT spark_cast(NULL::bigint, 'timestamp');
+----
+NULL
+
+# Test untyped NULL
+query P
+SELECT spark_cast(NULL, 'timestamp');
+----
+NULL
+
+# Test Int8 boundary values
+query P
+SELECT spark_cast(arrow_cast(127, 'Int8'), 'timestamp');
+----
+1970-01-01T00:02:07Z
+
+query P
+SELECT spark_cast(arrow_cast(-128, 'Int8'), 'timestamp');
+----
+1969-12-31T23:57:52Z
+
+# Test Int16 boundary values
+query P
+SELECT spark_cast(arrow_cast(32767, 'Int16'), 'timestamp');
+----
+1970-01-01T09:06:07Z
+
+query P
+SELECT spark_cast(arrow_cast(-32768, 'Int16'), 'timestamp');
+----
+1969-12-31T14:53:52Z
+
+# Test Int64 negative value
+query P
+SELECT spark_cast(-86400::bigint, 'timestamp');
+----
+1969-12-31T00:00:00Z
+
+# Test unsupported source type - should error
+statement error
+SELECT spark_cast('2024-01-01', 'timestamp');
+
+# Test unsupported target type - should error
+statement error
+SELECT spark_cast(100, 'string');
+
+# Test with different session timezones to verify simplify() picks up config
+
+# America/Los_Angeles (PST/PDT - has DST)
+statement ok
+SET datafusion.execution.time_zone = 'America/Los_Angeles';
+
+# Epoch in PST (UTC-8)
+query P
+SELECT spark_cast(0::bigint, 'timestamp');
+----
+1969-12-31T16:00:00-08:00
+
+# 2024-01-01 00:00:00 UTC in PST (winter, UTC-8)
+query P
+SELECT spark_cast(1704067200::bigint, 'timestamp');
+----
+2023-12-31T16:00:00-08:00
+
+# America/Phoenix (MST - no DST, always UTC-7)
+statement ok
+SET datafusion.execution.time_zone = 'America/Phoenix';
+
+# Epoch in Phoenix (UTC-7)
+query P
+SELECT spark_cast(0::bigint, 'timestamp');
+----
+1969-12-31T17:00:00-07:00
+
+# 2024-01-01 00:00:00 UTC in Phoenix (still UTC-7, no DST)
+query P
+SELECT spark_cast(1704067200::bigint, 'timestamp');
+----
+2023-12-31T17:00:00-07:00
+
+# Test with different timezones - LA (has DST)
+statement ok
+SET datafusion.execution.time_zone = 'America/Los_Angeles';
+
+query P
+SELECT spark_cast(1710054000::bigint, 'timestamp');
+----
+2024-03-09T23:00:00-08:00
+
+query P
+SELECT spark_cast(1710057600::bigint, 'timestamp');
+----
+2024-03-10T00:00:00-08:00
+
+# Phoenix has no DST - always UTC-7
+statement ok
+SET datafusion.execution.time_zone = 'America/Phoenix';
+
+query P
+SELECT spark_cast(1710054000::bigint, 'timestamp');
+----
+2024-03-10T00:00:00-07:00
+
+query P
+SELECT spark_cast(1710057600::bigint, 'timestamp');
+----
+2024-03-10T01:00:00-07:00
+
+# Reset to default
+statement ok
+SET datafusion.execution.time_zone = 'UTC';
+
+#############################
+# Array Tests
+#############################
+
+# Create test table with 4 int columns: null, min, max, regular value
+statement ok
+CREATE TABLE int_test AS SELECT
+    arrow_cast(column1, 'Int8') as i8_col,
+    arrow_cast(column2, 'Int16') as i16_col,
+    arrow_cast(column3, 'Int32') as i32_col,
+    column4::bigint as i64_col
+FROM (VALUES
+    (NULL, NULL, NULL, NULL),
+    (-128, -32768, -2147483648, -86400),
+    (127, 32767, 2147483647, 86400),
+    (100, 3600, 1710054000, 1710054000)
+);
+
+# Test in UTC
+query PPPP
+SELECT spark_cast(i8_col, 'timestamp'), spark_cast(i16_col, 'timestamp'), spark_cast(i32_col, 'timestamp'), spark_cast(i64_col, 'timestamp') FROM int_test;
+----
+NULL NULL NULL NULL
+1969-12-31T23:57:52Z 1969-12-31T14:53:52Z 1901-12-13T20:45:52Z 1969-12-31T00:00:00Z
+1970-01-01T00:02:07Z 1970-01-01T09:06:07Z 2038-01-19T03:14:07Z 1970-01-02T00:00:00Z
+1970-01-01T00:01:40Z 1970-01-01T01:00:00Z 2024-03-10T07:00:00Z 2024-03-10T07:00:00Z
+
+# Test in America/Los_Angeles (PST - has DST)
+statement ok
+SET datafusion.execution.time_zone = 'America/Los_Angeles';
+
+query PPPP
+SELECT spark_cast(i8_col, 'timestamp'), spark_cast(i16_col, 'timestamp'), spark_cast(i32_col, 'timestamp'), spark_cast(i64_col, 'timestamp') FROM int_test;
+----
+NULL NULL NULL NULL
+1969-12-31T15:57:52-08:00 1969-12-31T06:53:52-08:00 1901-12-13T12:45:52-08:00 1969-12-30T16:00:00-08:00
+1969-12-31T16:02:07-08:00 1970-01-01T01:06:07-08:00 2038-01-18T19:14:07-08:00 1970-01-01T16:00:00-08:00
+1969-12-31T16:01:40-08:00 1969-12-31T17:00:00-08:00 2024-03-09T23:00:00-08:00 2024-03-09T23:00:00-08:00
+
+# Test in America/Phoenix (MST - no DST, always UTC-7)
+statement ok
+SET datafusion.execution.time_zone = 'America/Phoenix';
+
+query PPPP
+SELECT spark_cast(i8_col, 'timestamp'), spark_cast(i16_col, 'timestamp'), spark_cast(i32_col, 'timestamp'), spark_cast(i64_col, 'timestamp') FROM int_test;
+----
+NULL NULL NULL NULL
+1969-12-31T16:57:52-07:00 1969-12-31T07:53:52-07:00 1901-12-13T13:45:52-07:00 1969-12-30T17:00:00-07:00
+1969-12-31T17:02:07-07:00 1970-01-01T02:06:07-07:00 2038-01-18T20:14:07-07:00 1970-01-01T17:00:00-07:00
+1969-12-31T17:01:40-07:00 1969-12-31T18:00:00-07:00 2024-03-10T00:00:00-07:00 2024-03-10T00:00:00-07:00
+
+# Reset and cleanup
+statement ok
+RESET datafusion.execution.time_zone;
+
+statement ok
+DROP TABLE int_test;

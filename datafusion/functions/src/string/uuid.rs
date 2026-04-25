@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::GenericStringBuilder;
@@ -62,10 +61,6 @@ impl UuidFunc {
 }
 
 impl ScalarUDFImpl for UuidFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "uuid"
     }

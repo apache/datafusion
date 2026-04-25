@@ -16,3 +16,7 @@
 # under the License.
 
 include ./join.slt.part
+
+# Config reset
+statement ok
+RESET datafusion.optimizer.repartition_joins;

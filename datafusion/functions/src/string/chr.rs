@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringBuilder, Int64Array};
@@ -95,10 +94,6 @@ impl ChrFunc {
 }
 
 impl ScalarUDFImpl for ChrFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "chr"
     }
@@ -149,11 +144,10 @@ impl ScalarUDFImpl for ChrFunc {
 mod tests {
     use super::*;
 
-    use arrow::array::{Array, Int64Array, StringArray};
+    use arrow::array::{Array, StringArray};
     use arrow::datatypes::Field;
     use datafusion_common::assert_contains;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     fn invoke_chr(arg: ColumnarValue, number_rows: usize) -> Result<ColumnarValue> {
         ChrFunc::new().invoke_with_args(ScalarFunctionArgs {

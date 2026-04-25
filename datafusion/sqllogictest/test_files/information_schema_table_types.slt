@@ -47,6 +47,10 @@ datafusion public temp LOCAL TEMPORARY
 
 # Cleanup
 
+# Config reset
+statement ok
+RESET datafusion.catalog.information_schema;
+
 statement ok
 drop table physical
 

@@ -590,6 +590,53 @@ pub fn get_required_group_by_exprs_indices(
         .collect()
 }
 
+/// Returns indices for the minimal subset of ORDER BY expressions that are
+/// functionally equivalent to the original set of ORDER BY expressions.
+pub fn get_required_sort_exprs_indices(
+    schema: &DFSchema,
+    sort_expr_names: &[String],
+) -> Vec<usize> {
+    let dependencies = schema.functional_dependencies();
+    let field_names = schema.field_names();
+
+    let mut known_field_indices = HashSet::new();
+    let mut required_sort_expr_indices = Vec::new();
+
+    for (sort_expr_idx, sort_expr_name) in sort_expr_names.iter().enumerate() {
+        // If the sort expression doesn't correspond to a known schema field
+        // (e.g. a computed expression), we can't reason about it via functional
+        // dependencies, so conservatively keep it.
+        let Some(field_idx) = field_names
+            .iter()
+            .position(|field_name| field_name == sort_expr_name)
+        else {
+            required_sort_expr_indices.push(sort_expr_idx);
+            continue;
+        };
+
+        // A sort expression is removable if its value is functionally determined
+        // by fields that already appear earlier in the sort order: if the earlier
+        // fields are fixed, this one's value is fixed too, so it adds no ordering
+        // information.
+        let removable = dependencies.deps.iter().any(|dependency| {
+            dependency.target_indices.contains(&field_idx)
+                && dependency
+                    .source_indices
+                    .iter()
+                    .all(|source_idx| known_field_indices.contains(source_idx))
+        });
+
+        if removable {
+            continue;
+        }
+
+        known_field_indices.insert(field_idx);
+        required_sort_expr_indices.push(sort_expr_idx);
+    }
+
+    required_sort_expr_indices
+}
+
 /// Updates entries inside the `entries` vector with their corresponding
 /// indices inside the `proj_indices` vector.
 fn update_elements_with_matching_indices(

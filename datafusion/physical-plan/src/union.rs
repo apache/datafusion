@@ -23,8 +23,8 @@
 
 use std::borrow::Borrow;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{any::Any, sync::Arc};
 
 use super::{
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
@@ -49,7 +49,7 @@ use crate::stream::ObservedStream;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, estimate_ndv_with_overlap};
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, assert_or_internal_err, exec_err, internal_datafusion_err,
@@ -225,10 +225,6 @@ impl ExecutionPlan for UnionExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -593,10 +589,6 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -854,13 +846,36 @@ fn col_stats_union(
     mut left: ColumnStatistics,
     right: &ColumnStatistics,
 ) -> ColumnStatistics {
-    left.distinct_count = Precision::Absent;
+    left.distinct_count = union_distinct_count(&left, right);
     left.min_value = left.min_value.min(&right.min_value);
     left.max_value = left.max_value.max(&right.max_value);
-    left.sum_value = left.sum_value.add(&right.sum_value);
+    left.sum_value = left.sum_value.add_for_sum(&right.sum_value);
     left.null_count = left.null_count.add(&right.null_count);
 
     left
+}
+
+fn union_distinct_count(
+    left: &ColumnStatistics,
+    right: &ColumnStatistics,
+) -> Precision<usize> {
+    let (ndv_left, ndv_right) = match (
+        left.distinct_count.get_value(),
+        right.distinct_count.get_value(),
+    ) {
+        (Some(&l), Some(&r)) => (l, r),
+        _ => return Precision::Absent,
+    };
+
+    // Even with exact inputs, the union NDV depends on how
+    // many distinct values are shared between the left and right.
+    // We can only estimate this via range overlap. Thus both paths
+    // below return `Inexact`.
+    if let Some(ndv) = estimate_ndv_with_overlap(left, right, ndv_left, ndv_right) {
+        return Precision::Inexact(ndv);
+    }
+
+    Precision::Inexact(ndv_left + ndv_right)
 }
 
 fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
@@ -1014,7 +1029,7 @@ mod tests {
             total_byte_size: Precision::Exact(52),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(6),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
@@ -1041,6 +1056,197 @@ mod tests {
         };
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_union_distinct_count() {
+        // (left_ndv, left_min, left_max, right_ndv, right_min, right_max, expected)
+        type NdvTestCase = (
+            Precision<usize>,
+            Option<i64>,
+            Option<i64>,
+            Precision<usize>,
+            Option<i64>,
+            Option<i64>,
+            Precision<usize>,
+        );
+        let cases: Vec<NdvTestCase> = vec![
+            // disjoint ranges: NDV = 5 + 3
+            (
+                Precision::Exact(5),
+                Some(0),
+                Some(10),
+                Precision::Exact(3),
+                Some(20),
+                Some(30),
+                Precision::Inexact(8),
+            ),
+            // identical ranges: intersection = max(10, 8) = 10
+            (
+                Precision::Exact(10),
+                Some(0),
+                Some(100),
+                Precision::Exact(8),
+                Some(0),
+                Some(100),
+                Precision::Inexact(10),
+            ),
+            // partial overlap: 50 + 50 + 25 = 125
+            (
+                Precision::Exact(100),
+                Some(0),
+                Some(100),
+                Precision::Exact(50),
+                Some(50),
+                Some(150),
+                Precision::Inexact(125),
+            ),
+            // right contained in left: 50 + 50 + 0 = 100
+            (
+                Precision::Exact(100),
+                Some(0),
+                Some(100),
+                Precision::Exact(50),
+                Some(25),
+                Some(75),
+                Precision::Inexact(100),
+            ),
+            // both constant, same value
+            (
+                Precision::Exact(1),
+                Some(5),
+                Some(5),
+                Precision::Exact(1),
+                Some(5),
+                Some(5),
+                Precision::Inexact(1),
+            ),
+            // both constant, different values
+            (
+                Precision::Exact(1),
+                Some(5),
+                Some(5),
+                Precision::Exact(1),
+                Some(10),
+                Some(10),
+                Precision::Inexact(2),
+            ),
+            // left constant within right range
+            (
+                Precision::Exact(1),
+                Some(5),
+                Some(5),
+                Precision::Exact(10),
+                Some(0),
+                Some(10),
+                Precision::Inexact(10),
+            ),
+            // left constant outside right range
+            (
+                Precision::Exact(1),
+                Some(20),
+                Some(20),
+                Precision::Exact(10),
+                Some(0),
+                Some(10),
+                Precision::Inexact(11),
+            ),
+            // right constant within left range
+            (
+                Precision::Exact(10),
+                Some(0),
+                Some(10),
+                Precision::Exact(1),
+                Some(5),
+                Some(5),
+                Precision::Inexact(10),
+            ),
+            // right constant outside left range
+            (
+                Precision::Exact(10),
+                Some(0),
+                Some(10),
+                Precision::Exact(1),
+                Some(20),
+                Some(20),
+                Precision::Inexact(11),
+            ),
+            // missing min/max falls back to sum (exact + exact)
+            (
+                Precision::Exact(10),
+                None,
+                None,
+                Precision::Exact(5),
+                None,
+                None,
+                Precision::Inexact(15),
+            ),
+            // missing min/max falls back to sum (exact + inexact)
+            (
+                Precision::Exact(10),
+                None,
+                None,
+                Precision::Inexact(5),
+                None,
+                None,
+                Precision::Inexact(15),
+            ),
+            // missing min/max falls back to sum (inexact + inexact)
+            (
+                Precision::Inexact(7),
+                None,
+                None,
+                Precision::Inexact(3),
+                None,
+                None,
+                Precision::Inexact(10),
+            ),
+            // one side absent
+            (
+                Precision::Exact(10),
+                None,
+                None,
+                Precision::Absent,
+                None,
+                None,
+                Precision::Absent,
+            ),
+            // one side absent (inexact + absent)
+            (
+                Precision::Inexact(4),
+                None,
+                None,
+                Precision::Absent,
+                None,
+                None,
+                Precision::Absent,
+            ),
+        ];
+
+        for (
+            i,
+            (left_ndv, left_min, left_max, right_ndv, right_min, right_max, expected),
+        ) in cases.into_iter().enumerate()
+        {
+            let to_sv = |v| Precision::Exact(ScalarValue::Int64(Some(v)));
+            let left = ColumnStatistics {
+                distinct_count: left_ndv,
+                min_value: left_min.map(to_sv).unwrap_or(Precision::Absent),
+                max_value: left_max.map(to_sv).unwrap_or(Precision::Absent),
+                ..Default::default()
+            };
+            let right = ColumnStatistics {
+                distinct_count: right_ndv,
+                min_value: right_min.map(to_sv).unwrap_or(Precision::Absent),
+                max_value: right_max.map(to_sv).unwrap_or(Precision::Absent),
+                ..Default::default()
+            };
+            assert_eq!(
+                union_distinct_count(&left, &right),
+                expected,
+                "case {i} failed"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1197,7 +1403,6 @@ mod tests {
 
         // Downcast to verify it's a UnionExec
         let union = union_plan
-            .as_any()
             .downcast_ref::<UnionExec>()
             .expect("Expected UnionExec");
 
@@ -1238,7 +1443,6 @@ mod tests {
 
         let union = UnionExec::try_new(vec![input1, input2])?;
         let union = union
-            .as_any()
             .downcast_ref::<UnionExec>()
             .expect("expected UnionExec for multiple inputs");
 

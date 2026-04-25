@@ -56,7 +56,10 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
-use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
+use datafusion_expr::registry::{
+    ExtensionTypeRegistryRef, FunctionRegistry, MemoryExtensionTypeRegistry,
+    SerializerRegistry,
+};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{AggregateUDF, Explain, Expr, LogicalPlan, ScalarUDF, WindowUDF};
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
@@ -65,9 +68,11 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_session::Session;
 #[cfg(feature = "sql")]
 use datafusion_sql::{
@@ -158,6 +163,8 @@ pub struct SessionState {
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions registered in the context
     window_functions: HashMap<String, Arc<WindowUDF>>,
+    /// Extension types registry for extensions.
+    extension_types: ExtensionTypeRegistryRef,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Holds registered external FileFormat implementations
@@ -186,9 +193,25 @@ pub struct SessionState {
     /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
+    /// Optional statistics registry for pluggable statistics providers.
+    ///
+    /// When set, physical optimizer rules can use this registry to obtain
+    /// enhanced statistics (e.g., NDV overrides, histograms) beyond what
+    /// is available from `ExecutionPlan::partition_statistics()`.
+    statistics_registry: Option<StatisticsRegistry>,
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
+}
+
+impl PhysicalOptimizerContext for SessionState {
+    fn config_options(&self) -> &ConfigOptions {
+        self.config_options()
+    }
+
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        self.statistics_registry.as_ref()
+    }
 }
 
 impl Debug for SessionState {
@@ -264,6 +287,10 @@ impl Session for SessionState {
 
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
         &self.window_functions
+    }
+
+    fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
+        &self.extension_types
     }
 
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {
@@ -743,12 +770,13 @@ impl SessionState {
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         let config_options = self.config_options();
-        let simplify_context = SimplifyContext::default()
+        let simplify_context = SimplifyContext::builder()
             .with_schema(Arc::new(df_schema.clone()))
             .with_config_options(Arc::clone(config_options))
             .with_query_execution_start_time(
                 self.execution_props().query_execution_start_time,
-            );
+            )
+            .build();
         let simplifier = ExprSimplifier::new(simplify_context);
         // apply type coercion here to ensure types match
         let mut expr = simplifier.coerce(expr, df_schema)?;
@@ -805,6 +833,14 @@ impl SessionState {
     /// return the configuration options
     pub fn config_options(&self) -> &Arc<ConfigOptions> {
         self.config.options()
+    }
+
+    /// Returns the statistics registry if one is configured.
+    ///
+    /// The registry provides pluggable statistics providers for enhanced
+    /// cardinality estimation (e.g., NDV overrides, histograms).
+    pub fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        self.statistics_registry.as_ref()
     }
 
     /// Mark the start of the execution
@@ -986,6 +1022,7 @@ pub struct SessionStateBuilder {
     scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
     aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
     window_functions: Option<Vec<Arc<WindowUDF>>>,
+    extension_types: Option<ExtensionTypeRegistryRef>,
     serializer_registry: Option<Arc<dyn SerializerRegistry>>,
     file_formats: Option<Vec<Arc<dyn FileFormatFactory>>>,
     config: Option<SessionConfig>,
@@ -995,6 +1032,7 @@ pub struct SessionStateBuilder {
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
+    statistics_registry: Option<StatisticsRegistry>,
     // fields to support convenience functions
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
@@ -1026,6 +1064,7 @@ impl SessionStateBuilder {
             scalar_functions: None,
             aggregate_functions: None,
             window_functions: None,
+            extension_types: None,
             serializer_registry: None,
             file_formats: None,
             table_options: None,
@@ -1035,6 +1074,7 @@ impl SessionStateBuilder {
             runtime_env: None,
             function_factory: None,
             cache_factory: None,
+            statistics_registry: None,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -1081,6 +1121,7 @@ impl SessionStateBuilder {
                 existing.aggregate_functions.into_values().collect_vec(),
             ),
             window_functions: Some(existing.window_functions.into_values().collect_vec()),
+            extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
             config: Some(new_config),
@@ -1090,6 +1131,7 @@ impl SessionStateBuilder {
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
             cache_factory: existing.cache_factory,
+            statistics_registry: existing.statistics_registry,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -1125,6 +1167,11 @@ impl SessionStateBuilder {
         self.window_functions
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_window_functions());
+
+        self.extension_types
+            .get_or_insert_with(|| Arc::new(MemoryExtensionTypeRegistry::new_empty()))
+            .extend(&SessionStateDefaults::default_extension_types())
+            .expect("MemoryExtensionTypeRegistry is not read-only.");
 
         self.table_functions
             .get_or_insert_with(HashMap::new)
@@ -1316,6 +1363,15 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Sets the [`ExtensionTypeRegistry`](datafusion_expr::registry::ExtensionTypeRegistry).
+    pub fn with_extension_type_registry(
+        mut self,
+        registry: ExtensionTypeRegistryRef,
+    ) -> Self {
+        self.extension_types = Some(registry);
+        self
+    }
+
     /// Set the [`SerializerRegistry`]
     pub fn with_serializer_registry(
         mut self,
@@ -1397,6 +1453,16 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set a [`StatisticsRegistry`] for pluggable statistics providers.
+    ///
+    /// The registry allows physical optimizer rules to access enhanced statistics
+    /// (e.g., NDV overrides, histograms) beyond what is available from
+    /// `ExecutionPlan::partition_statistics()`.
+    pub fn with_statistics_registry(mut self, registry: StatisticsRegistry) -> Self {
+        self.statistics_registry = Some(registry);
+        self
+    }
+
     /// Register an `ObjectStore` to the [`RuntimeEnv`]. See [`RuntimeEnv::register_object_store`]
     /// for more details.
     ///
@@ -1454,6 +1520,7 @@ impl SessionStateBuilder {
             scalar_functions,
             aggregate_functions,
             window_functions,
+            extension_types,
             serializer_registry,
             file_formats,
             table_options,
@@ -1463,6 +1530,7 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             cache_factory,
+            statistics_registry,
             analyzer_rules,
             optimizer_rules,
             physical_optimizer_rules,
@@ -1490,6 +1558,7 @@ impl SessionStateBuilder {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
+            extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
             serializer_registry: serializer_registry
                 .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
@@ -1502,6 +1571,7 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             cache_factory,
+            statistics_registry,
             prepared_plans: HashMap::new(),
         };
 
@@ -1557,6 +1627,10 @@ impl SessionStateBuilder {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());
                 }
             });
+        }
+
+        if let Some(extension_types) = extension_types {
+            state.extension_types = extension_types;
         }
 
         if state.config.create_default_catalog_and_schema() {
@@ -1829,17 +1903,20 @@ impl ContextProvider for SessionContextProvider<'_> {
         name: &str,
         args: Vec<Expr>,
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+        use datafusion_catalog::TableFunctionArgs;
+
         let tbl_func = self
             .state
             .table_functions
             .get(name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))?;
-        let simplify_context = SimplifyContext::default()
+        let simplify_context = SimplifyContext::builder()
             .with_config_options(Arc::clone(self.state.config_options()))
             .with_query_execution_start_time(
                 self.state.execution_props().query_execution_start_time,
-            );
+            )
+            .build();
         let simplifier = ExprSimplifier::new(simplify_context);
         let schema = DFSchema::empty();
         let args = args
@@ -1850,7 +1927,8 @@ impl ContextProvider for SessionContextProvider<'_> {
                     .and_then(|e| simplifier.simplify(e))
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
-        let provider = tbl_func.create_table_provider(&args)?;
+        let provider = tbl_func
+            .create_table_provider_with_args(TableFunctionArgs::new(&args, self.state))?;
 
         Ok(provider_as_source(provider))
     }

@@ -324,8 +324,8 @@ impl RunOpt {
         };
 
         let config = self.common.config()?;
-        let rt_builder = self.common.runtime_env_builder()?;
-        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+        let rt = self.common.build_runtime()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt);
 
         if let Some(path) = &self.path {
             for table in &["lineitem", "supplier", "nation", "customer"] {

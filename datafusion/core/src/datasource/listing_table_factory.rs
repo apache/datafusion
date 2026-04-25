@@ -241,6 +241,7 @@ mod tests {
 
     use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{DFSchema, TableReference};
+    use datafusion_expr::registry::ExtensionTypeRegistryRef;
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
@@ -263,10 +264,7 @@ mod tests {
         .with_options(HashMap::from([("format.has_header".into(), "true".into())]))
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
     }
@@ -296,13 +294,10 @@ mod tests {
         .with_options(options)
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let format = listing_table.options().format.clone();
-        let csv_format = format.as_any().downcast_ref::<CsvFormat>().unwrap();
+        let csv_format = format.downcast_ref::<CsvFormat>().unwrap();
         let csv_options = csv_format.options().clone();
         assert_eq!(csv_options.schema_infer_max_rec, Some(1000));
         let listing_options = listing_table.options();
@@ -333,14 +328,11 @@ mod tests {
         .with_options(options)
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         // Verify compression is used
         let format = listing_table.options().format.clone();
-        let csv_format = format.as_any().downcast_ref::<CsvFormat>().unwrap();
+        let csv_format = format.downcast_ref::<CsvFormat>().unwrap();
         let csv_options = csv_format.options().clone();
         assert_eq!(csv_options.compression, CompressionTypeVariant::GZIP);
 
@@ -377,10 +369,7 @@ mod tests {
         .with_options(options)
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
         assert_eq!("", listing_options.file_extension);
@@ -412,10 +401,7 @@ mod tests {
         )
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
         assert_eq!("", listing_options.file_extension);
@@ -443,10 +429,7 @@ mod tests {
         )
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
         let dtype =
@@ -475,10 +458,7 @@ mod tests {
         )
         .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
         assert!(listing_options.table_partition_cols.is_empty());
@@ -557,9 +537,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_with_invalid_session() {
-        use async_trait::async_trait;
-        use datafusion_catalog::Session;
-        use datafusion_common::Result;
         use datafusion_common::config::TableOptions;
         use datafusion_execution::TaskContext;
         use datafusion_execution::config::SessionConfig;
@@ -567,7 +544,6 @@ mod tests {
         use datafusion_physical_plan::ExecutionPlan;
         use std::any::Any;
         use std::collections::HashMap;
-        use std::sync::Arc;
 
         // A mock Session that is NOT SessionState
         #[derive(Debug)]
@@ -609,6 +585,11 @@ mod tests {
             ) -> &HashMap<String, Arc<datafusion_expr::WindowUDF>> {
                 unimplemented!()
             }
+
+            fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
+                unreachable!()
+            }
+
             fn runtime_env(&self) -> &Arc<datafusion_execution::runtime_env::RuntimeEnv> {
                 unimplemented!()
             }

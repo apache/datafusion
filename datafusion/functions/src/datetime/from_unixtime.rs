@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType::{Int64, Timestamp, Utf8};
@@ -24,7 +23,8 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -69,10 +69,6 @@ impl FromUnixtimeFunc {
 }
 
 impl ScalarUDFImpl for FromUnixtimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "from_unixtime"
     }
@@ -118,10 +114,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         internal_err!("call return_field_from_args instead")
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         let len = args.len();
         if len != 1 && len != 2 {
@@ -167,13 +160,13 @@ mod test {
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Int64;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
     fn test_without_timezone() {
         let arg_field = Arc::new(Field::new("a", DataType::Int64, true));
-        let args = datafusion_expr::ScalarFunctionArgs {
+        let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(Int64(Some(1729900800)))],
             arg_fields: vec![arg_field],
             number_rows: 1,
@@ -196,7 +189,7 @@ mod test {
             Field::new("a", DataType::Int64, true).into(),
             Field::new("a", DataType::Utf8, true).into(),
         ];
-        let args = datafusion_expr::ScalarFunctionArgs {
+        let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(Int64(Some(1729900800))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(

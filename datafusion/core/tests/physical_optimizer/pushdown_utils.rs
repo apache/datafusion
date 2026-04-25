@@ -43,7 +43,6 @@ use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
 use std::{
-    any::Any,
     fmt::{Display, Formatter},
     pin::Pin,
     sync::Arc,
@@ -143,10 +142,6 @@ impl FileSource for TestSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.predicate.clone()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        todo!("should not be called")
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
@@ -488,10 +483,6 @@ impl DisplayAs for TestNode {
 impl ExecutionPlan for TestNode {
     fn name(&self) -> &str {
         "TestInsertExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

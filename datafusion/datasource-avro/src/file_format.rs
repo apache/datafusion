@@ -16,13 +16,11 @@
 // under the License.
 
 //! Apache Avro [`FileFormat`] abstractions
-
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::avro_to_arrow::read_avro_schema_from_reader;
+use crate::read_avro_schema_from_reader;
 use crate::source::AvroSource;
 
 use arrow::datatypes::Schema;
@@ -66,10 +64,6 @@ impl FileFormatFactory for AvroFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(AvroFormat)
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 impl fmt::Debug for AvroFormatFactory {
@@ -91,10 +85,6 @@ pub struct AvroFormat;
 
 #[async_trait]
 impl FileFormat for AvroFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         AvroFormatFactory::new().get_ext()
     }

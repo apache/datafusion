@@ -21,22 +21,138 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
+# Tests for Spark-compatible ceil function.
+# Spark semantics differ from DataFusion's built-in ceil in two ways:
+#   1. Return type: Spark returns Int64 for float/integer inputs;
+#      DataFusion returns the same float type (e.g. ceil(1.5::DOUBLE) -> DOUBLE in DF, BIGINT in Spark)
+#   2. Decimal precision: Spark adjusts precision to (p - s + 1) for Decimal128(p, s) with scale > 0;
+#      DataFusion preserves the original precision and scale
+#
+# Example: SELECT ceil(1.50::DECIMAL(10,2))
+#   Spark:      returns Decimal(9, 0) value 2
+#   DataFusion: returns Decimal(10, 2) value 2.00
+
 ## Original Query: SELECT ceil(-0.1);
 ## PySpark 3.5.5 Result: {'CEIL(-0.1)': Decimal('0'), 'typeof(CEIL(-0.1))': 'decimal(1,0)', 'typeof(-0.1)': 'decimal(1,1)'}
-#query
-#SELECT ceil(-0.1::decimal(1,1));
+query RT
+SELECT ceil(-0.1::decimal(1,1)), arrow_typeof(ceil(-0.1::decimal(1,1)));
+----
+0 Decimal128(1, 0)
 
 ## Original Query: SELECT ceil(3.1411, -3);
 ## PySpark 3.5.5 Result: {'ceil(3.1411, -3)': Decimal('1000'), 'typeof(ceil(3.1411, -3))': 'decimal(4,0)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(-3)': 'int'}
+## TODO: 2-argument ceil(value, scale) is not yet implemented
 #query
 #SELECT ceil(3.1411::decimal(5,4), -3::int);
 
 ## Original Query: SELECT ceil(3.1411, 3);
 ## PySpark 3.5.5 Result: {'ceil(3.1411, 3)': Decimal('3.142'), 'typeof(ceil(3.1411, 3))': 'decimal(5,3)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(3)': 'int'}
+## TODO: 2-argument ceil(value, scale) is not yet implemented
 #query
 #SELECT ceil(3.1411::decimal(5,4), 3::int);
 
 ## Original Query: SELECT ceil(5);
 ## PySpark 3.5.5 Result: {'CEIL(5)': 5, 'typeof(CEIL(5))': 'bigint', 'typeof(5)': 'int'}
-#query
-#SELECT ceil(5::int);
+query IT
+SELECT ceil(5::int), arrow_typeof(ceil(5::int));
+----
+5 Int64
+
+# Scalar input: float64 returns bigint
+query IIIIIIIT
+SELECT ceil(125.2345::DOUBLE), ceil(15.0001::DOUBLE), ceil(0.1::DOUBLE), ceil(-0.9::DOUBLE), ceil(-1.1::DOUBLE), ceil(123.0::DOUBLE), ceil(NULL::DOUBLE), arrow_typeof(ceil(125.2345::DOUBLE));
+----
+126 16 1 0 -1 123 NULL Int64
+
+# Scalar input: float32 returns bigint
+query IIIIIIIT
+SELECT ceil(125.2345::FLOAT), ceil(15.0001::FLOAT), ceil(0.1::FLOAT), ceil(-0.9::FLOAT), ceil(-1.1::FLOAT), ceil(123.0::FLOAT), ceil(NULL::FLOAT), arrow_typeof(ceil(125.2345::FLOAT));
+----
+126 16 1 0 -1 123 NULL Int64
+
+# Scalar input: integer types all return bigint
+query IIIT
+SELECT ceil(5::TINYINT), ceil(-3::TINYINT), ceil(NULL::TINYINT), arrow_typeof(ceil(5::TINYINT));
+----
+5 -3 NULL Int64
+
+query IIIT
+SELECT ceil(5::SMALLINT), ceil(-3::SMALLINT), ceil(NULL::SMALLINT), arrow_typeof(ceil(5::SMALLINT));
+----
+5 -3 NULL Int64
+
+query IIIT
+SELECT ceil(5::INT), ceil(-3::INT), ceil(NULL::INT), arrow_typeof(ceil(5::INT));
+----
+5 -3 NULL Int64
+
+query IIIT
+SELECT ceil(5::BIGINT), ceil(-3::BIGINT), ceil(NULL::BIGINT), arrow_typeof(ceil(5::BIGINT));
+----
+5 -3 NULL Int64
+
+# Scalar input: decimal128 with scale > 0 returns decimal with scale 0
+# ceil(1.50) = 2, ceil(-1.50) = -1, ceil(1.00) = 1
+query RRRT
+SELECT ceil(1.50::DECIMAL(10, 2)), ceil(-1.50::DECIMAL(10, 2)), ceil(1.00::DECIMAL(10, 2)), arrow_typeof(ceil(1.50::DECIMAL(10, 2)));
+----
+2 -1 1 Decimal128(9, 0)
+
+# ceil(-0.1) = 0 (smallest positive decimal rounds up to 0 for negatives)
+query RRT
+SELECT ceil(-0.1::DECIMAL(3, 1)), ceil(NULL::DECIMAL(10, 2)), arrow_typeof(ceil(-0.1::DECIMAL(3, 1)));
+----
+0 NULL Decimal128(3, 0)
+
+# ceil(3.1411) = 4
+query RT
+SELECT ceil(3.1411::DECIMAL(5, 4)), arrow_typeof(ceil(3.1411::DECIMAL(5, 4)));
+----
+4 Decimal128(2, 0)
+
+# Scalar input: decimal128 with scale = 0 passes through unchanged
+query RRRT
+SELECT ceil(5::DECIMAL(10, 0)), ceil(-3::DECIMAL(10, 0)), ceil(NULL::DECIMAL(10, 0)), arrow_typeof(ceil(5::DECIMAL(10, 0)));
+----
+5 -3 NULL Decimal128(10, 0)
+
+# Array input: float64
+query I
+SELECT ceil(a) FROM (VALUES (125.2345::DOUBLE), (15.0001::DOUBLE), (0.1::DOUBLE), (-0.9::DOUBLE), (-1.1::DOUBLE), (123.0::DOUBLE), (NULL::DOUBLE)) AS t(a);
+----
+126
+16
+1
+0
+-1
+123
+NULL
+
+# Array input: float32
+query I
+SELECT ceil(a) FROM (VALUES (125.2345::FLOAT), (15.0001::FLOAT), (0.1::FLOAT), (-0.9::FLOAT), (-1.1::FLOAT), (123.0::FLOAT), (NULL::FLOAT)) AS t(a);
+----
+126
+16
+1
+0
+-1
+123
+NULL
+
+# Array input: integers
+query I
+SELECT ceil(a) FROM (VALUES (5::INT), (-3::INT), (NULL::INT)) AS t(a);
+----
+5
+-3
+NULL
+
+# Array input: decimal128 with scale > 0
+query R
+SELECT ceil(a) FROM (VALUES (1.50::DECIMAL(10, 2)), (-1.50::DECIMAL(10, 2)), (1.00::DECIMAL(10, 2)), (NULL::DECIMAL(10, 2))) AS t(a);
+----
+2
+-1
+1
+NULL

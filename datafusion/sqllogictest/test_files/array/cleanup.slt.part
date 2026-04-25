@@ -1,0 +1,170 @@
+### Delete tables
+
+statement ok
+drop table values;
+
+statement ok
+drop table values_without_nulls;
+
+statement ok
+drop table nested_arrays;
+
+statement ok
+drop table large_nested_arrays;
+
+statement ok
+drop table fixed_size_nested_arrays;
+
+statement ok
+drop table arrays;
+
+statement ok
+drop table large_arrays;
+
+statement ok
+drop table fixed_size_arrays;
+
+statement ok
+drop table slices;
+
+statement ok
+drop table fixed_slices;
+
+statement ok
+drop table arrayspop;
+
+statement ok
+drop table large_arrayspop;
+
+statement ok
+drop table arrays_values;
+
+statement ok
+drop table arrays_values_v2;
+
+statement ok
+drop table large_arrays_values_v2;
+
+statement ok
+drop table array_has_table_1D;
+
+statement ok
+drop table array_has_table_1D_Float;
+
+statement ok
+drop table array_has_table_1D_Boolean;
+
+statement ok
+drop table array_has_table_1D_UTF8;
+
+statement ok
+drop table array_has_table_2D;
+
+statement ok
+drop table array_has_table_2D_float;
+
+statement ok
+drop table array_has_table_3D;
+
+statement ok
+drop table array_intersect_table_1D;
+
+statement ok
+drop table large_array_intersect_table_1D;
+
+statement ok
+drop table array_intersect_table_1D_Float;
+
+statement ok
+drop table large_array_intersect_table_1D_Float;
+
+statement ok
+drop table array_intersect_table_1D_Boolean;
+
+statement ok
+drop table large_array_intersect_table_1D_Boolean;
+
+statement ok
+drop table array_intersect_table_1D_UTF8;
+
+statement ok
+drop table large_array_intersect_table_1D_UTF8;
+
+statement ok
+drop table array_intersect_table_2D;
+
+statement ok
+drop table large_array_intersect_table_2D;
+
+statement ok
+drop table array_intersect_table_2D_float;
+
+statement ok
+drop table large_array_intersect_table_2D_float;
+
+statement ok
+drop table array_intersect_table_3D;
+
+statement ok
+drop table large_array_intersect_table_3D;
+
+statement ok
+drop table fixed_size_array_has_table_1D;
+
+statement ok
+drop table fixed_size_array_has_table_1D_Float;
+
+statement ok
+drop table fixed_size_array_has_table_1D_Boolean;
+
+statement ok
+drop table fixed_size_array_has_table_1D_UTF8;
+
+statement ok
+drop table fixed_size_array_has_table_2D;
+
+statement ok
+drop table fixed_size_array_has_table_2D_float;
+
+statement ok
+drop table fixed_size_array_has_table_3D;
+
+statement ok
+drop table arrays_range;
+
+statement ok
+drop table arrays_with_repeating_elements;
+
+statement ok
+drop table large_arrays_with_repeating_elements;
+
+statement ok
+drop table fixed_arrays_with_repeating_elements;
+
+statement ok
+drop table nested_arrays_with_repeating_elements;
+
+statement ok
+drop table large_nested_arrays_with_repeating_elements;
+
+statement ok
+drop table fixed_size_nested_arrays_with_repeating_elements;
+
+statement ok
+drop table flatten_table;
+
+statement ok
+drop table large_flatten_table;
+
+statement ok
+drop table fixed_size_flatten_table;
+
+statement ok
+drop table arrays_values_without_nulls;
+
+statement ok
+drop table large_arrays_values_without_nulls;
+
+statement ok
+drop table fixed_size_arrays_values_without_nulls;
+

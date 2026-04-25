@@ -101,10 +101,6 @@ impl NVLFunc {
 }
 
 impl ScalarUDFImpl for NVLFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "nvl"
     }

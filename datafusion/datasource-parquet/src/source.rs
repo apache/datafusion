@@ -16,14 +16,13 @@
 // under the License.
 
 //! ParquetSource implementation for reading parquet files
-use std::any::Any;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
-use crate::opener::ParquetOpener;
+use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use datafusion_common::config::ConfigOptions;
@@ -31,6 +30,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
+use datafusion_datasource::morsel::Morselizer;
 
 use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
@@ -183,7 +183,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
 /// let exec = parquet_exec();
 /// let data_source = exec.data_source();
-/// let base_config = data_source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+/// let base_config = data_source.downcast_ref::<FileScanConfig>().unwrap();
 /// let existing_file_groups = &base_config.file_groups;
 /// let new_execs = existing_file_groups
 ///   .iter()
@@ -246,12 +246,12 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// # Execution Overview
 ///
 /// * Step 1: `DataSourceExec::execute` is called, returning a `FileStream`
-///   configured to open parquet files with a `ParquetOpener`.
+///   configured to morselize parquet files with a `ParquetMorselizer`.
 ///
-/// * Step 2: When the stream is polled, the `ParquetOpener` is called to open
-///   the file.
+/// * Step 2: When the stream is polled, the `ParquetMorselizer` is called to
+///   plan the file.
 ///
-/// * Step 3: The `ParquetOpener` gets the [`ParquetMetaData`] (file metadata)
+/// * Step 3: The `ParquetMorselizer` gets the [`ParquetMetaData`] (file metadata)
 ///   via [`ParquetFileReaderFactory`], creating a `ParquetAccessPlan` by
 ///   applying predicates to metadata. The plan and projections are used to
 ///   determine what pages must be read.
@@ -512,10 +512,21 @@ impl From<ParquetSource> for Arc<dyn FileSource> {
 impl FileSource for ParquetSource {
     fn create_file_opener(
         &self,
+        _object_store: Arc<dyn ObjectStore>,
+        _base_config: &FileScanConfig,
+        _partition: usize,
+    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
+        datafusion_common::internal_err!(
+            "ParquetSource::create_file_opener called but it supports the Morsel API, please use that instead"
+        )
+    }
+
+    fn create_morselizer(
+        &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
+    ) -> datafusion_common::Result<Box<dyn Morselizer>> {
         let expr_adapter_factory = base_config
             .expr_adapter_factory
             .clone()
@@ -542,12 +553,12 @@ impl FileSource for ParquetSource {
             .as_ref()
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
 
-        let opener = Arc::new(ParquetOpener {
+        Ok(Box::new(ParquetMorselizer {
             partition_index: partition,
             projection: self.projection.clone(),
             batch_size: self
                 .batch_size
-                .expect("Batch size must set before creating ParquetOpener"),
+                .expect("Batch size must set before creating ParquetMorselizer"),
             limit: base_config.limit,
             preserve_order: base_config.preserve_order,
             predicate: self.predicate.clone(),
@@ -569,12 +580,7 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
-        });
-        Ok(opener)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        }))
     }
 
     fn table_schema(&self) -> &TableSchema {
@@ -627,17 +633,17 @@ impl FileSource for ParquetSource {
                     write!(f, ", reverse_row_groups=true")?;
                 }
 
-                // Try to build a the pruning predicates.
+                // Try to build the pruning predicates.
                 // These are only generated here because it's useful to have *some*
                 // idea of what pushdown is happening when viewing plans.
-                // However it is important to note that these predicates are *not*
+                // However, it is important to note that these predicates are *not*
                 // necessarily the predicates that are actually evaluated:
                 // the actual predicates are built in reference to the physical schema of
                 // each file, which we do not have at this point and hence cannot use.
-                // Instead we use the logical schema of the file (the table schema without partition columns).
+                // Instead, we use the logical schema of the file (the table schema without partition columns).
                 if let Some(predicate) = &self.predicate {
                     let predicate_creation_errors = Count::new();
-                    if let (Some(pruning_predicate), _) = build_pruning_predicates(
+                    if let Some(pruning_predicate) = build_pruning_predicates(
                         Some(predicate),
                         self.table_schema.table_schema(),
                         &predicate_creation_errors,
@@ -743,19 +749,17 @@ impl FileSource for ParquetSource {
     ///
     /// With both pieces of information, ParquetSource can decide what optimizations to apply.
     ///
-    /// # Phase 1 Behavior (Current)
-    /// Returns `Inexact` when reversing the row group scan order would help satisfy the
-    /// requested ordering. We still need a Sort operator at a higher level because:
-    /// - We only reverse row group read order, not rows within row groups
-    /// - This provides approximate ordering that benefits limit pushdown
-    ///
-    /// # Phase 2 (Future)
-    /// Could return `Exact` when we can guarantee perfect ordering through techniques like:
-    /// - File reordering based on statistics
-    /// - Detecting already-sorted data
-    ///   This would allow removing the Sort operator entirely.
+    /// # Behavior
+    /// - Returns `Exact` when the file's natural ordering (from Parquet metadata) already
+    ///   satisfies the requested ordering. This allows the Sort operator to be eliminated
+    ///   if the files within each group are also non-overlapping (checked by FileScanConfig).
+    /// - Returns `Inexact` when reversing the row group scan order would help satisfy the
+    ///   requested ordering. We still need a Sort operator at a higher level because:
+    ///   - We only reverse row group read order, not rows within row groups
+    ///   - This provides approximate ordering that benefits limit pushdown
     ///
     /// # Returns
+    /// - `Exact`: The file's natural ordering satisfies the request (within-file ordering guaranteed)
     /// - `Inexact`: Created an optimized source (e.g., reversed scan) that approximates the order
     /// - `Unsupported`: Cannot optimize for this ordering
     fn try_pushdown_sort(
@@ -765,6 +769,16 @@ impl FileSource for ParquetSource {
     ) -> datafusion_common::Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
         if order.is_empty() {
             return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        // Check if the natural (non-reversed) ordering already satisfies the request.
+        // Parquet metadata guarantees within-file ordering, so if the ordering matches
+        // we can return Exact. FileScanConfig will verify that files within each group
+        // are non-overlapping before declaring the entire scan as Exact.
+        if eq_properties.ordering_satisfy(order.iter().cloned())? {
+            return Ok(SortOrderPushdownResult::Exact {
+                inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
+            });
         }
 
         // Build new equivalence properties with the reversed ordering.
@@ -811,11 +825,6 @@ impl FileSource for ParquetSource {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
-
-        // TODO Phase 2: Add support for other optimizations:
-        // - File reordering based on min/max statistics
-        // - Detection of exact ordering (return Exact to remove Sort operator)
-        // - Partial sort pushdown for prefix matches
     }
 
     fn apply_expressions(
@@ -895,7 +904,6 @@ mod tests {
     #[test]
     fn test_reverse_scan_with_other_options() {
         use arrow::datatypes::Schema;
-        use datafusion_common::config::TableParquetOptions;
 
         let schema = Arc::new(Schema::empty());
         let options = TableParquetOptions::default();

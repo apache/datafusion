@@ -112,3 +112,7 @@ insert into t2 values (1, 'new_val', 2.0, 100), (2, 'new_val2', 1.5, 200);
 # TODO fix https://github.com/apache/datafusion/issues/19950
 statement error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
 update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
+
+# Config reset
+statement ok
+RESET datafusion.optimizer.max_passes;

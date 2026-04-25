@@ -107,7 +107,6 @@ impl DataFrame {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use super::super::Result;
     use super::*;
@@ -608,6 +607,27 @@ mod tests {
             !entries.is_empty(),
             "Directory should contain at least one file"
         );
+
+        Ok(())
+    }
+
+    /// Test that `create_physical_plan` does not consume the `DataFrame`, so
+    /// callers can inspect (e.g. log) the physical plan and then still call
+    /// `write_parquet` or any other execution method on the same `DataFrame`.
+    #[tokio::test]
+    async fn create_physical_plan_does_not_consume_dataframe() -> Result<()> {
+        use crate::prelude::CsvReadOptions;
+        let ctx = SessionContext::new();
+        let df = ctx
+            .read_csv("tests/data/example.csv", CsvReadOptions::new())
+            .await?;
+
+        // Obtain the physical plan for inspection without consuming `df`.
+        let _physical_plan = df.create_physical_plan().await?;
+
+        // `df` is still usable — collect the results.
+        let batches = df.collect().await?;
+        assert!(!batches.is_empty());
 
         Ok(())
     }

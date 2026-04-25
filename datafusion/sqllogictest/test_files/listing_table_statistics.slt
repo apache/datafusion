@@ -40,8 +40,9 @@ physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion
 statement ok
 drop table t;
 
+# Config reset
 statement ok
-set datafusion.execution.collect_statistics = false;
+reset datafusion.execution.collect_statistics;
 
 statement ok
-set datafusion.explain.show_statistics = false;
+reset datafusion.explain.show_statistics;

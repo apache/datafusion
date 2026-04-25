@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use crate::function::map::utils::{
     get_element_type, get_list_offsets, get_list_values,
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
@@ -27,7 +25,8 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 use std::sync::Arc;
@@ -54,10 +53,6 @@ impl MapFromArrays {
 }
 
 impl ScalarUDFImpl for MapFromArrays {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_from_arrays"
     }
@@ -85,10 +80,7 @@ impl ScalarUDFImpl for MapFromArrays {
         Ok(Arc::new(Field::new(self.name(), map_type, nullable)))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(map_from_arrays_inner, vec![])(&args.args)
     }
 }
@@ -119,8 +111,6 @@ fn map_from_arrays_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn test_map_from_arrays_nullability_and_type() {

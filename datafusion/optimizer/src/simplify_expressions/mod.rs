@@ -20,6 +20,7 @@
 
 pub mod expr_simplifier;
 mod inlist_simplifier;
+mod linear_aggregates;
 mod regex;
 pub mod simplify_exprs;
 pub mod simplify_literal;

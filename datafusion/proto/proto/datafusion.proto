@@ -982,6 +982,9 @@ message PhysicalBinaryExprNode {
   PhysicalExprNode l = 1;
   PhysicalExprNode r = 2;
   string op = 3;
+  // Linearized operands for chains of the same operator (e.g. a AND b AND c).
+  // When present, `l` and `r` are ignored and `operands` holds the flattened list.
+  repeated PhysicalExprNode operands = 4;
 }
 
 message PhysicalDateTimeIntervalExprNode {
@@ -1042,9 +1045,6 @@ message PhysicalExtensionExprNode {
 message PhysicalHashExprNode {
   repeated PhysicalExprNode on_columns = 1;
   uint64 seed0 = 2;
-  uint64 seed1 = 3;
-  uint64 seed2 = 4;
-  uint64 seed3 = 5;
   string description = 6;
 }
 
@@ -1203,6 +1203,10 @@ message AnalyzeExecNode {
   bool show_statistics = 2;
   PhysicalPlanNode input = 3;
   datafusion_common.Schema schema = 4;
+  // Optional metric category filter.
+  // Empty means "plan only". Absent (has_metric_categories=false) means "all".
+  bool has_metric_categories = 5;
+  repeated string metric_categories = 6;
 }
 
 message CrossJoinExecNode {
@@ -1354,6 +1358,7 @@ message RepartitionExecNode{
   //   uint64 unknown = 4;
   // }
   Partitioning partitioning = 5;
+  bool preserve_order = 6;
 }
 
 message Partitioning {

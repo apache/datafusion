@@ -17,7 +17,6 @@
 
 //! Generic plans for deferred execution: [`StreamingTableExec`] and [`PartitionStream`]
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -232,10 +231,6 @@ impl DisplayAs for StreamingTableExec {
 impl ExecutionPlan for StreamingTableExec {
     fn name(&self) -> &'static str {
         "StreamingTableExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
