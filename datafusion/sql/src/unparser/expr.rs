@@ -1878,11 +1878,11 @@ mod tests {
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::{LambdaVariable, WildcardOptions};
     use datafusion_expr::{
-        ColumnarValue, HigherOrderUDF, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col,
-        cube, exists, grouping_set, interval_datetime_lit, interval_year_month_lit,
-        lambda, lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan,
-        try_cast, when,
+        ColumnarValue, HigherOrderUDF, LambdaParametersProgress, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, WindowFrame,
+        WindowFunctionDefinition, case, cast, col, cube, exists, grouping_set,
+        interval_datetime_lit, interval_year_month_lit, lambda, lit, not, not_exists,
+        out_ref_col, placeholder, rollup, table_scan, try_cast, when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
@@ -1950,8 +1950,9 @@ mod tests {
 
         fn lambda_parameters(
             &self,
-            _value_fields: &[FieldRef],
-        ) -> Result<Vec<Vec<Field>>> {
+            _step: usize,
+            _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
             unimplemented!()
         }
 

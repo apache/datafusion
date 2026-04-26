@@ -46,7 +46,7 @@ use datafusion_expr::type_coercion::binary::{
     comparison_coercion, like_coercion, type_union_coercion,
 };
 use datafusion_expr::type_coercion::functions::{
-    UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf,
+    UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
 };
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_case_when,
@@ -770,13 +770,17 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let current_fields = args
                     .iter()
                     .map(|arg| match arg {
-                        Expr::Lambda(_) => Ok(ValueOrLambda::Lambda(())),
+                        Expr::Lambda(lambda) => Ok(ValueOrLambda::Lambda(
+                            lambda.body.to_field(self.schema)?.1,
+                        )),
                         _ => Ok(ValueOrLambda::Value(arg.to_field(self.schema)?.1)),
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let new_fields =
-                    value_fields_with_higher_order_udf(&current_fields, func.as_ref())?;
+                let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+                    &current_fields,
+                    func.as_ref(),
+                )?;
 
                 let new_args = std::iter::zip(args, new_fields)
                     .map(|(arg, new_field)| match (&arg, new_field) {

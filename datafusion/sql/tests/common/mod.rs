@@ -98,6 +98,17 @@ impl MockSessionState {
             .insert(window_function.name().to_string(), window_function);
         self
     }
+
+    pub fn with_higher_order_function(
+        mut self,
+        higher_order_function: Arc<dyn HigherOrderUDF>,
+    ) -> Self {
+        self.higher_order_functions.insert(
+            higher_order_function.name().to_string(),
+            higher_order_function,
+        );
+        self
+    }
 }
 
 pub(crate) struct MockContextProvider {

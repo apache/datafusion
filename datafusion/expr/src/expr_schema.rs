@@ -24,7 +24,7 @@ use crate::expr::{
 };
 use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
-use crate::type_coercion::functions::value_fields_with_higher_order_udf;
+use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
@@ -647,8 +647,10 @@ impl ExprSchemable for Expr {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let new_fields =
-                    value_fields_with_higher_order_udf(&arg_fields, func.func.as_ref())?;
+                let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+                    &arg_fields,
+                    func.func.as_ref(),
+                )?;
 
                 let arguments = func
                     .args

@@ -39,6 +39,7 @@ use crate::expressions::{LambdaExpr, Literal};
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
+use datafusion_common::datatype::FieldExt;
 use datafusion_common::utils::remove_list_null_values;
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
@@ -47,7 +48,7 @@ use datafusion_common::{
 use datafusion_expr::type_coercion::functions::value_fields_with_higher_order_udf;
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderUDF,
-    LambdaArgument, ValueOrLambda, Volatility, expr_vec_fmt,
+    LambdaArgument, LambdaParametersProgress, ValueOrLambda, Volatility, expr_vec_fmt,
 };
 
 /// Physical expression of a higher order function
@@ -265,11 +266,13 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let value_fields = arg_fields
+        let fields = arg_fields
             .iter()
-            .filter_map(|field| match field {
-                ValueOrLambda::Value(field) => Some(Arc::clone(field)),
-                ValueOrLambda::Lambda(_field) => None,
+            .map(|field| match field {
+                ValueOrLambda::Lambda(field) => {
+                    ValueOrLambda::Lambda(Some(Arc::clone(field)))
+                }
+                ValueOrLambda::Value(field) => ValueOrLambda::Value(Arc::clone(field)),
             })
             .collect::<Vec<_>>();
 
@@ -279,9 +282,17 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
         // to reconstruct the arguments list with the correct order
         // this supports any value and lambda positioning including
         // multiple lambdas interleaved with values
-        let mut lambda_parameters =
-            self.fun().lambda_parameters(&value_fields)?.into_iter();
-        let num_lambdas = self.args.len() - value_fields.len();
+        let mut lambda_parameters = match self.fun().lambda_parameters(0, &fields)? {
+            LambdaParametersProgress::Partial(_) => {
+                return plan_err!(
+                    "{} lambda_parameters returned a partial result when the return type of all it's lambdas were provided",
+                    self.name()
+                );
+            }
+            LambdaParametersProgress::Complete(items) => items.into_iter(),
+        };
+
+        let num_lambdas = self.args.len() - fields.len();
 
         // functions can support multiple lambdas where some trailing ones are optional,
         // but to simplify the implementor, lambda_parameters returns the parameters of all of them,
@@ -323,7 +334,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                     }
 
                     let params = std::iter::zip(lambda.params(), lambda_params)
-                        .map(|(name, param)| Arc::new(param.with_name(name)))
+                        .map(|(name, param)| param.renamed(name.as_str()))
                         .collect();
 
                     Ok(ValueOrLambda::Lambda(LambdaArgument::new(
@@ -501,9 +512,12 @@ mod tests {
 
         fn lambda_parameters(
             &self,
-            _value_fields: &[FieldRef],
-        ) -> Result<Vec<Vec<Field>>> {
-            Ok(vec![vec![Field::new("", DataType::Null, true)]])
+            _step: usize,
+            _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            Ok(LambdaParametersProgress::Complete(vec![vec![Arc::new(
+                Field::new("", DataType::Null, true),
+            )]]))
         }
 
         fn return_field_from_args(

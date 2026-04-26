@@ -435,7 +435,7 @@ pub fn create_physical_expr(
                             })?
                             .into_iter()
                             .zip(&lambda.params)
-                            .map(|(field, name)| field.with_name(name))
+                            .map(|(field, name)| field.renamed(name.as_str()))
                             .collect();
 
                         let lambda_schema = DFSchema::from_unqualified_fields(

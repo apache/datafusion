@@ -145,8 +145,13 @@ impl Serializeable for Expr {
 
                     fn lambda_parameters(
                         &self,
-                        _value_fields: &[arrow::datatypes::FieldRef],
-                    ) -> Result<Vec<Vec<arrow::datatypes::Field>>> {
+                        _step: usize,
+                        _fields: &[datafusion_expr::ValueOrLambda<
+                            arrow::datatypes::FieldRef,
+                            Option<arrow::datatypes::FieldRef>,
+                        >],
+                    ) -> Result<datafusion_expr::LambdaParametersProgress>
+                    {
                         not_impl_err!("mock HigherOrderUDF")
                     }
 

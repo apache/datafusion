@@ -29,7 +29,7 @@ use crate::function::WindowFunctionSimplification;
 use crate::higher_order_function::HigherOrderUDF;
 use crate::logical_plan::Subquery;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf;
-use crate::{AggregateUDF, ValueOrLambda, Volatility};
+use crate::{AggregateUDF, LambdaParametersProgress, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -41,6 +41,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     Column, DFSchema, ExprSchema, HashMap, Result, ScalarValue, Spans, TableReference,
+    plan_err,
 };
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -447,26 +448,31 @@ impl HigherOrderFunction {
 
     /// Invokes the inner function [`HigherOrderUDF::lambda_parameters`]
     /// using the arguments of this invocation
-    pub fn lambda_parameters(&self, schema: &dyn ExprSchema) -> Result<Vec<Vec<Field>>> {
+    pub fn lambda_parameters(
+        &self,
+        schema: &dyn ExprSchema,
+    ) -> Result<Vec<Vec<FieldRef>>> {
         let args = self
             .args
             .iter()
             .map(|e| match e {
-                Expr::Lambda(_lambda) => Ok(ValueOrLambda::Lambda(())),
+                Expr::Lambda(lambda) => {
+                    Ok(ValueOrLambda::Lambda(Some(lambda.body.to_field(schema)?.1)))
+                }
                 _ => Ok(ValueOrLambda::Value(e.to_field(schema)?.1)),
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let coerced_values =
-            value_fields_with_higher_order_udf(&args, self.func.as_ref())?
-                .into_iter()
-                .filter_map(|arg| match arg {
-                    ValueOrLambda::Value(value) => Some(value),
-                    ValueOrLambda::Lambda(_lambda) => None,
-                })
-                .collect::<Vec<_>>();
+        let coerced_fields =
+            value_fields_with_higher_order_udf(&args, self.func.as_ref())?;
 
-        self.func.lambda_parameters(&coerced_values)
+        match self.func.lambda_parameters(0, &coerced_fields)? {
+            LambdaParametersProgress::Partial(_) => plan_err!(
+                "{} lambda_parameters returned a partial result when the return type of all it's lambdas were provided",
+                self.name()
+            ),
+            LambdaParametersProgress::Complete(items) => Ok(items),
+        }
     }
 }
 
