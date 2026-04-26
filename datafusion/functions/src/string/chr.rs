@@ -214,7 +214,13 @@ mod tests {
         ];
 
         assert_eq!(string_array.len(), expected.len());
+        assert_eq!(string_array.null_count(), 1);
+        assert!(string_array.is_null(7));
         for (i, e) in expected.iter().enumerate() {
+            if i == 7 {
+                continue;
+            }
+            assert!(!string_array.is_null(i));
             assert_eq!(string_array.value(i), *e);
         }
     }
