@@ -259,7 +259,11 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |&(idx, _)| unsafe {
+                        |&(idx, h)| unsafe {
+                            if hash != h {
+                                return false;
+                            }
+                                
                             let block_id = O::get_block_id(idx);
                             let block_offset = O::get_block_offset(idx);
                             self.values[block_id as usize]
