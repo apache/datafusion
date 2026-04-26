@@ -325,7 +325,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, LargeStringArray, StringArray, StringViewArray};
+    use std::sync::Arc;
+
+    use arrow::array::{
+        Array, ArrayRef, Int64Array, LargeStringArray, StringArray, StringViewArray,
+    };
     use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 
     use datafusion_common::ScalarValue;
@@ -432,5 +436,70 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    // Slicing the input arrays produces a NullBuffer with a non-zero offset.
+    // The tests below use 6-row inputs sliced to (1, 4) so that:
+    //   slot 0 (orig 1): "a"  × 3    → "aaa"
+    //   slot 1 (orig 2): "bb" × 2    → "bbbb"
+    //   slot 2 (orig 3): "c"  × NULL → NULL (count-side null)
+    //   slot 3 (orig 4): NULL × 1    → NULL (string-side null)
+    fn sliced_offset_inputs<F>(make_strings: F) -> (ArrayRef, ArrayRef)
+    where
+        F: FnOnce(Vec<Option<&'static str>>) -> ArrayRef,
+    {
+        let strings = make_strings(vec![
+            None,
+            Some("a"),
+            Some("bb"),
+            Some("c"),
+            None,
+            Some("d"),
+        ]);
+        let counts: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(2),
+            Some(3),
+            Some(2),
+            None,
+            Some(1),
+            Some(2),
+        ]));
+        (strings.slice(1, 4), counts.slice(1, 4))
+    }
+
+    fn assert_sliced_offset_output<A: Array + 'static>(result: ArrayRef)
+    where
+        for<'a> &'a A: arrow::array::ArrayAccessor<Item = &'a str>,
+    {
+        let result = result.as_any().downcast_ref::<A>().unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(arrow::array::ArrayAccessor::value(&result, 0), "aaa");
+        assert_eq!(arrow::array::ArrayAccessor::value(&result, 1), "bbbb");
+        assert!(result.is_null(2));
+        assert!(result.is_null(3));
+        assert_eq!(result.null_count(), 2);
+    }
+
+    #[test]
+    fn test_repeat_sliced_string_with_null_offset() {
+        let (strings, counts) = sliced_offset_inputs(|v| Arc::new(StringArray::from(v)));
+        let result = super::repeat(&strings, &counts).unwrap();
+        assert_sliced_offset_output::<StringArray>(result);
+    }
+
+    #[test]
+    fn test_repeat_sliced_large_string_with_null_offset() {
+        let (strings, counts) =
+            sliced_offset_inputs(|v| Arc::new(LargeStringArray::from(v)));
+        let result = super::repeat(&strings, &counts).unwrap();
+        assert_sliced_offset_output::<LargeStringArray>(result);
+    }
+
+    #[test]
+    fn test_repeat_sliced_string_view_with_null_offset() {
+        let (strings, counts) =
+            sliced_offset_inputs(|v| Arc::new(StringViewArray::from(v)));
+        let result = super::repeat(&strings, &counts).unwrap();
+        assert_sliced_offset_output::<StringViewArray>(result);
     }
 }
