@@ -659,7 +659,7 @@ impl SharedBuildAccumulator {
                         lit(true)
                     } else {
                         Arc::new(CaseExpr::try_new(
-                            Some(Arc::clone(&partition_expr)),
+                            Some(partition_expr),
                             when_then_branches,
                             Some(lit(true)),
                         )?) as Arc<dyn PhysicalExpr>
