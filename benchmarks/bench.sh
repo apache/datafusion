@@ -144,6 +144,7 @@ cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
+dict:                   Benchmark for dictionary-encoded group-by scenarios
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -345,6 +346,10 @@ main() {
                     # smj uses range() function, no data generation needed
                     echo "SMJ benchmark does not require data generation"
                     ;;
+                dict)
+                    # dict generates in-memory data, no data generation needed
+                    echo "DICT benchmark does not require data generation"
+                    ;;
                 compile_profile)
                     data_tpch "1" "parquet"
                     ;;
@@ -424,6 +429,7 @@ main() {
                     run_hj
                     run_tpcds
                     run_smj
+                    run_dict 
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -554,6 +560,9 @@ main() {
                     ;;
                 smj)
                     run_smj
+                    ;;
+                dict)
+                    run_dict
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -1381,6 +1390,14 @@ run_smj() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running smj benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the dict benchmark
+run_dict() {
+    RESULTS_FILE="${RESULTS_DIR}/dict.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running dict benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- dict --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
