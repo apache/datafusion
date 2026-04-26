@@ -137,9 +137,8 @@ use arrow::util::bit_util::apply_bitwise_binary_op;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, ScalarValue, internal_err,
 };
-use datafusion_execution::SendableRecordBatchStream;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_execution::{SendableRecordBatchStream, SpillFile};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 
 use futures::{Stream, StreamExt, ready};
@@ -254,7 +253,7 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     // with many inner rows will buffer them all. See "Degenerate cases"
     // in exec.rs. Spilled to disk when memory reservation fails.
     inner_key_buffer: Vec<RecordBatch>,
-    inner_key_spill: Option<RefCountedTempFile>,
+    inner_key_spill: Option<Arc<dyn SpillFile>>,
 
     // Track the active spill_stream
     spill_stream: Option<SendableRecordBatchStream>,
@@ -807,7 +806,7 @@ impl BitwiseSortMergeJoinStream {
             {
                 let stream = self
                     .spill_manager
-                    .read_spill_as_stream(spill_file.clone(), None)?;
+                    .read_spill_as_stream(Arc::clone(spill_file), None)?;
                 self.spill_stream = Some(stream);
             }
 

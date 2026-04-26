@@ -2104,6 +2104,7 @@ dependencies = [
  "arrow",
  "arrow-buffer",
  "async-trait",
+ "bytes",
  "chrono",
  "dashmap",
  "datafusion-common",
@@ -2117,6 +2118,8 @@ dependencies = [
  "parquet",
  "rand 0.9.4",
  "tempfile",
+ "tokio",
+ "tokio-util",
  "url",
 ]
 
@@ -2447,6 +2450,7 @@ dependencies = [
  "arrow-ord",
  "arrow-schema",
  "async-trait",
+ "bytes",
  "criterion",
  "datafusion-common",
  "datafusion-common-runtime",
