@@ -21,6 +21,7 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 
+cd "${ROOT_DIR}"
 
 MARKDOWN_FILES=()
 while IFS= read -r file; do
