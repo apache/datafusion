@@ -2309,7 +2309,13 @@ mod tests {
     }
 
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
-        let session_config = SessionConfig::new().with_batch_size(batch_size);
+        // Disable radix-partitioned aggregation for spill-specific tests.
+        // With it on (default), OOM is handled by in-memory radix
+        // partitioning rather than the disk-spill code path these tests
+        // exercise.
+        let session_config = SessionConfig::new()
+            .with_batch_size(batch_size)
+            .set_bool("datafusion.execution.aggregate_radix_partitioned", false);
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
             .build_arc()
@@ -3711,7 +3717,17 @@ mod tests {
         let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         let task_ctx = Arc::new(
             TaskContext::default()
-                .with_session_config(SessionConfig::new().with_batch_size(batch_size))
+                .with_session_config(
+                    SessionConfig::new()
+                        .with_batch_size(batch_size)
+                        // This test specifically asserts the disk-spill code
+                        // path; disable radix-partitioned aggregation so the
+                        // OOM falls through to the spill handler instead.
+                        .set_bool(
+                            "datafusion.execution.aggregate_radix_partitioned",
+                            false,
+                        ),
+                )
                 .with_runtime(Arc::new(
                     RuntimeEnvBuilder::new()
                         .with_memory_pool(memory_pool)

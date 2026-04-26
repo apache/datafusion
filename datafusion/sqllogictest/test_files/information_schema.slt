@@ -214,6 +214,8 @@ datafusion.catalog.has_header true
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
 datafusion.catalog.newlines_in_values false
+datafusion.execution.aggregate_radix_partitioned true
+datafusion.execution.aggregate_radix_partitioned_threshold_bytes 33554432
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics true
@@ -361,6 +363,8 @@ datafusion.catalog.has_header true Default value for `format.has_header` for `CR
 datafusion.catalog.information_schema true Should DataFusion provide access to `information_schema` virtual tables for displaying schema information
 datafusion.catalog.location NULL Location scanned to load tables for `default` schema
 datafusion.catalog.newlines_in_values false Specifies whether newlines in (quoted) CSV values are supported. This is the default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement. Parsing newlines in quoted values may be affected by execution behaviour such as parallel file scanning. Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
+datafusion.execution.aggregate_radix_partitioned true When true, the grouped hash aggregate operator radix-partitions its in-memory partial-aggregate state into a fixed number of in-memory runs (bucketed by hash of the grouping columns) once the working set exceeds [`aggregate_radix_partitioned_threshold_bytes`](Self::aggregate_radix_partitioned_threshold_bytes) — sized to roughly the last-level cache. Each bucket is later re-aggregated independently with a fresh, cache-resident hash table, instead of letting the table grow until it thrashes cache and ultimately spills to disk. Matches the design from Müller et al., SIGMOD 2015 ("Cache-Efficient Aggregation: Hashing Is Sorting"): hashing on small inputs that fit in cache, partitioning to make them small.
+datafusion.execution.aggregate_radix_partitioned_threshold_bytes 33554432 Working-set size (in bytes) at which the grouped hash aggregate flushes its in-memory hash table into radix-partitioned runs. The default is sized to roughly fit a thread's share of a modern last-level cache; the trigger fires once the combined size of group values and accumulator state exceeds this value. Only effective when [`aggregate_radix_partitioned`](Self::aggregate_radix_partitioned) is true.
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 datafusion.execution.collect_statistics true Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Applies to the default `ListingTableProvider` in DataFusion. Defaults to true.

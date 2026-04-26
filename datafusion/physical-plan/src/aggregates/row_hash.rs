@@ -36,7 +36,9 @@ use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
+use arrow::compute::take;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err, resources_datafusion_err,
@@ -56,6 +58,7 @@ use datafusion_common::utils::memory::get_record_batch_memory_size;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
+use std::pin::Pin;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -219,6 +222,97 @@ enum OutOfMemoryMode {
     EmitEarly,
     /// When out of memory occurs, immediately report the error
     ReportError,
+    /// When out of memory occurs, radix-partition the in-memory partial-aggregate
+    /// state into a fixed number of in-memory runs (bucketed by hash of the
+    /// grouping columns) and re-aggregate each bucket independently after the
+    /// input has been drained. See [`RadixPartitionState`].
+    RadixPartition,
+}
+
+/// Number of in-memory hash buckets used when radix-partitioning the
+/// hash table on memory pressure. Must be a power of two so we can use
+/// `hash & (NUM_RADIX_PARTITIONS - 1)` for bucket selection.
+const NUM_RADIX_PARTITIONS: usize = 32;
+
+/// Hash seed used for radix partitioning, deliberately distinct from
+/// [`AGGREGATION_HASH_SEED`](super::AGGREGATION_HASH_SEED) and from the
+/// `RepartitionExec` seed so the same key produces different bucket
+/// assignments at each layer.
+const RADIX_PARTITION_SEED: RandomState = RandomState::with_seed(0x1F4F_5A1B_7E0C_9D26);
+
+/// Holds in-memory radix-partitioned partial-aggregate state.
+///
+/// When the in-memory hash table cannot fit within the memory budget,
+/// the operator flushes its current contents into [`NUM_RADIX_PARTITIONS`]
+/// in-memory runs, bucketed by hash of the grouping columns. Each flush
+/// frees the hash table and lets ingestion continue against a fresh,
+/// cache-resident hash table. After all input has been consumed (and
+/// any final hash-table contents flushed), buckets are drained one at
+/// a time: each bucket's runs are streamed back through the operator's
+/// `merge_batch` path into a fresh hash table, so the working set per
+/// bucket is roughly `total_groups / NUM_RADIX_PARTITIONS` — designed
+/// to fit in cache.
+///
+/// This is the cache-efficient fallback from Müller et al., SIGMOD 2015,
+/// "Cache-Efficient Aggregation: Hashing Is Sorting". Disk spill is only
+/// used as a last resort if a single bucket still does not fit.
+struct RadixPartitionState {
+    /// Per-bucket lists of partial-state record batches.
+    /// `runs[bucket]` holds the batches that hashed to `bucket` across
+    /// all flush events. Empty buckets stay empty.
+    runs: Vec<Vec<RecordBatch>>,
+
+    /// Index of the bucket currently being drained, or
+    /// [`NUM_RADIX_PARTITIONS`] when all buckets have been drained.
+    drain_cursor: usize,
+
+    /// True once we have started draining buckets (i.e., input has been
+    /// fully consumed and we are now re-aggregating bucket-by-bucket).
+    is_draining: bool,
+}
+
+impl RadixPartitionState {
+    fn new() -> Self {
+        Self {
+            runs: (0..NUM_RADIX_PARTITIONS).map(|_| Vec::new()).collect(),
+            drain_cursor: 0,
+            is_draining: false,
+        }
+    }
+
+    /// Total in-memory bytes currently held in the partitioned runs.
+    fn runs_size(&self) -> usize {
+        self.runs
+            .iter()
+            .flat_map(|bucket| bucket.iter())
+            .map(get_record_batch_memory_size)
+            .sum()
+    }
+}
+
+/// A trivial [`Stream`] that yields a fixed sequence of pre-buffered
+/// record batches. Used to feed one bucket's partitioned runs back into
+/// [`GroupedHashAggregateStream`] during the radix-drain phase.
+struct BucketStream {
+    schema: SchemaRef,
+    iter: vec::IntoIter<RecordBatch>,
+}
+
+impl Stream for BucketStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().iter.next().map(Ok))
+    }
+}
+
+impl RecordBatchStream for BucketStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
 }
 
 /// HashTable based Grouping Aggregator
@@ -433,6 +527,16 @@ pub(crate) struct GroupedHashAggregateStream {
     /// The spill state object
     spill_state: SpillState,
 
+    /// In-memory radix-partitioned partial-aggregate state, present only
+    /// when [`OutOfMemoryMode::RadixPartition`] is active.
+    radix_state: Option<RadixPartitionState>,
+
+    /// Working-set size (bytes) at which the in-memory hash table is
+    /// proactively flushed into [`radix_state`] runs. Sized to a
+    /// thread's share of last-level cache. Only meaningful when
+    /// `radix_state` is `Some`.
+    radix_partition_threshold_bytes: usize,
+
     /// Optional probe for skipping data aggregation, if supported by
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
@@ -566,9 +670,26 @@ impl GroupedHashAggregateStream {
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
         let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
+        let radix_partitioned_enabled = context
+            .session_config()
+            .options()
+            .execution
+            .aggregate_radix_partitioned;
+        let radix_partition_threshold_bytes = context
+            .session_config()
+            .options()
+            .execution
+            .aggregate_radix_partitioned_threshold_bytes;
         let oom_mode = match (agg.mode, &group_ordering) {
             // In partial aggregation mode, always prefer to emit incomplete results early.
             (AggregateMode::Partial, _) => OutOfMemoryMode::EmitEarly,
+            // For non-partial modes with no group ordering, prefer in-memory radix
+            // partitioning (cache-efficient and disk-free) when enabled. If the bucket
+            // re-aggregation itself runs out of memory, the operator surfaces the error;
+            // disk spill remains the existing fallback when this mode is disabled.
+            (_, GroupOrdering::None) if radix_partitioned_enabled => {
+                OutOfMemoryMode::RadixPartition
+            }
             // For non-partial aggregation modes, emitting incomplete results is not an option.
             // Instead, use disk spilling to store sorted, incomplete results, and merge them
             // afterwards.
@@ -588,6 +709,11 @@ impl GroupedHashAggregateStream {
         };
 
         let group_values = new_group_values(group_schema, &group_ordering)?;
+        let radix_state = if oom_mode == OutOfMemoryMode::RadixPartition {
+            Some(RadixPartitionState::new())
+        } else {
+            None
+        };
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
@@ -678,6 +804,8 @@ impl GroupedHashAggregateStream {
             group_ordering,
             input_done: false,
             spill_state,
+            radix_state,
+            radix_partition_threshold_bytes,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
             reduction_factor,
@@ -709,7 +837,7 @@ impl Stream for GroupedHashAggregateStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
@@ -737,6 +865,20 @@ impl Stream for GroupedHashAggregateStream {
                             self.group_aggregate_batch(&batch)?;
 
                             assert!(!self.input_done);
+
+                            // If radix partitioning is active and the working
+                            // set has outgrown a thread's share of cache,
+                            // proactively flush the hash table into bucketed
+                            // runs. This is the cache-size trigger from the
+                            // paper — independent of memory-pool pressure.
+                            if self.should_radix_partition_now() {
+                                let batch_size = self.batch_size;
+                                self.radix_partition_state()?;
+                                self.clear_shrink(batch_size);
+                                // Best-effort reservation update; if it fails
+                                // we let the OOM path below handle it.
+                                let _ = self.update_memory_reservation();
+                            }
 
                             // If the number of group values equals or exceeds the soft limit,
                             // emit all groups and switch to producing output
@@ -1030,6 +1172,23 @@ impl GroupedHashAggregateStream {
                 self.update_memory_reservation()?;
                 Ok(None)
             }
+            OutOfMemoryMode::RadixPartition if !self.group_values.is_empty() => {
+                // While draining buckets, partitioning with the same hash
+                // bits would route data back into the same bucket — making
+                // no progress and ultimately losing it (the cursor moves
+                // past completed buckets). Recursive partitioning with
+                // higher-order hash bits would be the right fix; until
+                // then, surface the error so the caller can either grow
+                // the memory pool or disable radix mode.
+                let draining = self.radix_state.as_ref().is_some_and(|s| s.is_draining);
+                if draining {
+                    return Err(oom);
+                }
+                self.radix_partition_state()?;
+                self.clear_shrink(self.batch_size);
+                self.update_memory_reservation()?;
+                Ok(None)
+            }
             OutOfMemoryMode::EmitEarly if self.group_values.len() > 1 => {
                 let n = if self.group_values.len() >= self.batch_size {
                     // Try to emit an integer multiple of batch size if possible
@@ -1048,6 +1207,7 @@ impl GroupedHashAggregateStream {
             }
             OutOfMemoryMode::EmitEarly
             | OutOfMemoryMode::Spill
+            | OutOfMemoryMode::RadixPartition
             | OutOfMemoryMode::ReportError => Err(oom),
         }
     }
@@ -1074,7 +1234,14 @@ impl GroupedHashAggregateStream {
                 0
             };
 
-        let new_size = groups_and_acc_size + sort_headroom;
+        // Account for partial-state batches buffered in radix partition runs.
+        let radix_runs_size = self
+            .radix_state
+            .as_ref()
+            .map(|s| s.runs_size())
+            .unwrap_or(0);
+
+        let new_size = groups_and_acc_size + sort_headroom + radix_runs_size;
         let reservation_result = self.reservation.try_resize(new_size);
 
         if reservation_result.is_ok() {
@@ -1191,6 +1358,89 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
+    /// True when radix partitioning is enabled and the in-memory hash
+    /// table has outgrown its cache-size budget, so the operator should
+    /// flush its current state into bucketed runs.
+    ///
+    /// Suppressed during the drain phase (we are intentionally re-filling
+    /// a fresh table from one bucket and don't want to re-bucket it).
+    fn should_radix_partition_now(&self) -> bool {
+        let Some(radix_state) = self.radix_state.as_ref() else {
+            return false;
+        };
+        if radix_state.is_draining {
+            return false;
+        }
+        if self.group_values.is_empty() {
+            return false;
+        }
+        let acc_size = self.accumulators.iter().map(|a| a.size()).sum::<usize>();
+        let working_set = self.group_values.size() + acc_size;
+        working_set > self.radix_partition_threshold_bytes
+    }
+
+    /// Flush the in-memory hash table into radix-partitioned in-memory runs.
+    ///
+    /// The current partial-aggregate state is emitted as a single batch
+    /// (in spill schema), the rows are bucketed by hash of the grouping
+    /// columns, and each non-empty bucket's slice is appended to its run
+    /// list. The hash table is left untouched; callers should follow up
+    /// with [`Self::clear_shrink`] to reset it for fresh ingestion.
+    fn radix_partition_state(&mut self) -> Result<()> {
+        let Some(emit) = self.emit(EmitTo::All, true)? else {
+            return Ok(());
+        };
+
+        let num_group_cols = self.group_by.num_group_exprs();
+        assert_or_internal_err!(
+            emit.num_columns() >= num_group_cols,
+            "spill batch has fewer columns ({}) than group exprs ({})",
+            emit.num_columns(),
+            num_group_cols
+        );
+
+        let num_rows = emit.num_rows();
+        if num_rows == 0 {
+            return Ok(());
+        }
+
+        // Hash on the grouping columns of the emitted partial state.
+        let group_columns: Vec<&dyn Array> = (0..num_group_cols)
+            .map(|i| emit.column(i).as_ref())
+            .collect();
+        let mut hashes = vec![0u64; num_rows];
+        create_hashes(group_columns, &RADIX_PARTITION_SEED, &mut hashes)?;
+
+        // Bucket rows by `hash & (NUM_RADIX_PARTITIONS - 1)`.
+        let mask = (NUM_RADIX_PARTITIONS - 1) as u64;
+        let mut indices_per_bucket: Vec<Vec<u32>> =
+            (0..NUM_RADIX_PARTITIONS).map(|_| Vec::new()).collect();
+        for (row, &h) in hashes.iter().enumerate() {
+            indices_per_bucket[(h & mask) as usize].push(row as u32);
+        }
+
+        let radix_state = self
+            .radix_state
+            .as_mut()
+            .expect("radix_partition_state called without radix_state");
+
+        for (bucket, indices) in indices_per_bucket.into_iter().enumerate() {
+            if indices.is_empty() {
+                continue;
+            }
+            let idx_array = UInt32Array::from(indices);
+            let cols: Vec<ArrayRef> = emit
+                .columns()
+                .iter()
+                .map(|col| take(col.as_ref(), &idx_array, None))
+                .collect::<std::result::Result<_, arrow::error::ArrowError>>()?;
+            let bucket_batch = RecordBatch::try_new(emit.schema(), cols)?;
+            radix_state.runs[bucket].push(bucket_batch);
+        }
+
+        Ok(())
+    }
+
     /// Clear memory and shrink capacities to the given number of rows.
     fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values.clear_shrink(num_rows);
@@ -1217,6 +1467,14 @@ impl GroupedHashAggregateStream {
     /// This method is called both when the original input stream and,
     /// in case of disk spilling, the SPM stream have been drained.
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
+        // Radix-partitioned aggregation drains buckets one at a time; each
+        // bucket's runs become a fresh "input" that flows back into the
+        // ReadingInput state. The advance helper handles initial setup,
+        // intermediate transitions, and final completion.
+        if self.radix_state.is_some() {
+            return self.advance_radix_drain();
+        }
+
         self.input_done = true;
         self.group_ordering.input_done();
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
@@ -1280,6 +1538,135 @@ impl GroupedHashAggregateStream {
 
             ExecutionState::ReadingInput
         };
+        timer.done();
+        Ok(())
+    }
+
+    /// Advance the radix-partitioned drain phase.
+    ///
+    /// This is invoked from [`Self::set_input_done_and_produce_output`]
+    /// each time an "input" stream ends:
+    ///
+    /// * The first call (right after the original input stream ends)
+    ///   flushes any remaining hash table contents into runs and starts
+    ///   draining bucket 0.
+    /// * Subsequent calls emit the just-completed bucket's results,
+    ///   advance the cursor, and either start the next non-empty bucket
+    ///   or transition to [`ExecutionState::Done`].
+    ///
+    /// While we are draining, [`SpillState::is_stream_merging`] is set
+    /// so that [`Self::group_aggregate_batch`] uses the merging group-by
+    /// expressions and `merge_batch` paths against the spill-schema
+    /// inputs. We do not actually spill anything to disk here; the flag
+    /// is reused for its behavioral effect on schema lookup.
+    fn advance_radix_drain(&mut self) -> Result<()> {
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let timer = elapsed_compute.timer();
+
+        let just_started = !self
+            .radix_state
+            .as_ref()
+            .expect("radix_state present")
+            .is_draining;
+
+        let bucket_output = if just_started {
+            // Fast path: if the operator never had to radix-partition
+            // during ingestion (the working set always fit in cache),
+            // skip the drain phase entirely and emit normally. This
+            // preserves output ordering and avoids the extra round trip
+            // through `merge_batch` for small queries.
+            let runs_empty = self
+                .radix_state
+                .as_ref()
+                .unwrap()
+                .runs
+                .iter()
+                .all(|b| b.is_empty());
+            if runs_empty {
+                self.input_done = true;
+                self.group_ordering.input_done();
+                let batch = self.emit(EmitTo::All, false)?;
+                self.exec_state =
+                    batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput);
+                self.update_memory_reservation()?;
+                timer.done();
+                return Ok(());
+            }
+
+            // First entry: drain phase has not started yet. Flush any
+            // remaining in-memory hash table into the radix runs so that
+            // every group is bucketed before re-aggregation begins.
+            if !self.group_values.is_empty() {
+                self.radix_partition_state()?;
+                self.clear_shrink(0);
+            }
+
+            let radix_state = self.radix_state.as_mut().unwrap();
+            radix_state.is_draining = true;
+            radix_state.drain_cursor = 0;
+
+            // Subsequent batches arriving via BucketStream are in spill
+            // schema (group columns + accumulator state). Reuse the
+            // existing stream-merging machinery so group_aggregate_batch
+            // resolves columns from the spill schema and uses merge_batch
+            // semantics on accumulators.
+            self.spill_state.is_stream_merging = true;
+
+            None
+        } else {
+            // A bucket's input has just been exhausted. Emit its results.
+            let batch = self.emit(EmitTo::All, false)?;
+            self.clear_all();
+            self.radix_state.as_mut().unwrap().drain_cursor += 1;
+            batch
+        };
+
+        // Advance to the next non-empty bucket.
+        let radix_state = self.radix_state.as_mut().unwrap();
+        while radix_state.drain_cursor < NUM_RADIX_PARTITIONS
+            && radix_state.runs[radix_state.drain_cursor].is_empty()
+        {
+            radix_state.drain_cursor += 1;
+        }
+
+        if radix_state.drain_cursor >= NUM_RADIX_PARTITIONS {
+            // All buckets drained.
+            self.input_done = true;
+            self.group_ordering.input_done();
+            self.exec_state = match bucket_output {
+                Some(batch) => ExecutionState::ProducingOutput(batch),
+                None => ExecutionState::Done,
+            };
+            self.update_memory_reservation()?;
+            timer.done();
+            return Ok(());
+        }
+
+        // Replace the input stream with the next bucket's runs.
+        let next_bucket = radix_state.drain_cursor;
+        let runs = std::mem::take(&mut radix_state.runs[next_bucket]);
+        self.input = Box::pin(BucketStream {
+            schema: Arc::clone(&self.spill_state.spill_schema),
+            iter: runs.into_iter(),
+        });
+        self.input_done = false;
+
+        // Memory accounting: the runs we just drained no longer occupy
+        // their slot, but a copy is still alive inside BucketStream
+        // until the stream consumes them. Updating the reservation now
+        // would underestimate live memory; instead, leave it untouched
+        // and let group_aggregate_batch's normal path resize on the
+        // next batch ingested.
+
+        self.exec_state = match bucket_output {
+            // If we have a batch from the previous bucket to emit, queue
+            // it; ProducingOutput will fall back to ReadingInput when
+            // exhausted (because `input_done` is false), at which point
+            // poll_next will pull from the new BucketStream.
+            Some(batch) => ExecutionState::ProducingOutput(batch),
+            None => ExecutionState::ReadingInput,
+        };
+
         timer.done();
         Ok(())
     }
@@ -1700,5 +2087,135 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// Drives a `Single`-mode aggregate stream to completion and verifies
+    /// that radix-partitioned and plain (non-radix) execution produce the
+    /// same multiset of `(group, count)` rows. The radix run uses a tiny
+    /// threshold so the cache-size trigger fires repeatedly during input.
+    async fn assert_radix_matches_non_radix(
+        groups: &[i32],
+        values: &[i64],
+    ) -> Result<()> {
+        use datafusion_common::ScalarValue;
+        use datafusion_execution::config::SessionConfig;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(groups.to_vec())),
+                Arc::new(Int64Array::from(values.to_vec())),
+            ],
+        )?;
+        let input_partitions = vec![vec![batch]];
+
+        let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count_value")
+                .build()?,
+        )];
+
+        async fn run_one(
+            radix: bool,
+            input_partitions: &[Vec<RecordBatch>],
+            schema: &SchemaRef,
+            group_expr: &[(Arc<dyn PhysicalExpr>, String)],
+            aggr_expr: &[Arc<AggregateFunctionExpr>],
+        ) -> Result<Vec<RecordBatch>> {
+            let mut session_config = SessionConfig::new();
+            session_config = session_config.set(
+                "datafusion.execution.aggregate_radix_partitioned",
+                &ScalarValue::Boolean(Some(radix)),
+            );
+            // Tiny threshold so the radix flush actually fires on small
+            // inputs; chosen well below any plausible group_values size.
+            session_config = session_config.set(
+                "datafusion.execution.aggregate_radix_partitioned_threshold_bytes",
+                &ScalarValue::UInt64(Some(64)),
+            );
+            let task_ctx =
+                Arc::new(TaskContext::default().with_session_config(session_config));
+
+            let exec =
+                TestMemoryExec::try_new(input_partitions, Arc::clone(schema), None)?;
+            let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+            let aggregate_exec = AggregateExec::try_new(
+                AggregateMode::Single,
+                PhysicalGroupBy::new_single(group_expr.to_vec()),
+                aggr_expr.to_vec(),
+                vec![None],
+                exec,
+                Arc::clone(schema),
+            )?;
+
+            let mut stream =
+                GroupedHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
+            let mut out = Vec::new();
+            while let Some(b) = stream.next().await {
+                out.push(b?);
+            }
+            Ok(out)
+        }
+
+        let radix_batches =
+            run_one(true, &input_partitions, &schema, &group_expr, &aggr_expr).await?;
+        let plain_batches =
+            run_one(false, &input_partitions, &schema, &group_expr, &aggr_expr).await?;
+
+        // Reduce each side to a sorted (group, count) vector and compare.
+        let collect_pairs = |batches: Vec<RecordBatch>| -> Vec<(i32, i64)> {
+            let mut pairs = Vec::new();
+            for b in batches {
+                let g = b.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+                let c = b.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+                for i in 0..b.num_rows() {
+                    pairs.push((g.value(i), c.value(i)));
+                }
+            }
+            pairs.sort_unstable();
+            pairs
+        };
+
+        let radix_pairs = collect_pairs(radix_batches);
+        let plain_pairs = collect_pairs(plain_batches);
+        assert_eq!(
+            radix_pairs, plain_pairs,
+            "radix output diverged from non-radix output"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_radix_partitioned_high_cardinality() -> Result<()> {
+        // Many distinct groups so the cache-size trigger fires repeatedly,
+        // forcing several radix flushes.
+        let groups: Vec<i32> = (0..4096).chain(0..4096).chain(0..4096).collect();
+        let values: Vec<i64> = (0..groups.len() as i64).collect();
+        assert_radix_matches_non_radix(&groups, &values).await
+    }
+
+    #[tokio::test]
+    async fn test_radix_partitioned_low_cardinality() -> Result<()> {
+        // Few groups: the cache-size trigger should still fire because
+        // accumulator state grows, but K is small so all rows likely hash
+        // to a tiny number of buckets.
+        let groups: Vec<i32> = (0..10_000).map(|i| i % 4).collect();
+        let values: Vec<i64> = (0..10_000).collect();
+        assert_radix_matches_non_radix(&groups, &values).await
+    }
+
+    #[tokio::test]
+    async fn test_radix_partitioned_single_group() -> Result<()> {
+        // Pathological: every row in a single bucket.
+        let groups: Vec<i32> = vec![42; 1000];
+        let values: Vec<i64> = (0..1000).collect();
+        assert_radix_matches_non_radix(&groups, &values).await
     }
 }

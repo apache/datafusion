@@ -648,6 +648,31 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
+        /// When true, the grouped hash aggregate operator radix-partitions
+        /// its in-memory partial-aggregate state into a fixed number of
+        /// in-memory runs (bucketed by hash of the grouping columns) once
+        /// the working set exceeds
+        /// [`aggregate_radix_partitioned_threshold_bytes`](Self::aggregate_radix_partitioned_threshold_bytes)
+        /// — sized to roughly the last-level cache. Each bucket is later
+        /// re-aggregated independently with a fresh, cache-resident hash
+        /// table, instead of letting the table grow until it thrashes
+        /// cache and ultimately spills to disk.
+        ///
+        /// Matches the design from Müller et al., SIGMOD 2015 ("Cache-Efficient
+        /// Aggregation: Hashing Is Sorting"): hashing on small inputs that
+        /// fit in cache, partitioning to make them small.
+        pub aggregate_radix_partitioned: bool, default = true
+
+        /// Working-set size (in bytes) at which the grouped hash aggregate
+        /// flushes its in-memory hash table into radix-partitioned runs.
+        /// The default is sized to roughly fit a thread's share of a modern
+        /// last-level cache; the trigger fires once the combined size of
+        /// group values and accumulator state exceeds this value. Only
+        /// effective when
+        /// [`aggregate_radix_partitioned`](Self::aggregate_radix_partitioned)
+        /// is true.
+        pub aggregate_radix_partitioned_threshold_bytes: usize, default = 32 * 1024 * 1024
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.
