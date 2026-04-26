@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Dictionary-encoded array generation utilities for benchmarks.
-
 use crate::util::BenchmarkRun;
 use crate::util::CommonOpt;
 use crate::util::QueryResult;
@@ -39,7 +37,6 @@ const ITEMS_PER_VALUE: usize = 4;
 #[derive(Debug, Clone, clap::Parser)]
 pub struct RunOpt {
     /// Number of rows in the generated table.
-    /// Cardinality percentages are applied relative to this value.
     #[clap(long, default_value = "1000000")]
     pub num_rows: usize,
 
@@ -94,10 +91,6 @@ impl Cardinality {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Queries
-// ---------------------------------------------------------------------------
-
 #[derive(Debug)]
 pub struct DictionaryQuery {
     pub name: &'static str,
@@ -110,7 +103,7 @@ pub struct DictionaryQuery {
 }
 
 pub const DICTIONARY_QUERIES: &[DictionaryQuery] = &[
-    // --- single-column group-by: Utf8 ----------------------------------------
+    // single-column group-by: Utf8
     DictionaryQuery {
         name: "group_by_utf8_card5_no_nulls",
         value_type: DictValueType::Utf8,
@@ -151,7 +144,6 @@ pub const DICTIONARY_QUERIES: &[DictionaryQuery] = &[
         cardinality: Cardinality::TwentyFive,
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
-    // --- single-column group-by: List<Utf8>
     // currently not supported by GroupValuesRows,
     // https://github.com/apache/datafusion/pull/21765 Intends to address this.
     // commenting out these benchmarks fornow
@@ -181,7 +173,6 @@ pub const DICTIONARY_QUERIES: &[DictionaryQuery] = &[
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
     */
-    // --- multi-column group-by: Utf8 + Utf8 ----------------------------------
     DictionaryQuery {
         name: "group_by_two_utf8_card5_no_nulls",
         value_type: DictValueType::Utf8,
