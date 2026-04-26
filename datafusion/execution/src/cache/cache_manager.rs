@@ -24,7 +24,7 @@ use crate::cache::file_statistics_cache::{
 use crate::cache::list_files_cache::ListFilesEntry;
 use crate::cache::list_files_cache::TableScopedPath;
 use datafusion_common::TableReference;
-use datafusion_common::heap_size::DFHeapSize;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -111,13 +111,13 @@ pub trait FileStatisticsCache:
 }
 
 impl DFHeapSize for CachedFileMetadata {
-    fn heap_size(&self) -> usize {
-        self.meta.size.heap_size()
-            + self.meta.last_modified.heap_size()
-            + self.meta.version.heap_size()
-            + self.meta.e_tag.heap_size()
-            + self.meta.location.as_ref().heap_size()
-            + self.statistics.heap_size()
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.meta.size.heap_size(ctx)
+            + self.meta.last_modified.heap_size(ctx)
+            + self.meta.version.heap_size(ctx)
+            + self.meta.e_tag.heap_size(ctx)
+            + self.meta.location.as_ref().heap_size(ctx)
+            + self.statistics.heap_size(ctx)
         //TODO add ordering once LexOrdering/PhysicalExpr implements DFHeapSize
     }
 }

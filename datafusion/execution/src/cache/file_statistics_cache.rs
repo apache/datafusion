@@ -25,7 +25,7 @@ use std::sync::Mutex;
 pub use crate::cache::DefaultFilesMetadataCache;
 use crate::cache::lru_queue::LruQueue;
 use datafusion_common::TableReference;
-use datafusion_common::heap_size::DFHeapSize;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 
 /// Default implementation of [`FileStatisticsCache`]
 ///
@@ -99,8 +99,9 @@ impl DefaultFileStatisticsCacheState {
         key: &TableScopedPath,
         value: CachedFileMetadata,
     ) -> Option<CachedFileMetadata> {
-        let key_size = key.heap_size();
-        let entry_size = value.heap_size();
+        let mut ctx = DFHeapSizeCtx::default();
+        let key_size = key.heap_size(&mut ctx);
+        let entry_size = value.heap_size(&mut ctx);
 
         if entry_size + key_size > self.memory_limit {
             // Remove potential stale entry
@@ -110,11 +111,11 @@ impl DefaultFileStatisticsCacheState {
 
         let old_value = self.lru_queue.put(key.clone(), value);
         self.memory_used += entry_size;
-        self.memory_used += key.heap_size();
+        self.memory_used += key.heap_size(&mut ctx);
 
         if let Some(old_entry) = &old_value {
-            self.memory_used -= old_entry.heap_size();
-            self.memory_used -= key.heap_size();
+            self.memory_used -= old_entry.heap_size(&mut ctx);
+            self.memory_used -= key.heap_size(&mut ctx);
         }
 
         self.evict_entries();
@@ -124,8 +125,9 @@ impl DefaultFileStatisticsCacheState {
 
     fn remove(&mut self, k: &TableScopedPath) -> Option<CachedFileMetadata> {
         if let Some(old_entry) = self.lru_queue.remove(k) {
-            self.memory_used -= k.heap_size();
-            self.memory_used -= old_entry.heap_size();
+            let mut ctx = DFHeapSizeCtx::default();
+            self.memory_used -= k.heap_size(&mut ctx);
+            self.memory_used -= old_entry.heap_size(&mut ctx);
             Some(old_entry)
         } else {
             None
@@ -148,8 +150,9 @@ impl DefaultFileStatisticsCacheState {
     fn evict_entries(&mut self) {
         while self.memory_used > self.memory_limit {
             if let Some(removed) = self.lru_queue.pop() {
-                self.memory_used -= removed.0.heap_size();
-                self.memory_used -= removed.1.heap_size();
+                let mut ctx = DFHeapSizeCtx::default();
+                self.memory_used -= removed.0.heap_size(&mut ctx);
+                self.memory_used -= removed.1.heap_size(&mut ctx);
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
                 log::error!(
@@ -222,6 +225,7 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
 
     fn list_entries(&self) -> HashMap<TableScopedPath, FileStatisticsCacheEntry> {
         let mut entries = HashMap::<TableScopedPath, FileStatisticsCacheEntry>::new();
+        let mut ctx = DFHeapSizeCtx::default();
         for entry in self.state.lock().unwrap().lru_queue.list_entries() {
             let path = entry.0.clone();
             let cached = entry.1;
@@ -232,7 +236,7 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
                     num_rows: cached.statistics.num_rows,
                     num_columns: cached.statistics.column_statistics.len(),
                     table_size_bytes: cached.statistics.total_byte_size,
-                    statistics_size_bytes: cached.statistics.heap_size(),
+                    statistics_size_bytes: cached.statistics.heap_size(&mut ctx),
                     has_ordering: cached.ordering.is_some(),
                 },
             );
@@ -269,6 +273,7 @@ mod tests {
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
+    use datafusion_common::heap_size::DFHeapSizeCtx;
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
     use datafusion_expr::ColumnarValue;
@@ -619,10 +624,12 @@ mod tests {
         let (meta_2, value_2) = create_cached_file_metadata_with_stats("test2.parquet");
         let (meta_3, value_3) = create_cached_file_metadata_with_stats("test3.parquet");
 
-        let limit_for_2_entries = meta_1.location.as_ref().heap_size()
-            + value_1.heap_size()
-            + meta_2.location.as_ref().heap_size()
-            + value_2.heap_size();
+        let mut ctx = DFHeapSizeCtx::default();
+
+        let limit_for_2_entries = meta_1.location.as_ref().heap_size(&mut ctx)
+            + value_1.heap_size(&mut ctx)
+            + meta_2.location.as_ref().heap_size(&mut ctx)
+            + value_2.heap_size(&mut ctx);
 
         // create a cache with a limit which fits exactly 2 entries
         let cache = DefaultFileStatisticsCache::new(limit_for_2_entries);
@@ -672,11 +679,12 @@ mod tests {
         cache.put(&path_3, value_3.clone());
         assert_eq!(cache.memory_used(), limit_for_2_entries);
 
+        let mut ctx = DFHeapSizeCtx::default();
         cache.remove(&path_2);
         assert_eq!(cache.len(), 1);
         assert_eq!(
             cache.memory_used(),
-            meta_3.location.as_ref().heap_size() + value_3.heap_size()
+            meta_3.location.as_ref().heap_size(&mut ctx) + value_3.heap_size(&mut ctx)
         );
 
         cache.clear();
@@ -687,8 +695,8 @@ mod tests {
     #[test]
     fn test_cache_rejects_entry_which_is_too_large() {
         let (meta, value) = create_cached_file_metadata_with_stats("test1.parquet");
-
-        let limit_less_than_the_entry = value.heap_size() - 1;
+        let mut ctx = DFHeapSizeCtx::default();
+        let limit_less_than_the_entry = value.heap_size(&mut ctx) - 1;
 
         // create a cache with a size less than the entry
         let cache = DefaultFileStatisticsCache::new(limit_less_than_the_entry);
@@ -727,8 +735,8 @@ mod tests {
             total_byte_size: Precision::Exact(100),
             column_statistics: vec![column_statistics.clone()],
         };
-
-        let object_meta = create_test_meta(file_name, stats.heap_size() as u64);
+        let mut ctx = DFHeapSizeCtx::default();
+        let object_meta = create_test_meta(file_name, stats.heap_size(&mut ctx) as u64);
         let value =
             CachedFileMetadata::new(object_meta.clone(), Arc::new(stats.clone()), None);
         (object_meta, value)

@@ -30,7 +30,7 @@ use std::{
 };
 
 use datafusion_common::TableReference;
-use datafusion_common::heap_size::DFHeapSize;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
 use object_store::{ObjectMeta, path::Path};
 
@@ -172,8 +172,8 @@ impl Default for DefaultListFilesCacheState {
 }
 
 impl DFHeapSize for TableScopedPath {
-    fn heap_size(&self) -> usize {
-        self.path.as_ref().heap_size() + self.table.heap_size()
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.path.as_ref().heap_size(ctx) + self.table.heap_size(ctx)
     }
 }
 
