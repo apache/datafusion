@@ -360,7 +360,7 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Tip: If you have a [`HigherOrderFunction`] invocation, you can call the helper
     /// [`HigherOrderFunction::lambda_parameters`] instead of this method directly
     ///
-    /// The name of the returned [`Field`]'s are ignored.
+    /// The name of the returned fields are ignored.
     ///
     /// This function is repeatedelly called until [LambdaParametersProgress::Complete] is returned, with
     /// `step` increased by one at each invocation, starting at 0.
@@ -383,10 +383,10 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::new_list(DataType::Float32, true), true))),
     ///         // the Field of the literal `0.0`, the initial value
     ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::Float32, true))),
-    ///         // the Field of the output of the merge lambda, which is unknow at this point because it depends
+    ///         // the Field of the output of the merge lambda, which is unknown at this point because it depends
     ///         // on the return of this call
     ///         ValueOrLambda::Lambda(None),
-    ///         // the Field of the output of the finish lambda, unknow for the same reason as above
+    ///         // the Field of the output of the finish lambda, unknown for the same reason as above
     ///         ValueOrLambda::Lambda(None),
     /// ])?;
     ///
@@ -429,10 +429,10 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::new_list(DataType::Float32, true), true))),
     ///         // the Field of the literal `0`, the initial value
     ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, true))),
-    ///         // the Field of the output of the merge lambda, which is unknow at this point because it depends on
+    ///         // the Field of the output of the merge lambda, which is unknown at this point because it depends on
     ///         // the return this call
     ///         ValueOrLambda::Lambda(None),
-    ///         // the Field of the output of the finish lambda, unknow for the same reason as above
+    ///         // the Field of the output of the finish lambda, unknown for the same reason as above
     ///         ValueOrLambda::Lambda(None),
     /// ])?;
     ///
@@ -446,7 +446,7 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ///             // the array values being reduced
     ///             Arc::new(Field::new("", DataType::Float32, true)),
     ///         ]),
-    ///         // the merge lambda supported parameters, unknow at this point due to dependency on the merge output
+    ///         // the merge lambda supported parameters, unknown at this point due to dependency on the merge output
     ///         None,
     ///      ])
     /// );
@@ -461,7 +461,7 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ///         // the Field of the output of the merge lambda, which could be inferred to be a Float32 based on the
     ///         // returned values of the previous step
     ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::Float32, true))),
-    ///         // the Field of the output of the finish lambda, which is unknow at this point because it depends
+    ///         // the Field of the output of the finish lambda, which is unknown at this point because it depends
     ///         // on the return of this call
     ///         ValueOrLambda::Lambda(None),
     /// ])?;
@@ -560,7 +560,7 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// # Example creating `Field`
     ///
-    /// Note the name of the [`Field`] is ignored, except for structured types such as
+    /// Note the name of the `Field` is ignored, except for structured types such as
     /// `DataType::Struct`.
     ///
     /// ```rust
