@@ -277,17 +277,18 @@ async fn sql_limit() -> Result<()> {
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").await.unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is smaller than the original number of lines we mark the statistics as inexact
+    // and cap NDV at the new row count
+    let limit_stats = physical_plan.partition_statistics(None)?;
+    assert_eq!(limit_stats.num_rows, Precision::Exact(5));
+    // c1: NDV=2 stays at 2 (already below limit of 5)
     assert_eq!(
-        Statistics {
-            num_rows: Precision::Exact(5),
-            column_statistics: stats
-                .column_statistics
-                .iter()
-                .map(|c| c.clone().to_inexact())
-                .collect(),
-            total_byte_size: Precision::Absent
-        },
-        *physical_plan.partition_statistics(None)?
+        limit_stats.column_statistics[0].distinct_count,
+        Precision::Inexact(2)
+    );
+    // c2: NDV=13 capped to 5 (the limit row count)
+    assert_eq!(
+        limit_stats.column_statistics[1].distinct_count,
+        Precision::Inexact(5)
     );
 
     let df = ctx

@@ -695,15 +695,13 @@ impl BoolVecBuilder {
 }
 
 fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any()
-        .downcast_ref::<phys_expr::Literal>()
+    expr.downcast_ref::<phys_expr::Literal>()
         .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(true))))
         .unwrap_or_default()
 }
 
 fn is_always_false(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any()
-        .downcast_ref::<phys_expr::Literal>()
+    expr.downcast_ref::<phys_expr::Literal>()
         .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(false))))
         .unwrap_or_default()
 }
@@ -1113,15 +1111,10 @@ fn rewrite_expr_to_prunable(
         return plan_err!("rewrite_expr_to_prunable only support compare expression");
     }
 
-    let column_expr_any = column_expr.as_any();
-
-    if column_expr_any
-        .downcast_ref::<phys_expr::Column>()
-        .is_some()
-    {
+    if column_expr.downcast_ref::<phys_expr::Column>().is_some() {
         // `col op lit()`
         Ok((Arc::clone(column_expr), op, Arc::clone(scalar_expr)))
-    } else if let Some(cast) = column_expr_any.downcast_ref::<phys_expr::CastExpr>() {
+    } else if let Some(cast) = column_expr.downcast_ref::<phys_expr::CastExpr>() {
         // `cast(col) op lit()`
         let (left, op, right) = rewrite_cast_child_to_prunable(
             cast.expr(),
@@ -1140,9 +1133,7 @@ fn rewrite_expr_to_prunable(
         // extraction to agree with PruningPredicate on a stats representation
         // for nested field expressions.
         Ok((left, op, right))
-    } else if let Some(try_cast) =
-        column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()
-    {
+    } else if let Some(try_cast) = column_expr.downcast_ref::<phys_expr::TryCastExpr>() {
         // `try_cast(col) op lit()`
         let (left, op, right) = rewrite_cast_child_to_prunable(
             try_cast.expr(),
@@ -1156,23 +1147,18 @@ fn rewrite_expr_to_prunable(
             try_cast.cast_type().clone(),
         ));
         Ok((left, op, right))
-    } else if let Some(neg) = column_expr_any.downcast_ref::<phys_expr::NegativeExpr>() {
+    } else if let Some(neg) = column_expr.downcast_ref::<phys_expr::NegativeExpr>() {
         // `-col > lit()`  --> `col < -lit()`
         let (left, op, right) =
             rewrite_expr_to_prunable(neg.arg(), op, scalar_expr, schema)?;
         let right = Arc::new(phys_expr::NegativeExpr::new(right));
         Ok((left, reverse_operator(op)?, right))
-    } else if let Some(not) = column_expr_any.downcast_ref::<phys_expr::NotExpr>() {
+    } else if let Some(not) = column_expr.downcast_ref::<phys_expr::NotExpr>() {
         // `!col = true` --> `col = !true`
         if op != Operator::Eq && op != Operator::NotEq {
             return plan_err!("Not with operator other than Eq / NotEq is not supported");
         }
-        if not
-            .arg()
-            .as_any()
-            .downcast_ref::<phys_expr::Column>()
-            .is_some()
-        {
+        if not.arg().downcast_ref::<phys_expr::Column>().is_some() {
             let left = Arc::clone(not.arg());
             let right = Arc::new(phys_expr::NotExpr::new(Arc::clone(scalar_expr)));
             Ok((left, reverse_operator(op)?, right))
@@ -1249,7 +1235,7 @@ fn rewrite_column_expr(
     column_new: &phys_expr::Column,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     e.transform(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>()
+        if let Some(column) = expr.downcast_ref::<phys_expr::Column>()
             && column == column_old
         {
             return Ok(Transformed::yes(Arc::new(column_new.clone())));
@@ -1323,7 +1309,7 @@ fn build_is_null_column_expr(
     required_columns: &mut RequiredColumns,
     with_not: bool,
 ) -> Option<Arc<dyn PhysicalExpr>> {
-    if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
+    if let Some(col) = expr.downcast_ref::<phys_expr::Column>() {
         let field = schema.field_with_name(col.name()).ok()?;
 
         let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
@@ -1440,12 +1426,11 @@ fn build_predicate_expression(
         return Arc::clone(expr);
     }
     // predicate expression can only be a binary expression
-    let expr_any = expr.as_any();
-    if let Some(is_null) = expr_any.downcast_ref::<phys_expr::IsNullExpr>() {
+    if let Some(is_null) = expr.downcast_ref::<phys_expr::IsNullExpr>() {
         return build_is_null_column_expr(is_null.arg(), schema, required_columns, false)
             .unwrap_or_else(|| unhandled_hook.handle(expr));
     }
-    if let Some(is_not_null) = expr_any.downcast_ref::<phys_expr::IsNotNullExpr>() {
+    if let Some(is_not_null) = expr.downcast_ref::<phys_expr::IsNotNullExpr>() {
         return build_is_null_column_expr(
             is_not_null.arg(),
             schema,
@@ -1454,20 +1439,20 @@ fn build_predicate_expression(
         )
         .unwrap_or_else(|| unhandled_hook.handle(expr));
     }
-    if let Some(col) = expr_any.downcast_ref::<phys_expr::Column>() {
+    if let Some(col) = expr.downcast_ref::<phys_expr::Column>() {
         return build_single_column_expr(col, schema, required_columns, false)
             .unwrap_or_else(|| unhandled_hook.handle(expr));
     }
-    if let Some(not) = expr_any.downcast_ref::<phys_expr::NotExpr>() {
+    if let Some(not) = expr.downcast_ref::<phys_expr::NotExpr>() {
         // match !col (don't do so recursively)
-        if let Some(col) = not.arg().as_any().downcast_ref::<phys_expr::Column>() {
+        if let Some(col) = not.arg().downcast_ref::<phys_expr::Column>() {
             return build_single_column_expr(col, schema, required_columns, true)
                 .unwrap_or_else(|| unhandled_hook.handle(expr));
         } else {
             return unhandled_hook.handle(expr);
         }
     }
-    if let Some(in_list) = expr_any.downcast_ref::<phys_expr::InListExpr>() {
+    if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
         if !in_list.list().is_empty()
             && in_list.list().len() <= MAX_LIST_VALUE_SIZE_REWRITE
         {
@@ -1505,13 +1490,13 @@ fn build_predicate_expression(
     }
 
     let (left, op, right) = {
-        if let Some(bin_expr) = expr_any.downcast_ref::<phys_expr::BinaryExpr>() {
+        if let Some(bin_expr) = expr.downcast_ref::<phys_expr::BinaryExpr>() {
             (
                 Arc::clone(bin_expr.left()),
                 *bin_expr.op(),
                 Arc::clone(bin_expr.right()),
             )
-        } else if let Some(like_expr) = expr_any.downcast_ref::<phys_expr::LikeExpr>() {
+        } else if let Some(like_expr) = expr.downcast_ref::<phys_expr::LikeExpr>() {
             if like_expr.case_insensitive() {
                 return unhandled_hook.handle(expr);
             }
@@ -1607,7 +1592,7 @@ impl ColumnReferenceCount {
     fn from_expression(expr: &Arc<dyn PhysicalExpr>) -> Self {
         let mut seen = HashSet::<phys_expr::Column>::new();
         expr.apply(|expr| {
-            if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
+            if let Some(column) = expr.downcast_ref::<phys_expr::Column>() {
                 seen.insert(column.clone());
                 if seen.len() > 1 {
                     return Ok(TreeNodeRecursion::Stop);
@@ -1725,7 +1710,7 @@ fn unpack_string(s: &ScalarValue) -> Option<&str> {
 }
 
 fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
-    if let Some(lit) = expr.as_any().downcast_ref::<phys_expr::Literal>() {
+    if let Some(lit) = expr.downcast_ref::<phys_expr::Literal>() {
         let s = unpack_string(lit.value())?;
         return Some(s);
     }
@@ -2994,8 +2979,7 @@ mod tests {
             .children()
             .into_iter()
             .map(|child_expr| {
-                let Some(col_expr) =
-                    child_expr.as_any().downcast_ref::<phys_expr::Column>()
+                let Some(col_expr) = child_expr.downcast_ref::<phys_expr::Column>()
                 else {
                     return Arc::clone(child_expr);
                 };

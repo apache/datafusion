@@ -929,7 +929,12 @@ impl Interval {
     ///   when the calculated cardinality does not fit in an `u64`.
     pub fn cardinality(&self) -> Option<u64> {
         let data_type = self.data_type();
-        if data_type.is_integer() {
+        if data_type.is_integer()
+            || matches!(
+                data_type,
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+            )
+        {
             self.upper.distance(&self.lower).map(|diff| diff as u64)
         } else if data_type.is_floating() {
             // Negative numbers are sorted in the reverse order. To
@@ -3957,6 +3962,31 @@ mod tests {
             ScalarValue::Float32(Some(0.0_f32)),
         )?;
         assert_eq!(interval.cardinality().unwrap(), 2);
+
+        // Temporal types
+        let interval = Interval::try_new(
+            ScalarValue::Date32(Some(0)),
+            ScalarValue::Date32(Some(10)),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), 11);
+
+        let interval = Interval::try_new(
+            ScalarValue::Date64(Some(1000)),
+            ScalarValue::Date64(Some(5000)),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), 4001);
+
+        let interval = Interval::try_new(
+            ScalarValue::TimestampSecond(Some(100), None),
+            ScalarValue::TimestampSecond(Some(200), None),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), 101);
+
+        let interval = Interval::try_new(
+            ScalarValue::TimestampNanosecond(Some(1_000_000_000), None),
+            ScalarValue::TimestampNanosecond(Some(2_000_000_000), None),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), 1_000_000_001);
 
         Ok(())
     }

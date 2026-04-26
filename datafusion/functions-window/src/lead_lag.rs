@@ -314,8 +314,7 @@ impl WindowUDFImpl for WindowShift {
         }
         match args {
             [_, expr, ..] => {
-                let Some(lit) = expr.as_any().downcast_ref::<expressions::Literal>()
-                else {
+                let Some(lit) = expr.downcast_ref::<expressions::Literal>() else {
                     return LimitEffect::Unknown;
                 };
                 let ScalarValue::Int64(Some(amount)) = lit.value() else {
