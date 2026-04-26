@@ -162,6 +162,29 @@ impl<B: Block> Blocks<B> {
         self.inner.clear();
         self.start = 0;
     }
+
+    /// Push a new block to the end of the blocks.
+    pub fn push_block(&mut self, block: B) {
+        self.inner.push(block);
+    }
+
+    /// Return a reference to the last active block, if any.
+    pub fn last(&self) -> Option<&B> {
+        if self.is_empty() {
+            None
+        } else {
+            self.inner.last()
+        }
+    }
+
+    /// Return a mutable reference to the last active block, if any.
+    pub fn last_mut(&mut self) -> Option<&mut B> {
+        if self.is_empty() {
+            None
+        } else {
+            self.inner.last_mut()
+        }
+    }
 }
 
 impl<B: Block> Index<usize> for Blocks<B> {
@@ -169,14 +192,14 @@ impl<B: Block> Index<usize> for Blocks<B> {
 
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
-        &self.inner[self.start + index]
+        unsafe { self.inner.get_unchecked(self.start + index) }
     }
 }
 
 impl<B: Block> IndexMut<usize> for Blocks<B> {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.inner[self.start + index]
+        unsafe { self.inner.get_unchecked_mut(self.start + index) }
     }
 }
 
