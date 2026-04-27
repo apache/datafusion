@@ -148,3 +148,40 @@ query ?
 SELECT map_from_arrays(arrow_cast(array('a', 'b', 'c'), 'FixedSizeList(3, Utf8)'), arrow_cast(array(1, 2, 3), 'LargeList(Int32)'));
 ----
 {a: 1, b: 2, c: 3}
+
+# LAST_WIN policy: duplicates are allowed; later occurrences overwrite earlier ones.
+statement ok
+set datafusion.execution.map_key_dedup_policy = 'LAST_WIN';
+
+query ?
+SELECT map_from_arrays(array(1, 2, 1), array('a', 'b', 'c'));
+----
+{1: c, 2: b}
+
+query ?
+SELECT map_from_arrays(array('k', 'k', 'k'), array(1, 2, 3));
+----
+{k: 3}
+
+query ?
+SELECT map_from_arrays(array(true, false, true), array('a', NULL, 'b'));
+----
+{true: b, false: NULL}
+
+# Multi-row mix under LAST_WIN: clean, duplicate, empty and NULL rows all work.
+query ?
+SELECT map_from_arrays(a, b)
+FROM values
+    (array[1, 2], array['a', 'b']),
+    (array[1, 1], array['x', 'y']),
+    (array[], array[]),
+    (NULL, NULL)
+AS tab(a, b);
+----
+{1: a, 2: b}
+{1: y}
+{}
+NULL
+
+statement ok
+set datafusion.execution.map_key_dedup_policy = 'EXCEPTION';

@@ -176,3 +176,42 @@ FROM values
     (array[struct(1, 'a'), struct(2, 'b')]),
     (array[struct(1, 'x'), struct(1, 'y')])
 AS tab(data);
+
+# LAST_WIN policy: duplicates are allowed; later occurrences overwrite earlier ones.
+statement ok
+set datafusion.execution.map_key_dedup_policy = 'LAST_WIN';
+
+query ?
+SELECT map_from_entries(array(
+    struct(true, 'a'),
+    struct(false, 'b'),
+    struct(true, 'c'),
+    struct(false, cast(NULL as string)),
+    struct(true, 'd')
+));
+----
+{true: d, false: NULL}
+
+query ?
+SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b'), struct(1, 'c')));
+----
+{1: c, 2: b}
+
+query ?
+SELECT map_from_entries(array(struct('k', 1), struct('k', 2), struct('k', 3)));
+----
+{k: 3}
+
+# Multi-row mix under LAST_WIN: clean row + duplicate row both succeed.
+query ?
+SELECT map_from_entries(data)
+FROM values
+    (array[struct(1, 'a'), struct(2, 'b')]),
+    (array[struct(1, 'x'), struct(1, 'y')])
+AS tab(data);
+----
+{1: a, 2: b}
+{1: y}
+
+statement ok
+set datafusion.execution.map_key_dedup_policy = 'EXCEPTION';

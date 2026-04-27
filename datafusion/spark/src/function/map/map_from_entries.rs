@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::function::map::utils::{
     get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
-    map_type_from_key_value_types,
+    map_type_from_key_value_types, parse_map_key_dedup_policy,
 };
 use arrow::array::{Array, ArrayRef, NullBufferBuilder, StructArray};
 use arrow::buffer::NullBuffer;
@@ -101,11 +101,17 @@ impl ScalarUDFImpl for MapFromEntries {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(map_from_entries_inner, vec![])(&args.args)
+        let last_value_wins = parse_map_key_dedup_policy(
+            &args.config_options.execution.map_key_dedup_policy,
+        )?;
+        make_scalar_function(
+            move |args: &[ArrayRef]| map_from_entries_inner(args, last_value_wins),
+            vec![],
+        )(&args.args)
     }
 }
 
-fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
     let [entries] = take_function_args("map_from_entries", args)?;
     let entries_offsets = get_list_offsets(entries)?;
     let entries_values = get_list_values(entries)?;
@@ -148,6 +154,7 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         &entries_offsets,
         None,
         res_nulls.as_ref(),
+        last_value_wins,
     )
 }
 
