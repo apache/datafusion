@@ -19,9 +19,12 @@
 
 use std::cell::RefCell;
 use std::fmt::Debug;
+use std::future::Future;
 use std::ops::Range;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{fmt, vec};
 
@@ -40,6 +43,7 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::encryption::FileDecryptionProperties;
+use datafusion_common::instant::Instant;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, HashSet, Result,
@@ -79,7 +83,6 @@ use parquet::arrow::arrow_writer::{
     ArrowWriterOptions, compute_leaves,
 };
 use parquet::arrow::async_reader::MetadataFetch;
-use parquet::arrow::async_writer::AsyncFileWriter;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::basic::Type;
 #[cfg(feature = "parquet_encryption")]
@@ -91,6 +94,7 @@ use parquet::file::properties::{
 };
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::types::SchemaDescriptor;
+use pin_project::{pin_project, pinned_drop};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
@@ -1177,32 +1181,67 @@ impl DisplayAs for ParquetSink {
     }
 }
 
-/// Wraps an [`AsyncFileWriter`] and records the wall-clock time spent in I/O
-/// calls (`write` and `complete`). Used by the sequential write path to isolate
-/// I/O time so it can be subtracted from the total write time, yielding a clean
-/// `elapsed_compute` that covers only Arrow→Parquet encoding.
+/// Wraps any [`Future`] and accumulates the time spent actively executing
+/// inside `poll()` calls into `elapsed_compute`. Time between polls (when
+/// the future is suspended waiting for I/O or an upstream channel) is not
+/// measured, so only CPU time is captured.
 ///
-/// `io_time` is backed by `Arc<AtomicUsize>`, so clones share the same counter.
-/// This type is an internal implementation detail and is not registered in any
-/// `MetricsSet`.
-struct TimingWriter<W> {
-    inner: W,
-    io_time: Time,
+/// Used by the sequential write path so that `elapsed_compute` reflects
+/// pure Arrow→Parquet encoding time, automatically excluding object-store
+/// I/O latency without requiring a separate subtraction step.
+///
+/// Note: uses `pin-project` rather than `pin-project-lite` in order to
+/// support `PinnedDrop`, which ensures accumulated time is flushed even
+/// if the future is cancelled (dropped before completion).
+#[pin_project(PinnedDrop)]
+struct ElapsedComputeFuture<T> {
+    #[pin]
+    inner: T,
+    curr: Duration,
+    elapsed_compute: Time,
 }
 
-impl<W: AsyncFileWriter> AsyncFileWriter for TimingWriter<W> {
-    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
-        Box::pin(async move {
-            let _timer = self.io_time.timer();
-            self.inner.write(bs).await
-        })
+#[pinned_drop]
+impl<T> PinnedDrop for ElapsedComputeFuture<T> {
+    fn drop(self: Pin<&mut Self>) {
+        if self.curr > Duration::default() {
+            let self_projected = self.project();
+            self_projected
+                .elapsed_compute
+                .add_duration(*self_projected.curr);
+        }
     }
+}
 
-    fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
-        Box::pin(async move {
-            let _timer = self.io_time.timer();
-            self.inner.complete().await
-        })
+impl<O, F: Future<Output = O>> Future for ElapsedComputeFuture<F> {
+    type Output = O;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let self_projected = self.project();
+        let start = Instant::now();
+        let result = self_projected.inner.poll(cx);
+        *self_projected.curr += start.elapsed();
+        if result.is_ready() {
+            self_projected
+                .elapsed_compute
+                .add_duration(*self_projected.curr);
+            *self_projected.curr = Duration::default();
+        }
+        result
+    }
+}
+
+trait ElapsedComputeFutureExt: Future + Sized {
+    fn with_elapsed_compute(self, elapsed_compute: Time) -> ElapsedComputeFuture<Self>;
+}
+
+impl<O, F: Future<Output = O>> ElapsedComputeFutureExt for F {
+    fn with_elapsed_compute(self, elapsed_compute: Time) -> ElapsedComputeFuture<Self> {
+        ElapsedComputeFuture {
+            inner: self,
+            curr: Duration::default(),
+            elapsed_compute,
+        }
     }
 }
 
@@ -1275,8 +1314,7 @@ impl ParquetSink {
         object_store: Arc<dyn ObjectStore>,
         context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
-        io_time: Time,
-    ) -> Result<AsyncArrowWriter<TimingWriter<BufWriter>>> {
+    ) -> Result<AsyncArrowWriter<BufWriter>> {
         let buf_writer = BufWriter::with_capacity(
             object_store,
             location.clone(),
@@ -1286,16 +1324,12 @@ impl ParquetSink {
                 .execution
                 .objectstore_writer_buffer_size,
         );
-        let timing_writer = TimingWriter {
-            inner: buf_writer,
-            io_time,
-        };
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
 
         let writer = AsyncArrowWriter::try_new_with_options(
-            timing_writer,
+            buf_writer,
             get_writer_schema(&self.config),
             options,
         )?;
@@ -1375,10 +1409,6 @@ impl FileSink for ParquetSink {
             .with_category(MetricCategory::Bytes)
             .global_counter("bytes_written");
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
-        // Sequential path only: not registered in MetricsSet — used internally to
-        // compute elapsed_compute = total_write_time - io_time.
-        let total_write_time = Time::new();
-        let io_time = Time::new();
 
         let parquet_opts = &self.parquet_options;
 
@@ -1409,25 +1439,24 @@ impl FileSink for ParquetSink {
                         Arc::clone(&object_store),
                         context,
                         parquet_props.clone(),
-                        io_time.clone(),
                     )
                     .await?;
                 let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
-                let total_write_time_task = total_write_time.clone();
-                file_write_tasks.spawn(async move {
-                    while let Some(batch) = rx.recv().await {
-                        let _timer = total_write_time_task.timer();
-                        writer.write(&batch).await?;
-                        reservation.try_resize(writer.memory_size())?;
+                file_write_tasks.spawn(
+                    async move {
+                        while let Some(batch) = rx.recv().await {
+                            writer.write(&batch).await?;
+                            reservation.try_resize(writer.memory_size())?;
+                        }
+                        let parquet_meta_data = writer
+                            .close()
+                            .await
+                            .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
+                        Ok((path, parquet_meta_data))
                     }
-                    let _timer = total_write_time_task.timer();
-                    let parquet_meta_data = writer
-                        .close()
-                        .await
-                        .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
-                    Ok((path, parquet_meta_data))
-                });
+                    .with_elapsed_compute(elapsed_compute.clone()),
+                );
             } else {
                 let writer = ObjectWriterBuilder::new(
                     // Parquet files as a whole are never compressed, since they
@@ -1499,9 +1528,6 @@ impl FileSink for ParquetSink {
             .join_unwind()
             .await
             .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
-
-        let encoding_nanos = total_write_time.value().saturating_sub(io_time.value());
-        elapsed_compute.add_duration(Duration::from_nanos(encoding_nanos as u64));
 
         Ok(rows_written_counter.value() as u64)
     }

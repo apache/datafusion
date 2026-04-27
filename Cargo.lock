@@ -2118,6 +2118,7 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
+ "pin-project",
  "tempfile",
  "tokio",
 ]
