@@ -1,0 +1,273 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for IntervalJoinExec (point-in-interval range join)
+
+statement ok
+set datafusion.optimizer.enable_interval_join = true;
+
+# Setup tables
+statement ok
+CREATE TABLE windows (wid INT, start_time INT, end_time INT) AS VALUES
+  (1, 0, 20),
+  (2, 20, 40),
+  (3, 40, 50);
+
+statement ok
+CREATE TABLE events (id INT, event_time INT) AS VALUES
+  (1, 10),
+  (2, 15),
+  (3, 30),
+  (4, 45);
+
+# Basic inner join: event_time >= start_time AND event_time < end_time
+query III
+SELECT e.id, w.wid, e.event_time
+FROM events e JOIN windows w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time
+ORDER BY e.id;
+----
+1 1 10
+2 1 15
+3 2 30
+4 3 45
+
+# EXPLAIN should show IntervalJoinExec (not NestedLoopJoin)
+query TT
+EXPLAIN SELECT e.id, w.wid
+FROM events e JOIN windows w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time;
+----
+logical_plan
+01)Projection: e.id, w.wid
+02)--Inner Join:  Filter: e.event_time >= w.start_time AND e.event_time < w.end_time
+03)----SubqueryAlias: e
+04)------TableScan: events projection=[id, event_time]
+05)----SubqueryAlias: w
+06)------TableScan: windows projection=[wid, start_time, end_time]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, wid@2 as wid]
+02)--IntervalJoin: join_type=Inner, on=(event_time >= start_time AND event_time < end_time)
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[start_time@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Reversed column order: build columns on left of operator
+query III
+SELECT e.id, w.wid, e.event_time
+FROM events e JOIN windows w
+  ON w.start_time <= e.event_time AND w.end_time > e.event_time
+ORDER BY e.id;
+----
+1 1 10
+2 1 15
+3 2 30
+4 3 45
+
+# Value equals start_time (included with >=)
+query II
+SELECT e.id, w.wid
+FROM (SELECT 20 as id, 20 as event_time) e
+JOIN windows w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time;
+----
+20 2
+
+# Value equals end_time (excluded with <)
+query I
+SELECT count(*)
+FROM (SELECT 1 as id, 20 as event_time) e
+JOIN windows w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time;
+----
+1
+
+# Overlapping intervals
+statement ok
+CREATE TABLE overlapping_windows (wid INT, start_time INT, end_time INT) AS VALUES
+  (1, 0, 30),
+  (2, 10, 40),
+  (3, 20, 50);
+
+query II rowsort
+SELECT e.id, w.wid
+FROM (SELECT 1 as id, 25 as event_time) e
+JOIN overlapping_windows w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time;
+----
+1 1
+1 2
+1 3
+
+# No matches
+query I
+SELECT count(*)
+FROM (SELECT 1 as id, 100 as event_time) e
+JOIN windows w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time;
+----
+0
+
+# NULL probe values should not match
+query I
+SELECT count(*)
+FROM (SELECT 1 as id, NULL::INT as event_time) e
+JOIN windows w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time;
+----
+0
+
+# NULL build values should not match
+statement ok
+CREATE TABLE windows_with_nulls (wid INT, start_time INT, end_time INT) AS VALUES
+  (1, NULL, 20),
+  (2, 20, NULL),
+  (3, 10, 30);
+
+query II
+SELECT e.id, w.wid
+FROM (SELECT 1 as id, 15 as event_time) e
+JOIN windows_with_nulls w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time
+ORDER BY w.wid;
+----
+1 3
+
+# Empty build side
+query I
+SELECT count(*)
+FROM events e
+JOIN (SELECT * FROM windows WHERE false) w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time;
+----
+0
+
+# Empty probe side
+query I
+SELECT count(*)
+FROM (SELECT * FROM events WHERE false) e
+JOIN windows w
+  ON e.event_time >= w.start_time AND e.event_time < w.end_time;
+----
+0
+
+# Closed interval with > and <=
+query III
+SELECT e.id, w.wid, e.event_time
+FROM events e JOIN windows w
+  ON e.event_time > w.start_time AND e.event_time <= w.end_time
+ORDER BY e.id;
+----
+1 1 10
+2 1 15
+3 2 30
+4 3 45
+
+# BETWEEN-style (>= AND <=)
+query III rowsort
+SELECT e.id, w.wid, e.event_time
+FROM events e JOIN windows w
+  ON e.event_time >= w.start_time AND e.event_time <= w.end_time;
+----
+1 1 10
+2 1 15
+3 2 30
+4 3 45
+
+# Expressions on build side: probe >= (start - offset) AND probe < (end + offset)
+query III rowsort
+SELECT e.id, w.wid, e.event_time
+FROM events e JOIN windows w
+  ON e.event_time >= w.start_time - 5 AND e.event_time < w.end_time + 5
+ORDER BY e.id, w.wid;
+----
+1 1 10
+2 1 15
+2 2 15
+3 2 30
+4 3 45
+
+# Expression on probe side: (probe + 10) >= start AND (probe + 10) < end
+query III rowsort
+SELECT e.id, w.wid, e.event_time
+FROM events e JOIN windows w
+  ON e.event_time + 10 >= w.start_time AND e.event_time + 10 < w.end_time
+ORDER BY e.id, w.wid;
+----
+1 2 10
+2 2 15
+3 3 30
+
+# Timestamp columns with INTERVAL arithmetic
+statement ok
+CREATE TABLE time_windows (wid INT, start_ts TIMESTAMP, end_ts TIMESTAMP) AS VALUES
+  (1, '2024-01-01T00:00:00', '2024-01-01T01:00:00'),
+  (2, '2024-01-01T01:00:00', '2024-01-01T02:00:00'),
+  (3, '2024-01-01T02:00:00', '2024-01-01T03:00:00');
+
+statement ok
+CREATE TABLE time_events (id INT, event_ts TIMESTAMP) AS VALUES
+  (1, '2024-01-01T00:30:00'),
+  (2, '2024-01-01T01:30:00'),
+  (3, '2024-01-01T02:30:00');
+
+# Basic timestamp interval join
+query II
+SELECT e.id, w.wid
+FROM time_events e JOIN time_windows w
+  ON e.event_ts >= w.start_ts AND e.event_ts < w.end_ts
+ORDER BY e.id;
+----
+1 1
+2 2
+3 3
+
+# Timestamp + INTERVAL expression: expand window by 30 minutes each side
+query II rowsort
+SELECT e.id, w.wid
+FROM time_events e JOIN time_windows w
+  ON e.event_ts >= w.start_ts - INTERVAL '30 minutes'
+  AND e.event_ts < w.end_ts + INTERVAL '30 minutes'
+ORDER BY e.id, w.wid;
+----
+1 1
+1 2
+2 2
+2 3
+3 3
+
+statement ok
+DROP TABLE time_windows;
+
+statement ok
+DROP TABLE time_events;
+
+# Cleanup
+statement ok
+DROP TABLE windows;
+
+statement ok
+DROP TABLE events;
+
+statement ok
+DROP TABLE overlapping_windows;
+
+statement ok
+DROP TABLE windows_with_nulls;
+
+statement ok
+reset datafusion.optimizer.enable_interval_join;

@@ -1349,3 +1349,306 @@ fn make_staggered_batches_binary(
     // preserve your existing randomized partitioning
     stagger_batch_with_seed(batch, 42)
 }
+
+// ---------------------------------------------------------------------------
+// IntervalJoinExec fuzz tests
+// ---------------------------------------------------------------------------
+
+mod interval_join_fuzz {
+    use super::*;
+    use arrow::array::{Int32Array, RecordBatch};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_plan::joins::IntervalJoinExec;
+    use datafusion_common::JoinSide;
+    use rand::Rng;
+
+    /// Generate random interval data (build side): columns (id, start_val, end_val)
+    /// Intervals have start in [0..range) and end in [start+1..start+max_width]
+    fn make_interval_batches(
+        num_rows: usize,
+        range: i32,
+        max_width: i32,
+        null_pct: f64,
+        seed: u64,
+    ) -> Vec<RecordBatch> {
+        let mut rng = rand::rng();
+        let mut ids = Vec::with_capacity(num_rows);
+        let mut starts: Vec<Option<i32>> = Vec::with_capacity(num_rows);
+        let mut ends: Vec<Option<i32>> = Vec::with_capacity(num_rows);
+
+        for i in 0..num_rows {
+            ids.push(i as i32);
+            if rng.random_bool(null_pct) {
+                starts.push(None);
+                ends.push(Some(rng.random_range(0..range)));
+            } else if rng.random_bool(null_pct) {
+                starts.push(Some(rng.random_range(0..range)));
+                ends.push(None);
+            } else {
+                let s = rng.random_range(0..range);
+                let width = rng.random_range(1..=max_width);
+                starts.push(Some(s));
+                ends.push(Some(s + width));
+            }
+        }
+
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "id",
+                Arc::new(Int32Array::from_iter_values(ids)) as ArrayRef,
+            ),
+            ("start_val", Arc::new(Int32Array::from(starts)) as ArrayRef),
+            ("end_val", Arc::new(Int32Array::from(ends)) as ArrayRef),
+        ])
+        .unwrap();
+
+        stagger_batch_with_seed(batch, seed)
+    }
+
+    /// Generate random probe data: columns (pid, probe_val)
+    fn make_probe_batches(
+        num_rows: usize,
+        range: i32,
+        null_pct: f64,
+        seed: u64,
+    ) -> Vec<RecordBatch> {
+        let mut rng = rand::rng();
+        let mut pids = Vec::with_capacity(num_rows);
+        let mut vals: Vec<Option<i32>> = Vec::with_capacity(num_rows);
+
+        for i in 0..num_rows {
+            pids.push(i as i32);
+            if rng.random_bool(null_pct) {
+                vals.push(None);
+            } else {
+                vals.push(Some(rng.random_range(0..range)));
+            }
+        }
+
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "pid",
+                Arc::new(Int32Array::from_iter_values(pids)) as ArrayRef,
+            ),
+            ("probe_val", Arc::new(Int32Array::from(vals)) as ArrayRef),
+        ])
+        .unwrap();
+
+        stagger_batch_with_seed(batch, seed)
+    }
+
+    /// Build a NestedLoopJoin with filter: probe_val >= start_val AND probe_val < end_val
+    fn build_nlj(
+        left_batches: &[RecordBatch],
+        right_batches: &[RecordBatch],
+        left_schema: Arc<Schema>,
+        right_schema: Arc<Schema>,
+    ) -> Arc<NestedLoopJoinExec> {
+        let left = MemorySourceConfig::try_new_exec(
+            std::slice::from_ref(&left_batches.to_vec()),
+            left_schema.clone(),
+            None,
+        )
+        .unwrap();
+        let right = MemorySourceConfig::try_new_exec(
+            std::slice::from_ref(&right_batches.to_vec()),
+            right_schema.clone(),
+            None,
+        )
+        .unwrap();
+
+        // Filter: probe_val >= start_val AND probe_val < end_val
+        // Intermediate schema: [start_val (Left), end_val (Left), probe_val (Right)]
+        let intermediate_schema = Arc::new(Schema::new(vec![
+            Field::new("start_val", DataType::Int32, true),
+            Field::new("end_val", DataType::Int32, true),
+            Field::new("probe_val", DataType::Int32, true),
+        ]));
+
+        let column_indices = vec![
+            ColumnIndex {
+                index: 1, // start_val is column 1 in build (left)
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2, // end_val is column 2 in build (left)
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1, // probe_val is column 1 in probe (right)
+                side: JoinSide::Right,
+            },
+        ];
+
+        // probe_val >= start_val: Column(2) >= Column(0)
+        let gte_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("probe_val", 2)),
+            Operator::GtEq,
+            Arc::new(Column::new("start_val", 0)),
+        ));
+        // probe_val < end_val: Column(2) < Column(1)
+        let lt_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("probe_val", 2)),
+            Operator::Lt,
+            Arc::new(Column::new("end_val", 1)),
+        ));
+        // Combined: gte AND lt
+        let filter_expr = Arc::new(BinaryExpr::new(gte_expr, Operator::And, lt_expr));
+
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+
+        Arc::new(
+            NestedLoopJoinExec::try_new(
+                left,
+                right,
+                Some(filter),
+                &JoinType::Inner,
+                None,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// Build an IntervalJoinExec
+    fn build_interval_join(
+        left_batches: &[RecordBatch],
+        right_batches: &[RecordBatch],
+        left_schema: Arc<Schema>,
+        right_schema: Arc<Schema>,
+    ) -> Arc<IntervalJoinExec> {
+        let left = MemorySourceConfig::try_new_exec(
+            std::slice::from_ref(&left_batches.to_vec()),
+            left_schema.clone(),
+            None,
+        )
+        .unwrap();
+        let right = MemorySourceConfig::try_new_exec(
+            std::slice::from_ref(&right_batches.to_vec()),
+            right_schema.clone(),
+            None,
+        )
+        .unwrap();
+
+        let probe_expr =
+            Arc::new(Column::new_with_schema("probe_val", &right_schema).unwrap());
+        let build_low_expr =
+            Arc::new(Column::new_with_schema("start_val", &left_schema).unwrap());
+        let build_high_expr =
+            Arc::new(Column::new_with_schema("end_val", &left_schema).unwrap());
+
+        Arc::new(
+            IntervalJoinExec::try_new(
+                left,
+                right,
+                JoinSide::Left,
+                probe_expr,
+                build_low_expr,
+                build_high_expr,
+                Operator::GtEq,
+                Operator::Lt,
+                JoinType::Inner,
+            )
+            .unwrap(),
+        )
+    }
+
+    async fn run_interval_join_fuzz(
+        num_build: usize,
+        num_probe: usize,
+        range: i32,
+        max_width: i32,
+        null_pct: f64,
+    ) {
+        let build_batches =
+            make_interval_batches(num_build, range, max_width, null_pct, 42);
+        let probe_batches = make_probe_batches(num_probe, range, null_pct, 43);
+
+        let build_schema = build_batches[0].schema();
+        let probe_schema = probe_batches[0].schema();
+
+        for batch_size in [1, 2, 7, 49, 50, 100] {
+            let session_config = SessionConfig::new().with_batch_size(batch_size);
+            let ctx = SessionContext::new_with_config(session_config);
+            let task_ctx = ctx.task_ctx();
+
+            let nlj = build_nlj(
+                &build_batches,
+                &probe_batches,
+                build_schema.clone(),
+                probe_schema.clone(),
+            );
+            let nlj_collected = collect(nlj, task_ctx.clone()).await.unwrap();
+
+            let ij = build_interval_join(
+                &build_batches,
+                &probe_batches,
+                build_schema.clone(),
+                probe_schema.clone(),
+            );
+            let ij_collected = collect(ij, task_ctx.clone()).await.unwrap();
+
+            let nlj_rows: usize = nlj_collected.iter().map(|b| b.num_rows()).sum();
+            let ij_rows: usize = ij_collected.iter().map(|b| b.num_rows()).sum();
+
+            assert_eq!(
+                nlj_rows, ij_rows,
+                "Row count mismatch: NLJ={nlj_rows} IJ={ij_rows}, \
+                 batch_size={batch_size}, build={num_build}, probe={num_probe}"
+            );
+
+            if nlj_rows == 0 {
+                continue;
+            }
+
+            // Sort and compare content
+            let nlj_formatted =
+                pretty_format_batches(&nlj_collected).unwrap().to_string();
+            let ij_formatted = pretty_format_batches(&ij_collected).unwrap().to_string();
+
+            let mut nlj_sorted: Vec<&str> = nlj_formatted.trim().lines().collect();
+            nlj_sorted.sort_unstable();
+
+            let mut ij_sorted: Vec<&str> = ij_formatted.trim().lines().collect();
+            ij_sorted.sort_unstable();
+
+            for (i, (nlj_line, ij_line)) in nlj_sorted.iter().zip(&ij_sorted).enumerate()
+            {
+                assert_eq!(
+                    (i, nlj_line),
+                    (i, ij_line),
+                    "Content mismatch at line {i}, batch_size={batch_size}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_interval_join_fuzz_small() {
+        // Small dataset, narrow intervals, no nulls
+        run_interval_join_fuzz(50, 50, 100, 10, 0.0).await;
+    }
+
+    #[tokio::test]
+    async fn test_interval_join_fuzz_medium() {
+        // Medium dataset with some nulls
+        run_interval_join_fuzz(200, 200, 100, 20, 0.05).await;
+    }
+
+    #[tokio::test]
+    async fn test_interval_join_fuzz_with_nulls() {
+        // Higher null percentage
+        run_interval_join_fuzz(100, 100, 50, 15, 0.15).await;
+    }
+
+    #[tokio::test]
+    async fn test_interval_join_fuzz_wide_intervals() {
+        // Wide intervals → many overlaps → stress the scan loop
+        run_interval_join_fuzz(100, 200, 50, 40, 0.05).await;
+    }
+
+    #[tokio::test]
+    async fn test_interval_join_fuzz_1k() {
+        // Larger dataset
+        run_interval_join_fuzz(500, 500, 200, 20, 0.05).await;
+    }
+}

@@ -1277,6 +1277,10 @@ config_namespace! {
         /// one range filter.
         pub enable_piecewise_merge_join: bool, default = false
 
+        /// When set to true, interval join is enabled for point-in-interval
+        /// queries with two range predicates (e.g. `a >= low AND a < high`).
+        pub enable_interval_join: bool, default = false
+
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024

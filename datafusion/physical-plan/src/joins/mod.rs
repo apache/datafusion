@@ -23,6 +23,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 pub use hash_join::{
     HashExpr, HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr, SeededRandomState,
 };
+pub use interval_join::IntervalJoinExec;
 pub use nested_loop_join::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use parking_lot::Mutex;
 // Note: SortMergeJoin is not used in plans yet
@@ -32,6 +33,7 @@ pub use symmetric_hash_join::SymmetricHashJoinExec;
 pub mod chain;
 mod cross_join;
 mod hash_join;
+mod interval_join;
 mod nested_loop_join;
 mod piecewise_merge_join;
 mod sort_merge_join;

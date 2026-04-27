@@ -63,6 +63,7 @@ use arrow::datatypes::Schema;
 use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::Column;
+use datafusion_common::JoinSide;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
 use datafusion_common::tree_node::{
@@ -98,6 +99,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
+use datafusion_physical_plan::joins::IntervalJoinExec;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
@@ -1629,6 +1631,78 @@ impl DefaultPhysicalPlanner {
                             *join_type,
                             session_state.config().target_partitions(),
                         )?)
+                    } else if num_range_filters == 2
+                        && total_filters == 2
+                        && matches!(join_type, JoinType::Inner)
+                        && session_state
+                            .config_options()
+                            .optimizer
+                            .enable_interval_join
+                    {
+                        // Attempt to extract a point-in-interval pattern:
+                        // probe_col >= build_low AND probe_col < build_high
+                        match try_extract_interval_pattern(
+                            &range_filters,
+                            left_df_schema,
+                            right_df_schema,
+                        ) {
+                            Some(pattern) => {
+                                let build_side = if pattern.build_is_left {
+                                    JoinSide::Left
+                                } else {
+                                    JoinSide::Right
+                                };
+
+                                let probe_schema = if pattern.build_is_left {
+                                    right_df_schema
+                                } else {
+                                    left_df_schema
+                                };
+                                let build_schema = if pattern.build_is_left {
+                                    left_df_schema
+                                } else {
+                                    right_df_schema
+                                };
+
+                                let probe_expr = create_physical_expr(
+                                    &pattern.probe_expr,
+                                    probe_schema,
+                                    session_state.execution_props(),
+                                )?;
+                                let build_low_expr = create_physical_expr(
+                                    &pattern.build_low_expr,
+                                    build_schema,
+                                    session_state.execution_props(),
+                                )?;
+                                let build_high_expr = create_physical_expr(
+                                    &pattern.build_high_expr,
+                                    build_schema,
+                                    session_state.execution_props(),
+                                )?;
+
+                                Arc::new(IntervalJoinExec::try_new(
+                                    physical_left,
+                                    physical_right,
+                                    build_side,
+                                    probe_expr,
+                                    build_low_expr,
+                                    build_high_expr,
+                                    pattern.low_op,
+                                    pattern.high_op,
+                                    *join_type,
+                                )?)
+                            }
+                            None => {
+                                // Not a point-in-interval pattern, fall through to NLJ
+                                Arc::new(NestedLoopJoinExec::try_new(
+                                    physical_left,
+                                    physical_right,
+                                    join_filter,
+                                    join_type,
+                                    None,
+                                )?)
+                            }
+                        }
                     } else {
                         // there is no equal join condition, use the nested loop join
                         Arc::new(NestedLoopJoinExec::try_new(
@@ -3100,6 +3174,218 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
         })?;
         Ok(TreeNodeRecursion::Continue)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Interval join pattern extraction
+// ---------------------------------------------------------------------------
+
+/// Describes a detected point-in-interval pattern:
+/// `probe_expr {low_op} build_low_expr AND probe_expr {high_op} build_high_expr`
+struct IntervalPattern {
+    /// Whether the build (interval) side is the left input
+    build_is_left: bool,
+    /// Probe-side expression (e.g. `e.event_time`)
+    probe_expr: Expr,
+    /// Build-side low-bound expression (e.g. `w.start_time`)
+    build_low_expr: Expr,
+    /// Build-side high-bound expression (e.g. `w.end_time`)
+    build_high_expr: Expr,
+    /// Operator for low bound condition: GtEq or Gt
+    low_op: Operator,
+    /// Operator for high bound condition: Lt or LtEq
+    high_op: Operator,
+}
+
+/// Attempt to extract a point-in-interval pattern from two range filter expressions.
+///
+/// Returns `Some(IntervalPattern)` if:
+/// - Both filters are BinaryExpr with range operators
+/// - Both filters reference the same single-side probe expression
+/// - One filter is a lower-bound (>= or >) and the other an upper-bound (< or <=)
+/// - The build-side expressions reference the other side
+fn try_extract_interval_pattern(
+    range_filters: &[Expr],
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
+) -> Option<IntervalPattern> {
+    if range_filters.len() != 2 {
+        return None;
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Side {
+        Left,
+        Right,
+        Both,
+    }
+
+    // Determines which join side an expression belongs to by checking
+    // its column references against both schemas.
+    // e.g. `e.event_time` → Left, `w.start_time` → Right,
+    //       `e.time + w.time` → Both (rejected), unknown col → None
+    let side_of = |e: &Expr| -> Option<Side> {
+        let cols = e.column_refs();
+        let any_left = cols.iter().any(|c| left_schema.index_of_column(c).is_ok());
+        let any_right = cols.iter().any(|c| right_schema.index_of_column(c).is_ok());
+        match (any_left, any_right) {
+            (true, false) => Some(Side::Left),
+            (false, true) => Some(Side::Right),
+            (true, true) => Some(Side::Both),
+            (false, false) => None,
+        }
+    };
+
+    // Flips an inequality for side-swap: `a < b` ≡ `b > a`.
+    // Used when normalizing `w.start <= e.time` → `e.time >= w.start`.
+    fn reverse_ineq(op: Operator) -> Operator {
+        match op {
+            Operator::Lt => Operator::Gt,
+            Operator::LtEq => Operator::GtEq,
+            Operator::Gt => Operator::Lt,
+            Operator::GtEq => Operator::LtEq,
+            _ => op,
+        }
+    }
+
+    /// Describes one normalized filter with Left-schema expr on left
+    struct NormalizedFilter {
+        /// Expression from the Left schema
+        left_expr: Expr,
+        /// Expression from the Right schema
+        right_expr: Expr,
+        /// Operator: left_expr OP right_expr
+        op: Operator,
+    }
+
+    // Normalizes a filter so the left-schema expr is always on the left.
+    // Rejects non-inequality ops and expressions referencing both sides.
+    // e.g. `w.start <= e.time` (Right <= Left) → `e.time >= w.start` (Left >= Right)
+    let normalize = |filter: &Expr| -> Option<NormalizedFilter> {
+        let Expr::BinaryExpr(be) = filter else {
+            return None;
+        };
+        if !matches!(
+            be.op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            return None;
+        }
+
+        let left_side = side_of(&be.left)?;
+        let right_side = side_of(&be.right)?;
+
+        // Reject expressions that reference both sides
+        if left_side == Side::Both || right_side == Side::Both {
+            return None;
+        }
+        // Both must be on different sides
+        if left_side == right_side {
+            return None;
+        }
+
+        // Determine which expression is from Left schema and which from Right.
+        // We normalize to: "Left-side expr OP Right-side expr" with the op
+        // adjusted accordingly. Later we'll determine which is probe vs build.
+        if left_side == Side::Left {
+            // Already: left_expr OP right_expr
+            Some(NormalizedFilter {
+                left_expr: (*be.left).clone(),
+                right_expr: (*be.right).clone(),
+                op: be.op,
+            })
+        } else {
+            // Flip: right_expr is Left, left_expr is Right
+            // Original: right_col OP left_col
+            // Normalized: left_col reverse(OP) right_col
+            Some(NormalizedFilter {
+                left_expr: (*be.right).clone(),
+                right_expr: (*be.left).clone(),
+                op: reverse_ineq(be.op),
+            })
+        }
+    };
+
+    let f1 = normalize(&range_filters[0])?;
+    let f2 = normalize(&range_filters[1])?;
+
+    // Determine which side is the probe (same expression in both filters)
+    // and which is the build (different expressions)
+    let (probe_is_left, probe_expr, build_low_expr, build_high_expr, low_op, high_op) =
+        if f1.left_expr == f2.left_expr {
+            // Left-schema expression is the same → probe is Left, build is Right.
+            // e.g. f1: e.event_time >= w.start_time  (probe >= build_low)
+            //      f2: e.event_time <  w.end_time    (probe <  build_high)
+            //           ^^^^^^^^^^^^  same left expr → probe is Left
+            // Operators are already in probe OP build form, use directly.
+            let (low, high) = if matches!(f1.op, Operator::GtEq | Operator::Gt)
+                && matches!(f2.op, Operator::Lt | Operator::LtEq)
+            {
+                (&f1, &f2)
+            } else if matches!(f2.op, Operator::GtEq | Operator::Gt)
+                && matches!(f1.op, Operator::Lt | Operator::LtEq)
+            {
+                (&f2, &f1)
+            } else {
+                return None;
+            };
+            (
+                true,
+                low.left_expr.clone(),
+                low.right_expr.clone(),
+                high.right_expr.clone(),
+                low.op,
+                high.op,
+            )
+        } else if f1.right_expr == f2.right_expr {
+            // Right-schema expression is the same → probe is Right, build is Left.
+            // e.g. f1: w.start_time <= e.event_time  (build <= probe)
+            //      f2: w.end_time   >  e.event_time  (build >  probe)
+            //                           ^^^^^^^^^^^^  same right expr → probe is Right
+            // Operators are in build OP probe form, must reverse to probe OP build.
+            let (low, high) = {
+                let f1_rev = reverse_ineq(f1.op);
+                let f2_rev = reverse_ineq(f2.op);
+                if matches!(f1_rev, Operator::GtEq | Operator::Gt)
+                    && matches!(f2_rev, Operator::Lt | Operator::LtEq)
+                {
+                    (&f1, &f2)
+                } else if matches!(f2_rev, Operator::GtEq | Operator::Gt)
+                    && matches!(f1_rev, Operator::Lt | Operator::LtEq)
+                {
+                    (&f2, &f1)
+                } else {
+                    return None;
+                }
+            };
+            (
+                false,
+                low.right_expr.clone(),
+                low.left_expr.clone(),
+                high.left_expr.clone(),
+                reverse_ineq(low.op),
+                reverse_ineq(high.op),
+            )
+        } else {
+            // No common expression → not a point-in-interval pattern
+            return None;
+        };
+
+    // Build expressions must be different
+    if build_low_expr == build_high_expr {
+        return None;
+    }
+
+    let build_is_left = !probe_is_left;
+
+    Some(IntervalPattern {
+        build_is_left,
+        probe_expr,
+        build_low_expr,
+        build_high_expr,
+        low_op,
+        high_op,
+    })
 }
 
 #[cfg(test)]
