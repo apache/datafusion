@@ -92,10 +92,15 @@ cmd_comment() {
   comment_id=$(gh api "repos/${repo}/issues/${pr_number}/comments" \
     --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" | head -1)
 
+  echo "existing breaking change comment id $comment_id"
+
   if [ "$check_result" = "success" ]; then
     # Delete the comment if one exists
     if [ -n "$comment_id" ]; then
+      echo "result is success, so deleting breaking change comment"
       gh api "repos/${repo}/issues/comments/${comment_id}" --method DELETE
+    else
+        echo "result is success and no previous comment to delete"
     fi
   else
     local body="${MARKER}
@@ -110,9 +115,11 @@ ${logs}
 \`\`\`"
 
     if [ -n "$comment_id" ]; then
+        echo "comment already exists, updating content"
       gh api "repos/${repo}/issues/comments/${comment_id}" \
         --method PATCH --field body="$body"
     else
+        echo "no comment with breaking changes, creating a new one"
       gh api "repos/${repo}/issues/${pr_number}/comments" \
         --method POST --field body="$body"
     fi
