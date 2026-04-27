@@ -283,7 +283,7 @@ where
             builder.append_placeholder();
             continue;
         }
-        // SAFETY: `i < num_rows`, and the union of input nulls is valid at i,
+        // SAFETY: `i < num_rows` and the union of input nulls is valid at i,
         // so each input is also valid at i.
         let string = unsafe { string_array.value_unchecked(i) };
         let delimiter = unsafe { delimiter_array.value_unchecked(i) };
@@ -488,7 +488,7 @@ where
             builder.append_placeholder();
             continue;
         }
-        // SAFETY: `i < string_array.len()`, and `nulls` is valid at i, so the
+        // SAFETY: `i < string_array.len()` and `nulls` is valid at i, so the
         // input is also valid at i.
         let s = unsafe { string_array.value_unchecked(i) };
         builder.append_value(f(s));
