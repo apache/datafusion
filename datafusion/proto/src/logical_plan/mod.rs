@@ -1307,7 +1307,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         )),
                     })
-                } else if source.downcast_ref::<EmptyTable>().is_some() {
+                } else if provider.downcast_ref::<EmptyTable>().is_some() {
                     let schema: protobuf::Schema = schema.as_ref().try_into()?;
 
                     Ok(LogicalPlanNode {
