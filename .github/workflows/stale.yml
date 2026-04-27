@@ -37,3 +37,4 @@ jobs:
           days-before-issue-stale: -1
           days-before-issue-close: -1
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+          operations-per-run: 150

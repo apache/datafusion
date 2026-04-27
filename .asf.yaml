@@ -55,6 +55,7 @@ github:
         contexts:
           - "Check License Header"
           - "Use prettier to check formatting of documents"
+          - "Check Markdown Links"
           - "Validate required_status_checks in .asf.yaml"
           - "Spell Check with Typos"
     # needs to be updated as part of the release process
