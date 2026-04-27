@@ -26,8 +26,9 @@ use datafusion_expr::test::function_stub::{
     count_udaf, max, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
-    EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Union,
-    UserDefinedLogicalNode, UserDefinedLogicalNodeCore, WindowFrame,
+    ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Union,
+    UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
     WindowFunctionDefinition, cast, col, lit, table_scan, wildcard,
 };
 use datafusion_functions::unicode;
@@ -39,7 +40,7 @@ use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     BigQueryDialect, CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect,
     DefaultDialect, Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect,
-    PostgreSqlDialect as UnparserPostgreSqlDialect, SqliteDialect,
+    PostgreSqlDialect as UnparserPostgreSqlDialect, SnowflakeDialect, SqliteDialect,
 };
 use datafusion_sql::unparser::{Unparser, expr_to_sql, plan_to_sql};
 use insta::assert_snapshot;
@@ -367,7 +368,7 @@ fn roundtrip_statement_postgres_any_array_expr() -> Result<(), DataFusionError> 
         sql: "select left from array where 1 = any(left);",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserPostgreSqlDialect {},
-        expected: @r#"SELECT "array"."left" FROM "array" WHERE 1 = ANY("array"."left")"#,
+        expected: @r#"SELECT "array"."left" FROM "array" WHERE CASE WHEN "array"."left" IS NULL THEN NULL WHEN (cardinality("array"."left") = 0) THEN false WHEN 1 IS NULL THEN NULL WHEN 1 = ANY("array"."left") THEN true WHEN array_position("array"."left", NULL, 1) IS NOT NULL THEN NULL ELSE false END"#,
     );
     Ok(())
 }
@@ -3004,5 +3005,512 @@ fn test_unparse_manual_join_with_subquery_aggregate() -> Result<()> {
         "Unparsed SQL should preserve the MAX aggregate function call, got: {sql}"
     );
 
+    Ok(())
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/21490
+///
+/// When the outer Projection excludes a Sort column whose definition only
+/// exists as an alias in the inner Projection, the Unparser must inline the
+/// underlying expression into ORDER BY rather than emitting the now-missing
+/// alias name.
+#[test]
+fn test_sort_on_aliased_column_dropped_by_outer_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("X", DataType::Utf8, true),
+        Field::new("Y", DataType::Utf8, true),
+        Field::new("Z", DataType::Utf8, true),
+    ]);
+
+    // Build:
+    //   Projection: [a, b]                         -- outer: excludes sort column "c"
+    //     Sort: [c DESC, fetch=1]                   -- references alias "c"
+    //       Projection: [X AS a, Y AS b, Z AS c]    -- defines alias "c"
+    //         SubqueryAlias: t
+    //           TableScan: phys_table [X, Y, Z]
+    let plan = table_scan(Some("phys_table"), &schema, None)?
+        .alias("t")?
+        .project(vec![
+            Expr::Column(Column::new(Some(TableReference::bare("t")), "X")).alias("a"),
+            Expr::Column(Column::new(Some(TableReference::bare("t")), "Y")).alias("b"),
+            Expr::Column(Column::new(Some(TableReference::bare("t")), "Z")).alias("c"),
+        ])?
+        .sort_with_limit(
+            vec![Expr::Column(Column::new_unqualified("c")).sort(false, true)],
+            Some(1),
+        )?
+        .project(vec![
+            Expr::Column(Column::new_unqualified("a")),
+            Expr::Column(Column::new_unqualified("b")),
+        ])?
+        .build()?;
+
+    let unparser = Unparser::default();
+    let sql = unparser.plan_to_sql(&plan)?;
+
+    // ORDER BY must reference the physical column, not the dropped alias.
+    assert_snapshot!(
+        sql,
+        @r#"SELECT t."X" AS a, t."Y" AS b FROM phys_table AS t ORDER BY t."Z" DESC NULLS FIRST LIMIT 1"#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn snowflake_unnest_to_lateral_flatten_simple() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_unnest_to_lateral_flatten_with_cross_join() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]), j1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE", "j1"."j1_id", "j1"."j1_string" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1" CROSS JOIN "j1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_unnest_to_lateral_flatten_cross_join_inline() -> Result<(), DataFusionError>
+{
+    // Cross join with two inline UNNEST sources — both produce valid FLATTEN.
+    // NOTE: UNNEST(table.column) is NOT tested with Snowflake because
+    // LATERAL FLATTEN(INPUT => col) requires the column to be a Snowflake
+    // VARIANT/ARRAY type, which cannot be validated at unparse time.
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        // NOTE: SELECT correctly uses VALUE, but the JOIN ON condition
+        // still references the original column alias (c1) because join
+        // filters are rendered outside reconstruct_select_statement.
+        expected: @r#"SELECT "u"."VALUE", "j1"."j1_id", "j1"."j1_string" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "u" INNER JOIN "j1" ON ("u"."c1" = "j1"."j1_id")"#,
+    );
+    Ok(())
+}
+
+// --- Edge case tests for Snowflake FLATTEN ---
+
+#[test]
+fn snowflake_flatten_implicit_from() -> Result<(), DataFusionError> {
+    // UNNEST in SELECT clause (no explicit FROM UNNEST) — implicit table factor
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST([1,2,3])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_string_array() -> Result<(), DataFusionError> {
+    // String array unnest
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST(['a','b','c'])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" FROM LATERAL FLATTEN(INPUT => ['a', 'b', 'c']) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_select_unnest_with_alias() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST([1,2,3]) as c1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" AS "c1" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_select_unnest_plus_literal() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST([1,2,3]), 1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE", "Int64(1)" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_from_unnest_with_table_alias() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "t1"."VALUE" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "t1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_unnest_from_subselect() -> Result<(), DataFusionError> {
+    // UNNEST operating on an array column produced by a subselect.
+    // Uses unnest_table which has array_col (List<Int64>).
+    // The filter uses array_col IS NOT NULL — a simple predicate
+    // that doesn't involve struct types (which Snowflake FLATTEN can't handle).
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST(array_col) FROM (SELECT array_col FROM unnest_table WHERE array_col IS NOT NULL LIMIT 3)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" FROM (SELECT "unnest_table"."array_col" FROM "unnest_table" WHERE "unnest_table"."array_col" IS NOT NULL LIMIT 3) CROSS JOIN LATERAL FLATTEN(INPUT => "unnest_table"."array_col") AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+/// Dummy scalar UDF for testing — takes a string and returns List<Int64>.
+/// Simulates any UDF that extracts an array from a column (e.g. parsing
+/// JSON, splitting a delimited string, etc.).
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ExtractArrayUdf {
+    signature: Signature,
+}
+
+impl ExtractArrayUdf {
+    fn new() -> Self {
+        Self {
+            signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for ExtractArrayUdf {
+    fn name(&self) -> &str {
+        "extract_array"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::List(Arc::new(Field::new_list_field(
+            DataType::Int64,
+            true,
+        ))))
+    }
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        unimplemented!("test stub")
+    }
+}
+
+#[test]
+fn snowflake_flatten_unnest_udf_result() -> Result<(), DataFusionError> {
+    // UNNEST on a UDF result: extract_array(col) returns List<Int64>,
+    // then UNNEST flattens it. This exercises the path where the FLATTEN
+    // INPUT is a UDF call rather than a bare column reference.
+    let sql = "SELECT UNNEST(extract_array(j1_string)) AS items FROM j1 LIMIT 5";
+
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql(sql)?
+        .parse_statement()?;
+
+    let state = MockSessionState::default()
+        .with_aggregate_function(max_udaf())
+        .with_aggregate_function(min_udaf())
+        .with_scalar_function(Arc::new(ScalarUDF::new_from_impl(ExtractArrayUdf::new())))
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+        .with_expr_planner(Arc::new(NestedFunctionPlanner))
+        .with_expr_planner(Arc::new(FieldAccessPlanner));
+
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel
+        .sql_statement_to_plan(statement)
+        .unwrap_or_else(|e| panic!("Failed to parse sql: {sql}\n{e}"));
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT "_unnest_1"."VALUE" AS "items" FROM "j1" CROSS JOIN LATERAL FLATTEN(INPUT => extract_array("j1"."j1_string")) AS "_unnest_1" LIMIT 5"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_limit_between_projection_and_unnest() -> Result<(), DataFusionError>
+{
+    // Build: Projection → Limit → Unnest → Projection → TableScan
+    // The optimizer can insert a Limit between the outer Projection and the
+    // Unnest. The FLATTEN code path must look through transparent nodes
+    // (Limit, Sort) to find the Unnest.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .limit(0, Some(5))? // Limit BETWEEN outer Projection and Unnest
+        .project(vec![col("__unnest_placeholder(items)").alias("item")])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    // Must contain LATERAL FLATTEN — the Limit must not prevent FLATTEN detection
+    insta::assert_snapshot!(actual, @r#"SELECT "_unnest_1"."VALUE" AS "item" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" LIMIT 5"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_sort_between_projection_and_unnest() -> Result<(), DataFusionError> {
+    // Build: Projection → Sort → Unnest → Projection → TableScan
+    // Same as Limit test but with Sort instead.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .sort(vec![col("__unnest_placeholder(items)").sort(true, true)])?
+        .project(vec![col("__unnest_placeholder(items)").alias("item")])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    // Must contain LATERAL FLATTEN — the Sort must not prevent FLATTEN detection
+    insta::assert_snapshot!(actual, @r#"SELECT "_unnest_1"."VALUE" AS "item" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" ORDER BY "_unnest_1"."VALUE" ASC NULLS FIRST"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_limit_between_projection_and_unnest_with_subquery_alias()
+-> Result<(), DataFusionError> {
+    // Build: Projection → Limit → Unnest → SubqueryAlias → Projection → TableScan
+    // Combines the Limit and SubqueryAlias transparent node patterns.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .alias("t")?
+        .unnest_column("__unnest_placeholder(items)")?
+        .limit(0, Some(10))?
+        .project(vec![col("__unnest_placeholder(items)").alias("item")])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT "_unnest_1"."VALUE" AS "item" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" LIMIT 10"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_composed_expression_wrapping_unnest() -> Result<(), DataFusionError>
+{
+    // Build: Projection(CAST(placeholder AS Int64) AS item_id) → Unnest → Projection → TableScan
+    // The outer Projection wraps the unnest output in a function call.
+    // The FLATTEN code path must detect the placeholder inside the function
+    // and still emit LATERAL FLATTEN.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .project(vec![
+            cast(col("__unnest_placeholder(items)"), DataType::Int64).alias("item_id"),
+        ])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    // Must contain LATERAL FLATTEN despite the placeholder being inside CAST
+    insta::assert_snapshot!(actual, @r#"SELECT CAST("_unnest_1"."VALUE" AS BIGINT) AS "item_id" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1""#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_composed_expression_with_limit() -> Result<(), DataFusionError> {
+    // Combines both bugs: composed expression + Limit between Projection and Unnest
+    // Build: Projection(CAST(placeholder AS Int64) AS item_id) → Limit → Unnest → Projection → TableScan
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .limit(0, Some(5))?
+        .project(vec![
+            cast(col("__unnest_placeholder(items)"), DataType::Int64).alias("item_id"),
+        ])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT CAST("_unnest_1"."VALUE" AS BIGINT) AS "item_id" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" LIMIT 5"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_multi_expression_projection() -> Result<(), DataFusionError> {
+    // Build: Projection([CAST(placeholder AS Int64) AS a, CAST(placeholder AS Utf8) AS b])
+    //          → Unnest → Projection → TableScan
+    // The outer Projection has TWO expressions — both reference the placeholder.
+    // The FLATTEN code path must fire even when p.expr.len() > 1.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .project(vec![
+            cast(col("__unnest_placeholder(items)"), DataType::Int64).alias("a"),
+            cast(col("__unnest_placeholder(items)"), DataType::Utf8).alias("b"),
+        ])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT CAST("_unnest_1"."VALUE" AS BIGINT) AS "a", CAST("_unnest_1"."VALUE" AS VARCHAR) AS "b" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1""#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_multi_expression_with_limit() -> Result<(), DataFusionError> {
+    // Multi-expression + Limit between Projection and Unnest
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .limit(0, Some(10))?
+        .project(vec![
+            cast(col("__unnest_placeholder(items)"), DataType::Int64).alias("a"),
+            cast(col("__unnest_placeholder(items)"), DataType::Utf8).alias("b"),
+        ])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT CAST("_unnest_1"."VALUE" AS BIGINT) AS "a", CAST("_unnest_1"."VALUE" AS VARCHAR) AS "b" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" LIMIT 10"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_unnest_through_subquery_alias() -> Result<(), DataFusionError> {
+    // Build: Projection → Unnest → SubqueryAlias → Projection → TableScan
+    // This simulates the plan produced when a virtual/passthrough table
+    // wraps the source in a SubqueryAlias, which sits between the Unnest
+    // and its inner Projection.
+
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .alias("t")? // SubqueryAlias — this is what breaks
+        .unnest_column("__unnest_placeholder(items)")?
+        .project(vec![col("__unnest_placeholder(items)").alias("item")])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let sql_str = result.to_string();
+
+    // Should contain LATERAL FLATTEN, not error
+    insta::assert_snapshot!(sql_str, @r#"SELECT "_unnest_1"."VALUE" AS "item" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1""#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_cross_join_unnest_table_column() -> Result<(), DataFusionError> {
+    // Single CROSS JOIN UNNEST from a table column with user-provided alias.
+    // Column references into the FLATTEN alias use .VALUE.
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM multi_array_table CROSS JOIN UNNEST(column_a) AS a (a)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "multi_array_table"."column_a", "multi_array_table"."column_b", "a"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_multiple_unnest_cross_join() -> Result<(), DataFusionError> {
+    // Realistic Snowflake pattern:
+    //   SELECT a, b
+    //   FROM multi_array_table
+    //   CROSS JOIN UNNEST(column_a) AS a
+    //   CROSS JOIN UNNEST(column_b) AS b
+    //
+    // Each CROSS JOIN UNNEST should produce a separate LATERAL FLATTEN
+    // with a distinct alias so they don't collide in the same FROM clause.
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT a.a, b.b FROM multi_array_table CROSS JOIN UNNEST(column_a) AS a (a) CROSS JOIN UNNEST(column_b) AS b (b)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "a"."VALUE", "b"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_b") AS "b""#,
+    );
     Ok(())
 }

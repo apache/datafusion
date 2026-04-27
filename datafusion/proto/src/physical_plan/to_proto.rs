@@ -306,14 +306,37 @@ pub fn serialize_physical_expr_with_converter(
             )),
         })
     } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
+        // Linearize a nested binary expression tree of the same operator
+        // into a flat vector of operands to avoid deep recursion in proto.
+        let op = expr.op();
+        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![expr.right()];
+        let mut current_expr: &BinaryExpr = expr;
+        loop {
+            match current_expr.left().downcast_ref::<BinaryExpr>() {
+                Some(bin) if bin.op() == op => {
+                    operand_refs.push(bin.right());
+                    current_expr = bin;
+                }
+                _ => {
+                    operand_refs.push(current_expr.left());
+                    break;
+                }
+            }
+        }
+
+        // Reverse so operands are ordered from left innermost to right outermost
+        operand_refs.reverse();
+
+        let operands = operand_refs
+            .iter()
+            .map(|e| proto_converter.physical_expr_to_proto(e, codec))
+            .collect::<Result<Vec<_>>>()?;
+
         let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
-            l: Some(Box::new(
-                proto_converter.physical_expr_to_proto(expr.left(), codec)?,
-            )),
-            r: Some(Box::new(
-                proto_converter.physical_expr_to_proto(expr.right(), codec)?,
-            )),
-            op: format!("{:?}", expr.op()),
+            l: None,
+            r: None,
+            op: format!("{:?}", op),
+            operands,
         });
 
         Ok(protobuf::PhysicalExprNode {

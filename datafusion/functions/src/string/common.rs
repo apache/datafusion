@@ -19,12 +19,12 @@
 
 use std::sync::Arc;
 
-use crate::strings::append_view;
+use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder, append_view};
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, GenericStringBuilder, NullBufferBuilder,
-    OffsetSizeTrait, StringViewArray, StringViewBuilder, new_null_array,
+    Array, ArrayRef, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
+    StringViewArray, new_null_array,
 };
-use arrow::buffer::{Buffer, ScalarBuffer};
+use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -349,18 +349,30 @@ where
             >(array, op)?)),
             DataType::Utf8View => {
                 let string_array = as_string_view_array(array)?;
-                let mut string_builder =
-                    StringViewBuilder::with_capacity(string_array.len());
+                let item_len = string_array.len();
+                // Null-preserving: reuse the input null buffer as the output null buffer.
+                let nulls = string_array.nulls().cloned();
+                let mut builder = StringViewArrayBuilder::with_capacity(item_len);
 
-                for str in string_array.iter() {
-                    if let Some(str) = str {
-                        string_builder.append_value(op(str));
-                    } else {
-                        string_builder.append_null();
+                if let Some(ref n) = nulls {
+                    for i in 0..item_len {
+                        if n.is_null(i) {
+                            builder.append_placeholder();
+                        } else {
+                            // SAFETY: `n.is_null(i)` was false in the branch above.
+                            let s = unsafe { string_array.value_unchecked(i) };
+                            builder.append_value(&op(s));
+                        }
+                    }
+                } else {
+                    for i in 0..item_len {
+                        // SAFETY: no null buffer means every index is valid.
+                        let s = unsafe { string_array.value_unchecked(i) };
+                        builder.append_value(&op(s));
                     }
                 }
 
-                Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(nulls)?)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
@@ -390,32 +402,44 @@ where
     const PRE_ALLOC_BYTES: usize = 8;
 
     let string_array = as_generic_string_array::<O>(array)?;
-    let value_data = string_array.value_data();
-
-    // All values are ASCII.
-    if value_data.is_ascii() {
+    if string_array.is_ascii() {
         return case_conversion_ascii_array::<O, _>(string_array, op);
     }
 
     // Values contain non-ASCII.
     let item_len = string_array.len();
-    let capacity = string_array.value_data().len() + PRE_ALLOC_BYTES;
-    let mut builder = GenericStringBuilder::<O>::with_capacity(item_len, capacity);
+    let offsets = string_array.value_offsets();
+    let start = offsets.first().unwrap().as_usize();
+    let end = offsets.last().unwrap().as_usize();
+    let capacity = (end - start) + PRE_ALLOC_BYTES;
+    // Null-preserving: reuse the input null buffer as the output null buffer.
+    let nulls = string_array.nulls().cloned();
+    let mut builder = GenericStringArrayBuilder::<O>::with_capacity(item_len, capacity);
 
-    if string_array.null_count() == 0 {
-        let iter =
-            (0..item_len).map(|i| Some(op(unsafe { string_array.value_unchecked(i) })));
-        builder.extend(iter);
+    if let Some(ref n) = nulls {
+        for i in 0..item_len {
+            if n.is_null(i) {
+                builder.append_placeholder();
+            } else {
+                // SAFETY: `n.is_null(i)` was false in the branch above.
+                let s = unsafe { string_array.value_unchecked(i) };
+                builder.append_value(&op(s));
+            }
+        }
     } else {
-        let iter = string_array.iter().map(|string| string.map(&op));
-        builder.extend(iter);
+        for i in 0..item_len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_array.value_unchecked(i) };
+            builder.append_value(&op(s));
+        }
     }
-    Ok(Arc::new(builder.finish()))
+    Ok(Arc::new(builder.finish(nulls)?))
 }
 
-/// All values of string_array are ASCII, and when converting case, there is no changes in the byte
-/// array length. Therefore, the StringArray can be treated as a complete ASCII string for
-/// case conversion, and we can reuse the offsets buffer and the nulls buffer.
+/// Fast path for case conversion on an all-ASCII string array. ASCII case
+/// conversion is byte-length-preserving, so we can convert the entire addressed
+/// range in one call and reuse the offsets and nulls buffers — rebasing the
+/// offsets when the input is a sliced array.
 fn case_conversion_ascii_array<'a, O, F>(
     string_array: &'a GenericStringArray<O>,
     op: F,
@@ -424,21 +448,33 @@ where
     O: OffsetSizeTrait,
     F: Fn(&'a str) -> String,
 {
-    let value_data = string_array.value_data();
-    // SAFETY: all items stored in value_data satisfy UTF8.
-    // ref: impl ByteArrayNativeType for str {...}
-    let str_values = unsafe { std::str::from_utf8_unchecked(value_data) };
+    let value_offsets = string_array.value_offsets();
+    let start = value_offsets.first().unwrap().as_usize();
+    let end = value_offsets.last().unwrap().as_usize();
+    let relevant = &string_array.value_data()[start..end];
 
-    // conversion
+    // SAFETY: `relevant` is a subslice of the string array's value buffer,
+    // which is valid UTF-8.
+    let str_values = unsafe { std::str::from_utf8_unchecked(relevant) };
+
     let converted_values = op(str_values);
-    assert_eq!(converted_values.len(), str_values.len());
-    let bytes = converted_values.into_bytes();
+    debug_assert_eq!(converted_values.len(), str_values.len());
+    let values = Buffer::from_vec(converted_values.into_bytes());
 
-    // build result
-    let values = Buffer::from_vec(bytes);
-    let offsets = string_array.offsets().clone();
+    // Shift offsets from `start`-based to 0-based so they index into `values`.
+    let offsets = if start == 0 {
+        string_array.offsets().clone()
+    } else {
+        let s = O::usize_as(start);
+        let rebased: Vec<O> = value_offsets.iter().map(|&o| o - s).collect();
+        // SAFETY: subtracting a constant from monotonic offsets preserves
+        // monotonicity, and `start` is the minimum offset so no underflow.
+        unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(rebased)) }
+    };
+
     let nulls = string_array.nulls().cloned();
-    // SAFETY: offsets and nulls are consistent with the input array.
+    // SAFETY: offsets are monotonic and in-bounds for `values`; nulls
+    // (if any) match the slice length.
     Ok(Arc::new(unsafe {
         GenericStringArray::<O>::new_unchecked(offsets, values, nulls)
     }))
