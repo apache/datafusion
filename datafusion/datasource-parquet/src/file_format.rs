@@ -1473,21 +1473,19 @@ impl FileSink for ParquetSink {
                         .objectstore_writer_buffer_size,
                 ))
                 .build()?;
-                let schema = get_writer_schema(&self.config);
-                let props = parquet_props.clone();
-                let skip_arrow_metadata = self.parquet_options.global.skip_arrow_metadata;
-                let parallel_options_clone = parallel_options.clone();
-                let pool = Arc::clone(context.memory_pool());
+                let ctx = ParquetFileWriteContext {
+                    schema: get_writer_schema(&self.config),
+                    props: Arc::new(parquet_props),
+                    skip_arrow_metadata: self.parquet_options.global.skip_arrow_metadata,
+                    parallel_options: Arc::new(parallel_options.clone()),
+                    pool: Arc::clone(context.memory_pool()),
+                };
                 let encoding_time = elapsed_compute.clone();
                 file_write_tasks.spawn(async move {
                     let parquet_meta_data = output_single_parquet_file_parallelized(
                         writer,
                         rx,
-                        schema,
-                        &props,
-                        skip_arrow_metadata,
-                        parallel_options_clone,
-                        pool,
+                        ctx,
                         encoding_time,
                     )
                     .await?;
@@ -1611,6 +1609,22 @@ struct ParallelParquetWriterOptions {
     max_buffered_record_batches_per_stream: usize,
 }
 
+/// Write configuration inputs shared across all parallel tasks that encode a
+/// single Parquet file. These values are invariant for the duration of one file
+/// write and do not change per row-group or per column.
+///
+/// Separating these from per-call parameters (`object_store_writer`, `data`,
+/// `encoding_time`) keeps the deep parallel call chain below the argument-count
+/// limit without mixing configuration with runtime state.
+#[derive(Clone)]
+struct ParquetFileWriteContext {
+    schema: Arc<Schema>,
+    props: Arc<WriterProperties>,
+    skip_arrow_metadata: bool,
+    parallel_options: Arc<ParallelParquetWriterOptions>,
+    pool: Arc<dyn MemoryPool>,
+}
+
 /// This is the return type of calling [ArrowColumnWriter].close() on each column
 /// i.e. the Vec of encoded columns which can be appended to a row group
 type RBStreamSerializeResult = Result<(Vec<ArrowColumnChunk>, MemoryReservation, usize)>;
@@ -1676,20 +1690,17 @@ fn spawn_rg_join_and_finalize_task(
 /// on the next row group in parallel. So, parquet serialization is parallelized
 /// across both columns and row_groups, with a theoretical max number of parallel tasks
 /// given by n_columns * num_row_groups.
-#[expect(clippy::too_many_arguments)]
 fn spawn_parquet_parallel_serialization_task(
     row_group_writer_factory: ArrowRowGroupWriterFactory,
     mut data: Receiver<RecordBatch>,
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
-    schema: Arc<Schema>,
-    writer_props: Arc<WriterProperties>,
-    parallel_options: Arc<ParallelParquetWriterOptions>,
-    pool: Arc<dyn MemoryPool>,
+    ctx: ParquetFileWriteContext,
     encoding_time: Time,
 ) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
-        let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
-        let max_row_group_rows = writer_props
+        let max_buffer_rb = ctx.parallel_options.max_buffered_record_batches_per_stream;
+        let max_row_group_rows = ctx
+            .props
             .max_row_group_row_count()
             .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT);
         let mut row_group_index = 0;
@@ -1699,7 +1710,7 @@ fn spawn_parquet_parallel_serialization_task(
             spawn_column_parallel_row_group_writer(
                 col_writers,
                 max_buffer_rb,
-                &pool,
+                &ctx.pool,
                 &encoding_time,
             )?;
         let mut current_rg_rows = 0;
@@ -1713,7 +1724,7 @@ fn spawn_parquet_parallel_serialization_task(
                     send_arrays_to_col_writers(
                         &col_array_channels,
                         &rb,
-                        Arc::clone(&schema),
+                        Arc::clone(&ctx.schema),
                     )
                     .await?;
                     current_rg_rows += rb.num_rows();
@@ -1724,7 +1735,7 @@ fn spawn_parquet_parallel_serialization_task(
                     send_arrays_to_col_writers(
                         &col_array_channels,
                         &a,
-                        Arc::clone(&schema),
+                        Arc::clone(&ctx.schema),
                     )
                     .await?;
 
@@ -1735,7 +1746,7 @@ fn spawn_parquet_parallel_serialization_task(
                     let finalize_rg_task = spawn_rg_join_and_finalize_task(
                         column_writer_handles,
                         max_row_group_rows,
-                        &pool,
+                        &ctx.pool,
                         encoding_time.clone(),
                     );
 
@@ -1755,7 +1766,7 @@ fn spawn_parquet_parallel_serialization_task(
                         spawn_column_parallel_row_group_writer(
                             col_writers,
                             max_buffer_rb,
-                            &pool,
+                            &ctx.pool,
                             &encoding_time,
                         )?;
                 }
@@ -1768,7 +1779,7 @@ fn spawn_parquet_parallel_serialization_task(
             let finalize_rg_task = spawn_rg_join_and_finalize_task(
                 column_writer_handles,
                 current_rg_rows,
-                &pool,
+                &ctx.pool,
                 encoding_time.clone(),
             );
 
@@ -1833,42 +1844,34 @@ async fn concatenate_parallel_row_groups(
 /// independent RecordBatch streams in parallel to RowGroups in memory. Another
 /// task then stitches these independent RowGroups together and streams this large
 /// single parquet file to an ObjectStore in multiple parts.
-#[expect(clippy::too_many_arguments)]
 async fn output_single_parquet_file_parallelized(
     object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     data: Receiver<RecordBatch>,
-    output_schema: Arc<Schema>,
-    parquet_props: &WriterProperties,
-    skip_arrow_metadata: bool,
-    parallel_options: ParallelParquetWriterOptions,
-    pool: Arc<dyn MemoryPool>,
+    ctx: ParquetFileWriteContext,
     encoding_time: Time,
 ) -> Result<ParquetMetaData> {
-    let max_rowgroups = parallel_options.max_parallel_row_groups;
+    let max_rowgroups = ctx.parallel_options.max_parallel_row_groups;
     // Buffer size of this channel limits maximum number of RowGroups being worked on in parallel
     let (serialize_tx, serialize_rx) =
         mpsc::channel::<SpawnedTask<RBStreamSerializeResult>>(max_rowgroups);
 
-    let arc_props = Arc::new(parquet_props.clone());
     let merged_buff = SharedBuffer::new(INITIAL_BUFFER_BYTES);
     let options = ArrowWriterOptions::new()
-        .with_properties(parquet_props.clone())
-        .with_skip_arrow_metadata(skip_arrow_metadata);
+        .with_properties((*ctx.props).clone())
+        .with_skip_arrow_metadata(ctx.skip_arrow_metadata);
     let writer = ArrowWriter::try_new_with_options(
         merged_buff.clone(),
-        Arc::clone(&output_schema),
+        Arc::clone(&ctx.schema),
         options,
     )?;
     let (writer, row_group_writer_factory) = writer.into_serialized_writer()?;
 
+    let pool = Arc::clone(&ctx.pool);
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
         row_group_writer_factory,
         data,
         serialize_tx,
-        Arc::clone(&output_schema),
-        Arc::clone(&arc_props),
-        parallel_options.into(),
-        Arc::clone(&pool),
+        ctx,
         encoding_time,
     );
     let parquet_meta_data = concatenate_parallel_row_groups(
