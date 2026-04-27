@@ -17,7 +17,6 @@
 
 //! This module contains tests for limiting memory at runtime in DataFusion
 
-use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
@@ -213,6 +212,7 @@ async fn sort_merge_join_spill() {
         .with_config(config)
         .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
+        .with_expected_success()
         .run()
         .await
 }
@@ -1144,10 +1144,6 @@ impl SortedTableProvider {
 
 #[async_trait]
 impl TableProvider for SortedTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

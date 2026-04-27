@@ -17,7 +17,6 @@
 
 //! Negation (-) expression
 
-use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -79,11 +78,6 @@ impl std::fmt::Display for NegativeExpr {
 }
 
 impl PhysicalExpr for NegativeExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         self.arg.data_type(input_schema)
     }

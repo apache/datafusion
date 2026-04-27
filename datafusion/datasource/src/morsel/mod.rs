@@ -26,7 +26,12 @@
 //! It is inspired by the paper [Morsel-Driven Parallelism: A NUMA-Aware Query
 //! Evaluation Framework for the Many-Core Age](https://db.in.tum.de/~leis/papers/morsels.pdf).
 
+mod adapters;
+#[cfg(test)]
+pub(crate) mod mocks;
+
 use crate::PartitionedFile;
+pub(crate) use adapters::FileOpenerMorselizer;
 use arrow::array::RecordBatch;
 use datafusion_common::Result;
 use futures::FutureExt;

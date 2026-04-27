@@ -17,7 +17,6 @@
 
 //! Execution plan for reading line-delimited Avro files
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -130,10 +129,6 @@ impl FileSource for AvroSource {
             self.table_schema.file_schema(),
         )?;
         Ok(opener)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn table_schema(&self) -> &TableSchema {

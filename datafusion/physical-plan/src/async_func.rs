@@ -338,8 +338,7 @@ impl AsyncMapper {
     ) -> Result<()> {
         // recursively look for references to async functions
         physical_expr.apply(|expr| {
-            if let Some(scalar_func_expr) =
-                expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+            if let Some(scalar_func_expr) = expr.downcast_ref::<ScalarFunctionExpr>()
                 && scalar_func_expr.fun().as_async().is_some()
             {
                 let next_name = self.next_column_name();

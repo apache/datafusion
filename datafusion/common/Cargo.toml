@@ -75,7 +75,7 @@ hashbrown = { workspace = true }
 hex = { workspace = true, optional = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
-libc = "0.2.184"
+libc = "0.2.185"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }

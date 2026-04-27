@@ -83,3 +83,7 @@ harness = false
 [[bench]]
 name = "first_last"
 harness = false
+
+[[bench]]
+name = "count_distinct"
+harness = false

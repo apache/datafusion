@@ -888,6 +888,8 @@ fn coerced_from<'a>(
         (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
+        // We can go into a BinaryView from a Binary or LargeBinary
+        (BinaryView, Binary | LargeBinary | Null) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
         (List(_), FixedSizeList(_, _)) => Some(type_into.clone()),
@@ -956,6 +958,20 @@ mod tests {
         let cases = vec![
             (DataType::Utf8View, DataType::Utf8),
             (DataType::Utf8View, DataType::LargeUtf8),
+            (DataType::Utf8View, DataType::Null),
+        ];
+
+        for case in cases {
+            assert_eq!(coerced_from(&case.0, &case.1), Some(case.0));
+        }
+    }
+
+    #[test]
+    fn test_binary_conversion() {
+        let cases = vec![
+            (DataType::BinaryView, DataType::Binary),
+            (DataType::BinaryView, DataType::LargeBinary),
+            (DataType::BinaryView, DataType::Null),
         ];
 
         for case in cases {

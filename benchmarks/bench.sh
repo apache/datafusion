@@ -109,6 +109,9 @@ clickbench_extended:    ClickBench \"inspired\" queries against a single parquet
 # Sort Pushdown Benchmarks
 sort_pushdown:          Sort pushdown baseline (no WITH ORDER) on TPC-H data (SF=1)
 sort_pushdown_sorted:   Sort pushdown with WITH ORDER — tests sort elimination on non-overlapping files
+sort_pushdown_inexact:  Sort pushdown Inexact path (--sorted DESC) — multi-file with scrambled RGs, tests reverse scan + RG reorder
+sort_pushdown_inexact_unsorted: Sort pushdown Inexact path (no WITH ORDER) — same data, tests Unsupported path + RG reorder
+sort_pushdown_inexact_overlap: Sort pushdown Inexact path — multi-file scrambled RGs (streaming data scenario)
 
 # Sorted Data Benchmarks (ORDER BY Optimization)
 clickbench_sorted:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
@@ -316,6 +319,9 @@ main() {
                 sort_pushdown|sort_pushdown_sorted)
                     data_sort_pushdown
                     ;;
+                sort_pushdown_inexact|sort_pushdown_inexact_unsorted|sort_pushdown_inexact_overlap)
+                    data_sort_pushdown_inexact
+                    ;;
                 sort_tpch)
                     # same data as for tpch
                     data_tpch "1" "parquet"
@@ -522,6 +528,15 @@ main() {
                 sort_pushdown_sorted)
                     run_sort_pushdown_sorted
                     ;;
+                sort_pushdown_inexact)
+                    run_sort_pushdown_inexact
+                    ;;
+                sort_pushdown_inexact_unsorted)
+                    run_sort_pushdown_inexact_unsorted
+                    ;;
+                sort_pushdown_inexact_overlap)
+                    run_sort_pushdown_inexact_overlap
+                    ;;
                 sort_tpch)
                     run_sort_tpch "1"
                     ;;
@@ -677,7 +692,7 @@ run_tpch() {
     echo "Running tpch benchmark..."
 
     FORMAT=$2
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --scale-factor "${SCALE_FACTOR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the tpch in memory (needs tpch parquet data)
@@ -693,7 +708,7 @@ run_tpch_mem() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --scale-factor "${SCALE_FACTOR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the tpcds benchmark
@@ -900,7 +915,7 @@ data_imdb() {
                 if [ "${DOWNLOADED_SIZE}" != "${expected_size}" ]; then
                     echo "Error: Download size mismatch"
                     echo "Expected: ${expected_size}"
-                    echo "Got: ${DOWNLADED_SIZE}"
+                    echo "Got: ${DOWNLOADED_SIZE}"
                     echo "Please re-initiate the download"
                     return 1
                 fi
@@ -1135,6 +1150,187 @@ run_sort_pushdown_sorted() {
     RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_sorted.json"
     echo "Running sort pushdown benchmark (with WITH ORDER)..."
     debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Generates data for sort pushdown Inexact benchmark.
+#
+# Produces multiple parquet files where each file has MULTIPLE row groups
+# with scrambled RG order. This tests both:
+#   - Row-group-level reorder within each file (reorder_by_statistics)
+#   - TopK threshold initialization from RG statistics
+#
+# Strategy:
+# 1. Write a single sorted file with small (100K-row) RGs (~61 RGs total).
+# 2. Use pyarrow to redistribute RGs into N_FILES files, scrambling the
+#    RG order within each file using a deterministic permutation.
+#    Each file gets ~61/N_FILES RGs with narrow, non-overlapping ranges
+#    but in scrambled order.
+#
+# Writing a single file with ORDER BY scramble does NOT work: the parquet
+# writer merges rows from adjacent chunks at RG boundaries, widening
+# ranges and defeating reorder_by_statistics.
+#
+# Requires pyarrow (pip install pyarrow).
+data_sort_pushdown_inexact() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact/lineitem"
+    if [ -d "${INEXACT_DIR}" ] && [ "$(ls -A ${INEXACT_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown Inexact data already exists at ${INEXACT_DIR}"
+        return
+    fi
+
+    # Check pyarrow dependency (needed to split/scramble RGs)
+    if ! python3 -c "import pyarrow" 2>/dev/null; then
+        echo "Error: pyarrow is required for sort pushdown Inexact data generation."
+        echo "Install with: pip install pyarrow"
+        return 1
+    fi
+
+    echo "Generating sort pushdown Inexact benchmark data (multi-file, scrambled RGs)..."
+
+    # Re-use the sort_pushdown data as the source (generate if missing)
+    data_sort_pushdown
+
+    mkdir -p "${INEXACT_DIR}"
+    SRC_DIR="${DATA_DIR}/sort_pushdown/lineitem"
+
+    # Step 1: Write a single sorted file with small (100K-row) RGs
+    TMPFILE="${INEXACT_DIR}/_sorted_small_rgs.parquet"
+    (cd "${SCRIPT_DIR}/.." && cargo run --release -p datafusion-cli -- -c "
+        CREATE EXTERNAL TABLE src
+        STORED AS PARQUET
+        LOCATION '${SRC_DIR}';
+
+        COPY (SELECT * FROM src ORDER BY l_orderkey)
+        TO '${TMPFILE}'
+        STORED AS PARQUET
+        OPTIONS ('format.max_row_group_size' '100000');
+    ")
+
+    # Step 2: Redistribute RGs into 3 files with scrambled RG order.
+    # Each file gets ~20 RGs. RG assignment: rg_idx % 3 determines file,
+    # permutation (rg_idx * 41 + 7) % n scrambles the order within file.
+    python3 -c "
+import pyarrow.parquet as pq
+
+pf = pq.ParquetFile('${TMPFILE}')
+n = pf.metadata.num_row_groups
+n_files = 3
+
+# Assign each RG to a file, scramble order within each file
+file_rgs = [[] for _ in range(n_files)]
+for rg_idx in range(n):
+    slot = (rg_idx * 41 + 7) % n  # scrambled index
+    file_id = slot % n_files
+    file_rgs[file_id].append(rg_idx)
+
+# Write each file with its assigned RGs (in scrambled order)
+for file_id in range(n_files):
+    rgs = file_rgs[file_id]
+    if not rgs:
+        continue
+    tables = [pf.read_row_group(rg) for rg in rgs]
+    writer = pq.ParquetWriter(
+        '${INEXACT_DIR}/part_%03d.parquet' % file_id,
+        pf.schema_arrow)
+    for t in tables:
+        writer.write_table(t)
+    writer.close()
+    print(f'File part_{file_id:03d}.parquet: {len(rgs)} RGs')
+"
+
+    rm -f "${TMPFILE}"
+    echo "Sort pushdown Inexact data generated at ${INEXACT_DIR}"
+    ls -la "${INEXACT_DIR}"
+
+    # Also generate overlap data: same strategy but with different file count
+    # and permutation. Simulates streaming data with network delays where
+    # chunks arrive out of sequence.
+    #
+    # Requires pyarrow (pip install pyarrow).
+    OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap/lineitem"
+    if [ -d "${OVERLAP_DIR}" ] && [ "$(ls -A ${OVERLAP_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown Inexact overlap data already exists at ${OVERLAP_DIR}"
+        return
+    fi
+
+    echo "Generating sort pushdown Inexact overlap data (multi-file, scrambled RGs)..."
+    mkdir -p "${OVERLAP_DIR}"
+
+    # Step 1: Write a single sorted file with small (100K-row) RGs
+    TMPFILE="${OVERLAP_DIR}/_sorted_small_rgs.parquet"
+    (cd "${SCRIPT_DIR}/.." && cargo run --release -p datafusion-cli -- -c "
+        CREATE EXTERNAL TABLE src
+        STORED AS PARQUET
+        LOCATION '${SRC_DIR}';
+
+        COPY (SELECT * FROM src ORDER BY l_orderkey)
+        TO '${TMPFILE}'
+        STORED AS PARQUET
+        OPTIONS ('format.max_row_group_size' '100000');
+    ")
+
+    # Step 2: Redistribute into 5 files with scrambled RG order.
+    python3 -c "
+import pyarrow.parquet as pq
+
+pf = pq.ParquetFile('${TMPFILE}')
+n = pf.metadata.num_row_groups
+n_files = 5
+
+file_rgs = [[] for _ in range(n_files)]
+for rg_idx in range(n):
+    slot = (rg_idx * 37 + 13) % n
+    file_id = slot % n_files
+    file_rgs[file_id].append(rg_idx)
+
+for file_id in range(n_files):
+    rgs = file_rgs[file_id]
+    if not rgs:
+        continue
+    tables = [pf.read_row_group(rg) for rg in rgs]
+    writer = pq.ParquetWriter(
+        '${OVERLAP_DIR}/part_%03d.parquet' % file_id,
+        pf.schema_arrow)
+    for t in tables:
+        writer.write_table(t)
+    writer.close()
+    print(f'File part_{file_id:03d}.parquet: {len(rgs)} RGs')
+"
+
+    rm -f "${TMPFILE}"
+}
+
+# Runs the sort pushdown Inexact benchmark (tests RG reorder by statistics).
+# Enables pushdown_filters so TopK's dynamic filter is pushed to the parquet
+# reader for late materialization (only needed for Inexact path).
+run_sort_pushdown_inexact() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact.json"
+    echo "Running sort pushdown Inexact benchmark (multi-file scrambled RGs, --sorted DESC)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${INEXACT_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown Inexact benchmark WITHOUT declared ordering.
+# Tests the Unsupported path in try_pushdown_sort where RG reorder by
+# statistics can still help TopK queries without any file ordering guarantee.
+run_sort_pushdown_inexact_unsorted() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact_unsorted.json"
+    echo "Running sort pushdown Inexact benchmark (no WITH ORDER, Unsupported path)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --iterations 5 --path "${INEXACT_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact_unsorted" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown benchmark with multi-file scrambled RG order.
+# Simulates streaming data with network delays — multiple files, each with
+# scrambled RGs. Tests both RG-level reorder and TopK stats initialization.
+run_sort_pushdown_inexact_overlap() {
+    OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact_overlap.json"
+    echo "Running sort pushdown Inexact benchmark (multi-file scrambled RGs, streaming data pattern)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${OVERLAP_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact_overlap" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the sort integration benchmark

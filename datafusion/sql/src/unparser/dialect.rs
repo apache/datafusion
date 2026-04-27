@@ -51,6 +51,11 @@ pub trait Dialect: Send + Sync {
     /// Return the character used to quote identifiers.
     fn identifier_quote_style(&self, _identifier: &str) -> Option<char>;
 
+    /// Whether array literals should be rendered with the `ARRAY[...]` keyword.
+    fn use_array_keyword_for_array_literals(&self) -> bool {
+        false
+    }
+
     /// Does the dialect support specifying `NULLS FIRST/LAST` in `ORDER BY` clauses?
     fn supports_nulls_first_in_sort(&self) -> bool {
         true
@@ -98,6 +103,12 @@ pub trait Dialect: Send + Sync {
     /// Most dialects use BigInt, but some, like MySQL, require SIGNED
     fn int64_cast_dtype(&self) -> ast::DataType {
         ast::DataType::BigInt(None)
+    }
+
+    /// The SQL type to use for Arrow Int8 unparsing
+    /// Most dialects use TinyInt, but PostgreSQL prefers SmallInt
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::TinyInt(None)
     }
 
     /// The SQL type to use for Arrow Int32 unparsing
@@ -197,6 +208,15 @@ pub trait Dialect: Send + Sync {
     /// the LogicalPlan planner always puts UNNEST in the SELECT clause. This flag allows
     /// to unparse the UNNEST plan as [ast::TableFactor::UNNEST] instead of a subquery.
     fn unnest_as_table_factor(&self) -> bool {
+        false
+    }
+
+    /// Unparse the unnest plan as `LATERAL FLATTEN(INPUT => expr, ...)`.
+    ///
+    /// Snowflake uses FLATTEN as a table function instead of the SQL-standard UNNEST.
+    /// When this returns `true`, the unparser emits
+    /// `LATERAL FLATTEN(INPUT => <col>, OUTER => <bool>)` in the FROM clause.
+    fn unnest_as_lateral_flatten(&self) -> bool {
         false
     }
 
@@ -321,6 +341,10 @@ impl Dialect for DefaultDialect {
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {
+    fn use_array_keyword_for_array_literals(&self) -> bool {
+        true
+    }
+
     fn supports_qualify(&self) -> bool {
         false
     }
@@ -343,6 +367,10 @@ impl Dialect for PostgreSqlDialect {
 
     fn float64_ast_dtype(&self) -> ast::DataType {
         ast::DataType::DoublePrecision
+    }
+
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::SmallInt(None)
     }
 
     fn scalar_function_to_sql_overrides(
@@ -645,12 +673,110 @@ impl Dialect for BigQueryDialect {
     fn unnest_as_table_factor(&self) -> bool {
         true
     }
+
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        false
+    }
+
+    fn float64_ast_dtype(&self) -> ast::DataType {
+        ast::DataType::Float64
+    }
+
+    fn utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::String(None)
+    }
+
+    fn large_utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::String(None)
+    }
+
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        _tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        ast::DataType::Timestamp(None, TimezoneInfo::None)
+    }
+
+    fn date_field_extract_style(&self) -> DateFieldExtractStyle {
+        DateFieldExtractStyle::Extract
+    }
+
+    fn interval_style(&self) -> IntervalStyle {
+        IntervalStyle::SQLStandard
+    }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        if func_name == "date_part" {
+            return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        Ok(None)
+    }
 }
 
 impl BigQueryDialect {
     #[must_use]
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+/// Dialect for Snowflake SQL.
+///
+/// Key differences from the default dialect:
+/// - Uses double-quote identifier quoting
+/// - Supports `NULLS FIRST`/`NULLS LAST` in `ORDER BY`
+/// - Does not support empty select lists (`SELECT FROM t`)
+/// - Does not support column aliases in table alias definitions
+///   (Snowflake accepts the syntax but silently ignores the renames in join contexts)
+/// - Unparses `UNNEST` plans as `LATERAL FLATTEN(INPUT => expr, ...)`
+pub struct SnowflakeDialect {}
+
+#[expect(clippy::new_without_default)]
+impl SnowflakeDialect {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Dialect for SnowflakeDialect {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
+        Some('"')
+    }
+
+    fn supports_nulls_first_in_sort(&self) -> bool {
+        true
+    }
+
+    fn supports_empty_select_list(&self) -> bool {
+        false
+    }
+
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        false
+    }
+
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        if tz.is_some() {
+            ast::DataType::Timestamp(None, TimezoneInfo::WithTimeZone)
+        } else {
+            ast::DataType::Timestamp(None, TimezoneInfo::None)
+        }
+    }
+
+    fn unnest_as_lateral_flatten(&self) -> bool {
+        true
     }
 }
 
@@ -664,6 +790,7 @@ pub struct CustomDialect {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
+    int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
@@ -675,6 +802,7 @@ pub struct CustomDialect {
     window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
+    unnest_as_lateral_flatten: bool,
 }
 
 impl Default for CustomDialect {
@@ -689,6 +817,7 @@ impl Default for CustomDialect {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
+            int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
@@ -703,6 +832,7 @@ impl Default for CustomDialect {
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
+            unnest_as_lateral_flatten: false,
         }
     }
 }
@@ -746,6 +876,10 @@ impl Dialect for CustomDialect {
 
     fn int64_cast_dtype(&self) -> ast::DataType {
         self.int64_cast_dtype.clone()
+    }
+
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        self.int8_cast_dtype.clone()
     }
 
     fn int32_cast_dtype(&self) -> ast::DataType {
@@ -813,6 +947,10 @@ impl Dialect for CustomDialect {
     fn unnest_as_table_factor(&self) -> bool {
         self.unnest_as_table_factor
     }
+
+    fn unnest_as_lateral_flatten(&self) -> bool {
+        self.unnest_as_lateral_flatten
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -839,6 +977,7 @@ pub struct CustomDialectBuilder {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
+    int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
@@ -850,6 +989,7 @@ pub struct CustomDialectBuilder {
     window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
+    unnest_as_lateral_flatten: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -870,6 +1010,7 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
+            int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
@@ -884,6 +1025,7 @@ impl CustomDialectBuilder {
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
+            unnest_as_lateral_flatten: false,
         }
     }
 
@@ -898,6 +1040,7 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
             date_field_extract_style: self.date_field_extract_style,
             character_length_style: self.character_length_style,
+            int8_cast_dtype: self.int8_cast_dtype,
             int64_cast_dtype: self.int64_cast_dtype,
             int32_cast_dtype: self.int32_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
@@ -910,6 +1053,7 @@ impl CustomDialectBuilder {
             window_func_support_window_frame: self.window_func_support_window_frame,
             full_qualified_col: self.full_qualified_col,
             unnest_as_table_factor: self.unnest_as_table_factor,
+            unnest_as_lateral_flatten: self.unnest_as_lateral_flatten,
         }
     }
 
@@ -949,6 +1093,12 @@ impl CustomDialectBuilder {
         character_length_style: CharacterLengthStyle,
     ) -> Self {
         self.character_length_style = character_length_style;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for Int8 casting: TinyInt, SmallInt, etc.
+    pub fn with_int8_cast_dtype(mut self, int8_cast_dtype: ast::DataType) -> Self {
+        self.int8_cast_dtype = int8_cast_dtype;
         self
     }
 
@@ -1048,6 +1198,14 @@ impl CustomDialectBuilder {
 
     pub fn with_unnest_as_table_factor(mut self, unnest_as_table_factor: bool) -> Self {
         self.unnest_as_table_factor = unnest_as_table_factor;
+        self
+    }
+
+    pub fn with_unnest_as_lateral_flatten(
+        mut self,
+        unnest_as_lateral_flatten: bool,
+    ) -> Self {
+        self.unnest_as_lateral_flatten = unnest_as_lateral_flatten;
         self
     }
 }

@@ -280,7 +280,7 @@ fn sort_columns_from_physical_sort_exprs(
 ) -> Option<Vec<&Column>> {
     sort_order
         .iter()
-        .map(|expr| expr.expr.as_any().downcast_ref::<Column>())
+        .map(|expr| expr.expr.downcast_ref::<Column>())
         .collect()
 }
 

@@ -37,5 +37,6 @@ mod sanity_checker;
 #[expect(clippy::needless_pass_by_value)]
 mod test_utils;
 mod window_optimize;
+mod window_topn;
 
 mod pushdown_utils;

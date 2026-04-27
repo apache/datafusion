@@ -68,9 +68,11 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_session::Session;
 #[cfg(feature = "sql")]
 use datafusion_sql::{
@@ -191,9 +193,25 @@ pub struct SessionState {
     /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
+    /// Optional statistics registry for pluggable statistics providers.
+    ///
+    /// When set, physical optimizer rules can use this registry to obtain
+    /// enhanced statistics (e.g., NDV overrides, histograms) beyond what
+    /// is available from `ExecutionPlan::partition_statistics()`.
+    statistics_registry: Option<StatisticsRegistry>,
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
+}
+
+impl PhysicalOptimizerContext for SessionState {
+    fn config_options(&self) -> &ConfigOptions {
+        self.config_options()
+    }
+
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        self.statistics_registry.as_ref()
+    }
 }
 
 impl Debug for SessionState {
@@ -817,6 +835,14 @@ impl SessionState {
         self.config.options()
     }
 
+    /// Returns the statistics registry if one is configured.
+    ///
+    /// The registry provides pluggable statistics providers for enhanced
+    /// cardinality estimation (e.g., NDV overrides, histograms).
+    pub fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        self.statistics_registry.as_ref()
+    }
+
     /// Mark the start of the execution
     pub fn mark_start_execution(&mut self) {
         let config = Arc::clone(self.config.options());
@@ -1006,6 +1032,7 @@ pub struct SessionStateBuilder {
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
+    statistics_registry: Option<StatisticsRegistry>,
     // fields to support convenience functions
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
@@ -1047,6 +1074,7 @@ impl SessionStateBuilder {
             runtime_env: None,
             function_factory: None,
             cache_factory: None,
+            statistics_registry: None,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -1103,6 +1131,7 @@ impl SessionStateBuilder {
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
             cache_factory: existing.cache_factory,
+            statistics_registry: existing.statistics_registry,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -1424,6 +1453,16 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set a [`StatisticsRegistry`] for pluggable statistics providers.
+    ///
+    /// The registry allows physical optimizer rules to access enhanced statistics
+    /// (e.g., NDV overrides, histograms) beyond what is available from
+    /// `ExecutionPlan::partition_statistics()`.
+    pub fn with_statistics_registry(mut self, registry: StatisticsRegistry) -> Self {
+        self.statistics_registry = Some(registry);
+        self
+    }
+
     /// Register an `ObjectStore` to the [`RuntimeEnv`]. See [`RuntimeEnv::register_object_store`]
     /// for more details.
     ///
@@ -1491,6 +1530,7 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             cache_factory,
+            statistics_registry,
             analyzer_rules,
             optimizer_rules,
             physical_optimizer_rules,
@@ -1531,6 +1571,7 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             cache_factory,
+            statistics_registry,
             prepared_plans: HashMap::new(),
         };
 
