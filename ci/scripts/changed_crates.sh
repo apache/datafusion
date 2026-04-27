@@ -26,8 +26,8 @@
 #
 #   semver-check <base_ref> <packages...>
 #       Run cargo-semver-checks for the given packages against base_ref.
-#       Prints the (ANSI-stripped) log output to stdout.
-#       Exit code matches cargo-semver-checks (0 = pass, non-zero = breaking).
+#       Output and exit code are passed through unchanged; the caller is
+#       responsible for capturing/formatting them.
 #
 #   comment <repo> <pr_number> <check_result> [logs]
 #       Upsert or delete a sticky PR comment based on check_result.
@@ -77,18 +77,7 @@ cmd_semver_check() {
     args+=(--package "$pkg")
   done
 
-  set +e
-  # Send raw output (with ANSI colors) to stderr so it streams into the
-  # Actions log, while writing the same content to a file we can clean up
-  # afterwards. Only the cleaned, ANSI-stripped output goes to stdout, so
-  # the workflow's `OUTPUT=$(...)` capture stays free of duplicate text.
-  cargo semver-checks --baseline-rev "$base_ref" "${args[@]}" 2>&1 \
-    | tee /dev/stderr > /tmp/semver-output.txt
-  local exit_code=${PIPESTATUS[0]}
-  set -e
-
-  sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt
-  return "$exit_code"
+  cargo semver-checks --baseline-rev "$base_ref" "${args[@]}"
 }
 
 # ── comment ─────────────────────────────────────────────────────────

@@ -77,11 +77,16 @@ jobs:
           PACKAGES: ${{ steps.changed_crates.outputs.packages }}
         run: |
           set +e
-          OUTPUT=$(ci/scripts/changed_crates.sh semver-check "origin/${BASE_REF}" $PACKAGES)
-          EXIT_CODE=$?
-          echo "logs<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$OUTPUT" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          # `tee` lets cargo's output stream live into the Actions log
+          # while we also keep a copy for the PR comment.
+          ci/scripts/changed_crates.sh semver-check "origin/${BASE_REF}" $PACKAGES \
+            2>&1 | tee /tmp/semver-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          {
+            echo "logs<<EOF"
+            sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           exit $EXIT_CODE
 
   # Post or remove a sticky comment on the PR based on the semver check result.
