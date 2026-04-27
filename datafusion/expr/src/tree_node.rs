@@ -116,7 +116,7 @@ impl TreeNode for Expr {
     /// indicating whether the expression was transformed or left unchanged.
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        mut f: F,
+        f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
             // TODO: remove the next line after `Expr::Wildcard` is removed
@@ -150,8 +150,13 @@ impl TreeNode for Expr {
                 relation,
                 name,
                 metadata,
-            }) => f(*expr)?.update_data(|e| {
-                e.alias_qualified_with_metadata(relation, name, metadata)
+            }) => expr.map_elements(f)?.update_data(|expr| {
+                Expr::Alias(Alias {
+                    expr,
+                    relation,
+                    name,
+                    metadata,
+                })
             }),
             Expr::InSubquery(InSubquery {
                 expr,
