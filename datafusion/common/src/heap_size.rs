@@ -246,7 +246,20 @@ impl<K: DFHeapSize, V: DFHeapSize> DFHeapSize for HashMap<K, V> {
 
 impl<T: DFHeapSize> DFHeapSize for Arc<T> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as usize;
+        let ptr = Arc::as_ptr(self) as *const i32 as usize;
+
+        if !ctx.seen.insert(ptr) {
+            return 0;
+        }
+
+        // Arc stores weak and strong counts on the heap alongside an instance of T
+        2 * size_of::<usize>() + self.as_ref().heap_size(ctx)
+    }
+}
+
+impl DFHeapSize for Arc<str> {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        let ptr = Arc::as_ptr(self) as *const i32 as usize;
 
         if !ctx.seen.insert(ptr) {
             return 0;
@@ -259,6 +272,13 @@ impl<T: DFHeapSize> DFHeapSize for Arc<T> {
 
 impl DFHeapSize for Arc<dyn DFHeapSize> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        let ptr = Arc::as_ptr(self) as *const i32 as usize;
+
+        if !ctx.seen.insert(ptr) {
+            return 0;
+        }
+
+        // Arc stores weak and strong counts on the heap alongside an instance of T
         2 * size_of::<usize>() + size_of_val(self.as_ref()) + self.as_ref().heap_size(ctx)
     }
 }
@@ -307,12 +327,6 @@ impl DFHeapSize for FixedSizeListArray {
 impl DFHeapSize for MapArray {
     fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
         self.get_array_memory_size()
-    }
-}
-
-impl DFHeapSize for Arc<str> {
-    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        2 * size_of::<usize>() + self.as_ref().heap_size(ctx)
     }
 }
 
@@ -493,21 +507,45 @@ impl DFHeapSize for usize {
     }
 }
 
-#[test]
-fn test_heap_size_arc_avoid_double_accounting() {
-    let a1 = Arc::new(vec![1, 2, 3]);
-    let mut ctx = DFHeapSizeCtx::default();
-    let heap_size = a1.heap_size(&mut ctx);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let a2 = Arc::clone(&a1);
-    let a3 = Arc::clone(&a1);
-    let a4 = Arc::clone(&a3);
+    #[test]
+    fn test_heap_size_arc_avoid_double_accounting() {
+        let a1 = Arc::new(vec![1, 2, 3]);
+        let mut ctx = DFHeapSizeCtx::default();
+        let heap_size = a1.heap_size(&mut ctx);
 
-    let mut ctx = DFHeapSizeCtx::default();
-    let heap_size_with_clones = a1.heap_size(&mut ctx)
-        + a2.heap_size(&mut ctx)
-        + a3.heap_size(&mut ctx)
-        + a4.heap_size(&mut ctx);
+        let a2 = Arc::clone(&a1);
+        let a3 = Arc::clone(&a1);
+        let a4 = Arc::clone(&a3);
 
-    assert_eq!(heap_size, heap_size_with_clones);
+        let mut ctx = DFHeapSizeCtx::default();
+        let heap_size_with_clones = a1.heap_size(&mut ctx)
+            + a2.heap_size(&mut ctx)
+            + a3.heap_size(&mut ctx)
+            + a4.heap_size(&mut ctx);
+
+        assert_eq!(heap_size, heap_size_with_clones);
+    }
+
+    #[test]
+    fn test_heap_size_arc_str_avoid_double_accounting() {
+        let a1 = Arc::new("Hello".to_string());
+        let mut ctx = DFHeapSizeCtx::default();
+        let heap_size = a1.heap_size(&mut ctx);
+
+        let a2 = Arc::clone(&a1);
+        let a3 = Arc::clone(&a1);
+        let a4 = Arc::clone(&a3);
+
+        let mut ctx = DFHeapSizeCtx::default();
+        let heap_size_with_clones = a1.heap_size(&mut ctx)
+            + a2.heap_size(&mut ctx)
+            + a3.heap_size(&mut ctx)
+            + a4.heap_size(&mut ctx);
+
+        assert_eq!(heap_size, heap_size_with_clones);
+    }
 }

@@ -110,6 +110,7 @@ impl DefaultFileStatisticsCacheState {
         }
 
         let old_value = self.lru_queue.put(key.clone(), value);
+        let mut ctx = DFHeapSizeCtx::default();
         self.memory_used += entry_size;
         self.memory_used += key.heap_size(&mut ctx);
 
