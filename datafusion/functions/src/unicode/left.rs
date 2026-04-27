@@ -79,8 +79,8 @@ impl ScalarUDFImpl for LeftFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8View)
     }
 
     /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
@@ -108,8 +108,8 @@ impl ScalarUDFImpl for LeftFunc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray, StringViewArray};
-    use arrow::datatypes::DataType::{Utf8, Utf8View};
+    use arrow::array::{Array, StringViewArray};
+    use arrow::datatypes::DataType::Utf8View;
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -127,8 +127,8 @@ mod tests {
             ],
             Ok(Some("ab")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -138,8 +138,8 @@ mod tests {
             ],
             Ok(Some("abcde")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -149,8 +149,8 @@ mod tests {
             ],
             Ok(Some("abc")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -160,8 +160,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -171,8 +171,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -182,8 +182,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -193,8 +193,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -204,8 +204,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -215,8 +215,8 @@ mod tests {
             ],
             Ok(Some("joséé")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             LeftFunc::new(),
@@ -226,8 +226,8 @@ mod tests {
             ],
             Ok(Some("joséé")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
@@ -240,8 +240,8 @@ mod tests {
                 "function left requires compilation with feature flag: unicode_expressions."
             ),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
 
         // StringView cases
@@ -307,8 +307,8 @@ mod tests {
                 ],
                 Ok(Some(expected.as_str())),
                 &str,
-                Utf8,
-                StringArray
+                Utf8View,
+                StringViewArray
             );
         }
 

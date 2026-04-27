@@ -31,7 +31,6 @@ use datafusion::optimizer::{
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion::sql::sqlparser::parser::Parser;
-use std::any::Any;
 use std::sync::Arc;
 
 /// This example shows how to use DataFusion's SQL planner to parse SQL text and
@@ -190,10 +189,6 @@ struct MyTableSource {
 }
 
 impl TableSource for MyTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

@@ -159,7 +159,7 @@ next section)
 ## More Debugging Information: `EXPLAIN VERBOSE`
 
 If the plan has to read too many files, not all of them will be shown in the
-`EXPLAIN`. To see them, use `EXPLAIN VEBOSE`. Like `EXPLAIN`, `EXPLAIN VERBOSE`
+`EXPLAIN`. To see them, use `EXPLAIN VERBOSE`. Like `EXPLAIN`, `EXPLAIN VERBOSE`
 does not run the query. Instead it shows the full explain plan, with information
 that is omitted from the default explain, as well as all intermediate physical
 plans DataFusion generates before returning. This mode can be very helpful for
@@ -225,6 +225,7 @@ Again, reading from bottom up:
 
 When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains the following metrics:
 
+- `output_rows_skew`: output skew score derived from per-partition `output_rows`. `0%` is perfectly balanced, `100%` is maximally skewed, and `N/A` means no output rows were produced.
 - `page_index_rows_pruned`: number of rows evaluated by page index filters. The metric reports both how many rows were considered in total and how many matched (were not pruned).
 - `page_index_pages_pruned`: number of pages evaluated by page index filters. The metric reports both how many pages were considered in total and how many matched (were not pruned).
 - `row_groups_pruned_bloom_filter`: number of row groups evaluated by Bloom Filters, reporting both total checked groups and groups that matched.

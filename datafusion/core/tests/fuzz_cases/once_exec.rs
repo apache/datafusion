@@ -24,7 +24,6 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
 
@@ -78,10 +77,6 @@ impl DisplayAs for OnceExec {
 impl ExecutionPlan for OnceExec {
     fn name(&self) -> &'static str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

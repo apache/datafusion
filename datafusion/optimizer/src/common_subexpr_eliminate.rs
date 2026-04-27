@@ -325,11 +325,7 @@ impl CommonSubexprEliminate {
                                 .map(|expr| Some(name_preserver.save(expr)))
                                 .collect::<Vec<_>>()
                         } else {
-                            new_aggr_expr
-                                .clone()
-                                .into_iter()
-                                .map(|_| None)
-                                .collect::<Vec<_>>()
+                            (0..new_aggr_expr.len()).map(|_| None).collect()
                         };
 
                         let mut agg_exprs = common_exprs
@@ -590,8 +586,12 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_) => {
                 // This rule handles recursion itself in a `ApplyOrder::TopDown` like
-                // manner.
-                plan.map_children(|c| self.rewrite(c, config))?
+                // manner. Process uncorrelated subqueries in expressions
+                // (e.g., Expr::ScalarSubquery), then direct children.
+                plan.map_uncorrelated_subqueries(|c| self.rewrite(c, config))?
+                    .transform_sibling(|plan| {
+                        plan.map_children(|c| self.rewrite(c, config))
+                    })?
             }
         };
 

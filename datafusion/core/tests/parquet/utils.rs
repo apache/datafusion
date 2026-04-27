@@ -47,7 +47,7 @@ impl MetricsFinder {
 impl ExecutionPlanVisitor for MetricsFinder {
     type Error = std::convert::Infallible;
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
             && data_source_exec
                 .downcast_to_file_source::<ParquetSource>()
                 .is_some()

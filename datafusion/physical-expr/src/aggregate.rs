@@ -126,10 +126,6 @@ impl AggregateExprBuilder {
     /// # }
     /// #
     /// # impl AggregateUDFImpl for FirstValueUdf {
-    /// #     fn as_any(&self) -> &dyn Any {
-    /// #         unimplemented!()
-    /// #     }
-    /// #
     /// #     fn name(&self) -> &str {
     /// #         unimplemented!()
     /// #     }

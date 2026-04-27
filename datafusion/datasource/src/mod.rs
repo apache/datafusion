@@ -38,6 +38,7 @@ pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
+pub mod morsel;
 pub mod projection;
 pub mod schema_adapter;
 pub mod sink;

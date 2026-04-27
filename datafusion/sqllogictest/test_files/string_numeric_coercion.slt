@@ -1,0 +1,584 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Tests for string-numeric comparison coercion
+## Verifies that when comparing a numeric column to a string literal,
+## the comparison is performed numerically (not lexicographically).
+## See: https://github.com/apache/datafusion/issues/15161
+##########
+
+# Setup test data
+statement ok
+CREATE TABLE t_int AS VALUES (1), (5), (325), (499), (1000);
+
+statement ok
+CREATE TABLE t_float AS VALUES (1.5), (5.0), (325.7), (499.9), (1000.1);
+
+# -------------------------------------------------
+# Integer column with comparison operators vs string literals.
+# Ensure that the comparison is done with numeric semantics,
+# not lexicographically.
+# -------------------------------------------------
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 < '5';
+----
+1
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 > '5';
+----
+1000
+325
+499
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 <= '5';
+----
+1
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 >= '5';
+----
+1000
+325
+499
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 = '5';
+----
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 != '5';
+----
+1
+1000
+325
+499
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 < '10';
+----
+1
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 <= '100';
+----
+1
+5
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 > '100';
+----
+1000
+325
+499
+
+# -------------------------------------------------
+# Float column with comparison operators vs string literals
+# -------------------------------------------------
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 < '5';
+----
+1.5
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 > '5';
+----
+1000.1
+325.7
+499.9
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 = '5';
+----
+5
+
+query R rowsort
+SELECT * FROM t_float WHERE column1 = '5.0';
+----
+5
+
+# -------------------------------------------------
+# Error on strings that cannot be cast to the numeric column type
+# -------------------------------------------------
+
+# Non-numeric string against integer column
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT * FROM t_int WHERE column1 < 'hello';
+
+# Non-numeric string against float column
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Float64 type
+SELECT * FROM t_float WHERE column1 < 'hello';
+
+# Float string against integer column
+statement error Arrow error: Cast error: Cannot cast string '99.99' to value of Int64 type
+SELECT * FROM t_int WHERE column1 = '99.99';
+
+# Empty string against integer column
+statement error Arrow error: Cast error: Cannot cast string '' to value of Int64 type
+SELECT * FROM t_int WHERE column1 = '';
+
+# Empty string against float column
+statement error Arrow error: Cast error: Cannot cast string '' to value of Float64 type
+SELECT * FROM t_float WHERE column1 = '';
+
+# Overflow
+statement error Arrow error: Cast error: Cannot cast string '99999999999999999999' to value of Int64 type
+SELECT * FROM t_int WHERE column1 = '99999999999999999999';
+
+
+# -------------------------------------------------
+# UNION still uses string coercion (type unification context)
+# -------------------------------------------------
+
+statement ok
+CREATE TABLE t_str AS VALUES ('one'), ('two'), ('three');
+
+query T rowsort
+SELECT column1 FROM t_int UNION ALL SELECT column1 FROM t_str;
+----
+1
+1000
+325
+499
+5
+one
+three
+two
+
+# Verify the UNION coerces to Utf8 (not numeric)
+query TT
+EXPLAIN SELECT column1 FROM t_int UNION ALL SELECT column1 FROM t_str;
+----
+logical_plan
+01)Union
+02)--Projection: CAST(t_int.column1 AS Utf8) AS column1
+03)----TableScan: t_int projection=[column1]
+04)--TableScan: t_str projection=[column1]
+physical_plan
+01)UnionExec
+02)--ProjectionExec: expr=[CAST(column1@0 AS Utf8) as column1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# -------------------------------------------------
+# BETWEEN uses comparison coercion (numeric preferred)
+# -------------------------------------------------
+
+query I rowsort
+SELECT * FROM t_int WHERE column1 BETWEEN '5' AND '100';
+----
+5
+
+# -------------------------------------------------
+# IN list uses comparison coercion (numeric preferred)
+# `x IN (a, b)` is semantically equivalent to `x = a OR x = b`
+# -------------------------------------------------
+
+# Basic IN list with string literals against integer column
+query I rowsort
+SELECT * FROM t_int WHERE column1 IN ('5', '325');
+----
+325
+5
+
+# IN list with a value where numeric coercion matters
+query I rowsort
+SELECT * FROM t_int WHERE column1 IN ('1000');
+----
+1000
+
+# IN list with NOT
+query I rowsort
+SELECT * FROM t_int WHERE column1 NOT IN ('1', '5');
+----
+1000
+325
+499
+
+# IN list with float column
+query R rowsort
+SELECT * FROM t_float WHERE column1 IN ('5.0', '325.7');
+----
+325.7
+5
+
+# Verify the plan shows numeric coercion (not CAST to Utf8)
+query TT
+EXPLAIN SELECT * FROM t_int WHERE column1 IN ('5', '325');
+----
+logical_plan
+01)Filter: t_int.column1 = Int64(5) OR t_int.column1 = Int64(325)
+02)--TableScan: t_int projection=[column1]
+physical_plan
+01)FilterExec: column1@0 = 5 OR column1@0 = 325
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Error on invalid string in IN list
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT * FROM t_int WHERE column1 IN ('5', 'hello');
+
+# Mixed numeric literal and string literal in IN list against integer column
+query I rowsort
+SELECT * FROM t_int WHERE column1 IN (5, '325');
+----
+325
+5
+
+# Mixed numeric literal and string literal in IN list against float column
+query R rowsort
+SELECT * FROM t_float WHERE column1 IN (5, '325.7');
+----
+325.7
+5
+
+# String and numeric literal order reversed
+query R rowsort
+SELECT * FROM t_float WHERE column1 IN ('5', 325.7);
+----
+325.7
+5
+
+# Float string literal against integer column errors (cannot cast '10.0' to Int64)
+statement error Arrow error: Cast error: Cannot cast string '10.0' to value of Int64 type
+SELECT * FROM t_int WHERE column1 IN (5, '10.0');
+
+# Non-numeric string in mixed IN list still errors
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT * FROM t_int WHERE column1 IN ('hello', 5);
+
+# -------------------------------------------------
+# CASE WHEN uses comparison coercion for conditions (numeric preferred)
+# `CASE expr WHEN val` is semantically equivalent to `expr = val`
+# -------------------------------------------------
+
+# Basic CASE with integer column and string WHEN values
+query T rowsort
+SELECT CASE column1 WHEN '5' THEN 'five' WHEN '1000' THEN 'thousand' ELSE 'other' END FROM t_int;
+----
+five
+other
+other
+other
+thousand
+
+# CASE with float column: '5' is cast to 5.0 numerically, matching the row.
+# (Under string comparison, '5.0' != '5' would fail to match.)
+query T rowsort
+SELECT CASE column1 WHEN '5' THEN 'matched' ELSE 'no match' END FROM t_float;
+----
+matched
+no match
+no match
+no match
+no match
+
+# THEN/ELSE results still use type union coercion (string preferred),
+# so mixing numeric and string coerces to string
+query T rowsort
+SELECT CASE WHEN column1 > 500 THEN column1 ELSE 'small' END FROM t_int;
+----
+1000
+small
+small
+small
+small
+
+# -------------------------------------------------
+# GREATEST / LEAST use comparison coercion (numeric preferred)
+# -------------------------------------------------
+
+# GREATEST with mixed int and string: numeric comparison, not lexicographic.
+query I
+SELECT GREATEST(10, '9');
+----
+10
+
+query T
+SELECT arrow_typeof(GREATEST(10, '9'));
+----
+Int64
+
+# LEAST with mixed int and string: numeric comparison.
+query I
+SELECT LEAST(10, '9');
+----
+9
+
+query T
+SELECT arrow_typeof(LEAST(10, '9'));
+----
+Int64
+
+# GREATEST with multiple mixed args
+query I
+SELECT GREATEST(1, '20', 3);
+----
+20
+
+# Non-numeric string in GREATEST errors
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT GREATEST(1, 'hello');
+
+# -------------------------------------------------
+# NULLIF uses comparison coercion (numeric preferred)
+# -------------------------------------------------
+
+# NULLIF with mixed int and string: numeric comparison.
+# 10 != 9 numerically, so returns 10.
+query I
+SELECT NULLIF(10, '9');
+----
+10
+
+query T
+SELECT arrow_typeof(NULLIF(10, '9'));
+----
+Int64
+
+# NULLIF with matching values: 10 = 10 numerically, so returns NULL.
+query I
+SELECT NULLIF(10, '10');
+----
+NULL
+
+# -------------------------------------------------
+# Nested struct/map/list comparisons use comparison coercion
+# (numeric preferred) for their field/element types
+# -------------------------------------------------
+
+statement ok
+CREATE TABLE t_struct_int AS SELECT named_struct('val', column1) as s FROM (VALUES (1), (5), (10));
+
+statement ok
+CREATE TABLE t_struct_str AS SELECT named_struct('val', column1) as s FROM (VALUES ('5'), ('10'));
+
+# Struct comparison: the string field is cast to Int64 (numeric preferred).
+query ? rowsort
+SELECT t1.s FROM t_struct_int t1, t_struct_str t2 WHERE t1.s = t2.s;
+----
+{val: 10}
+{val: 5}
+
+# Struct in UNION uses type union coercion (string preferred).
+# The integer struct field is cast to Utf8.
+query ? rowsort
+SELECT s FROM t_struct_int UNION ALL SELECT s FROM t_struct_str;
+----
+{val: 10}
+{val: 10}
+{val: 1}
+{val: 5}
+{val: 5}
+
+statement ok
+DROP TABLE t_struct_int;
+
+statement ok
+DROP TABLE t_struct_str;
+
+# List comparison: string elements are cast to Int64 (numeric preferred).
+statement ok
+CREATE TABLE t_list_int AS SELECT column1 as l FROM (VALUES ([1, 5, 10]), ([20, 30]));
+
+statement ok
+CREATE TABLE t_list_str AS SELECT column1 as l FROM (VALUES (['5', '10']), (['20', '30']));
+
+# Verify the element types are Int64 and Utf8 respectively
+query T
+SELECT arrow_typeof(l) FROM t_list_int LIMIT 1;
+----
+List(Int64)
+
+query T
+SELECT arrow_typeof(l) FROM t_list_str LIMIT 1;
+----
+List(Utf8)
+
+query ? rowsort
+SELECT t1.l FROM t_list_int t1, t_list_str t2 WHERE t1.l = t2.l;
+----
+[20, 30]
+
+# List comparison casts the string list to the numeric element type (Int64),
+# not the other way around.
+query TT
+EXPLAIN SELECT t1.l FROM t_list_int t1, t_list_str t2 WHERE t1.l = t2.l;
+----
+logical_plan
+01)Projection: t1.l
+02)--Inner Join: t1.l = CAST(t2.l AS List(Int64))
+03)----SubqueryAlias: t1
+04)------TableScan: t_list_int projection=[l]
+05)----SubqueryAlias: t2
+06)------TableScan: t_list_str projection=[l]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(l@0, CAST(t2.l AS List(Int64))@1)], projection=[l@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--ProjectionExec: expr=[l@0 as l, CAST(l@0 AS List(Int64)) as CAST(t2.l AS List(Int64))]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# List in UNION uses type union coercion (string preferred).
+# The integer list elements are cast to Utf8.
+query ? rowsort
+SELECT l FROM t_list_int UNION ALL SELECT l FROM t_list_str;
+----
+[1, 5, 10]
+[20, 30]
+[20, 30]
+[5, 10]
+
+# Verify the UNION result type has Utf8 elements (not Int64).
+query T
+SELECT arrow_typeof(l) FROM (SELECT l FROM t_list_int UNION ALL SELECT l FROM t_list_str) LIMIT 1;
+----
+List(Utf8)
+
+statement ok
+DROP TABLE t_list_int;
+
+statement ok
+DROP TABLE t_list_str;
+
+# Map comparison: string values are cast to Int64 (numeric preferred).
+statement ok
+CREATE TABLE t_map_int AS SELECT MAP {'a': 1, 'b': 5} as m;
+
+statement ok
+CREATE TABLE t_map_str AS SELECT MAP {'a': '1', 'b': '5'} as m;
+
+# Verify the value types are Int64 and Utf8 respectively
+query T
+SELECT arrow_typeof(m) FROM t_map_int LIMIT 1;
+----
+Map("entries": non-null Struct("key": non-null Utf8, "value": Int64), unsorted)
+
+query T
+SELECT arrow_typeof(m) FROM t_map_str LIMIT 1;
+----
+Map("entries": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)
+
+query ? rowsort
+SELECT t1.m FROM t_map_int t1, t_map_str t2 WHERE t1.m = t2.m;
+----
+{a: 1, b: 5}
+
+# Map in UNION uses type union coercion (string preferred).
+# The integer map values are cast to Utf8.
+query ? rowsort
+SELECT m FROM t_map_int UNION ALL SELECT m FROM t_map_str;
+----
+{a: 1, b: 5}
+{a: 1, b: 5}
+
+# Verify the UNION result type has Utf8 values (not Int64).
+query T
+SELECT arrow_typeof(m) FROM (SELECT m FROM t_map_int UNION ALL SELECT m FROM t_map_str) LIMIT 1;
+----
+Map("entries": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)
+
+statement ok
+DROP TABLE t_map_int;
+
+statement ok
+DROP TABLE t_map_str;
+
+# -------------------------------------------------
+# LIKE / regex on dictionary-encoded numeric columns should error,
+# consistent with LIKE on plain numeric columns
+# -------------------------------------------------
+
+# Plain integer column: LIKE is not supported
+statement error There isn't a common type to coerce Int64 and Utf8 in LIKE expression
+SELECT * FROM t_int WHERE column1 LIKE '%5%';
+
+# Dictionary-encoded integer column: should also error
+statement error There isn't a common type to coerce Dictionary\(Int32, Int64\) and Utf8 in LIKE expression
+SELECT arrow_cast(column1, 'Dictionary(Int32, Int64)') LIKE '%5%' FROM t_int;
+
+# Dictionary-encoded string column: LIKE works as normal
+query B rowsort
+SELECT arrow_cast('hello', 'Dictionary(Int32, Utf8)') LIKE '%ell%';
+----
+true
+
+# REE-encoded integer column: LIKE should also error
+statement error There isn't a common type to coerce RunEndEncoded.* and Utf8 in LIKE expression
+SELECT arrow_cast(column1, 'RunEndEncoded("run_ends": non-null Int32, "values": Int64)') LIKE '%5%' FROM t_int;
+
+# REE-encoded string column: LIKE works as normal
+query B rowsort
+SELECT arrow_cast('hello', 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)') LIKE '%ell%';
+----
+true
+
+# Dictionary-encoded integer column: regex should error
+statement error Cannot infer common argument type for regex operation
+SELECT arrow_cast(column1, 'Dictionary(Int32, Int64)') ~ '5' FROM t_int;
+
+# Dictionary-encoded string column: regex works as normal
+query B rowsort
+SELECT arrow_cast('hello', 'Dictionary(Int32, Utf8)') ~ 'ell';
+----
+true
+
+# REE-encoded integer column: regex should error
+statement error Cannot infer common argument type for regex operation
+SELECT arrow_cast(column1, 'RunEndEncoded("run_ends": non-null Int32, "values": Int64)') ~ '5' FROM t_int;
+
+# REE-encoded string column: regex works as normal
+query B rowsort
+SELECT arrow_cast('hello', 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)') ~ 'ell';
+----
+true
+
+# -------------------------------------------------
+# Cleanup
+# -------------------------------------------------
+
+statement ok
+DROP TABLE t_int;
+
+statement ok
+DROP TABLE t_float;
+
+statement ok
+DROP TABLE t_str;
+
+# -------------------------------------------------
+# List element coercion should reject mixed
+# numeric/string categories (same as array literals)
+# -------------------------------------------------
+
+# Array literal with mixed numeric/string elements errors
+query error Cannot cast string 'a' to value of Int64 type
+SELECT [1, 'a'];
+
+# MAP with mixed-category list keys should also error
+query error Cannot cast string 'a' to value of Int64 type
+SELECT MAP {[1,2,3]:1, ['a', 'b']:2};
+
+# MAP with mixed-category list values should also error
+query error Cannot cast string 'a' to value of Int64 type
+SELECT MAP {'a':[1,2,3], 'b':['a', 'b']};

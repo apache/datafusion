@@ -654,7 +654,7 @@ fn test_list_coercion() {
 
     let rhs_type = DataType::List(Arc::new(Field::new("rhs", DataType::Int64, true)));
 
-    let coerced_type = list_coercion(&lhs_type, &rhs_type).unwrap();
+    let coerced_type = list_coercion(&lhs_type, &rhs_type, comparison_coercion).unwrap();
     assert_eq!(
         coerced_type,
         DataType::List(Arc::new(Field::new("lhs", DataType::Int64, true)))
@@ -789,5 +789,111 @@ fn test_decimal_cross_variant_comparison_coercion() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Tests that `comparison_coercion` prefers the numeric type when one side is
+/// numeric and the other is a string (e.g., `numeric_col < '123'`).
+#[test]
+fn test_comparison_coercion_prefers_numeric() {
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Utf8),
+        Some(DataType::Int32)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Utf8, &DataType::Int32),
+        Some(DataType::Int32)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Utf8, &DataType::Float64),
+        Some(DataType::Float64)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Float64, &DataType::Utf8),
+        Some(DataType::Float64)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Int64, &DataType::LargeUtf8),
+        Some(DataType::Int64)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Utf8View, &DataType::Int16),
+        Some(DataType::Int16)
+    );
+    // String-string stays string
+    assert_eq!(
+        comparison_coercion(&DataType::Utf8, &DataType::Utf8),
+        Some(DataType::Utf8)
+    );
+    // Numeric-numeric stays numeric
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Int64),
+        Some(DataType::Int64)
+    );
+}
+
+/// Tests that `type_union_coercion` prefers the string type when unifying
+/// numeric and string types (for UNION, CASE THEN/ELSE, etc.).
+#[test]
+fn test_type_union_coercion_prefers_string() {
+    assert_eq!(
+        type_union_coercion(&DataType::Int32, &DataType::Utf8),
+        Some(DataType::Utf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Utf8, &DataType::Int32),
+        Some(DataType::Utf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Float64, &DataType::Utf8),
+        Some(DataType::Utf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Utf8, &DataType::Float64),
+        Some(DataType::Utf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Int64, &DataType::LargeUtf8),
+        Some(DataType::LargeUtf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Utf8View, &DataType::Int16),
+        Some(DataType::Utf8View)
+    );
+    // String-string stays string
+    assert_eq!(
+        type_union_coercion(&DataType::Utf8, &DataType::Utf8),
+        Some(DataType::Utf8)
+    );
+    // Numeric-numeric stays numeric
+    assert_eq!(
+        type_union_coercion(&DataType::Int32, &DataType::Int64),
+        Some(DataType::Int64)
+    );
+}
+
+/// Tests that comparison operators coerce to numeric when comparing
+/// numeric and string types.
+#[test]
+fn test_binary_comparison_string_numeric_coercion() -> Result<()> {
+    let comparison_ops = [
+        Operator::Eq,
+        Operator::NotEq,
+        Operator::Lt,
+        Operator::LtEq,
+        Operator::Gt,
+        Operator::GtEq,
+    ];
+    for op in &comparison_ops {
+        let (lhs, rhs) = BinaryTypeCoercer::new(&DataType::Int64, op, &DataType::Utf8)
+            .get_input_types()?;
+        assert_eq!(lhs, DataType::Int64, "Op {op}: Int64 vs Utf8 -> lhs");
+        assert_eq!(rhs, DataType::Int64, "Op {op}: Int64 vs Utf8 -> rhs");
+
+        let (lhs, rhs) = BinaryTypeCoercer::new(&DataType::Utf8, op, &DataType::Float64)
+            .get_input_types()?;
+        assert_eq!(lhs, DataType::Float64, "Op {op}: Utf8 vs Float64 -> lhs");
+        assert_eq!(rhs, DataType::Float64, "Op {op}: Utf8 vs Float64 -> rhs");
+    }
     Ok(())
 }

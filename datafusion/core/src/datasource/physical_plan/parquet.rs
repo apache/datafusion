@@ -234,7 +234,8 @@ mod tests {
             let analyze_exec = Arc::new(AnalyzeExec::new(
                 false,
                 false,
-                vec![MetricType::SUMMARY, MetricType::DEV],
+                vec![MetricType::Summary, MetricType::Dev],
+                None,
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
                     file_group.clone(),
@@ -1703,7 +1704,7 @@ mod tests {
         let state = session_ctx.state();
         let location = Path::from_filesystem_path(".")
             .unwrap()
-            .child("invalid.parquet");
+            .join("invalid.parquet");
 
         let partitioned_file = PartitionedFile::new_from_meta(ObjectMeta {
             location,

@@ -1,0 +1,177 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# StatisticsRegistry: demonstrates improved join ordering via more conservative
+# cardinality estimates on a skewed dataset.
+#
+# customers (10 rows, 3 distinct customer_ids, skewed 8:1:1)
+# orders    (10 rows, same distribution)
+# dim_small (50 rows)
+#
+# Built-in: 10*10 / NDV(3) = 33 < 50  -> keeps inner join on build side (wrong; actual = 66)
+# Registry: 10*10 = 100 > 50           -> swaps dim_small to build side (correct)
+#
+# Parquet files written by COPY TO carry min/max stats (NDV=3 via range) but no
+# distinct_count, so the registry falls back to the cartesian product upper bound.
+# Threshold settings force Partitioned mode so statistics alone drive the swap.
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 1;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 1;
+
+# -- Create test data --------------------------------------------------------
+
+query I
+COPY (SELECT arrow_cast(v, 'Int32') AS order_id,
+             arrow_cast(CASE WHEN v <= 8 THEN 1
+                             WHEN v <= 9 THEN 2
+                             ELSE 3 END, 'Int32') AS customer_id,
+             arrow_cast(v, 'Int32') AS small_id
+      FROM generate_series(1, 10) t(v))
+TO 'test_files/scratch/statistics_registry/orders.parquet'
+STORED AS PARQUET;
+----
+10
+
+query I
+COPY (SELECT arrow_cast(CASE WHEN v <= 8 THEN 1
+                             WHEN v <= 9 THEN 2
+                             ELSE 3 END, 'Int32') AS customer_id,
+             arrow_cast(v, 'Int32') AS region_id
+      FROM generate_series(1, 10) t(v))
+TO 'test_files/scratch/statistics_registry/customers.parquet'
+STORED AS PARQUET;
+----
+10
+
+query I
+COPY (SELECT arrow_cast(v, 'Int32') AS small_id,
+             arrow_cast(v, 'Int32') AS label
+      FROM generate_series(1, 50) t(v))
+TO 'test_files/scratch/statistics_registry/dim_small.parquet'
+STORED AS PARQUET;
+----
+50
+
+statement ok
+CREATE EXTERNAL TABLE orders
+STORED AS PARQUET
+LOCATION 'test_files/scratch/statistics_registry/orders.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE customers
+STORED AS PARQUET
+LOCATION 'test_files/scratch/statistics_registry/customers.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE dim_small
+STORED AS PARQUET
+LOCATION 'test_files/scratch/statistics_registry/dim_small.parquet';
+
+# -- Without registry --------------------------------------------------------
+# Built-in estimate 33 < 50: inner join stays on left (suboptimal; actual output is 66 rows)
+
+statement ok
+set datafusion.optimizer.use_statistics_registry = false;
+
+query TT
+EXPLAIN SELECT o.order_id, c.region_id, d.label
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+JOIN dim_small d ON o.small_id = d.small_id;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(small_id@2, small_id@0)], projection=[order_id@1, region_id@0, label@4]
+02)--RepartitionExec: partitioning=Hash([small_id@2], 4), input_partitions=1
+03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(customer_id@0, customer_id@1)], projection=[region_id@1, order_id@2, small_id@4]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/customers.parquet]]}, projection=[customer_id, region_id], file_type=parquet
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], file_type=parquet, predicate=DynamicFilter [ empty ]
+06)--RepartitionExec: partitioning=Hash([small_id@0], 4), input_partitions=1
+07)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/dim_small.parquet]]}, projection=[small_id, label], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# -- With registry -----------------------------------------------------------
+# Conservative estimate 100 > 50: dim_small correctly swapped to build side
+
+statement ok
+set datafusion.optimizer.use_statistics_registry = true;
+
+query TT
+EXPLAIN SELECT o.order_id, c.region_id, d.label
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+JOIN dim_small d ON o.small_id = d.small_id;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(small_id@0, small_id@2)], projection=[order_id@3, region_id@2, label@1]
+02)--RepartitionExec: partitioning=Hash([small_id@0], 4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/dim_small.parquet]]}, projection=[small_id, label], file_type=parquet
+04)--RepartitionExec: partitioning=Hash([small_id@2], 4), input_partitions=1
+05)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(customer_id@0, customer_id@1)], projection=[region_id@1, order_id@2, small_id@4]
+06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/customers.parquet]]}, projection=[customer_id, region_id], file_type=parquet
+07)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ]
+
+# -- Verify results are identical regardless of join order --------------------
+
+statement ok
+set datafusion.optimizer.use_statistics_registry = false;
+
+query I
+SELECT count(*)
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+JOIN dim_small d ON o.small_id = d.small_id;
+----
+66
+
+statement ok
+set datafusion.optimizer.use_statistics_registry = true;
+
+query I
+SELECT count(*)
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+JOIN dim_small d ON o.small_id = d.small_id;
+----
+66
+
+# -- Cleanup -----------------------------------------------------------------
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.use_statistics_registry = false;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 1048576;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 131072;
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE customers;
+
+statement ok
+DROP TABLE dim_small;

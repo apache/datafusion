@@ -26,6 +26,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Not;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::nested_struct::has_one_of_more_common_fields;
@@ -498,8 +499,6 @@ struct ConstEvaluator {
     /// The `config_options` are passed from the session to allow scalar functions
     /// to access configuration like timezone.
     execution_props: ExecutionProps,
-    input_schema: DFSchema,
-    input_batch: RecordBatch,
 }
 
 /// The simplify result of ConstEvaluator
@@ -575,6 +574,18 @@ impl TreeNodeRewriter for ConstEvaluator {
     }
 }
 
+static DUMMY_SCHEMA: LazyLock<Arc<Schema>> =
+    LazyLock::new(|| Arc::new(Schema::new(vec![Field::new(".", DataType::Null, true)])));
+
+static DUMMY_DF_SCHEMA: LazyLock<DFSchema> =
+    LazyLock::new(|| DFSchema::try_from(Arc::clone(&*DUMMY_SCHEMA)).unwrap());
+
+static DUMMY_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
+    // Need a single "input" row to produce a single output row
+    let col = new_null_array(&DataType::Null, 1);
+    RecordBatch::try_new(DUMMY_SCHEMA.clone(), vec![col]).unwrap()
+});
+
 impl ConstEvaluator {
     /// Create a new `ConstantEvaluator`.
     ///
@@ -588,16 +599,6 @@ impl ConstEvaluator {
     pub fn try_new(config_options: Option<Arc<ConfigOptions>>) -> Result<Self> {
         // The dummy column name is unused and doesn't matter as only
         // expressions without column references can be evaluated
-        static DUMMY_COL_NAME: &str = ".";
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            DUMMY_COL_NAME,
-            DataType::Null,
-            true,
-        )]));
-        let input_schema = DFSchema::try_from(Arc::clone(&schema))?;
-        // Need a single "input" row to produce a single output row
-        let col = new_null_array(&DataType::Null, 1);
-        let input_batch = RecordBatch::try_new(schema, vec![col])?;
 
         let mut execution_props = ExecutionProps::new();
         execution_props.config_options = config_options;
@@ -605,8 +606,6 @@ impl ConstEvaluator {
         Ok(Self {
             can_evaluate: vec![],
             execution_props,
-            input_schema,
-            input_batch,
         })
     }
 
@@ -702,16 +701,13 @@ impl ConstEvaluator {
             return ConstSimplifyResult::NotSimplified(s, m);
         }
 
-        let phys_expr = match create_physical_expr(
-            &expr,
-            &self.input_schema,
-            &self.execution_props,
-        ) {
-            Ok(e) => e,
-            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
-        };
+        let phys_expr =
+            match create_physical_expr(&expr, &DUMMY_DF_SCHEMA, &self.execution_props) {
+                Ok(e) => e,
+                Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+            };
         let metadata = phys_expr
-            .return_field(self.input_batch.schema_ref())
+            .return_field(DUMMY_BATCH.schema_ref())
             .ok()
             .and_then(|f| {
                 let m = f.metadata();
@@ -720,7 +716,7 @@ impl ConstEvaluator {
                     false => Some(FieldMetadata::from(m)),
                 }
             });
-        let col_val = match phys_expr.evaluate(&self.input_batch) {
+        let col_val = match phys_expr.evaluate(&DUMMY_BATCH) {
             Ok(v) => v,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
         };
@@ -1698,10 +1694,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
                             {
                                 // Repeated occurrences of wildcard are redundant so remove them
                                 // exp LIKE '%%'  --> exp LIKE '%'
-                                let simplified_pattern = Regex::new("%%+")
-                                    .unwrap()
-                                    .replace_all(pattern_str, "%")
-                                    .to_string();
+
+                                static LIKE_REGEX: LazyLock<Regex> =
+                                    LazyLock::new(|| Regex::new("%%+").unwrap());
+                                let simplified_pattern =
+                                    LIKE_REGEX.replace_all(pattern_str, "%").to_string();
                                 Transformed::yes(Expr::Like(Like {
                                     pattern: Box::new(
                                         string_scalar.to_expr(&simplified_pattern),
@@ -1787,6 +1784,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
                 let lhs = to_inlist(*left).unwrap();
                 let rhs = to_inlist(*right).unwrap();
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut seen: HashSet<Expr> = HashSet::new();
                 let list = lhs
                     .list
@@ -2177,6 +2176,7 @@ impl<'a> StringScalar<'a> {
     }
 }
 
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
     let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
     iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
@@ -2261,6 +2261,7 @@ fn to_inlist(expr: Expr) -> Option<InList> {
 
 /// Return the union of two inlist expressions
 /// maintaining the order of the elements in the two lists
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
     // extend the list in l1 with the elements in l2 that are not already in l1
     let l1_items: HashSet<_> = l1.list.iter().collect();
@@ -2279,6 +2280,7 @@ fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
 
 /// Return the intersection of two inlist expressions
 /// maintaining the order of the elements in the two lists
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn inlist_intersection(mut l1: InList, l2: &InList, negated: bool) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
@@ -2295,6 +2297,7 @@ fn inlist_intersection(mut l1: InList, l2: &InList, negated: bool) -> Result<Exp
 
 /// Return the all items in l1 that are not in l2
 /// maintaining the order of the elements in the two lists
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
@@ -4961,10 +4964,6 @@ mod tests {
     }
 
     impl AggregateUDFImpl for SimplifyMockUdaf {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "mock_simplify"
         }
@@ -5042,10 +5041,6 @@ mod tests {
     }
 
     impl WindowUDFImpl for SimplifyMockUdwf {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "mock_simplify"
         }

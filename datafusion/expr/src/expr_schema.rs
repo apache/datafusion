@@ -65,6 +65,24 @@ pub trait ExprSchemable {
     -> Result<(DataType, bool)>;
 }
 
+/// Derives the output field for a cast expression from the source field.
+/// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
+fn cast_output_field(
+    source_field: &FieldRef,
+    target_type: &DataType,
+    force_nullable: bool,
+) -> Arc<Field> {
+    let mut f = source_field
+        .as_ref()
+        .clone()
+        .with_data_type(target_type.clone())
+        .with_metadata(source_field.metadata().clone());
+    if force_nullable {
+        f = f.with_nullable(true);
+    }
+    Arc::new(f)
+}
+
 impl ExprSchemable for Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression
     /// based on [ExprSchema]
@@ -553,33 +571,25 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, field }) => expr
-                .to_field(schema)
-                .map(|(_table_ref, destination_field)| {
-                    // This propagates the nullability of the input rather than
-                    // force the nullability of the destination field. This is
-                    // usually the desired behaviour (i.e., specifying a cast
-                    // destination type usually does not force a user to pick
-                    // nullability, and assuming `true` would prevent the non-nullability
-                    // of the parent expression to make the result eligible for
-                    // optimizations that only apply to non-nullable values).
-                    destination_field
-                        .as_ref()
-                        .clone()
-                        .with_data_type(field.data_type().clone())
-                        .with_metadata(destination_field.metadata().clone())
+            Expr::Cast(Cast { expr, field }) => {
+                expr.to_field(schema).map(|(_table_ref, src)| {
+                    cast_output_field(&src, field.data_type(), false)
                 })
-                .map(Arc::new),
+            }
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::TryCast(TryCast { expr, field }) => {
+                expr.to_field(schema).map(|(_table_ref, src)| {
+                    cast_output_field(&src, field.data_type(), true)
+                })
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
             | Expr::Case(_)
-            | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)

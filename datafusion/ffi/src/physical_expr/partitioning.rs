@@ -17,20 +17,19 @@
 
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::RVec;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use stabby::vec::Vec as SVec;
 
 use crate::physical_expr::FFI_PhysicalExpr;
 
 /// A stable struct for sharing [`Partitioning`] across FFI boundaries.
 /// See ['Partitioning'] for the meaning of each variant.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub enum FFI_Partitioning {
     RoundRobinBatch(usize),
-    Hash(RVec<FFI_PhysicalExpr>, usize),
+    Hash(SVec<FFI_PhysicalExpr>, usize),
     UnknownPartitioning(usize),
 }
 

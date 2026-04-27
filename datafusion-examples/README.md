@@ -126,6 +126,16 @@ cargo run --example dataframe -- dataframe
 | mem_pool_tracking  | [`execution_monitoring/memory_pool_tracking.rs`](examples/execution_monitoring/memory_pool_tracking.rs)             | Demonstrates memory tracking             |
 | tracing            | [`execution_monitoring/tracing.rs`](examples/execution_monitoring/tracing.rs)                                       | Demonstrates tracing integration         |
 
+## Extension Types Examples
+
+### Group: `extension_types`
+
+#### Category: Single Process
+
+| Subcommand  | File Path                                                                   | Description                          |
+| ----------- | --------------------------------------------------------------------------- | ------------------------------------ |
+| temperature | [`extension_types/temperature.rs`](examples/extension_types/temperature.rs) | Extension type for temperature data. |
+
 ## External Dependency Examples
 
 ### Group: `external_dependency`
@@ -208,13 +218,14 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand | File Path                                               | Description                                     |
-| ---------- | ------------------------------------------------------- | ----------------------------------------------- |
-| adv_udaf   | [`udf/advanced_udaf.rs`](examples/udf/advanced_udaf.rs) | Advanced User Defined Aggregate Function (UDAF) |
-| adv_udf    | [`udf/advanced_udf.rs`](examples/udf/advanced_udf.rs)   | Advanced User Defined Scalar Function (UDF)     |
-| adv_udwf   | [`udf/advanced_udwf.rs`](examples/udf/advanced_udwf.rs) | Advanced User Defined Window Function (UDWF)    |
-| async_udf  | [`udf/async_udf.rs`](examples/udf/async_udf.rs)         | Asynchronous User Defined Scalar Function       |
-| udaf       | [`udf/simple_udaf.rs`](examples/udf/simple_udaf.rs)     | Simple UDAF example                             |
-| udf        | [`udf/simple_udf.rs`](examples/udf/simple_udf.rs)       | Simple UDF example                              |
-| udtf       | [`udf/simple_udtf.rs`](examples/udf/simple_udtf.rs)     | Simple UDTF example                             |
-| udwf       | [`udf/simple_udwf.rs`](examples/udf/simple_udwf.rs)     | Simple UDWF example                             |
+| Subcommand      | File Path                                                   | Description                                     |
+| --------------- | ----------------------------------------------------------- | ----------------------------------------------- |
+| adv_udaf        | [`udf/advanced_udaf.rs`](examples/udf/advanced_udaf.rs)     | Advanced User Defined Aggregate Function (UDAF) |
+| adv_udf         | [`udf/advanced_udf.rs`](examples/udf/advanced_udf.rs)       | Advanced User Defined Scalar Function (UDF)     |
+| adv_udwf        | [`udf/advanced_udwf.rs`](examples/udf/advanced_udwf.rs)     | Advanced User Defined Window Function (UDWF)    |
+| async_udf       | [`udf/async_udf.rs`](examples/udf/async_udf.rs)             | Asynchronous User Defined Scalar Function       |
+| udaf            | [`udf/simple_udaf.rs`](examples/udf/simple_udaf.rs)         | Simple UDAF example                             |
+| udf             | [`udf/simple_udf.rs`](examples/udf/simple_udf.rs)           | Simple UDF example                              |
+| udtf            | [`udf/simple_udtf.rs`](examples/udf/simple_udtf.rs)         | Simple UDTF example                             |
+| udwf            | [`udf/simple_udwf.rs`](examples/udf/simple_udwf.rs)         | Simple UDWF example                             |
+| table_list_udtf | [`udf/table_list_udtf.rs`](examples/udf/table_list_udtf.rs) | Session-aware UDTF table list example           |

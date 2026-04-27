@@ -47,12 +47,12 @@ impl OptimizerRule for PushDownLimit {
         true
     }
 
+    #[expect(clippy::only_used_in_recursion)]
     fn rewrite(
         &self,
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let _ = config.options();
         let LogicalPlan::Limit(mut limit) = plan else {
             return Ok(Transformed::no(plan));
         };
