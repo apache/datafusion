@@ -157,7 +157,6 @@ mod tests {
         buffer::NullBuffer,
         datatypes::{Field, Fields, Int64Type},
     };
-    use datafusion_common::assert_batches_eq;
 
     use super::*;
 
@@ -280,26 +279,27 @@ mod tests {
         let rhs_b = Arc::new(StringArray::from(vec![Some("1"), Some("2"), None]));
         let rhs_nulls = Some(NullBuffer::from(vec![true, true, false]));
         let rhs = ColumnarValue::Array(Arc::new(StructArray::new(
-            fields,
+            fields.clone(),
             vec![rhs_a, rhs_b],
             rhs_nulls,
         )));
 
         let result = nullif_func(&[lhs, rhs])?;
         let result = result.into_array(0).expect("Failed to convert to array");
-        let batch = RecordBatch::try_from_iter([("result", result)])?;
 
-        let expected = [
-            "+--------------+",
-            "| result       |",
-            "+--------------+",
-            "|              |",
-            "| {a: 2, b: 2} |",
-            "|              |",
-            "+--------------+",
+        let expected_arrays = vec![
+            Arc::new(Int64Array::from(vec![None, Some(2), None])) as ArrayRef,
+            Arc::new(StringArray::from(vec![None, Some("2"), None])) as ArrayRef,
         ];
+        let expected_nulls = NullBuffer::from(vec![false, true, false]);
 
-        assert_batches_eq!(expected, &[batch]);
+        let expected = Arc::new(StructArray::try_new(
+            fields,
+            expected_arrays,
+            Some(expected_nulls),
+        )?) as ArrayRef;
+
+        assert_eq!(expected.as_ref(), result.as_ref());
 
         Ok(())
     }
@@ -323,21 +323,15 @@ mod tests {
         let result = nullif_func(&[lhs, rhs])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
-        let batch = RecordBatch::try_from_iter([("result", result)])?;
+        let expected = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            None,
+            Some(vec![Some(3)]),
+            Some(vec![]),
+            Some(vec![Some(5), Some(6), Some(7)]),
+            None,
+        ])) as ArrayRef;
 
-        let expected = [
-            "+-----------+",
-            "| result    |",
-            "+-----------+",
-            "|           |",
-            "| [3]       |",
-            "| []        |",
-            "| [5, 6, 7] |",
-            "|           |",
-            "+-----------+",
-        ];
-
-        assert_batches_eq!(expected, &[batch]);
+        assert_eq!(expected.as_ref(), result.as_ref());
 
         Ok(())
     }
