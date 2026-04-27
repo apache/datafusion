@@ -18,6 +18,7 @@
 //! Utility functions for expression simplification
 
 use arrow::datatypes::i256;
+use datafusion_common::cse::NormalizeEq;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     Case, Expr, Like, Operator,
@@ -68,13 +69,19 @@ pub static POWS_OF_TEN: [i128; 38] = [
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
+///
+/// Equality is checked via [`NormalizeEq`] so that commutative operands
+/// (e.g. `A = B` and `B = A`) are recognized as the same predicate, even
+/// when the [`Canonicalizer`](super::expr_simplifier::ExprSimplifier) has
+/// been disabled (notably for `LogicalPlan::Join` filters per
+/// <https://github.com/apache/datafusion/pull/8780>).
 fn expr_contains_inner(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == search_op => {
             expr_contains_inner(left, needle, search_op)
                 || expr_contains_inner(right, needle, search_op)
         }
-        _ => expr == needle,
+        _ => expr.normalize_eq(needle),
     }
 }
 
