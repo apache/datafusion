@@ -1,0 +1,201 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for Spark-compatible array_exists (alias: exists) higher-order function.
+# Spark semantics (three-valued logic):
+#  - returns true if the predicate holds for at least one element
+#  - returns false if the predicate evaluates to false for every non-null element
+#    and there are no null elements / null predicate results
+#  - returns null if no element evaluates to true and at least one element produced
+#    a null predicate result (including null elements), or if the array is null
+#  - empty array returns false
+
+###
+### Scalar happy paths
+###
+
+query B
+SELECT array_exists(array(1, 2, 3), x -> x > 2);
+----
+true
+
+query B
+SELECT array_exists(array(1, 2, 3), x -> x > 10);
+----
+false
+
+query B
+SELECT array_exists(array(1, 2, 3), x -> x % 2 = 0);
+----
+true
+
+# String predicate
+query B
+SELECT array_exists(array('a', 'b', 'c'), x -> x = 'b');
+----
+true
+
+query B
+SELECT array_exists(array('a', 'b', 'c'), x -> x = 'z');
+----
+false
+
+###
+### Three-valued logic (null semantics)
+###
+
+# All elements false, one element null -> null
+query B
+SELECT array_exists(array(1, NULL, 3), x -> x > 10);
+----
+NULL
+
+# Predicate evaluates to true for a non-null element, nulls present -> true
+query B
+SELECT array_exists(array(1, NULL, 3), x -> x > 2);
+----
+true
+
+# Predicate is explicitly `x IS NULL` - Spark returns false here because
+# the null element gets stripped before the predicate is applied and the
+# predicate produces false for each non-null element.
+query B
+SELECT array_exists(array(1, 2, 3), x -> x IS NULL);
+----
+false
+
+###
+### Empty and null input
+###
+
+# Empty literal array -> false
+query B
+SELECT array_exists(array(), x -> x > 0);
+----
+false
+
+# NULL array -> NULL
+query B
+SELECT array_exists(CAST(NULL AS ARRAY<INT>), x -> x > 0);
+----
+NULL
+
+# Array entirely of nulls, no true predicate -> NULL
+query B
+SELECT array_exists(array(CAST(NULL AS INT), NULL), x -> x > 0);
+----
+NULL
+
+###
+### `exists` alias (Spark's native function name)
+###
+### NOTE: Spark names this function `exists`, but registering it as such
+### is currently not usable from SQL because the DataFusion / sqlparser
+### parser treats the bare `EXISTS` token as a reserved keyword for
+### `EXISTS (<subquery>)`. Only the `array_exists` name is exposed here.
+
+###
+### Columnar evaluation against a table
+###
+
+statement ok
+CREATE TABLE test_arrays AS VALUES
+  (1, make_array(1, 2, 3)),
+  (2, make_array(4, NULL, 6)),
+  (3, make_array(7, 8, 9)),
+  (4, CAST(NULL AS ARRAY<INT>)),
+  (5, make_array(CAST(NULL AS INT), NULL)),
+  (6, make_array());
+
+query IB
+SELECT column1, array_exists(column2, x -> x > 5)
+FROM test_arrays
+ORDER BY column1;
+----
+1 false
+2 true
+3 true
+4 NULL
+5 NULL
+6 false
+
+query IB
+SELECT column1, array_exists(column2, x -> x = 2)
+FROM test_arrays
+ORDER BY column1;
+----
+1 true
+2 NULL
+3 false
+4 NULL
+5 NULL
+6 false
+
+statement ok
+DROP TABLE test_arrays;
+
+###
+### Large list support
+###
+
+query B
+SELECT array_exists(arrow_cast(make_array(1, 2, 3), 'LargeList(Int32)'), x -> x > 2);
+----
+true
+
+query B
+SELECT array_exists(arrow_cast(make_array(1, 2, 3), 'LargeList(Int32)'), x -> x > 10);
+----
+false
+
+###
+### Nested higher-order functions
+###
+
+# Outer array_exists over an inner array_exists: does any inner array contain
+# a value greater than 10?
+query B
+SELECT array_exists(
+    array(array(1, 2), array(3, 20), array(5, 6)),
+    inner -> array_exists(inner, x -> x > 10)
+);
+----
+true
+
+query B
+SELECT array_exists(
+    array(array(1, 2), array(3, 4), array(5, 6)),
+    inner -> array_exists(inner, x -> x > 10)
+);
+----
+false
+
+###
+### Error cases
+###
+
+# Non-array first argument
+query error DataFusion error: Error during planning: array_exists expected a list as first argument, got Int64
+SELECT array_exists(1, x -> x > 0);
+
+# Missing lambda
+query error
+SELECT array_exists(array(1, 2, 3));
+
+# Non-boolean lambda body
+query error DataFusion error: Error during planning: array_exists predicate must return Boolean, got Int64
+SELECT array_exists(array(1, 2, 3), x -> x + 1);

@@ -15,11 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::ScalarUDF;
-use std::sync::Arc;
+pub mod array_exists;
 
-pub mod expr_fn {}
+use datafusion_expr::{Expr, HigherOrderUDF, ScalarUDF, expr::HigherOrderFunction};
+use std::sync::{Arc, LazyLock};
+
+pub fn array_exists_higher_order_function() -> Arc<dyn HigherOrderUDF> {
+    static INSTANCE: LazyLock<Arc<dyn HigherOrderUDF>> =
+        LazyLock::new(|| Arc::new(array_exists::SparkArrayExists::new()));
+    Arc::clone(&INSTANCE)
+}
+
+pub mod expr_fn {
+    use super::*;
+
+    /// Returns true if the predicate holds for at least one element of the array.
+    pub fn array_exists(array: Expr, lambda: Expr) -> Expr {
+        Expr::HigherOrderFunction(HigherOrderFunction::new(
+            array_exists_higher_order_function(),
+            vec![array, lambda],
+        ))
+    }
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![]
+}
+
+pub fn higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
+    vec![array_exists_higher_order_function()]
 }

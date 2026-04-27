@@ -54,6 +54,7 @@
 //! # struct SessionContext {}
 //! # impl FunctionRegistry for SessionContext {
 //! #    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> { Ok (None) }
+//! #    fn register_higher_order_function(&mut self, _f: Arc<dyn HigherOrderUDF>) -> Result<Option<Arc<dyn HigherOrderUDF>>> { Ok(None) }
 //! #    fn udfs(&self) -> HashSet<String> { unimplemented!() }
 //! #    fn higher_order_function_names(&self) -> HashSet<String> { unimplemented!() }
 //! #    fn udafs(&self) -> HashSet<String> { unimplemented!() }
@@ -140,7 +141,7 @@ pub use session_state::SessionStateBuilderSpark;
 use datafusion_catalog::TableFunction;
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use log::debug;
 use std::sync::Arc;
 
@@ -213,6 +214,11 @@ pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
     function::table::functions()
 }
 
+/// Returns all default higher-order functions
+pub fn all_default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
+    function::lambda::higher_order_functions()
+}
+
 /// Registers all enabled packages with a [`FunctionRegistry`], overriding any existing
 /// functions if there is a name clash.
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
@@ -242,6 +248,21 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         }
         Ok(()) as Result<()>
     })?;
+
+    let higher_order_functions: Vec<Arc<dyn HigherOrderUDF>> =
+        all_default_higher_order_functions();
+    higher_order_functions
+        .into_iter()
+        .try_for_each(|function| {
+            let existing_function = registry.register_higher_order_function(function)?;
+            if let Some(existing_function) = existing_function {
+                debug!(
+                    "Overwrite existing higher-order function: {}",
+                    existing_function.name()
+                );
+            }
+            Ok(()) as Result<()>
+        })?;
 
     Ok(())
 }

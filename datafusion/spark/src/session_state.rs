@@ -22,8 +22,9 @@ use datafusion::execution::SessionStateBuilder;
 
 use crate::planner::SparkFunctionPlanner;
 use crate::{
-    all_default_aggregate_functions, all_default_scalar_functions,
-    all_default_table_functions, all_default_window_functions,
+    all_default_aggregate_functions, all_default_higher_order_functions,
+    all_default_scalar_functions, all_default_table_functions,
+    all_default_window_functions,
 };
 
 /// Extension trait for adding Apache Spark features to [`SessionStateBuilder`].
@@ -73,6 +74,10 @@ impl SessionStateBuilderSpark for SessionStateBuilder {
             .get_or_insert_with(Vec::new)
             .extend(all_default_window_functions());
 
+        self.higher_order_functions()
+            .get_or_insert_with(Vec::new)
+            .extend(all_default_higher_order_functions());
+
         self.table_functions()
             .get_or_insert_with(HashMap::new)
             .extend(
@@ -101,6 +106,11 @@ mod tests {
         assert!(
             state.aggregate_functions().contains_key("try_sum"),
             "Apache Spark aggregate function 'try_sum' should be registered"
+        );
+
+        assert!(
+            state.higher_order_functions().contains_key("array_exists"),
+            "Apache Spark higher-order function 'array_exists' should be registered"
         );
 
         assert!(
