@@ -65,7 +65,9 @@ jobs:
 
       - name: Install cargo-semver-checks
         if: steps.changed_crates.outputs.packages != ''
-        run: cargo install cargo-semver-checks
+        uses: taiki-e/install-action@94cb46f8d6e437890146ffbd78a778b78e623fb2  # v2.74.0
+        with:
+          tool: cargo-semver-checks
 
       - name: Run cargo-semver-checks
         id: check_semver

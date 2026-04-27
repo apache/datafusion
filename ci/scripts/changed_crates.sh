@@ -21,6 +21,8 @@
 # Subcommands:
 #   changed-crates <base_ref>
 #       Print space-separated list of crate names whose files changed vs base_ref.
+#       Only published workspace members (those without `publish = false`) are
+#       considered.
 #
 #   semver-check <base_ref> <packages...>
 #       Run cargo-semver-checks for the given packages against base_ref.
@@ -41,27 +43,28 @@ MARKER="<!-- semver-check-comment -->"
 cmd_changed_crates() {
   local base_ref="${1:?Usage: changed_crates.sh changed-crates <base_ref>}"
 
-  # Parse workspace members from root Cargo.toml, excluding internal crates
-  # that are not published / not part of the public API.
-  local members
-  members=$(sed -n '/^members = \[/,/\]/p' Cargo.toml | grep '"' | sed 's/.*"\(.*\)".*/\1/' \
-    | grep -v -e '^benchmarks$' -e '^test-utils$' -e '^datafusion/sqllogictest$' -e '^datafusion/doc$')
-
+  # 1. Files changed between the PR and the base branch.
   local changed_files
   changed_files=$(git diff --name-only "${base_ref}...HEAD")
 
-  local packages=""
-  for member in $members; do
-    if echo "$changed_files" | grep -q "^${member}/"; then
-      local pkg
-      pkg=$(grep '^name\s*=' "$member/Cargo.toml" | head -1 | sed 's/.*=\s*"\(.*\)"/\1/')
-      if [ -n "$pkg" ]; then
-        packages="$packages $pkg"
-      fi
-    fi
-  done
+  # 2. Every publishable workspace member, one per line as
+  #    "<crate-name> <crate-dir>". `publish = false` in Cargo.toml shows
+  #    up as `"publish": []` in cargo metadata, so filtering on that
+  #    excludes internal crates without a manual exclusion list.
+  local crates
+  crates=$(cargo metadata --no-deps --format-version 1 | jq -r '
+    .workspace_root + "/" as $root
+    | .packages[]
+    | select(.publish != [])
+    | "\(.name) \(.manifest_path | ltrimstr($root) | rtrimstr("/Cargo.toml"))"
+  ')
 
-  echo "$packages" | xargs
+  # 3. Keep crates whose directory contains a changed file.
+  while read -r name dir; do
+    if grep -q "^${dir}/" <<<"$changed_files"; then
+      echo "$name"
+    fi
+  done <<<"$crates" | xargs
 }
 
 # ── semver-check ────────────────────────────────────────────────────
@@ -69,19 +72,21 @@ cmd_semver_check() {
   local base_ref="${1:?Usage: changed_crates.sh semver-check <base_ref> <packages...>}"
   shift
 
-  local args=""
+  local args=()
   for pkg in "$@"; do
-    args="$args --package $pkg"
+    args+=(--package "$pkg")
   done
 
   set +e
-  # Compare the PR's code against the base branch to detect breaking changes.
-  # Use tee to show output in the Actions log while also capturing it.
-  cargo semver-checks --baseline-rev "$base_ref" $args 2>&1 | tee /tmp/semver-output.txt
+  # Send raw output (with ANSI colors) to stderr so it streams into the
+  # Actions log, while writing the same content to a file we can clean up
+  # afterwards. Only the cleaned, ANSI-stripped output goes to stdout, so
+  # the workflow's `OUTPUT=$(...)` capture stays free of duplicate text.
+  cargo semver-checks --baseline-rev "$base_ref" "${args[@]}" 2>&1 \
+    | tee /dev/stderr > /tmp/semver-output.txt
   local exit_code=${PIPESTATUS[0]}
   set -e
 
-  # Strip ANSI escape codes from the captured output for the PR comment.
   sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt
   return "$exit_code"
 }
