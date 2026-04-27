@@ -100,10 +100,16 @@ CREATE EXTERNAL TABLE skew_parquet
 STORED AS PARQUET
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
 
-query TT
-EXPLAIN ANALYZE SELECT * FROM skew_parquet;
-----
-Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=84.31%<slt:ignore>
+# Skipped:
+# After https://github.com/apache/datafusion/pull/21351, the Parquet scan order
+# is no longer deterministic, so this metric cannot be reliably tested.
+# Coverage can be restored by implementing this metric in other executors,
+# such as the memory table.
+#
+# query TT
+# EXPLAIN ANALYZE SELECT * FROM skew_parquet;
+# ----
+# Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=84.31%<slt:ignore>
 
 # All partition's output_rows: [0]
 statement ok
