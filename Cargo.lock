@@ -7482,3 +7482,31 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "arrow"
+version = "58.1.0"
+
+[[patch.unused]]
+name = "arrow-buffer"
+version = "58.1.0"
+
+[[patch.unused]]
+name = "arrow-flight"
+version = "58.1.0"
+
+[[patch.unused]]
+name = "arrow-ipc"
+version = "58.1.0"
+
+[[patch.unused]]
+name = "arrow-ord"
+version = "58.1.0"
+
+[[patch.unused]]
+name = "arrow-schema"
+version = "58.1.0"
+
+[[patch.unused]]
+name = "parquet"
+version = "58.1.0"

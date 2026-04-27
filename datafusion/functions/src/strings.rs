@@ -133,8 +133,8 @@ pub struct StringViewArrayBuilder {
 }
 
 impl StringViewArrayBuilder {
-    pub fn with_capacity(_item_capacity: usize, data_capacity: usize) -> Self {
-        let builder = StringViewBuilder::with_capacity(data_capacity);
+    pub fn with_capacity(item_capacity: usize, _data_capacity: usize) -> Self {
+        let builder = StringViewBuilder::with_capacity(item_capacity);
         Self {
             builder,
             block: String::new(),
