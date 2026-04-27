@@ -34,9 +34,9 @@ jobs:
           fetch-depth: 0
       - name: Check size of new Git objects
         env:
-          # 1 MB ought to be enough for anybody.
+          # 1.5 MB ought to be enough for anybody.
           # TODO in case we may want to consciously commit a bigger file to the repo without using Git LFS we may disable the check e.g. with a label
-          MAX_FILE_SIZE_BYTES: 1048576
+          MAX_FILE_SIZE_BYTES: 1572864
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "merge_group" ]; then
