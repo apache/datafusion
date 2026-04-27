@@ -340,7 +340,6 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                     Ok(ValueOrLambda::Lambda(LambdaArgument::new(
                         params,
                         Arc::clone(lambda.body()),
-                        None,
                     )))
                 } else {
                     let value = arg.evaluate(batch)?;
@@ -536,10 +535,9 @@ mod tests {
             args: HigherOrderFunctionArgs,
         ) -> Result<ColumnarValue> {
             match &args.args[0] {
-                ValueOrLambda::Lambda(lambda) => lambda.evaluate(
-                    &[&|| Ok(Arc::new(NullArray::new(args.number_rows)))],
-                    |_| unimplemented!("mock_function"),
-                ),
+                ValueOrLambda::Lambda(lambda) => {
+                    lambda.evaluate(&[&|| Ok(Arc::new(NullArray::new(args.number_rows)))])
+                }
                 ValueOrLambda::Value(value) => Ok(value.clone()),
             }
         }

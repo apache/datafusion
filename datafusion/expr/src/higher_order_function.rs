@@ -22,7 +22,7 @@ use crate::{ColumnarValue, Documentation, Expr};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::signature::Volatility;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -208,45 +208,20 @@ pub struct LambdaArgument {
     /// For example, for `array_transform([2], v -> -v)`,
     /// this will be the physical expression of `-v`
     body: Arc<dyn PhysicalExpr>,
-    /// A RecordBatch with the captured columns inside the lambda body, if any
-    ///
-    /// For example, for `array_transform([2], v -> v + a + b)`,
-    /// this will be a `RecordBatch` with columns `a` and `b`
-    captures: Option<RecordBatch>,
 }
 
 impl LambdaArgument {
-    /// Create a new LambdaArgument
-    ///
-    /// Note that capture is not supported yet and must be `None` for now,
-    /// otherwise [LambdaArgument::evaluate] will fail
-    pub fn new(
-        params: Vec<FieldRef>,
-        body: Arc<dyn PhysicalExpr>,
-        captures: Option<RecordBatch>,
-    ) -> Self {
-        Self {
-            params,
-            body,
-            captures,
-        }
+    pub fn new(params: Vec<FieldRef>, body: Arc<dyn PhysicalExpr>) -> Self {
+        Self { params, body }
     }
 
     /// Evaluate this lambda
     /// `args` should evaluate to the value of each parameter
     /// of the correspondent lambda returned in [HigherOrderUDF::lambda_parameters].
-    ///
-    /// `adjust` should adjust the length of captured columns of this
-    /// lambda relative to it's parameters
     pub fn evaluate(
         &self,
         args: &[&dyn Fn() -> Result<ArrayRef>],
-        _adjust: impl FnOnce(&[ArrayRef]) -> Result<Vec<ArrayRef>>,
     ) -> Result<ColumnarValue> {
-        if self.captures.is_some() {
-            return exec_err!("lambda column capture is not supported yet");
-        }
-
         let columns = args
             .iter()
             .take(self.params.len())

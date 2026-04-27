@@ -22,7 +22,7 @@ use arrow::{
     datatypes::{DataType, Field, FieldRef},
 };
 use datafusion_common::{
-    Result, ScalarValue, exec_err, not_impl_err, plan_err,
+    Result, ScalarValue, exec_err, plan_err,
     utils::{adjust_offsets_for_slice, list_values, take_function_args},
 };
 use datafusion_expr::{
@@ -203,11 +203,7 @@ impl HigherOrderUDF for ArrayTransform {
 
         // call the transforming lambda
         let transformed_values = lambda
-            .evaluate(&[&values_param], |_| {
-                not_impl_err!(
-                    "array_transform column capture support is not implemented yet"
-                )
-            })?
+            .evaluate(&[&values_param])?
             .into_array(list_values.len())?;
 
         let field = match args.return_field.data_type() {
