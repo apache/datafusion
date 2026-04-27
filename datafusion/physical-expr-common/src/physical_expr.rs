@@ -181,7 +181,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// A `Result` containing the output interval for the expression in
     /// case of success, or an error object in case of failure.
     ///
-    /// Note the output bounds must form an **envelope** that contains all
+    /// Note that the output bounds must form an **envelope** that contains all
     /// possible outputs of the expression given the input bounds. While
     /// expressions should output the tightest possible bounds, they do not need
     /// to be exact and can be conservative.
@@ -192,7 +192,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// and `b: [3, 4]`, then the output interval would be `[4, 6]`.
     ///
     /// If the expression is `sin(a)`, it is correct (though not precise) to
-    /// produce an output interval `[-1, 1]` for all inputs a.
+    /// produce the interval `[-1, 1]` for any input interval for `a`.
     fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
         not_impl_err!("Not implemented for {self}")
     }
