@@ -3832,7 +3832,6 @@ struct DataEncoderTuple {
     pub blob: Vec<u8>,
 }
 
-#[derive(Default)]
 pub struct DefaultPhysicalProtoConverter {}
 
 impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
