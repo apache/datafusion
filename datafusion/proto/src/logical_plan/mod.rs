@@ -254,26 +254,22 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     ) -> Result<()> {
         let mut encoded_file_format = Vec::new();
 
-        let kind = if node.as_any().downcast_ref::<CsvFormatFactory>().is_some() {
+        let kind = if node.downcast_ref::<CsvFormatFactory>().is_some() {
             file_formats::CsvLogicalExtensionCodec
                 .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Csv
-        } else if node.as_any().downcast_ref::<JsonFormatFactory>().is_some() {
+        } else if node.downcast_ref::<JsonFormatFactory>().is_some() {
             file_formats::JsonLogicalExtensionCodec
                 .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Json
-        } else if node.as_any().downcast_ref::<ArrowFormatFactory>().is_some() {
+        } else if node.downcast_ref::<ArrowFormatFactory>().is_some() {
             file_formats::ArrowLogicalExtensionCodec
                 .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Arrow
         } else {
             #[cfg(feature = "parquet")]
             {
-                if node
-                    .as_any()
-                    .downcast_ref::<ParquetFormatFactory>()
-                    .is_some()
-                {
+                if node.downcast_ref::<ParquetFormatFactory>().is_some() {
                     file_formats::ParquetLogicalExtensionCodec.try_encode_file_format(
                         &mut encoded_file_format,
                         Arc::clone(&node),
@@ -1132,12 +1128,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     serialize_exprs(filters, extension_codec)?;
 
                 if let Some(listing_table) = provider.downcast_ref::<ListingTable>() {
-                    let any = listing_table.options().format.as_any();
+                    let format = listing_table.options().format.as_ref();
                     let file_format_type = {
                         let mut maybe_some_type = None;
 
                         #[cfg(feature = "parquet")]
-                        if let Some(parquet) = any.downcast_ref::<ParquetFormat>() {
+                        if let Some(parquet) = format.downcast_ref::<ParquetFormat>() {
                             let options = parquet.options();
                             maybe_some_type =
                                 Some(FileFormatType::Parquet(protobuf::ParquetFormat {
@@ -1145,7 +1141,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 }));
                         };
 
-                        if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+                        if let Some(csv) = format.downcast_ref::<CsvFormat>() {
                             let options = csv.options();
                             maybe_some_type =
                                 Some(FileFormatType::Csv(protobuf::CsvFormat {
@@ -1153,7 +1149,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 }));
                         }
 
-                        if let Some(json) = any.downcast_ref::<OtherNdJsonFormat>() {
+                        if let Some(json) = format.downcast_ref::<OtherNdJsonFormat>() {
                             let options = json.options();
                             maybe_some_type =
                                 Some(FileFormatType::Json(protobuf::NdJsonFormat {
@@ -1162,12 +1158,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }
 
                         #[cfg(feature = "avro")]
-                        if any.is::<AvroFormat>() {
+                        if format.is::<AvroFormat>() {
                             maybe_some_type =
                                 Some(FileFormatType::Avro(protobuf::AvroFormat {}))
                         }
 
-                        if any.is::<ArrowFormat>() {
+                        if format.is::<ArrowFormat>() {
                             maybe_some_type =
                                 Some(FileFormatType::Arrow(protobuf::ArrowFormat {}))
                         }
@@ -1325,10 +1321,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(serialize_expr(
+                            expr: Some(Box::new(serialize_expr(
                                 &filter.predicate,
                                 extension_codec,
-                            )?),
+                            )?)),
                         },
                     ))),
                 })
@@ -1444,7 +1440,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     null_equality.to_owned().into();
                 let filter = filter
                     .as_ref()
-                    .map(|e| serialize_expr(e, extension_codec))
+                    .map(|e| serialize_expr(e, extension_codec).map(Box::new))
                     .map_or(Ok(None), |v| v.map(Some))?;
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
@@ -1461,8 +1457,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Subquery(_) => {
-                not_impl_err!("LogicalPlan serde is not yet implemented for subqueries")
+            LogicalPlan::Subquery(subquery) => {
+                // Serialize the inner subquery plan directly — the
+                // LogicalPlan::Subquery wrapper is reconstructed during
+                // expression deserialization.
+                LogicalPlanNode::try_from_logical_plan(
+                    &subquery.subquery,
+                    extension_codec,
+                )
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(

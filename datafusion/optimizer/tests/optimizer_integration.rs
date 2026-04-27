@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Formatter;
@@ -137,15 +136,13 @@ fn subquery_filter_with_cast() -> Result<()> {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-    Projection: test.col_int32
-      Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.avg(test.col_int32)
-        TableScan: test projection=[col_int32]
-        SubqueryAlias: __scalar_sq_1
-          Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]
-            Projection: test.col_int32
-              Filter: __common_expr_4 >= Date32("2002-05-08") AND __common_expr_4 <= Date32("2002-05-13")
-                Projection: CAST(test.col_utf8 AS Date32) AS __common_expr_4, test.col_int32
-                  TableScan: test projection=[col_int32, col_utf8]
+    Filter: CAST(test.col_int32 AS Float64) > (<subquery>)
+      Subquery:
+        Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]
+          Projection: test.col_int32
+            Filter: CAST(test.col_utf8 AS Date32) >= Date32("2002-05-08") AND CAST(test.col_utf8 AS Date32) <= Date32("2002-05-13")
+              TableScan: test projection=[col_int32, col_utf8]
+      TableScan: test projection=[col_int32]
     "#
     );
     Ok(())
@@ -759,10 +756,6 @@ struct InexactFilterTableSource {
 }
 
 impl TableSource for InexactFilterTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -932,10 +925,6 @@ struct MyTableSource {
 }
 
 impl TableSource for MyTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

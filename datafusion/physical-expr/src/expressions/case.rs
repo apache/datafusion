@@ -36,7 +36,7 @@ use datafusion_expr::ColumnarValue;
 use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
 use std::hash::Hash;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
@@ -131,7 +131,7 @@ impl CaseBody {
         let mut used_column_indices = IndexSet::<usize>::new();
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
-                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(column) = expr.downcast_ref::<Column>() {
                     used_column_indices.insert(column.index());
                 }
                 Ok(TreeNodeRecursion::Continue)
@@ -162,7 +162,7 @@ impl CaseBody {
         let project = |expr: &Arc<dyn PhysicalExpr>| -> Result<Arc<dyn PhysicalExpr>> {
             Arc::clone(expr)
                 .transform_down(|e| {
-                    if let Some(column) = e.as_any().downcast_ref::<Column>() {
+                    if let Some(column) = e.downcast_ref::<Column>() {
                         let original = column.index();
                         let projected = *column_index_map.get(&original).unwrap();
                         if projected != original {
@@ -281,7 +281,7 @@ impl std::fmt::Display for CaseExpr {
 /// this is limited to use with Column expressions but could potentially be used for other
 /// expressions in the future
 fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any().is::<Column>()
+    expr.is::<Column>()
 }
 
 /// Creates a [FilterPredicate] from a boolean array.
@@ -621,7 +621,7 @@ impl CaseExpr {
         // normalize null literals to None in the else_expr (this already happens
         // during SQL planning, but not necessarily for other use cases)
         let else_expr = match &else_expr {
-            Some(e) => match e.as_any().downcast_ref::<Literal>() {
+            Some(e) => match e.downcast_ref::<Literal>() {
                 Some(lit) if lit.value().is_null() => None,
                 _ => else_expr,
             },
@@ -659,9 +659,9 @@ impl CaseExpr {
             {
                 EvalMethod::InfallibleExprOrNull
             } else if body.when_then_expr.len() == 1
-                && body.when_then_expr[0].1.as_any().is::<Literal>()
+                && body.when_then_expr[0].1.is::<Literal>()
                 && body.else_expr.is_some()
-                && body.else_expr.as_ref().unwrap().as_any().is::<Literal>()
+                && body.else_expr.as_ref().unwrap().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
             } else if body.when_then_expr.len() == 1 {
@@ -1194,11 +1194,6 @@ impl CaseExpr {
 }
 
 impl PhysicalExpr for CaseExpr {
-    /// Return a reference to Any that can be used for down-casting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         self.body.data_type(input_schema)
     }
@@ -2207,7 +2202,7 @@ mod tests {
 
         let expr2 = Arc::clone(&expr)
             .transform(|e| {
-                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                let transformed = match e.downcast_ref::<Literal>() {
                     Some(lit_value) => match lit_value.value() {
                         ScalarValue::Utf8(Some(str_value)) => {
                             Some(lit(str_value.to_uppercase()))
@@ -2227,7 +2222,7 @@ mod tests {
 
         let expr3 = Arc::clone(&expr)
             .transform_down(|e| {
-                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                let transformed = match e.downcast_ref::<Literal>() {
                     Some(lit_value) => match lit_value.value() {
                         ScalarValue::Utf8(Some(str_value)) => {
                             Some(lit(str_value.to_uppercase()))

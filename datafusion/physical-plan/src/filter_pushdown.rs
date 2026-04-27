@@ -365,7 +365,7 @@ impl FilterRemapper {
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         let mut all_valid = true;
         let transformed = Arc::clone(filter).transform_down(|expr| {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            if let Some(col) = expr.downcast_ref::<Column>() {
                 if self.allowed_indices.contains(&col.index())
                     && let Ok(new_index) = self.child_schema.index_of(col.name())
                 {

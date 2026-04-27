@@ -16,7 +16,6 @@
 // under the License.
 
 //! ParquetSource implementation for reading parquet files
-use std::any::Any;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -184,7 +183,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
 /// let exec = parquet_exec();
 /// let data_source = exec.data_source();
-/// let base_config = data_source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+/// let base_config = data_source.downcast_ref::<FileScanConfig>().unwrap();
 /// let existing_file_groups = &base_config.file_groups;
 /// let new_execs = existing_file_groups
 ///   .iter()
@@ -582,10 +581,6 @@ impl FileSource for ParquetSource {
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
         }))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn table_schema(&self) -> &TableSchema {

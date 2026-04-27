@@ -426,11 +426,22 @@ message LogicalExprNode {
 
     Unnest unnest = 35;
 
+    // Subquery expressions
+    ScalarSubqueryExprNode scalar_subquery_expr = 36;
   }
 }
 
 message Wildcard {
   TableReference qualifier = 1;
+}
+
+message SubqueryNode {
+  LogicalPlanNode subquery = 1;
+  repeated LogicalExprNode outer_ref_columns = 2;
+}
+
+message ScalarSubqueryExprNode {
+  SubqueryNode subquery = 1;
 }
 
 message PlaceholderNode {
@@ -775,6 +786,7 @@ message PhysicalPlanNode {
     AsyncFuncExecNode async_func = 36;
     BufferExecNode buffer = 37;
     ArrowScanExecNode arrow_scan = 38;
+    ScalarSubqueryExecNode scalar_subquery = 39;
   }
 }
 
@@ -920,6 +932,8 @@ message PhysicalExprNode {
     UnknownColumn unknown_column = 20;
 
     PhysicalHashExprNode hash_expr = 21;
+
+    PhysicalScalarSubqueryExprNode scalar_subquery = 22;
   }
 }
 
@@ -981,6 +995,9 @@ message PhysicalBinaryExprNode {
   PhysicalExprNode l = 1;
   PhysicalExprNode r = 2;
   string op = 3;
+  // Linearized operands for chains of the same operator (e.g. a AND b AND c).
+  // When present, `l` and `r` are ignored and `operands` holds the flattened list.
+  repeated PhysicalExprNode operands = 4;
 }
 
 message PhysicalDateTimeIntervalExprNode {
@@ -1474,4 +1491,15 @@ message AsyncFuncExecNode {
 message BufferExecNode {
   PhysicalPlanNode input = 1;
   uint64 capacity = 2;
+}
+
+message ScalarSubqueryExecNode {
+  PhysicalPlanNode input = 1;
+  repeated PhysicalPlanNode subqueries = 2;
+}
+
+message PhysicalScalarSubqueryExprNode {
+  datafusion_common.ArrowType data_type = 1;
+  bool nullable = 2;
+  uint32 index = 3;
 }

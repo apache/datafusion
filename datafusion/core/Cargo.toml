@@ -144,6 +144,7 @@ datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
 liblzma = { workspace = true, optional = true }
 log = { workspace = true }
@@ -172,7 +173,6 @@ bytes = { workspace = true }
 env_logger = { workspace = true }
 glob = { workspace = true }
 insta = { workspace = true }
-pretty_assertions = "1.0"
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.5"
 recursive = { workspace = true }

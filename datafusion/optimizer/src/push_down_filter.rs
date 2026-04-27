@@ -1144,8 +1144,16 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
 
-                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+                // Filters containing scalar subqueries cannot be pushed to
+                // providers because the subquery result is not available
+                // until execution time.
+                let (subquery_filters, pushdown_candidates): (Vec<&Expr>, Vec<&Expr>) =
                     filter_predicates
+                        .into_iter()
+                        .partition(|pred| pred.contains_scalar_subquery());
+
+                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+                    pushdown_candidates
                         .into_iter()
                         .partition(|pred| pred.is_volatile());
 
@@ -1178,11 +1186,13 @@ impl OptimizerRule for PushDownFilter {
                     .cloned()
                     .collect();
 
-                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type, and also include volatile filters
+                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
+                // and also include volatile and subquery-containing filters
                 let new_predicate: Vec<Expr> = zip
                     .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
                     .map(|(pred, _)| pred)
                     .chain(volatile_filters)
+                    .chain(subquery_filters)
                     .cloned()
                     .collect();
 
@@ -1466,7 +1476,6 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
@@ -3139,10 +3148,6 @@ mod tests {
             Ok((0..filters.len())
                 .map(|_| self.filter_support.clone())
                 .collect())
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 

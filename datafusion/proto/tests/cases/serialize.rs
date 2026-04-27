@@ -77,7 +77,8 @@ fn udf_roundtrip_with_registry() {
         .call(vec![lit("")]);
 
     let bytes = expr.to_bytes().unwrap();
-    let deserialized_expr = Expr::from_bytes_with_registry(&bytes, &ctx).unwrap();
+    let deserialized_expr =
+        Expr::from_bytes_with_ctx(&bytes, ctx.task_ctx().as_ref()).unwrap();
 
     assert_eq!(expr, deserialized_expr);
 }
@@ -281,7 +282,8 @@ fn test_expression_serialization_roundtrip() {
 
         let extension_codec = DefaultLogicalExtensionCodec {};
         let proto = serialize_expr(&expr, &extension_codec).unwrap();
-        let deserialize = parse_expr(&proto, &ctx, &extension_codec).unwrap();
+        let deserialize =
+            parse_expr(&proto, ctx.task_ctx().as_ref(), &extension_codec).unwrap();
 
         let serialize_name = extract_function_name(&expr);
         let deserialize_name = extract_function_name(&deserialize);
