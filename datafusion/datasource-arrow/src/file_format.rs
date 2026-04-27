@@ -165,7 +165,7 @@ impl FileFormat for ArrowFormat {
                 }
                 GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
             };
-            schemas.push(schema.as_ref().clone());
+            schemas.push(Arc::unwrap_or_clone(schema));
         }
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))

@@ -61,6 +61,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::buffer::BufferExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::sync::Arc;
@@ -104,8 +105,12 @@ impl PhysicalOptimizerRule for PushdownSort {
                 let required_ordering = sort_child.expr();
                 match sort_input.try_pushdown_sort(required_ordering)? {
                     SortOrderPushdownResult::Exact { inner } => {
+                        // Preserve fetch (LIMIT) from the eliminated SortExec.
+                        // Use LocalLimitExec (not Global) since input is multi-partition.
                         let inner = if let Some(fetch) = sort_child.fetch() {
-                            inner.with_fetch(Some(fetch)).unwrap_or(inner)
+                            inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
+                                Arc::new(LocalLimitExec::new(inner, fetch))
+                            })
                         } else {
                             inner
                         };
@@ -149,14 +154,19 @@ impl PhysicalOptimizerRule for PushdownSort {
             match sort_input.try_pushdown_sort(required_ordering)? {
                 SortOrderPushdownResult::Exact { inner } => {
                     // Data source guarantees perfect ordering - remove the Sort operator.
-                    // Preserve the fetch (LIMIT) from the original SortExec so the
-                    // data source can stop reading early.
-                    let inner = if let Some(fetch) = sort_exec.fetch() {
-                        inner.with_fetch(Some(fetch)).unwrap_or(inner)
+                    //
+                    // If the SortExec carried a fetch (LIMIT), we must preserve it.
+                    // First try pushing the limit into the source via `with_fetch()`.
+                    // If the source doesn't support `with_fetch`, fall back to
+                    // wrapping with GlobalLimitExec.
+                    if let Some(fetch) = sort_exec.fetch() {
+                        let inner = inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
+                            Arc::new(GlobalLimitExec::new(inner, 0, Some(fetch)))
+                        });
+                        Ok(Transformed::yes(inner))
                     } else {
-                        inner
-                    };
-                    Ok(Transformed::yes(inner))
+                        Ok(Transformed::yes(inner))
+                    }
                 }
                 SortOrderPushdownResult::Inexact { inner } => {
                     // Data source is optimized for the ordering but not perfectly sorted

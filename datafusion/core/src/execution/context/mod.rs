@@ -950,13 +950,13 @@ impl SessionContext {
         match (or_replace, view) {
             (true, Ok(_)) => {
                 self.deregister_table(name.clone())?;
-                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
-                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
