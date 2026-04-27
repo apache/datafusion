@@ -546,6 +546,29 @@ tested in the same way using the <a class="reference external" href="https://doc
 <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583">core/src/lib.rs</a> for more details.</p>
 </section>
 </section>
+<section id="documentation-link-checks">
+<h2>Documentation Link Checks<a class="headerlink" href="#documentation-link-checks" title="Link to this heading">#</a></h2>
+<p>Run the internal markdown link check locally:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span>ci/scripts/utils/tool_versions.sh
+cargo<span class="w"> </span>install<span class="w"> </span>lychee<span class="w"> </span>--locked<span class="w"> </span>--version<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">LYCHEE_VERSION</span><span class="si">}</span><span class="s2">&quot;</span>
+bash<span class="w"> </span>ci/scripts/markdown_link_check.sh
+</pre></div>
+</div>
+<p>Notes:</p>
+<ul class="simple">
+<li><p>The script is run with <code class="docutils literal notranslate"><span class="pre">bash</span></code> and is compatible with the default Bash on macOS (no <code class="docutils literal notranslate"><span class="pre">mapfile</span></code> dependency).</p></li>
+<li><p>The CI configuration currently checks internal markdown links only. External <code class="docutils literal notranslate"><span class="pre">http(s)</span></code> and <code class="docutils literal notranslate"><span class="pre">mailto</span></code> links are excluded to avoid flaky failures.</p></li>
+</ul>
+<p>When a link is broken, lychee prints the file and URL/path that failed. For example:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>[docs/source/user-guide/cli/overview.md]:
+  [ERROR] file:///.../docs/source/user-guide/cli/missing-page.md | Cannot find file: File not found. Check if file exists and path is correct
+</pre></div>
+</div>
+<p>Rust doc comments are validated by rustdoc in CI and can be checked locally with:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>ci/scripts/rust_docs.sh
+</pre></div>
+</div>
+</section>
 <section id="benchmarks">
 <h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Link to this heading">#</a></h2>
 <section id="criterion-benchmarks">
@@ -651,6 +674,7 @@ tested in the same way using the <a class="reference external" href="https://doc
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#user-guide-documentation">User Guide Documentation</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-link-checks">Documentation Link Checks</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarks">Benchmarks</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#criterion-benchmarks">Criterion Benchmarks</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-sql-benchmarks">Parquet SQL Benchmarks</a></li>
