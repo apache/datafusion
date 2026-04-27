@@ -681,16 +681,17 @@ impl protobuf::PhysicalPlanNode {
             })?;
 
         let filter_selectivity = filter.default_filter_selectivity.try_into();
-        let projection = if !filter.projection.is_empty() {
-            Some(
-                filter
-                    .projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
+        // After deserializing, check if it equals the full range
+        let num_fields = schema.fields().len();
+        let full_projection: Vec<usize> = (0..num_fields).collect();
+        let deserialized: Vec<usize> = filter.projection.iter().map(|i| *i as usize).collect();
+
+        let projection = if deserialized == full_projection {
+            None  // treat full range as "no projection"
+        } else if deserialized.is_empty() {
+            Some(vec![])  // genuine empty projection
         } else {
-            None
+            Some(deserialized)
         };
 
         let filter = FilterExecBuilder::new(predicate, input)
@@ -2350,8 +2351,9 @@ impl protobuf::PhysicalPlanNode {
                             .physical_expr_to_proto(exec.predicate(), codec)?,
                     ),
                     default_filter_selectivity: exec.default_selectivity() as u32,
-                    projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
-                        v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+                    projection: match exec.projection() {
+                    None => (0..fields.len()).map(|i| i as u32).collect(),
+                    Some(v) => v.iter().map(|x| *x as u32).collect(),
                     }),
                     batch_size: exec.batch_size() as u32,
                     fetch: exec.fetch().map(|f| f as u32),
