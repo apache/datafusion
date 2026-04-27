@@ -105,11 +105,7 @@ use datafusion_common::not_impl_err;
 /// [`UnityCatalogProvider`]: https://github.com/delta-io/delta-rs/blob/951436ecec476ce65b5ed3b58b50fb0846ca7b91/crates/deltalake-core/src/data_catalog/unity/datafusion.rs#L111-L123
 ///
 /// [`TableProvider`]: crate::TableProvider
-pub trait CatalogProvider: Debug + Sync + Send {
-    /// Returns the catalog provider as [`Any`]
-    /// so that it can be downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait CatalogProvider: Any + Debug + Sync + Send {
     /// Retrieves the list of available schema names in this catalog.
     fn schema_names(&self) -> Vec<String>;
 
@@ -152,15 +148,31 @@ pub trait CatalogProvider: Debug + Sync + Send {
     }
 }
 
+impl dyn CatalogProvider {
+    /// Returns `true` if the catalog provider is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn CatalogProvider>` via auto-deref.
+    pub fn is<T: CatalogProvider>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this catalog provider to a concrete type `T`,
+    /// returning `None` if the provider is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn CatalogProvider>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: CatalogProvider>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// Represent a list of named [`CatalogProvider`]s.
 ///
 /// Please see the documentation on [`CatalogProvider`] for details of
 /// implementing a custom catalog.
-pub trait CatalogProviderList: Debug + Sync + Send {
-    /// Returns the catalog list as [`Any`]
-    /// so that it can be downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait CatalogProviderList: Any + Debug + Sync + Send {
     /// Adds a new catalog to this catalog list
     /// If a catalog of the same name existed before, it is replaced in the list and returned.
     fn register_catalog(
@@ -174,4 +186,24 @@ pub trait CatalogProviderList: Debug + Sync + Send {
 
     /// Retrieves a specific catalog by name, provided it exists.
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>>;
+}
+
+impl dyn CatalogProviderList {
+    /// Returns `true` if the catalog provider list is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn CatalogProviderList>` via auto-deref.
+    pub fn is<T: CatalogProviderList>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this catalog provider list to a concrete type `T`,
+    /// returning `None` if the provider list is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn CatalogProviderList>` via
+    /// auto-deref, unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would
+    /// attempt to downcast the `Arc` itself.
+    pub fn downcast_ref<T: CatalogProviderList>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }

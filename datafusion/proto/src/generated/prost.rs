@@ -1478,6 +1478,10 @@ pub struct PhysicalBinaryExprNode {
     pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
+    /// Linearized operands for chains of the same operator (e.g. a AND b AND c).
+    /// When present, `l` and `r` are ignored and `operands` holds the flattened list.
+    #[prost(message, repeated, tag = "4")]
+    pub operands: ::prost::alloc::vec::Vec<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {

@@ -220,7 +220,7 @@ impl ExprIntervalGraphNode {
     /// any other expression starts with an indefinite interval (`[-∞, ∞]`).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = Arc::clone(&node.expr);
-        if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(literal) = expr.downcast_ref::<Literal>() {
             let value = literal.value();
             Interval::try_new(value.clone(), value.clone())
                 .map(|interval| Self::new_with_interval(expr, interval))
@@ -646,7 +646,6 @@ impl ExprIntervalGraph {
             if node_interval == &Interval::TRUE
                 && self.graph[node]
                     .expr
-                    .as_any()
                     .downcast_ref::<BinaryExpr>()
                     .is_some_and(|expr| expr.op() == &Operator::Or)
             {
@@ -892,12 +891,12 @@ mod tests {
                     PropagationResult::Success,
                     &Schema::new(vec![
                         Field::new(
-                            left_col.as_any().downcast_ref::<Column>().unwrap().name(),
+                            left_col.downcast_ref::<Column>().unwrap().name(),
                             DataType::$SCALAR,
                             true,
                         ),
                         Field::new(
-                            right_col.as_any().downcast_ref::<Column>().unwrap().name(),
+                            right_col.downcast_ref::<Column>().unwrap().name(),
                             DataType::$SCALAR,
                             true,
                         ),
@@ -939,16 +938,8 @@ mod tests {
             Interval::make(Some(100), None)?,
             PropagationResult::Infeasible,
             &Schema::new(vec![
-                Field::new(
-                    left_col.as_any().downcast_ref::<Column>().unwrap().name(),
-                    DataType::Int32,
-                    true,
-                ),
-                Field::new(
-                    right_col.as_any().downcast_ref::<Column>().unwrap().name(),
-                    DataType::Int32,
-                    true,
-                ),
+                Field::new(left_col.name(), DataType::Int32, true),
+                Field::new(right_col.name(), DataType::Int32, true),
             ]),
         )
     }
