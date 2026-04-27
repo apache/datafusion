@@ -2354,7 +2354,7 @@ impl protobuf::PhysicalPlanNode {
                     projection: match exec.projection() {
                     None => (0..fields.len()).map(|i| i as u32).collect(),
                     Some(v) => v.iter().map(|x| *x as u32).collect(),
-                    }),
+                    },
                     batch_size: exec.batch_size() as u32,
                     fetch: exec.fetch().map(|f| f as u32),
                 },
