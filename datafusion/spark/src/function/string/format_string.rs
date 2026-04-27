@@ -1690,6 +1690,23 @@ impl ConversionSpecifier {
     }
 
     fn format_float(&self, writer: &mut String, value: f64) -> Result<()> {
+        // Java/Spark reject the grouping separator flag with scientific notation
+        if self.grouping_separator
+            && matches!(
+                self.conversion_type,
+                ConversionType::SciFloatLower | ConversionType::SciFloatUpper
+            )
+        {
+            return exec_err!(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion '{}'",
+                if self.conversion_type == ConversionType::SciFloatUpper {
+                    'E'
+                } else {
+                    'e'
+                }
+            );
+        }
+
         let mut prefix = String::new();
         let mut suffix = String::new();
         let mut number = String::new();
@@ -1769,6 +1786,9 @@ impl ConversionSpecifier {
                 number = format!("{abs:.prec$}", prec = precision as usize);
                 if strip_trailing_0s {
                     number = trim_trailing_0s(&number).to_owned();
+                }
+                if self.grouping_separator {
+                    number = insert_thousands_separator(&number);
                 }
             }
             if self.alt_form && !number.contains('.') {
@@ -2000,6 +2020,23 @@ impl ConversionSpecifier {
     }
 
     fn format_decimal(&self, writer: &mut String, value: &str, scale: i64) -> Result<()> {
+        // Java/Spark reject the grouping separator flag with scientific notation
+        if self.grouping_separator
+            && matches!(
+                self.conversion_type,
+                ConversionType::SciFloatLower | ConversionType::SciFloatUpper
+            )
+        {
+            return exec_err!(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion '{}'",
+                if self.conversion_type == ConversionType::SciFloatUpper {
+                    'E'
+                } else {
+                    'e'
+                }
+            );
+        }
+
         let mut prefix = String::new();
         let upper = self.conversion_type.is_upper();
 
@@ -2033,7 +2070,15 @@ impl ConversionSpecifier {
         let number = match self.conversion_type {
             ConversionType::DecFloatLower => {
                 // Format as fixed-point decimal
-                self.format_decimal_fixed(&abs_decimal, precision, strip_trailing_0s)?
+                let mut n = self.format_decimal_fixed(
+                    &abs_decimal,
+                    precision,
+                    strip_trailing_0s,
+                )?;
+                if self.grouping_separator {
+                    n = insert_thousands_separator(&n);
+                }
+                n
             }
             ConversionType::SciFloatLower => self.format_decimal_scientific(
                 &abs_decimal,
@@ -2062,11 +2107,15 @@ impl ConversionSpecifier {
                         strip_trailing_0s,
                     )?
                 } else {
-                    self.format_decimal_fixed(
+                    let mut n = self.format_decimal_fixed(
                         &abs_decimal,
                         precision - 1 - log10_val.floor() as i32,
                         strip_trailing_0s,
-                    )?
+                    )?;
+                    if self.grouping_separator {
+                        n = insert_thousands_separator(&n);
+                    }
+                    n
                 }
             }
             _ => {
@@ -2332,6 +2381,24 @@ impl FloatBits for f64 {
     }
 }
 
+/// Inserts thousands separators (`,`) into the integer part of a numeric string.
+/// For example, `"1234567.89"` becomes `"1,234,567.89"`.
+fn insert_thousands_separator(number: &str) -> String {
+    let (int_part, frac_part) = match number.find('.') {
+        Some(pos) => (&number[..pos], &number[pos..]),
+        None => (number, ""),
+    };
+    let mut result = String::with_capacity(number.len() + number.len() / 3);
+    for (i, c) in int_part.char_indices() {
+        if i > 0 && (int_part.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.push_str(frac_part);
+    result
+}
+
 fn trim_trailing_0s(number: &str) -> &str {
     if number.contains('.') {
         for (i, c) in number.chars().rev().enumerate() {
@@ -2355,6 +2422,8 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::function::utils::test::test_scalar_function;
+    use arrow::array::StringArray;
     use arrow::datatypes::DataType::Utf8;
 
     #[test]
@@ -2383,6 +2452,227 @@ mod tests {
             "format_string(fmt, ...) should NOT be nullable when fmt is NOT nullable"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_thousands_separator() {
+        assert_eq!(insert_thousands_separator("1234567.89"), "1,234,567.89");
+        assert_eq!(insert_thousands_separator("123.45"), "123.45");
+        assert_eq!(insert_thousands_separator("1234"), "1,234");
+        assert_eq!(insert_thousands_separator("12"), "12");
+        assert_eq!(insert_thousands_separator("0.5"), "0.5");
+        assert_eq!(
+            insert_thousands_separator("1234567890.1234"),
+            "1,234,567,890.1234"
+        );
+        assert_eq!(insert_thousands_separator("1000"), "1,000");
+        assert_eq!(insert_thousands_separator("100"), "100");
+    }
+
+    #[test]
+    fn test_grouping_separator_float() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_decimal() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_scientific_float() -> Result<()> {
+        // %,e — Java/Spark reject grouping separator with scientific notation
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,e".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'e'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,E — uppercase scientific also rejected
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,E".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'E'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,.0e — precision 0 scientific with grouping also rejected
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.0e".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'e'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_compact_float() -> Result<()> {
+        // %,g with large number — triggers scientific, no commas
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1.23457e+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,g with small number — triggers fixed-point, commas in integer part
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(12345.6))),
+            ],
+            Ok(Some("12,345.6")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,.0g — precision 0 compact with grouping (large number, scientific)
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.0g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1e+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,G — uppercase compact
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,G".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1.23457E+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_scientific_decimal() -> Result<()> {
+        // %,e on decimal — Java/Spark reject grouping separator with scientific notation
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,e".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'e'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,.0e on decimal — also rejected
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.0e".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Err(DataFusionError::Execution(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion 'e'".to_string(),
+            )),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_compact_decimal() -> Result<()> {
+        // %,g on decimal — large number triggers scientific, no commas
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("1.23457e+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,g on decimal — small number triggers fixed-point, commas expected
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(1234560), 10, 2)),
+            ],
+            Ok(Some("12,345.6")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %,.0g on decimal — precision 0 compact with grouping (scientific)
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.0g".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("1e+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
         Ok(())
     }
 }
