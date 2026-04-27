@@ -175,10 +175,6 @@ struct CustomProvider {
 
 #[async_trait]
 impl TableProvider for CustomProvider {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.zero_batch.schema()
     }

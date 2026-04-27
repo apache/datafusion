@@ -84,9 +84,17 @@ substrait = ["datafusion-substrait"]
 [dev-dependencies]
 env_logger = { workspace = true }
 regex = { workspace = true }
+# Required to make sure tests for pg display behaves consistently
+# regardless of feature unification with dependencies
+serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [[test]]
 harness = false
 name = "sqllogictests"
 path = "bin/sqllogictests.rs"
+
+# Required because we pull serde_json with a feature to get consistent pg display,
+# but its not directly used.
+[package.metadata.cargo-machete]
+ignored = "serde_json"

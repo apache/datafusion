@@ -171,9 +171,8 @@ trait FromColumnStatistics {
                     let col_stats = &statistics_args.statistics.column_statistics;
                     if statistics_args.exprs.len() == 1 {
                         // TODO optimize with exprs other than Column
-                        if let Some(col_expr) = statistics_args.exprs[0]
-                            .as_any()
-                            .downcast_ref::<expressions::Column>()
+                        if let Some(col_expr) =
+                            statistics_args.exprs[0].downcast_ref::<expressions::Column>()
                         {
                             return self.value_from_column_statistics(
                                 &col_stats[col_expr.index()],

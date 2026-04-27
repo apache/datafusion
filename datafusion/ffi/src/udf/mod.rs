@@ -391,7 +391,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             .map(WrappedSchema)
             .collect::<RVec<_>>();
 
-        let return_field = return_field.as_ref().clone();
+        let return_field = Arc::unwrap_or_clone(return_field);
         let return_field = WrappedSchema(FFI_ArrowSchema::try_from(return_field)?);
         let config_options = config_options.as_ref().into();
 

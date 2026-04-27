@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -226,10 +225,6 @@ impl ExecutionPlan for CustomExecutionPlan {
 
 #[async_trait]
 impl TableProvider for CustomTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         TEST_CUSTOM_SCHEMA_REF!()
     }

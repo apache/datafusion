@@ -55,3 +55,15 @@ FROM sensor_readings;
 ----
 sensor_A
 sensor_B
+
+# Test arithmetic on REE columns (numeric and decimal value types)
+query IR rowsort
+SELECT
+    arrow_cast(temperature, 'RunEndEncoded("run_ends": non-null Int32, "values": Int64)') + 1 AS t_plus_one,
+    arrow_cast(arrow_cast(temperature, 'Decimal128(10, 2)'), 'RunEndEncoded("run_ends": non-null Int32, "values": Decimal128(10, 2))') + 1 AS t_dec_plus_one
+FROM sensor_readings;
+----
+21 21
+23 23
+24 24
+25 25

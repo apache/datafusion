@@ -447,7 +447,6 @@ mod tests {
 
     fn as_planner_cast(physical: &Arc<dyn PhysicalExpr>) -> &expressions::CastExpr {
         physical
-            .as_any()
             .downcast_ref::<expressions::CastExpr>()
             .expect("planner should lower logical CAST to CastExpr")
     }

@@ -1423,27 +1423,22 @@ impl MaterializingSortMergeJoinStream {
                     .evaluate(&filter_batch)?
                     .into_array(filter_batch.num_rows())?;
 
-                let pre_mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+                let filter_result_mask =
+                    datafusion_common::cast::as_boolean_array(&filter_result)?;
 
-                let mask = if pre_mask.null_count() > 0 {
-                    compute::prep_null_mask_filter(pre_mask)
+                // Convert NULL filter results to false — NULL means "not satisfied"
+                // per SQL semantics, same as Left/Right outer joins.
+                let mask = if filter_result_mask.null_count() > 0 {
+                    compute::prep_null_mask_filter(filter_result_mask)
                 } else {
-                    pre_mask.clone()
+                    filter_result_mask.clone()
                 };
 
                 if needs_deferred_filtering(&self.filter, self.join_type) {
-                    // Full join uses pre_mask (preserving nulls) for
-                    // get_corrected_filter_mask; other outer joins use mask.
-                    let mask_to_use = if self.join_type != JoinType::Full {
-                        &mask
-                    } else {
-                        pre_mask
-                    };
-
                     self.joined_record_batches.push_batch_with_filter_metadata(
                         output_batch,
                         &combined_left_indices,
-                        mask_to_use,
+                        &mask,
                         self.streamed_batch_counter.load(Relaxed),
                         self.join_type,
                     );
@@ -1468,7 +1463,7 @@ impl MaterializingSortMergeJoinStream {
                             let idx = right.value(i) as usize;
                             match buffered_batch.join_filter_status[idx] {
                                 FilterState::SomePassed => {}
-                                _ if pre_mask.value(offset + i) => {
+                                _ if mask.value(offset + i) => {
                                     buffered_batch.join_filter_status[idx] =
                                         FilterState::SomePassed;
                                 }

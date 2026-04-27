@@ -39,7 +39,7 @@ mod tests {
                     "External catalog provider failed to implement create_catalog"
                         .to_string(),
                 ))?(codec);
-        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
+        let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
 
         let _ = ctx.register_catalog("fruit", foreign_catalog);
 
@@ -66,7 +66,7 @@ mod tests {
                     "External catalog provider failed to implement create_catalog_list"
                         .to_string(),
                 ))?(codec);
-        let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
+        let foreign_catalog_list: Arc<dyn CatalogProviderList> =
             (&ffi_catalog_list).into();
 
         ctx.register_catalog_list(foreign_catalog_list);

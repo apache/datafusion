@@ -50,7 +50,7 @@ impl<'a> TreeNodeRewriter for PhysicalColumnRewriter<'a> {
         &mut self,
         node: Self::Node,
     ) -> datafusion_common::Result<Transformed<Self::Node>> {
-        if let Some(column) = node.as_any().downcast_ref::<Column>() {
+        if let Some(column) = node.downcast_ref::<Column>() {
             if let Some(new_column) = self.column_map.get(column) {
                 // jump to prevent rewriting the new sub-expression again
                 return Ok(Transformed::new(
