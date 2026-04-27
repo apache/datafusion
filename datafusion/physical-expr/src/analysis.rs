@@ -202,7 +202,7 @@ pub fn analyze(
         let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
 
         for (expr, index) in &target_expr_and_indices {
-            if let Some(column) = expr.as_any().downcast_ref::<Column>()
+            if let Some(column) = expr.downcast_ref::<Column>()
                 && let Some(bound) =
                     target_boundaries.iter().find(|b| b.column == *column)
             {
@@ -241,7 +241,7 @@ fn shrink_boundaries(
 ) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
     target_expr_and_indices.iter().for_each(|(expr, i)| {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>()
+        if let Some(column) = expr.downcast_ref::<Column>()
             && let Some(bound) = target_boundaries
                 .iter_mut()
                 .find(|bound| bound.column.eq(column))

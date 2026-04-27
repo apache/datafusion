@@ -18,7 +18,6 @@
 pub(crate) mod partitioning;
 pub(crate) mod sort;
 
-use std::any::Any;
 use std::ffi::c_void;
 use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -448,7 +447,7 @@ impl Drop for FFI_PhysicalExpr {
 impl From<Arc<dyn PhysicalExpr>> for FFI_PhysicalExpr {
     /// Creates a new [`FFI_PhysicalExpr`].
     fn from(expr: Arc<dyn PhysicalExpr>) -> Self {
-        if let Some(expr) = expr.as_any().downcast_ref::<ForeignPhysicalExpr>() {
+        if let Some(expr) = expr.downcast_ref::<ForeignPhysicalExpr>() {
             return expr.expr.clone();
         }
 
@@ -522,10 +521,6 @@ impl Clone for FFI_PhysicalExpr {
 }
 
 impl PhysicalExpr for ForeignPhysicalExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         unsafe {
             let schema = WrappedSchema::from(Arc::new(input_schema.clone()));

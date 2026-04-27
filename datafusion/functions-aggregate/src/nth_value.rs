@@ -125,7 +125,6 @@ impl AggregateUDFImpl for NthValueAgg {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let n = match acc_args.exprs[1]
-            .as_any()
             .downcast_ref::<Literal>()
             .map(|lit| lit.value())
         {

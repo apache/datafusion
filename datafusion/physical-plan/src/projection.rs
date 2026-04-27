@@ -442,7 +442,7 @@ impl ExecutionPlan for ProjectionExec {
             // Recursively transform the expression
             let mut can_pushdown = true;
             let transformed = Arc::clone(&sort_expr.expr).transform(|expr| {
-                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(col) = expr.downcast_ref::<Column>() {
                     // Check if column index is valid.
                     // This should always be true but fail gracefully if it's not.
                     if col.index() >= self.expr().len() {
@@ -455,9 +455,7 @@ impl ExecutionPlan for ProjectionExec {
                     // Check if projection expression is a simple column
                     // We cannot push down order by clauses that depend on
                     // projected computations as they would have nothing to reference.
-                    if let Some(child_col) =
-                        proj_expr.expr.as_any().downcast_ref::<Column>()
-                    {
+                    if let Some(child_col) = proj_expr.expr.downcast_ref::<Column>() {
                         // Replace with the child column
                         Ok(Transformed::yes(Arc::new(child_col.clone()) as _))
                     } else {
@@ -750,7 +748,7 @@ pub fn remove_unnecessary_projections(
 fn is_projection_removable(projection: &ProjectionExec) -> bool {
     let exprs = projection.expr();
     exprs.iter().enumerate().all(|(idx, proj_expr)| {
-        let Some(col) = proj_expr.expr.as_any().downcast_ref::<Column>() else {
+        let Some(col) = proj_expr.expr.downcast_ref::<Column>() else {
             return false;
         };
         col.name() == proj_expr.alias && col.index() == idx
@@ -763,7 +761,6 @@ pub fn all_alias_free_columns(exprs: &[ProjectionExpr]) -> bool {
     exprs.iter().all(|proj_expr| {
         proj_expr
             .expr
-            .as_any()
             .downcast_ref::<Column>()
             .map(|column| column.name() == proj_expr.alias)
             .unwrap_or(false)
@@ -782,7 +779,6 @@ pub fn new_projections_for_columns(
         .filter_map(|proj_expr| {
             proj_expr
                 .expr
-                .as_any()
                 .downcast_ref::<Column>()
                 .map(|expr| source[expr.index()])
         })
@@ -801,9 +797,7 @@ pub fn make_with_child(
 
 /// Returns `true` if all the expressions in the argument are `Column`s.
 pub fn all_columns(exprs: &[ProjectionExpr]) -> bool {
-    exprs
-        .iter()
-        .all(|proj_expr| proj_expr.expr.as_any().is::<Column>())
+    exprs.iter().all(|proj_expr| proj_expr.expr.is::<Column>())
 }
 
 /// Updates the given lexicographic ordering according to given projected
@@ -852,7 +846,6 @@ pub fn physical_to_column_exprs(
         .map(|proj_expr| {
             proj_expr
                 .expr
-                .as_any()
                 .downcast_ref::<Column>()
                 .map(|col| (col.clone(), proj_expr.alias.clone()))
         })
@@ -1035,7 +1028,7 @@ fn try_unifying_projections(
             .expr
             .apply(|expr| {
                 Ok({
-                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                    if let Some(column) = expr.downcast_ref::<Column>() {
                         *column_ref_map.entry(column.clone()).or_default() += 1;
                     }
                     TreeNodeRecursion::Continue
@@ -1083,7 +1076,7 @@ fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
     let mut seen = std::collections::HashSet::new();
     let mut indices = Vec::new();
     for proj_expr in exprs {
-        if let Some(col) = proj_expr.expr.as_any().downcast_ref::<Column>() {
+        if let Some(col) = proj_expr.expr.downcast_ref::<Column>() {
             // Simple column reference: preserve projection order.
             if seen.insert(col.index()) {
                 indices.push(col.index());
@@ -1095,7 +1088,7 @@ fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
             proj_expr
                 .expr
                 .apply(|expr| {
-                    if let Some(col) = expr.as_any().downcast_ref::<Column>()
+                    if let Some(col) = expr.downcast_ref::<Column>()
                         && seen.insert(col.index())
                     {
                         indices.push(col.index());
@@ -1151,7 +1144,7 @@ fn new_columns_for_join_on(
             // Rewrite all columns in `on`
             Arc::clone(*on)
                 .transform(|expr| {
-                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                    if let Some(column) = expr.downcast_ref::<Column>() {
                         // Find the column in the projection expressions
                         let new_column = projection_exprs
                             .iter()
