@@ -93,6 +93,9 @@ use std::sync::Arc;
 
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
+use datafusion_physical_expr::expressions::Column;
 
 use crate::ExecutionPlan;
 
@@ -317,6 +320,10 @@ impl StatisticsRegistry {
     }
 
     /// Create a registry pre-loaded with the standard built-in providers.
+    ///
+    /// Each provider reads the `ExpressionAnalyzerRegistry` from the exec node
+    /// it processes (set at planning time via `use_expression_analyzer`), so
+    /// custom analyzers are available to all built-in providers uniformly.
     ///
     /// Provider order (first match wins):
     /// 1. [`FilterStatisticsProvider`]
@@ -549,7 +556,7 @@ impl StatisticsProvider for FilterStatisticsProvider {
             input_stats,
             filter.predicate(),
             filter.default_selectivity(),
-            // TODO: pass filter.expression_analyzer_registry() once #21122 lands
+            filter.expression_analyzer_registry(),
         )?;
 
         // Adjust distinct_count for each column using the selectivity ratio
@@ -600,8 +607,6 @@ impl StatisticsProvider for ProjectionStatisticsProvider {
 
         let input_stats = (*child_stats[0].base).clone();
         let output_schema = proj.schema();
-        // TODO: pass proj.expression_analyzer_registry() once #21122 lands,
-        // so expression-level NDV/min/max feeds into projected column stats.
         let stats = proj
             .projection_expr()
             .project_statistics(input_stats, &output_schema)?;
@@ -664,7 +669,7 @@ impl StatisticsProvider for PassthroughStatisticsProvider {
 /// - GROUP BY is empty (scalar aggregate)
 /// - Any GROUP BY expression is not a simple column reference
 /// - Any GROUP BY column lacks NDV information
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct AggregateStatisticsProvider;
 
 impl StatisticsProvider for AggregateStatisticsProvider {
@@ -674,7 +679,6 @@ impl StatisticsProvider for AggregateStatisticsProvider {
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
         use crate::aggregates::AggregateExec;
-        use datafusion_physical_expr::expressions::Column;
 
         use crate::aggregates::AggregateMode;
 
@@ -694,17 +698,13 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 
         let input_stats = &child_stats[0].base;
 
-        // Compute NDV product of GROUP BY columns
+        let Some(analyzer) = agg.expression_analyzer_registry() else {
+            return Ok(StatisticsResult::Delegate);
+        };
+
         let mut ndv_product: Option<usize> = None;
         for (expr, _) in agg.group_expr().expr().iter() {
-            let Some(col) = expr.downcast_ref::<Column>() else {
-                return Ok(StatisticsResult::Delegate);
-            };
-            let Some(&ndv) = input_stats
-                .column_statistics
-                .get(col.index())
-                .and_then(|s| s.distinct_count.get_value())
-            else {
+            let Some(ndv) = analyzer.get_distinct_count(expr, input_stats) else {
                 return Ok(StatisticsResult::Delegate);
             };
             if ndv == 0 {
@@ -756,7 +756,7 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 /// Delegates when:
 /// - The plan is not a supported join type
 /// - Either input lacks row count information
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct JoinStatisticsProvider;
 
 impl StatisticsProvider for JoinStatisticsProvider {
@@ -765,9 +765,8 @@ impl StatisticsProvider for JoinStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::joins::{CrossJoinExec, HashJoinExec, SortMergeJoinExec};
+        use crate::joins::{CrossJoinExec, HashJoinExec, JoinOnRef, SortMergeJoinExec};
         use datafusion_common::JoinType;
-        use datafusion_physical_expr::expressions::Column;
 
         if child_stats.len() < 2 {
             return Ok(StatisticsResult::Delegate);
@@ -782,9 +781,25 @@ impl StatisticsProvider for JoinStatisticsProvider {
             return Ok(StatisticsResult::Delegate);
         };
 
-        use crate::joins::JoinOnRef;
+        let analyzer = plan.expression_analyzer_registry();
 
-        /// Estimate equi-join output using NDV of join key columns:
+        /// Resolve NDV for a join key expression. Uses the ExpressionAnalyzer
+        /// when available (handles arbitrary expressions), otherwise falls back
+        /// to direct column statistics lookup (bare column keys only).
+        fn resolve_key_ndv(
+            key: &Arc<dyn PhysicalExpr>,
+            stats: &Statistics,
+            analyzer: Option<&ExpressionAnalyzerRegistry>,
+        ) -> Option<usize> {
+            if let Some(a) = analyzer {
+                return a.get_distinct_count(key, stats);
+            }
+            key.downcast_ref::<Column>()
+                .and_then(|c| stats.column_statistics.get(c.index()))
+                .and_then(|s| s.distinct_count.get_value().copied())
+        }
+
+        /// Estimate equi-join output using NDV of join key expressions:
         ///   left_rows * right_rows / product(max(left_ndv_i, right_ndv_i))
         /// Falls back to Cartesian product if any key lacks NDV on both sides.
         fn equi_join_estimate(
@@ -793,20 +808,15 @@ impl StatisticsProvider for JoinStatisticsProvider {
             right: &Statistics,
             left_rows: usize,
             right_rows: usize,
+            analyzer: Option<&ExpressionAnalyzerRegistry>,
         ) -> usize {
             if on.is_empty() {
                 return left_rows.saturating_mul(right_rows);
             }
             let mut ndv_divisor: usize = 1;
             for (left_key, right_key) in on {
-                let left_ndv = left_key
-                    .downcast_ref::<Column>()
-                    .and_then(|c| left.column_statistics.get(c.index()))
-                    .and_then(|s| s.distinct_count.get_value().copied());
-                let right_ndv = right_key
-                    .downcast_ref::<Column>()
-                    .and_then(|c| right.column_statistics.get(c.index()))
-                    .and_then(|s| s.distinct_count.get_value().copied());
+                let left_ndv = resolve_key_ndv(left_key, left, analyzer);
+                let right_ndv = resolve_key_ndv(right_key, right, analyzer);
                 match (left_ndv, right_ndv) {
                     (Some(l), Some(r)) if l > 0 && r > 0 => {
                         ndv_divisor = ndv_divisor.saturating_mul(l.max(r));
@@ -821,26 +831,38 @@ impl StatisticsProvider for JoinStatisticsProvider {
             }
         }
 
-        let (inner_estimate, is_exact_cartesian, join_type) = if let Some(hash_join) =
-            plan.downcast_ref::<HashJoinExec>()
-        {
-            let est =
-                equi_join_estimate(hash_join.on(), left, right, left_rows, right_rows);
-            (est, false, *hash_join.join_type())
-        } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
-            let est = equi_join_estimate(smj.on(), left, right, left_rows, right_rows);
-            (est, false, smj.join_type())
-        } else if plan.downcast_ref::<CrossJoinExec>().is_some() {
-            let both_exact = left.num_rows.is_exact().unwrap_or(false)
-                && right.num_rows.is_exact().unwrap_or(false);
-            (
-                left_rows.saturating_mul(right_rows),
-                both_exact,
-                JoinType::Inner,
-            )
-        } else {
-            return Ok(StatisticsResult::Delegate);
-        };
+        let (inner_estimate, is_exact_cartesian, join_type) =
+            if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
+                let est = equi_join_estimate(
+                    hash_join.on(),
+                    left,
+                    right,
+                    left_rows,
+                    right_rows,
+                    analyzer,
+                );
+                (est, false, *hash_join.join_type())
+            } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
+                let est = equi_join_estimate(
+                    smj.on(),
+                    left,
+                    right,
+                    left_rows,
+                    right_rows,
+                    analyzer,
+                );
+                (est, false, smj.join_type())
+            } else if plan.downcast_ref::<CrossJoinExec>().is_some() {
+                let both_exact = left.num_rows.is_exact().unwrap_or(false)
+                    && right.num_rows.is_exact().unwrap_or(false);
+                (
+                    left_rows.saturating_mul(right_rows),
+                    both_exact,
+                    JoinType::Inner,
+                )
+            } else {
+                return Ok(StatisticsResult::Delegate);
+            };
 
         // Apply join-type-aware cardinality bounds
         let estimated = match join_type {

@@ -177,6 +177,10 @@ impl TestContext {
                 info!("Registering dummy async udf");
                 register_async_abs_udf(test_ctx.session_ctx())
             }
+            "expression_analyzer.slt" => {
+                info!("Registering tables with controlled statistics");
+                statistics_table::register_statistics_tables(test_ctx.session_ctx());
+            }
             _ => {
                 info!("Using default SessionContext");
             }
@@ -614,4 +618,166 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     let async_abs = AsyncAbs::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_abs));
     ctx.register_udf(udf.into_scalar_udf());
+}
+
+/// A table provider with fully controlled statistics for testing
+/// statistics-dependent optimizer and planner behaviors.
+///
+/// Unlike [`MemTable`] (which derives statistics from actual data), this
+/// provider returns whatever `Statistics` you supply, letting tests exercise
+/// code paths that depend on specific column NDV, min/max, or row-count values
+/// without needing real data files.
+pub mod statistics_table {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use async_trait::async_trait;
+    use datafusion::catalog::Session;
+    use datafusion::common::tree_node::TreeNodeRecursion;
+    use datafusion::common::{Result, stats::Precision};
+    use datafusion::datasource::{TableProvider, TableType};
+    use datafusion::execution::TaskContext;
+    use datafusion::logical_expr::Expr;
+    use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
+    use datafusion::physical_plan::{
+        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+        PlanProperties, SendableRecordBatchStream, Statistics,
+        execution_plan::{Boundedness, EmissionType},
+    };
+    use datafusion::prelude::SessionContext;
+
+    /// A [`TableProvider`] and [`ExecutionPlan`] that returns user-supplied
+    /// statistics. Useful for testing code paths that depend on specific column
+    /// NDV, min/max, or row counts without requiring real data files.
+    #[derive(Debug, Clone)]
+    pub struct StatisticsTable {
+        schema: SchemaRef,
+        stats: Statistics,
+        cache: Arc<PlanProperties>,
+    }
+
+    impl StatisticsTable {
+        pub fn new(schema: SchemaRef, stats: Statistics) -> Self {
+            assert_eq!(
+                schema.fields().len(),
+                stats.column_statistics.len(),
+                "column_statistics length must match schema field count"
+            );
+            let cache = Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(Arc::clone(&schema)),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            ));
+            Self {
+                schema,
+                stats,
+                cache,
+            }
+        }
+    }
+
+    impl DisplayAs for StatisticsTable {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            write!(f, "StatisticsTable")
+        }
+    }
+
+    impl ExecutionPlan for StatisticsTable {
+        fn name(&self) -> &'static str {
+            "StatisticsTable"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.cache
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            datafusion::common::not_impl_err!(
+                "StatisticsTable is for statistics testing only"
+            )
+        }
+
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
+            Ok(Arc::new(self.stats.clone()))
+        }
+    }
+
+    #[async_trait]
+    impl TableProvider for StatisticsTable {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+
+        fn table_type(&self) -> TableType {
+            TableType::Base
+        }
+
+        async fn scan(
+            &self,
+            _state: &dyn Session,
+            projection: Option<&Vec<usize>>,
+            _filters: &[Expr],
+            _limit: Option<usize>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            let schema = datafusion::common::project_schema(&self.schema, projection)?;
+            let stats = self.stats.clone().project(projection);
+            Ok(Arc::new(StatisticsTable::new(schema, stats)))
+        }
+    }
+
+    /// Registers named [`StatisticsTable`] instances needed by SLT tests
+    /// that require controlled statistics (NDV, row count, min/max).
+    pub fn register_statistics_tables(ctx: &SessionContext) {
+        // t_ndv: 1000 rows, column a (Int64, NDV=10), column b (Int64, NDV=5).
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let stats = Statistics {
+            num_rows: Precision::Inexact(1000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    distinct_count: Precision::Inexact(10),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    distinct_count: Precision::Inexact(5),
+                    ..Default::default()
+                },
+            ],
+        };
+        ctx.register_table("t_ndv", Arc::new(StatisticsTable::new(schema, stats)))
+            .expect("registering t_ndv should succeed");
+    }
 }

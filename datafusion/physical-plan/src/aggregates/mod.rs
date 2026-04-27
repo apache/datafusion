@@ -35,6 +35,7 @@ use crate::{
     SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 use datafusion_physical_expr::utils::collect_columns;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
@@ -670,6 +671,9 @@ pub struct AggregateExec {
     /// it remains `Some(..)` to enable dynamic filtering during aggregate execution;
     /// otherwise, it is cleared to `None`.
     dynamic_filter: Option<Arc<AggrDynFilter>>,
+    /// Registry for expression-level statistics estimation.
+    /// Set when `use_expression_analyzer` is enabled.
+    expression_analyzer_registry: Option<Arc<ExpressionAnalyzerRegistry>>,
 }
 
 impl AggregateExec {
@@ -695,6 +699,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            expression_analyzer_registry: self.expression_analyzer_registry.clone(),
         }
     }
 
@@ -715,6 +720,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            expression_analyzer_registry: self.expression_analyzer_registry.clone(),
         }
     }
 
@@ -849,6 +855,7 @@ impl AggregateExec {
             input_order_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
+            expression_analyzer_registry: None,
         };
 
         exec.init_dynamic_filter();
@@ -1553,6 +1560,26 @@ impl ExecutionPlan for AggregateExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn uses_expression_level_statistics(&self) -> bool {
+        true
+    }
+
+    fn with_expression_analyzer_registry(
+        &self,
+        registry: &Arc<ExpressionAnalyzerRegistry>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.expression_analyzer_registry.is_some() {
+            return None;
+        }
+        let mut new_exec = self.clone();
+        new_exec.expression_analyzer_registry = Some(Arc::clone(registry));
+        Some(Arc::new(new_exec))
+    }
+
+    fn expression_analyzer_registry(&self) -> Option<&ExpressionAnalyzerRegistry> {
+        self.expression_analyzer_registry.as_deref()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {

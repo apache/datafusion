@@ -21,6 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use itertools::Itertools;
 
@@ -95,6 +96,8 @@ pub struct FilterExec {
     batch_size: usize,
     /// Number of rows to fetch
     fetch: Option<usize>,
+    /// Optional expression analyzer registry for selectivity estimation
+    expression_analyzer_registry: Option<Arc<ExpressionAnalyzerRegistry>>,
 }
 
 /// Builder for [`FilterExec`] to set optional parameters
@@ -214,6 +217,7 @@ impl FilterExecBuilder {
             projection: self.projection,
             batch_size: self.batch_size,
             fetch: self.fetch,
+            expression_analyzer_registry: None,
         })
     }
 }
@@ -287,6 +291,7 @@ impl FilterExec {
             projection: self.projection.clone(),
             batch_size,
             fetch: self.fetch,
+            expression_analyzer_registry: self.expression_analyzer_registry.clone(),
         })
     }
 
@@ -320,6 +325,7 @@ impl FilterExec {
         input_stats: Statistics,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
+        expression_analyzer_registry: Option<&ExpressionAnalyzerRegistry>,
     ) -> Result<Statistics> {
         let (eq_columns, is_infeasible) = collect_equality_columns(predicate);
 
@@ -340,9 +346,11 @@ impl FilterExec {
             }
             (0.0, Precision::Exact(0), cs)
         } else if !check_support(predicate, schema) {
-            // Interval analysis is not applicable; fall back to the default
-            // selectivity but still pin NDV=1 for every `col = literal` column.
-            let selectivity = default_selectivity as f64 / 100.0;
+            // Interval analysis is not applicable. Use ExpressionAnalyzer for
+            // better selectivity when available, fall back to default_selectivity.
+            let selectivity = expression_analyzer_registry
+                .and_then(|r| r.get_selectivity(predicate, &input_stats))
+                .unwrap_or(default_selectivity as f64 / 100.0);
             let mut cs = input_stats.to_inexact().column_statistics;
             for &idx in &eq_columns {
                 if idx < cs.len() && cs[idx].distinct_count != Precision::Exact(0) {
@@ -403,6 +411,7 @@ impl FilterExec {
             Arc::unwrap_or_clone(input.partition_statistics(None)?),
             predicate,
             default_selectivity,
+            None,
         )?;
         let mut eq_properties = input.equivalence_properties().clone();
         let (equal_pairs, _) = collect_columns_from_predicate_inner(predicate);
@@ -574,6 +583,26 @@ impl ExecutionPlan for FilterExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn uses_expression_level_statistics(&self) -> bool {
+        true
+    }
+
+    fn with_expression_analyzer_registry(
+        &self,
+        registry: &Arc<ExpressionAnalyzerRegistry>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.expression_analyzer_registry.is_some() {
+            return None;
+        }
+        let mut new_exec = self.clone();
+        new_exec.expression_analyzer_registry = Some(Arc::clone(registry));
+        Some(Arc::new(new_exec))
+    }
+
+    fn expression_analyzer_registry(&self) -> Option<&ExpressionAnalyzerRegistry> {
+        self.expression_analyzer_registry.as_deref()
+    }
+
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
@@ -584,6 +613,7 @@ impl ExecutionPlan for FilterExec {
             input_stats,
             self.predicate(),
             self.default_selectivity,
+            self.expression_analyzer_registry.as_deref(),
         )?;
         Ok(Arc::new(stats.project(self.projection.as_ref())))
     }
@@ -748,6 +778,7 @@ impl ExecutionPlan for FilterExec {
                 projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
+                expression_analyzer_registry: self.expression_analyzer_registry.clone(),
             };
             Some(Arc::new(new) as _)
         };
@@ -772,6 +803,7 @@ impl ExecutionPlan for FilterExec {
             projection: self.projection.clone(),
             batch_size: self.batch_size,
             fetch,
+            expression_analyzer_registry: self.expression_analyzer_registry.clone(),
         }))
     }
 
@@ -3147,6 +3179,68 @@ mod tests {
     /// an explicit projection must not panic when `try_swapping_with_projection`
     /// attempts to swap the two nodes.
     ///
+    /// Verifies that `ExpressionAnalyzerRegistry` computes selectivity for OR predicates
+    /// using inclusion-exclusion, which interval arithmetic cannot represent (a union of
+    /// two disjoint intervals is not a single interval).
+    ///
+    /// For `(a = 42 OR b = 5)` with NDV_a=10, NDV_b=5 on 1000 rows:
+    /// - Without ExpressionAnalyzer: default 20% selectivity -> 200 rows
+    /// - With ExpressionAnalyzer: P(a=42) + P(b=5) - P(a=42)*P(b=5) = 0.1 + 0.2 - 0.02 = 0.28 -> 280 rows
+    #[tokio::test]
+    async fn test_filter_statistics_expression_analyzer_selectivity_or_predicate()
+    -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(10),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(5),
+                        ..Default::default()
+                    },
+                ],
+            },
+            schema.clone(),
+        ));
+        // (a = 42 OR b = 5): OR is not expressible as a single interval
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+            )),
+            Operator::Or,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("b", 1)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
+            )),
+        ));
+
+        // Without ExpressionAnalyzer: default 20% selectivity -> 200 rows
+        let filter = Arc::new(FilterExec::try_new(Arc::clone(&predicate), input as _)?);
+        let stats = filter.partition_statistics(None)?;
+        assert_eq!(stats.num_rows, Precision::Inexact(200));
+
+        // With ExpressionAnalyzer: inclusion-exclusion -> 0.1 + 0.2 - 0.02 = 0.28 -> 280 rows
+        let registry = Arc::new(ExpressionAnalyzerRegistry::new());
+        let filter_with_registry = filter
+            .with_expression_analyzer_registry(&registry)
+            .expect("registry should be injectable when not already set");
+        let stats_with_registry = filter_with_registry.partition_statistics(None)?;
+        assert_eq!(stats_with_registry.num_rows, Precision::Inexact(280));
+
+        Ok(())
+    }
+
     /// Before the fix, `FilterExecBuilder::from(self)` copied the old projection
     /// (e.g. `[0, 1, 2]`) from the FilterExec. After `.with_input` replaced the
     /// input with the narrower ProjectionExec (2 columns), `.build()` tried to

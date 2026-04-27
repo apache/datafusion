@@ -39,4 +39,5 @@ mod test_utils;
 mod window_optimize;
 mod window_topn;
 
+mod expression_analyzer_injection;
 mod pushdown_utils;

@@ -59,6 +59,7 @@ use datafusion_common::{
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
@@ -561,6 +562,35 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
             );
         }
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
+    }
+
+    /// Whether this node could benefit from expression-level statistics
+    /// (NDV, selectivity, min/max) to compute its output statistics.
+    ///
+    /// Nodes that return `true` must also override
+    /// [`Self::with_expression_analyzer_registry`] to accept the registry and
+    /// [`Self::expression_analyzer_registry`] to expose it.
+    ///
+    /// See `FilterExec`, `ProjectionExec`, `AggregateExec`, and `HashJoinExec`
+    /// for reference implementations.
+    fn uses_expression_level_statistics(&self) -> bool {
+        false
+    }
+
+    /// Accepts an [`ExpressionAnalyzerRegistry`] and returns a new plan node
+    /// with the registry stored, or `None` if this node does not use
+    /// expression-level statistics or a registry is already set.
+    fn with_expression_analyzer_registry(
+        &self,
+        _registry: &Arc<ExpressionAnalyzerRegistry>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
+
+    /// Returns the [`ExpressionAnalyzerRegistry`] if one has been injected
+    /// into this node, or `None` otherwise.
+    fn expression_analyzer_registry(&self) -> Option<&ExpressionAnalyzerRegistry> {
+        None
     }
 
     /// Returns `true` if a limit can be safely pushed down through this
