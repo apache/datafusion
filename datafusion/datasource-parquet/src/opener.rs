@@ -1154,6 +1154,23 @@ impl RowGroupsPrunedParquetOpen {
             reader_metadata.parquet_schema(),
         );
 
+        // Split into consecutive runs of row groups that share the same filter
+        // requirement. Fully matched row groups skip the RowFilter; others need it.
+        // Reverse the run order for reverse scans so the combined decoder stream
+        // preserves the requested global row group order.
+        let mut runs = if has_row_filter && !fully_matched_row_groups.is_empty() {
+            split_decoder_runs(access_plan, &fully_matched_row_groups)
+        } else {
+            // Single run: all row groups use the same filter config
+            vec![(has_row_filter, access_plan)]
+        };
+        if prepared.reverse_row_groups {
+            runs.reverse();
+        }
+        let run_count = runs.len();
+        let decoder_limit = prepared.limit.filter(|_| run_count == 1);
+        let remaining_limit = prepared.limit.filter(|_| run_count > 1);
+
         // Helper: configure a decoder builder with shared options from
         // the prepared plan.
         let build_decoder = |pp: PreparedAccessPlan,
@@ -1171,20 +1188,10 @@ impl RowGroupsPrunedParquetOpen {
                 builder = builder.with_row_selection(row_selection);
             }
             builder = builder.with_row_groups(pp.row_group_indexes);
-            if let Some(limit) = prepared.limit {
+            if let Some(limit) = decoder_limit {
                 builder = builder.with_limit(limit);
             }
             Ok(builder)
-        };
-
-        // Split into consecutive runs of row groups that share the same filter
-        // requirement. Fully matched row groups skip the RowFilter; others need it.
-        // This preserves the original row group ordering for ordered scans.
-        let runs = if has_row_filter && !fully_matched_row_groups.is_empty() {
-            split_decoder_runs(access_plan, &fully_matched_row_groups)
-        } else {
-            // Single run: all row groups use the same filter config
-            vec![(has_row_filter, access_plan)]
         };
 
         // Build a decoder per run
@@ -1237,6 +1244,7 @@ impl RowGroupsPrunedParquetOpen {
             PushDecoderStreamState {
                 decoder,
                 pending_decoders,
+                remaining_limit,
                 reader: prepared.async_file_reader,
                 projector,
                 output_schema,
@@ -1277,6 +1285,12 @@ struct PushDecoderStreamState {
     /// Used when fully matched row groups split the scan into consecutive
     /// runs with different filter configurations, maintaining original order.
     pending_decoders: VecDeque<ParquetPushDecoder>,
+    /// Global remaining row limit across all decoder runs.
+    ///
+    /// Decoder-local limits are only safe for single-run scans. When the scan
+    /// is split across multiple decoders, the combined stream limit is enforced
+    /// here instead.
+    remaining_limit: Option<usize>,
     reader: Box<dyn AsyncFileReader>,
     projector: Projector,
     output_schema: Arc<Schema>,
@@ -1303,6 +1317,9 @@ impl PushDecoderStreamState {
     /// with `unfold`'s ownership across yield points.
     async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
         loop {
+            if self.remaining_limit == Some(0) {
+                return None;
+            }
             match self.decoder.try_decode() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
                     let data = self
@@ -1320,6 +1337,18 @@ impl PushDecoderStreamState {
                     }
                 }
                 Ok(DecodeResult::Data(batch)) => {
+                    let batch = if let Some(remaining_limit) = self.remaining_limit {
+                        if batch.num_rows() > remaining_limit {
+                            self.remaining_limit = Some(0);
+                            batch.slice(0, remaining_limit)
+                        } else {
+                            self.remaining_limit =
+                                Some(remaining_limit - batch.num_rows());
+                            batch
+                        }
+                    } else {
+                        batch
+                    };
                     let mut timer = self.baseline_metrics.elapsed_compute().timer();
                     self.copy_arrow_reader_metrics();
                     let result = self.project_batch(&batch);
@@ -1844,6 +1873,12 @@ mod test {
         /// Enable page index.
         fn with_enable_page_index(mut self, enable: bool) -> Self {
             self.enable_page_index = enable;
+            self
+        }
+
+        /// Set a row limit.
+        fn with_limit(mut self, limit: usize) -> Self {
+            self.limit = Some(limit);
             self
         }
 
@@ -2807,6 +2842,78 @@ mod test {
             rows_without_page_index, 100,
             "without page index all rows are returned"
         );
+    }
+
+    async fn fully_matched_split_test_file(
+        store: Arc<dyn ObjectStore>,
+    ) -> (SchemaRef, PartitionedFile) {
+        use parquet::file::properties::WriterProperties;
+
+        let batch0 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(7), Some(1), Some(2)])).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch0.clone(), batch1, batch2],
+            Some(props),
+        )
+        .await;
+
+        let schema = batch0.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        (schema, file)
+    }
+
+    #[tokio::test]
+    async fn test_fully_matched_runs_respect_global_limit() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = fully_matched_split_test_file(Arc::clone(&store)).await;
+        let predicate = logical2physical(&col("a").gt_eq(lit(3)), &schema);
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .with_limit(4)
+            .build();
+
+        let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
+        assert_eq!(values, vec![3, 4, 5, 6]);
+    }
+
+    #[tokio::test]
+    async fn test_fully_matched_runs_preserve_reverse_order() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = fully_matched_split_test_file(Arc::clone(&store)).await;
+        let predicate = logical2physical(&col("a").gt_eq(lit(3)), &schema);
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .with_reverse_row_groups(true)
+            .build();
+
+        let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
+        assert_eq!(values, vec![7, 4, 5, 6, 3]);
     }
 
     #[test]
