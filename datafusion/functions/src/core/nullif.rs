@@ -157,6 +157,7 @@ mod tests {
         buffer::NullBuffer,
         datatypes::{Field, Fields, Int64Type},
     };
+    use datafusion_common::DataFusionError;
 
     use super::*;
 
@@ -332,6 +333,27 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(expected.as_ref(), result.as_ref());
+
+        Ok(())
+    }
+
+    #[test]
+    fn nullif_compare_nested_to_unnested() -> Result<()> {
+        let lhs = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3)]),
+            Some(vec![]),
+            Some(vec![Some(5), Some(6), Some(7)]),
+            None,
+        ]));
+        let lhs = ColumnarValue::Array(lhs);
+
+        let rhs = Arc::new(Int64Array::from(vec![Some(1), Some(3), None, None, None]));
+        let rhs = ColumnarValue::Array(rhs);
+
+        let result = nullif_func(&[lhs, rhs]);
+
+        assert!(matches!(result, Err(DataFusionError::ArrowError(_, _))));
 
         Ok(())
     }
