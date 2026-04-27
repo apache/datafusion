@@ -3773,11 +3773,11 @@ impl PartialOrd for Aggregate {
 #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
-        let mut counts: HashMap<&[Expr], usize> = HashMap::new();
-        for set in sets {
-            *counts.entry(set).or_insert(0) += 1;
-        }
-        counts.into_values().max().unwrap_or(0).saturating_sub(1)
+        sets.iter()
+            .map(|set| sets.iter().filter(|other| *other == set).count())
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(1)
     } else {
         0
     }
