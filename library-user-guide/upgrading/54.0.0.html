@@ -736,6 +736,82 @@ also matches the behavior of other string-related functions in DataFusion.</p>
 clusters (e.g., ZWJ emoji sequences). For ASCII and most common Unicode text,
 behavior is unchanged.</p>
 </section>
+<section id="scalar-subquery-execution-changes">
+<h3>Scalar subquery execution changes<a class="headerlink" href="#scalar-subquery-execution-changes" title="Link to this heading">#</a></h3>
+<p>Uncorrelated scalar subqueries (e.g. <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">...</span> <span class="pre">WHERE</span> <span class="pre">x</span> <span class="pre">&gt;</span> <span class="pre">(SELECT</span> <span class="pre">max(v)</span> <span class="pre">FROM</span> <span class="pre">t)</span></code>)
+are now executed by a dedicated physical operator rather than being rewritten to
+a join. Correlated scalar subqueries are unchanged.</p>
+<p>This produces two user-visible changes:</p>
+<ul class="simple">
+<li><p><strong>Subqueries that return multiple rows now fail at runtime.</strong> An uncorrelated
+scalar subquery that returns more than one row fails with <code class="docutils literal notranslate"><span class="pre">Execution</span> <span class="pre">error:</span> <span class="pre">Scalar</span> <span class="pre">subquery</span> <span class="pre">returned</span> <span class="pre">more</span> <span class="pre">than</span> <span class="pre">one</span> <span class="pre">row</span></code>. This matches the SQL standard and
+the behavior of most other SQL implementations. The previous join-based
+rewrite could silently produce multi-row output. Add a <code class="docutils literal notranslate"><span class="pre">LIMIT</span> <span class="pre">1</span></code> or an
+aggregate to the subquery to fix such queries.</p></li>
+<li><p><strong>Plan shape changes.</strong> Uncorrelated <code class="docutils literal notranslate"><span class="pre">Expr::ScalarSubquery</span></code> nodes now survive
+into the final logical plan instead of being replaced by a join; the
+corresponding physical plan contains a new <code class="docutils literal notranslate"><span class="pre">ScalarSubqueryExec</span></code> node and a
+<code class="docutils literal notranslate"><span class="pre">ScalarSubqueryExpr</span></code> expression. Code that walks or transforms <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> /
+<code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> trees, as well as <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output, may need updating.</p></li>
+</ul>
+</section>
+<section id="datafusion-proto-expression-deserialization-now-takes-a-taskcontext">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: expression deserialization now takes a <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code><a class="headerlink" href="#datafusion-proto-expression-deserialization-now-takes-a-taskcontext" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">Serializeable::from_bytes_with_registry</span></code> is renamed to <code class="docutils literal notranslate"><span class="pre">from_bytes_with_ctx</span></code>
+and takes a <code class="docutils literal notranslate"><span class="pre">&amp;TaskContext</span></code> instead of a <code class="docutils literal notranslate"><span class="pre">&amp;dyn</span> <span class="pre">FunctionRegistry</span></code>. <code class="docutils literal notranslate"><span class="pre">parse_expr</span></code>,
+<code class="docutils literal notranslate"><span class="pre">parse_exprs</span></code>, and <code class="docutils literal notranslate"><span class="pre">parse_sorts</span></code> take the same change. <code class="docutils literal notranslate"><span class="pre">Expr::from_bytes</span></code>
+(without a registry argument) is unchanged.</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">-let expr = Expr::from_bytes_with_registry(&amp;bytes, &amp;registry)?;</span>
+<span class="gi">+let expr = Expr::from_bytes_with_ctx(&amp;bytes, ctx.task_ctx().as_ref())?;</span>
+</pre></div>
+</div>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">-let expr = parse_expr(&amp;proto, &amp;registry, &amp;codec)?;</span>
+<span class="gi">+let expr = parse_expr(&amp;proto, ctx.task_ctx().as_ref(), &amp;codec)?;</span>
+</pre></div>
+</div>
+</section>
+<section id="datafusion-proto-physicalprotoconverterextension-reshaped">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: <code class="docutils literal notranslate"><span class="pre">PhysicalProtoConverterExtension</span></code> reshaped<a class="headerlink" href="#datafusion-proto-physicalprotoconverterextension-reshaped" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">PhysicalProtoConverterExtension</span></code> and the <code class="docutils literal notranslate"><span class="pre">parse_physical_*_with_converter</span></code>
+helpers now take a single <code class="docutils literal notranslate"><span class="pre">&amp;PhysicalPlanDecodeContext&lt;'_&gt;</span></code> that bundles the
+<code class="docutils literal notranslate"><span class="pre">TaskContext</span></code> and the <code class="docutils literal notranslate"><span class="pre">PhysicalExtensionCodec</span></code>. Implementations update like
+this:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="w"> </span>impl PhysicalProtoConverterExtension for MyConverter {
+<span class="w"> </span>    fn proto_to_execution_plan(
+<span class="w"> </span>        &amp;self,
+<span class="gd">-        ctx: &amp;TaskContext,</span>
+<span class="gd">-        codec: &amp;dyn PhysicalExtensionCodec,</span>
+<span class="w"> </span>        proto: &amp;protobuf::PhysicalPlanNode,
+<span class="gi">+        ctx: &amp;PhysicalPlanDecodeContext&lt;&#39;_&gt;,</span>
+<span class="w"> </span>    ) -&gt; Result&lt;Arc&lt;dyn ExecutionPlan&gt;&gt; {
+<span class="gd">-        proto.try_into_physical_plan_with_converter(ctx, codec, self)</span>
+<span class="gi">+        self.default_proto_to_execution_plan(proto, ctx)</span>
+<span class="w"> </span>    }
+
+<span class="w"> </span>    fn proto_to_physical_expr(
+<span class="w"> </span>        &amp;self,
+<span class="w"> </span>        proto: &amp;PhysicalExprNode,
+<span class="gd">-        ctx: &amp;TaskContext,</span>
+<span class="w"> </span>        input_schema: &amp;Schema,
+<span class="gd">-        codec: &amp;dyn PhysicalExtensionCodec,</span>
+<span class="gi">+        ctx: &amp;PhysicalPlanDecodeContext&lt;&#39;_&gt;,</span>
+<span class="w"> </span>    ) -&gt; Result&lt;Arc&lt;dyn PhysicalExpr&gt;&gt; {
+<span class="gd">-        parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)</span>
+<span class="gi">+        self.default_proto_to_physical_expr(proto, input_schema, ctx)</span>
+<span class="w"> </span>    }
+<span class="w"> </span>}
+</pre></div>
+</div>
+<p>Pull out the <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code> or codec inside these methods with
+<code class="docutils literal notranslate"><span class="pre">ctx.task_ctx()</span></code> and <code class="docutils literal notranslate"><span class="pre">ctx.codec()</span></code>. Construct a fresh context at an API
+boundary with <code class="docutils literal notranslate"><span class="pre">PhysicalPlanDecodeContext::new(task_ctx,</span> <span class="pre">codec)</span></code>.</p>
+</section>
+<section id="executionprops-has-new-fields">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code> has new fields<a class="headerlink" href="#executionprops-has-new-fields" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code> gained new public fields. Code that constructs it via a
+struct literal, or pattern-matches it without <code class="docutils literal notranslate"><span class="pre">..</span></code>, no longer compiles. Use
+<code class="docutils literal notranslate"><span class="pre">ExecutionProps::new()</span></code> and include <code class="docutils literal notranslate"><span class="pre">..</span></code> in exhaustive patterns.</p>
+</section>
 <section id="items-in-datafusion-functions-strings-are-no-longer-public">
 <h3>Items in <code class="docutils literal notranslate"><span class="pre">datafusion_functions::strings</span></code> are no longer public<a class="headerlink" href="#items-in-datafusion-functions-strings-are-no-longer-public" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">StringArrayBuilder</span></code>, <code class="docutils literal notranslate"><span class="pre">LargeStringArrayBuilder</span></code>, <code class="docutils literal notranslate"><span class="pre">StringViewArrayBuilder</span></code>,
@@ -847,6 +923,10 @@ allocation-free variant:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pruningstatistics-row-counts-no-longer-takes-a-column-parameter"><code class="docutils literal notranslate"><span class="pre">PruningStatistics::row_counts</span></code> no longer takes a <code class="docutils literal notranslate"><span class="pre">column</span></code> parameter</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#avro-api-and-timestamp-decoding-changes">Avro API and timestamp decoding changes</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#lpad-rpad-and-translate-now-operate-on-unicode-codepoints-instead-of-grapheme-clusters"><code class="docutils literal notranslate"><span class="pre">lpad</span></code>, <code class="docutils literal notranslate"><span class="pre">rpad</span></code>, and <code class="docutils literal notranslate"><span class="pre">translate</span></code> now operate on Unicode codepoints instead of grapheme clusters</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#scalar-subquery-execution-changes">Scalar subquery execution changes</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-expression-deserialization-now-takes-a-taskcontext"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: expression deserialization now takes a <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-physicalprotoconverterextension-reshaped"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: <code class="docutils literal notranslate"><span class="pre">PhysicalProtoConverterExtension</span></code> reshaped</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionprops-has-new-fields"><code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code> has new fields</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#items-in-datafusion-functions-strings-are-no-longer-public">Items in <code class="docutils literal notranslate"><span class="pre">datafusion_functions::strings</span></code> are no longer public</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats"><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_median</span></code> now coerce to floats</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default"><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code></a></li>
