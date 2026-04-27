@@ -53,7 +53,7 @@ cmd_changed_crates() {
   #    excludes internal crates without a manual exclusion list.
   local crates
   crates=$(cargo metadata --no-deps --format-version 1 | jq -r '
-    .workspace_root + "/" as $root
+    (.workspace_root + "/") as $root
     | .packages[]
     | select(.publish != [])
     | "\(.name) \(.manifest_path | ltrimstr($root) | rtrimstr("/Cargo.toml"))"
