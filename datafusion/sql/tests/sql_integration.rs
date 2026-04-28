@@ -5342,8 +5342,9 @@ fn test_progressive_lambda_parameters() {
         .unwrap()
         .unwrap();
 
-    // test that merge accumulator parameter and finish parameter correctly
-    // got the type of the merge lambda output (Float64), and not the initial value type (Int64)
+    // taking into account the user defined coercion that coerced the List(Float64) to List(Float32),
+    // test that merge accumulator parameter and finish parameter correctly got the type of the merge
+    // lambda output (Float32 instead of Float64), and not the initial value type (Int64)
     assert_eq!(
         expr,
         Expr::HigherOrderFunction(HigherOrderFunction::new(
@@ -5351,6 +5352,7 @@ fn test_progressive_lambda_parameters() {
             vec![
                 Expr::ScalarFunction(ScalarFunction::new_udf(
                     make_array_udf(),
+                    // note the array being reduced is List(Float64)
                     vec![
                         Expr::Literal(1.0f64.into(), None),
                         Expr::Literal(2.0f64.into(), None)
@@ -5359,10 +5361,11 @@ fn test_progressive_lambda_parameters() {
                 Expr::Literal(0i64.into(), None),
                 lambda(
                     ["acc", "v"],
-                    resolved_lambda_var("acc", DataType::Float64)
-                        + resolved_lambda_var("v", DataType::Float64)
+                    // lambda vars are Float32
+                    resolved_lambda_var("acc", DataType::Float32)
+                        + resolved_lambda_var("v", DataType::Float32)
                 ),
-                lambda(["v"], -resolved_lambda_var("v", DataType::Float64)),
+                lambda(["v"], -resolved_lambda_var("v", DataType::Float32)),
             ]
         ))
     )
@@ -5384,7 +5387,7 @@ impl MockArrayReduce {
     #[expect(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
-            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -5400,6 +5403,17 @@ impl HigherOrderUDF for MockArrayReduce {
 
     fn signature(&self) -> &HigherOrderSignature {
         &self.signature
+    }
+
+    fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [_list, initial] = arg_types else {
+            unreachable!()
+        };
+
+        Ok(vec![
+            DataType::new_list(DataType::Float32, true),
+            initial.clone(),
+        ])
     }
 
     fn lambda_parameters(
