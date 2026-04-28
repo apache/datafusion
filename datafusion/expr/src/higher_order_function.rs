@@ -31,6 +31,7 @@ use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use arrow_schema::SchemaRef;
 
 /// The types of arguments for which a function has implementations.
 ///
