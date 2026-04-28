@@ -23,6 +23,9 @@ on:
   pull_request:
   merge_group:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
@@ -50,6 +53,22 @@ jobs:
       - name: Prettier check
       # if you encounter error, see instructions inside the script
         run: ci/scripts/doc_prettier_check.sh
+
+  markdown-link-check:
+    name: Check Markdown Links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Load tool versions
+        run: |
+          source ci/scripts/utils/tool_versions.sh
+          echo "LYCHEE_VERSION=${LYCHEE_VERSION}" >> "$GITHUB_ENV"
+      - name: Install lychee
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486  # v2.75.18
+        with:
+          tool: lychee@${{ env.LYCHEE_VERSION }}
+      - name: Run markdown link check
+        run: bash ci/scripts/markdown_link_check.sh
 
   asf-yaml-check:
     name: Validate required_status_checks in .asf.yaml

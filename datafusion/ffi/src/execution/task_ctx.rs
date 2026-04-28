@@ -18,9 +18,6 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::pmr::ROption;
-use abi_stable::std_types::{RHashMap, RString};
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -28,33 +25,37 @@ use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
 
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
+
 use crate::session::config::FFI_SessionConfig;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
+use crate::util::FFI_Option;
 
 /// A stable struct for sharing [`TaskContext`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_TaskContext {
     /// Return the session ID.
-    pub session_id: unsafe extern "C" fn(&Self) -> RString,
+    pub session_id: unsafe extern "C" fn(&Self) -> SString,
 
     /// Return the task ID.
-    pub task_id: unsafe extern "C" fn(&Self) -> ROption<RString>,
+    pub task_id: unsafe extern "C" fn(&Self) -> FFI_Option<SString>,
 
     /// Return the session configuration.
     pub session_config: unsafe extern "C" fn(&Self) -> FFI_SessionConfig,
 
-    /// Returns a hashmap of names to scalar functions.
-    pub scalar_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_ScalarUDF>,
+    /// Returns a vec of name-function pairs for scalar functions.
+    pub scalar_functions: unsafe extern "C" fn(&Self) -> SVec<(SString, FFI_ScalarUDF)>,
 
-    /// Returns a hashmap of names to aggregate functions.
+    /// Returns a vec of name-function pairs for aggregate functions.
     pub aggregate_functions:
-        unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_AggregateUDF>,
+        unsafe extern "C" fn(&Self) -> SVec<(SString, FFI_AggregateUDF)>,
 
-    /// Returns a hashmap of names to window functions.
-    pub window_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
+    /// Returns a vec of name-function pairs for window functions.
+    pub window_functions: unsafe extern "C" fn(&Self) -> SVec<(SString, FFI_WindowUDF)>,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
@@ -82,14 +83,14 @@ impl FFI_TaskContext {
     }
 }
 
-unsafe extern "C" fn session_id_fn_wrapper(ctx: &FFI_TaskContext) -> RString {
+unsafe extern "C" fn session_id_fn_wrapper(ctx: &FFI_TaskContext) -> SString {
     unsafe {
         let ctx = ctx.inner();
         ctx.session_id().into()
     }
 }
 
-unsafe extern "C" fn task_id_fn_wrapper(ctx: &FFI_TaskContext) -> ROption<RString> {
+unsafe extern "C" fn task_id_fn_wrapper(ctx: &FFI_TaskContext) -> FFI_Option<SString> {
     unsafe {
         let ctx = ctx.inner();
         ctx.task_id().map(|s| s.as_str().into()).into()
@@ -107,7 +108,7 @@ unsafe extern "C" fn session_config_fn_wrapper(
 
 unsafe extern "C" fn scalar_functions_fn_wrapper(
     ctx: &FFI_TaskContext,
-) -> RHashMap<RString, FFI_ScalarUDF> {
+) -> SVec<(SString, FFI_ScalarUDF)> {
     unsafe {
         let ctx = ctx.inner();
         ctx.scalar_functions()
@@ -119,7 +120,7 @@ unsafe extern "C" fn scalar_functions_fn_wrapper(
 
 unsafe extern "C" fn aggregate_functions_fn_wrapper(
     ctx: &FFI_TaskContext,
-) -> RHashMap<RString, FFI_AggregateUDF> {
+) -> SVec<(SString, FFI_AggregateUDF)> {
     unsafe {
         let ctx = ctx.inner();
         ctx.aggregate_functions()
@@ -136,7 +137,7 @@ unsafe extern "C" fn aggregate_functions_fn_wrapper(
 
 unsafe extern "C" fn window_functions_fn_wrapper(
     ctx: &FFI_TaskContext,
-) -> RHashMap<RString, FFI_WindowUDF> {
+) -> SVec<(SString, FFI_WindowUDF)> {
     unsafe {
         let ctx = ctx.inner();
         ctx.window_functions()
@@ -198,7 +199,7 @@ impl From<FFI_TaskContext> for Arc<TaskContext> {
                     let udf = <Arc<dyn ScalarUDFImpl>>::from(&kv_pair.1);
 
                     (
-                        kv_pair.0.into_string(),
+                        kv_pair.0.to_string(),
                         Arc::new(ScalarUDF::new_from_shared_impl(udf)),
                     )
                 })
@@ -209,7 +210,7 @@ impl From<FFI_TaskContext> for Arc<TaskContext> {
                     let udaf = <Arc<dyn AggregateUDFImpl>>::from(&kv_pair.1);
 
                     (
-                        kv_pair.0.into_string(),
+                        kv_pair.0.to_string(),
                         Arc::new(AggregateUDF::new_from_shared_impl(udaf)),
                     )
                 })
@@ -220,7 +221,7 @@ impl From<FFI_TaskContext> for Arc<TaskContext> {
                     let udwf = <Arc<dyn WindowUDFImpl>>::from(&kv_pair.1);
 
                     (
-                        kv_pair.0.into_string(),
+                        kv_pair.0.to_string(),
                         Arc::new(WindowUDF::new_from_shared_impl(udwf)),
                     )
                 })

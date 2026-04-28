@@ -28,6 +28,7 @@ use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
     Like, NullTreatment, Placeholder, ScalarFunction, Unnest,
 };
+use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
     Expr, JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunctionDefinition, logical_plan::PlanType,
@@ -48,7 +49,8 @@ use crate::protobuf::{
     },
 };
 
-use super::LogicalExtensionCodec;
+use super::{AsLogicalPlan, LogicalExtensionCodec};
+use crate::protobuf::LogicalPlanNode;
 
 impl From<&UnnestOptions> for protobuf::UnnestOptions {
     fn from(opts: &UnnestOptions) -> Self {
@@ -579,14 +581,20 @@ pub fn serialize_expr(
                 qualifier: qualifier.to_owned().map(|x| x.into()),
             })),
         },
-        Expr::ScalarSubquery(_)
-        | Expr::InSubquery(_)
-        | Expr::Exists { .. }
-        | Expr::SetComparison(_)
-        | Expr::OuterReferenceColumn { .. } => {
-            // we would need to add logical plan operators to datafusion.proto to support this
-            // see discussion in https://github.com/apache/datafusion/issues/2565
-            return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
+        Expr::ScalarSubquery(subquery) => protobuf::LogicalExprNode {
+            expr_type: Some(ExprType::ScalarSubqueryExpr(Box::new(
+                protobuf::ScalarSubqueryExprNode {
+                    subquery: Some(Box::new(serialize_subquery(subquery, codec)?)),
+                },
+            ))),
+        },
+        Expr::InSubquery(_)
+        | Expr::Exists(_)
+        | Expr::OuterReferenceColumn(_, _)
+        | Expr::SetComparison(_) => {
+            return Err(Error::General(format!(
+                "Proto serialization error: {expr} is not yet supported"
+            )));
         }
         Expr::GroupingSet(GroupingSet::Cube(exprs)) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Cube(CubeNode {
@@ -629,6 +637,19 @@ pub fn serialize_expr(
     };
 
     Ok(expr_node)
+}
+
+fn serialize_subquery(
+    subquery: &Subquery,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<protobuf::SubqueryNode, Error> {
+    let plan = LogicalPlanNode::try_from_logical_plan(&subquery.subquery, codec)
+        .map_err(|e| Error::General(e.to_string()))?;
+    let outer_ref_columns = serialize_exprs(&subquery.outer_ref_columns, codec)?;
+    Ok(protobuf::SubqueryNode {
+        subquery: Some(Box::new(plan)),
+        outer_ref_columns,
+    })
 }
 
 pub fn serialize_sorts<'a, I>(
