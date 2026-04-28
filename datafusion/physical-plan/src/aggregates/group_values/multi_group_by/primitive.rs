@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::multi_group_by::{
-    EqualToResults, GroupColumn, Nulls, nulls_equal_to,
+    GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::ArrowNativeTypeOp;
@@ -25,6 +25,7 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use itertools::izip;
 use std::iter;
 use std::sync::Arc;
 
@@ -61,67 +62,42 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut EqualToResults,
+        equal_to_results: &mut [bool],
     ) {
         assert!(
             !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()),
             "called with nullable input"
         );
         let array_values = array.as_primitive::<T>().values();
-        let n = lhs_rows.len();
-        let n_full = n / 64;
 
-        // Process 64 rows per chunk via bitmask AND
-        for chunk_idx in 0..n_full {
-            // Skip entirely if all bits already false
-            if equal_to_results.get_chunk(chunk_idx) == 0 {
-                continue;
-            }
+        let iter = izip!(
+            lhs_rows.iter(),
+            rhs_rows.iter(),
+            equal_to_results.iter_mut(),
+        );
 
-            let base = chunk_idx * 64;
-            let mut eq_mask: u64 = 0;
-
-            // Build a 64-bit mask: bit k=1 if rows[base+k] are equal
-            for k in 0..64usize {
-                let i = base + k;
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
+            let result = {
+                // Getting unchecked not only for bound checks but because the bound checks are
+                // what prevents auto-vectorization
                 let left = if cfg!(debug_assertions) {
-                    self.group_values[lhs_rows[i]]
+                    self.group_values[lhs_row]
                 } else {
                     // SAFETY: indices are guaranteed to be in bounds
-                    unsafe { *self.group_values.get_unchecked(*lhs_rows.get_unchecked(i)) }
+                    unsafe { *self.group_values.get_unchecked(lhs_row) }
                 };
                 let right = if cfg!(debug_assertions) {
-                    array_values[rhs_rows[i]]
+                    array_values[rhs_row]
                 } else {
                     // SAFETY: indices are guaranteed to be in bounds
-                    unsafe { *array_values.get_unchecked(*rhs_rows.get_unchecked(i)) }
+                    unsafe { *array_values.get_unchecked(rhs_row) }
                 };
-                eq_mask |= (left.is_eq(right) as u64) << k;
-            }
-            equal_to_results.and_chunk(chunk_idx, eq_mask);
-        }
 
-        // Handle the remaining rows (< 64)
-        let remainder_start = n_full * 64;
-        if remainder_start < n {
-            let chunk_idx = n_full;
-            if equal_to_results.get_chunk(chunk_idx) != 0 {
-                let mut eq_mask: u64 = 0;
-                for (k, i) in (remainder_start..n).enumerate() {
-                    let left = if cfg!(debug_assertions) {
-                        self.group_values[lhs_rows[i]]
-                    } else {
-                        unsafe { *self.group_values.get_unchecked(*lhs_rows.get_unchecked(i)) }
-                    };
-                    let right = if cfg!(debug_assertions) {
-                        array_values[rhs_rows[i]]
-                    } else {
-                        unsafe { *array_values.get_unchecked(*rhs_rows.get_unchecked(i)) }
-                    };
-                    eq_mask |= (left.is_eq(right) as u64) << k;
-                }
-                equal_to_results.and_chunk(chunk_idx, eq_mask);
-            }
+                // Always evaluate, to allow for auto-vectorization
+                left.is_eq(right)
+            };
+
+            *equal_to_result = result && *equal_to_result;
         }
     }
 
@@ -130,36 +106,33 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut EqualToResults,
+        equal_to_results: &mut [bool],
     ) {
         assert!(NULLABLE, "called with non-nullable input");
         let array = array.as_primitive::<T>();
 
-        for (idx, (&lhs_row, &rhs_row)) in
-            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
-        {
+        let iter = izip!(
+            lhs_rows.iter(),
+            rhs_rows.iter(),
+            equal_to_results.iter_mut(),
+        );
+
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
             // Has found not equal to in previous column, don't need to check
-            if !equal_to_results.get_bit(idx) {
+            if !*equal_to_result {
                 continue;
             }
-
-            let chunk_idx = idx / 64;
-            let bit_pos = idx % 64;
 
             // Perf: skip null check (by short circuit) if input is not nullable
             let exist_null = self.nulls.is_null(lhs_row);
             let input_null = array.is_null(rhs_row);
             if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                if !result {
-                    equal_to_results.and_chunk(chunk_idx, !(1u64 << bit_pos));
-                }
+                *equal_to_result = result;
                 continue;
             }
 
             // Otherwise, we need to check their values
-            if !self.group_values[lhs_row].is_eq(array.value(rhs_row)) {
-                equal_to_results.and_chunk(chunk_idx, !(1u64 << bit_pos));
-            }
+            *equal_to_result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
         }
     }
 }
@@ -203,7 +176,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut EqualToResults,
+        equal_to_results: &mut [bool],
     ) {
         if !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()) {
             self.vectorized_equal_to_non_nullable(
@@ -308,7 +281,6 @@ mod tests {
     use std::sync::Arc;
 
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
-    use crate::aggregates::group_values::multi_group_by::EqualToResults;
     use arrow::array::{ArrayRef, Float32Array, Int64Array, NullBufferBuilder};
     use arrow::datatypes::{DataType, Float32Type, Int64Type};
 
@@ -328,10 +300,10 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut EqualToResults| {
+                        equal_to_results: &mut Vec<bool>| {
             let iter = lhs_rows.iter().zip(rhs_rows.iter());
             for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results.set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
             }
         };
 
@@ -352,7 +324,7 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut EqualToResults| {
+                        equal_to_results: &mut Vec<bool>| {
             builder.vectorized_equal_to(
                 lhs_rows,
                 input_array,
@@ -372,7 +344,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut EqualToResults,
+            &mut Vec<bool>,
         ),
     {
         // Will cover such cases:
@@ -421,8 +393,7 @@ mod tests {
         let input_array = Arc::new(Float32Array::new(values, nulls.finish())) as ArrayRef;
 
         // Check
-        let mut equal_to_results = EqualToResults::new();
-        equal_to_results.reset(builder.len());
+        let mut equal_to_results = vec![true; builder.len()];
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5, 6],
@@ -430,7 +401,6 @@ mod tests {
             &[0, 1, 2, 3, 4, 5, 6],
             &mut equal_to_results,
         );
-        let equal_to_results = equal_to_results.to_vec();
 
         assert!(!equal_to_results[0]);
         assert!(equal_to_results[1]);
@@ -455,10 +425,10 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut EqualToResults| {
+                        equal_to_results: &mut Vec<bool>| {
             let iter = lhs_rows.iter().zip(rhs_rows.iter());
             for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results.set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
             }
         };
 
@@ -479,7 +449,7 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut EqualToResults| {
+                        equal_to_results: &mut Vec<bool>| {
             builder.vectorized_equal_to(
                 lhs_rows,
                 input_array,
@@ -499,7 +469,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut EqualToResults,
+            &mut Vec<bool>,
         ),
     {
         // Will cover such cases:
@@ -517,8 +487,7 @@ mod tests {
         let input_array = Arc::new(Int64Array::from(vec![Some(0), Some(2)])) as ArrayRef;
 
         // Check
-        let mut equal_to_results = EqualToResults::new();
-        equal_to_results.reset(builder.len());
+        let mut equal_to_results = vec![true; builder.len()];
         equal_to(
             &builder,
             &[0, 1],
@@ -526,7 +495,6 @@ mod tests {
             &[0, 1],
             &mut equal_to_results,
         );
-        let equal_to_results = equal_to_results.to_vec();
 
         assert!(equal_to_results[0]);
         assert!(!equal_to_results[1]);
@@ -552,21 +520,19 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = EqualToResults::new();
-        equal_to_results.reset(all_nulls_input_array.len());
+        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
-        let results = equal_to_results.to_vec();
 
-        assert!(results[0]);
-        assert!(results[1]);
-        assert!(results[2]);
-        assert!(results[3]);
-        assert!(results[4]);
+        assert!(equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(equal_to_results[3]);
+        assert!(equal_to_results[4]);
 
         // All not nulls input array
         let all_not_nulls_input_array = Arc::new(Int64Array::from(vec![
@@ -580,20 +546,18 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = EqualToResults::new();
-        equal_to_results.reset(all_not_nulls_input_array.len());
+        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
-        let results = equal_to_results.to_vec();
 
-        assert!(results[0]);
-        assert!(results[1]);
-        assert!(results[2]);
-        assert!(results[3]);
-        assert!(results[4]);
+        assert!(equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(equal_to_results[3]);
+        assert!(equal_to_results[4]);
     }
 }
