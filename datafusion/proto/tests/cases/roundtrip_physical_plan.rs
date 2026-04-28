@@ -3742,4 +3742,3 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     Ok(())
 }
 
-}
