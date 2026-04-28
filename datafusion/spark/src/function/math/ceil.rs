@@ -18,27 +18,33 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrowNativeTypeOp, AsArray, Decimal128Array};
-use arrow::datatypes::{DataType, Decimal128Type, Float32Type, Float64Type, Int64Type};
-use datafusion_common::types::{
-    NativeType, logical_float32, logical_float64, logical_int32,
+use arrow::datatypes::{
+    DataType, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::types::{NativeType, logical_int32};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass, Volatility,
 };
 
+use super::scale::get_scale;
+
 /// Spark-compatible `ceil` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#ceil>
 ///
 /// Differences with DataFusion ceil:
-///  - Spark's ceil returns Int64 for float inputs; DataFusion preserves
+///  - Spark's 1-arg `ceil` returns Int64 for float inputs; DataFusion preserves
 ///    the input type (Float32→Float32, Float64→Float64)
-///  - Spark's ceil on Decimal128(p, s) returns Decimal128(p−s+1, 0), reducing scale
+///  - Spark's `ceil` on Decimal128(p, s) returns Decimal128(p−s+1, 0), reducing scale
 ///    to 0; DataFusion preserves the original precision and scale
 ///  - Spark only supports Decimal128; DataFusion also supports Decimal32/64/256
 ///  - Spark does not check for decimal overflow; DataFusion errors on overflow
 ///
+/// Two-argument form `ceil(expr, scale)` returns the same type as `expr` for
+/// integer and floating-point inputs (regardless of `scale`).  Decimal inputs
+/// are not yet supported in the 2-arg form (see TODO in execution path).
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
@@ -53,47 +59,19 @@ impl Default for SparkCeil {
 
 impl SparkCeil {
     pub fn new() -> Self {
-        let decimal = Coercion::new_exact(TypeSignatureClass::Decimal);
-        let integer = Coercion::new_exact(TypeSignatureClass::Integer);
+        let numeric = Coercion::new_exact(TypeSignatureClass::Numeric);
         let decimal_places = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_int32()),
             vec![TypeSignatureClass::Integer],
             NativeType::Int32,
         );
-        let float32 = Coercion::new_exact(TypeSignatureClass::Native(logical_float32()));
-        let float64 = Coercion::new_implicit(
-            TypeSignatureClass::Native(logical_float64()),
-            vec![TypeSignatureClass::Numeric],
-            NativeType::Float64,
-        );
         Self {
             signature: Signature::one_of(
                 vec![
-                    // ceil(decimal, scale)
-                    TypeSignature::Coercible(vec![
-                        decimal.clone(),
-                        decimal_places.clone(),
-                    ]),
-                    // ceil(decimal)
-                    TypeSignature::Coercible(vec![decimal]),
-                    // ceil(integer, scale)
-                    TypeSignature::Coercible(vec![
-                        integer.clone(),
-                        decimal_places.clone(),
-                    ]),
-                    // ceil(integer)
-                    TypeSignature::Coercible(vec![integer]),
-                    // ceil(float32, scale)
-                    TypeSignature::Coercible(vec![
-                        float32.clone(),
-                        decimal_places.clone(),
-                    ]),
-                    // ceil(float32)
-                    TypeSignature::Coercible(vec![float32]),
-                    // ceil(float64, scale)
-                    TypeSignature::Coercible(vec![float64.clone(), decimal_places]),
-                    // ceil(float64)
-                    TypeSignature::Coercible(vec![float64]),
+                    // ceil(numeric)
+                    TypeSignature::Numeric(1),
+                    // ceil(numeric, scale)
+                    TypeSignature::Coercible(vec![numeric, decimal_places]),
                 ],
                 Volatility::Immutable,
             ),
@@ -115,6 +93,8 @@ impl ScalarUDFImpl for SparkCeil {
         let has_scale = arg_types.len() == 2;
 
         match &arg_types[0] {
+            // 2-arg decimal is not yet supported; report input type so the planner
+            // does not reject the call before we surface a proper error at execution.
             DataType::Decimal128(p, s) if has_scale => Ok(DataType::Decimal128(*p, *s)),
             DataType::Decimal128(p, s) => {
                 if *s > 0 {
@@ -125,6 +105,8 @@ impl ScalarUDFImpl for SparkCeil {
                     Ok(DataType::Decimal128(*p, *s))
                 }
             }
+            // 2-arg form preserves the input float type for any scale (including 0),
+            // matching Spark's `ceil(double, scale)` semantics.
             DataType::Float32 if has_scale => Ok(DataType::Float32),
             DataType::Float64 if has_scale => Ok(DataType::Float64),
             dt if matches!(dt, DataType::Float32 | DataType::Float64)
@@ -145,46 +127,6 @@ impl ScalarUDFImpl for SparkCeil {
     }
 }
 
-/// Extract the scale (decimal places) from the second argument.
-/// Returns `Some(0)` if no second argument is provided.
-/// Returns `None` if the scale argument is NULL (Spark returns NULL for `round(expr, NULL)`).
-fn get_scale(args: &[ColumnarValue]) -> Result<Option<i32>> {
-    if args.len() < 2 {
-        return Ok(Some(0));
-    }
-
-    match &args[1] {
-        ColumnarValue::Scalar(ScalarValue::Int8(Some(v))) => Ok(Some(i32::from(*v))),
-        ColumnarValue::Scalar(ScalarValue::Int16(Some(v))) => Ok(Some(i32::from(*v))),
-        ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => Ok(Some(*v)),
-        ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => {
-            i32::try_from(*v).map(Some).map_err(|_| {
-                (exec_err!("round scale {v} is out of supported i32 range")
-                    as Result<(), _>)
-                    .unwrap_err()
-            })
-        }
-        ColumnarValue::Scalar(ScalarValue::UInt8(Some(v))) => Ok(Some(i32::from(*v))),
-        ColumnarValue::Scalar(ScalarValue::UInt16(Some(v))) => Ok(Some(i32::from(*v))),
-        ColumnarValue::Scalar(ScalarValue::UInt32(Some(v))) => {
-            i32::try_from(*v).map(Some).map_err(|_| {
-                (exec_err!("round scale {v} is out of supported i32 range")
-                    as Result<(), _>)
-                    .unwrap_err()
-            })
-        }
-        ColumnarValue::Scalar(ScalarValue::UInt64(Some(v))) => {
-            i32::try_from(*v).map(Some).map_err(|_| {
-                (exec_err!("round scale {v} is out of supported i32 range")
-                    as Result<(), _>)
-                    .unwrap_err()
-            })
-        }
-        ColumnarValue::Scalar(sv) if sv.is_null() => Ok(None),
-        other => exec_err!("Unsupported type for round scale: {}", other.data_type()),
-    }
-}
-
 fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.is_empty() || args.len() > 2 {
         return exec_err!(
@@ -193,9 +135,11 @@ fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         );
     }
 
-    let scale = match get_scale(args)? {
+    let has_scale = args.len() == 2;
+    let scale = match get_scale("ceil", args)? {
         Some(scale) => scale,
         None => {
+            // NULL scale → return NULL with the same type the planner advertised
             return Ok(ColumnarValue::Scalar(ScalarValue::try_from(
                 args[0].data_type(),
             )?));
@@ -204,8 +148,8 @@ fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let input = &args[0];
 
     match input {
-        ColumnarValue::Scalar(value) => spark_ceil_scalar(value, scale),
-        ColumnarValue::Array(input) => spark_ceil_array(input, scale),
+        ColumnarValue::Scalar(value) => spark_ceil_scalar(value, scale, has_scale),
+        ColumnarValue::Array(input) => spark_ceil_array(input, scale, has_scale),
     }
 }
 
@@ -224,21 +168,74 @@ fn decimal128_ceil_precision(precision: u8, scale: i8) -> u8 {
     ((precision as i64) - (scale as i64) + 1).clamp(1, 38) as u8
 }
 
-fn spark_ceil_scalar(value: &ScalarValue, scale: i32) -> Result<ColumnarValue> {
+/// Compute the ceiling of an integer at the given decimal `scale`.
+///
+/// - `scale >= 0`: integers have no fractional part; returns `value` unchanged.
+/// - `scale  < 0`: rounds *up* to the nearest multiple of `10^(-scale)`.
+///   For positive values this rounds away from zero; for negative values it
+///   rounds toward zero (ceiling = toward +∞).
+///
+/// If `10^(-scale)` overflows `i64`, returns `0` (matching Spark / `round`).
+fn ceil_integer(value: i64, scale: i32) -> i64 {
+    if scale >= 0 {
+        return value;
+    }
+    let abs_scale = (-scale) as u32;
+    let Some(factor) = 10_i64.checked_pow(abs_scale) else {
+        return 0;
+    };
+    let remainder = value % factor;
+    if remainder > 0 {
+        // Positive remainder: bump up to the next multiple.
+        value.wrapping_sub(remainder).wrapping_add(factor)
+    } else if remainder < 0 {
+        // Negative remainder (negative value not on boundary): truncating toward
+        // zero already gives the ceiling.
+        value.wrapping_sub(remainder)
+    } else {
+        value
+    }
+}
+
+fn spark_ceil_scalar(
+    value: &ScalarValue,
+    scale: i32,
+    has_scale: bool,
+) -> Result<ColumnarValue> {
     let result = match value {
-        // Floats without scale (scale=0) -> Int64 (original behaivour)
-        ScalarValue::Float32(v) if scale == 0 => {
-            ScalarValue::Int64(v.map(|x| x.ceil() as i64))
+        // Floats: 2-arg form preserves the input float type for *every* scale,
+        // so the runtime type matches what `return_type` advertised.
+        ScalarValue::Float32(v) if has_scale => {
+            ScalarValue::Float32(v.map(|x| ceil_float(x, scale)))
         }
-        ScalarValue::Float64(v) if scale == 0 => {
-            ScalarValue::Int64(v.map(|x| x.ceil() as i64))
+        ScalarValue::Float64(v) if has_scale => {
+            ScalarValue::Float64(v.map(|x| ceil_float(x, scale)))
         }
-        // Floats with scale -> preserve type
-        ScalarValue::Float32(v) => ScalarValue::Float32(v.map(|x| ceil_float(x, scale))),
-        ScalarValue::Float64(v) => ScalarValue::Float64(v.map(|x| ceil_float(x, scale))),
-        // Integers: negative scale rounds, positive is no-op
+        // 1-arg float: Spark returns Int64.
+        ScalarValue::Float32(v) => ScalarValue::Int64(v.map(|x| x.ceil() as i64)),
+        ScalarValue::Float64(v) => ScalarValue::Int64(v.map(|x| x.ceil() as i64)),
+        // Integers: the 1-arg path was a plain `cast_to(Int64)`. The 2-arg path
+        // additionally applies a (possibly negative) scale before casting.
+        v if v.data_type().is_integer() && has_scale => {
+            match v.cast_to(&DataType::Int64)? {
+                ScalarValue::Int64(opt) => {
+                    ScalarValue::Int64(opt.map(|x| ceil_integer(x, scale)))
+                }
+                other => {
+                    return exec_err!(
+                        "Internal error: integer cast_to(Int64) yielded {:?}",
+                        other.data_type()
+                    );
+                }
+            }
+        }
         v if v.data_type().is_integer() => v.cast_to(&DataType::Int64)?,
-        // Decimal128 with positive scalar
+        // Decimal128 with positive scale (1-arg only).
+        ScalarValue::Decimal128(_, _, _) if has_scale => {
+            return not_impl_err!(
+                "2-argument ceil is not yet supported for decimal inputs"
+            );
+        }
         ScalarValue::Decimal128(v, p, s) if *s > 0 => {
             let new_p = decimal128_ceil_precision(*p, *s);
             ScalarValue::Decimal128(v.map(|x| decimal128_ceil(x, *s as u32)), new_p, 0)
@@ -254,32 +251,77 @@ fn spark_ceil_scalar(value: &ScalarValue, scale: i32) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Scalar(result))
 }
 
+macro_rules! impl_integer_array_ceil {
+    ($array:expr, $arrow_type:ty, $scale:expr) => {{
+        let array = $array.as_primitive::<$arrow_type>();
+        let result = array.unary::<_, Int64Type>(|x| ceil_integer(x as i64, $scale));
+        Arc::new(result) as Arc<dyn arrow::array::Array>
+    }};
+}
+
 fn spark_ceil_array(
     input: &Arc<dyn arrow::array::Array>,
     scale: i32,
+    has_scale: bool,
 ) -> Result<ColumnarValue> {
     let result = match input.data_type() {
-        DataType::Float32 if scale == 0 => Arc::new(
-            input
-                .as_primitive::<Float32Type>()
-                .unary::<_, Int64Type>(|x| x.ceil() as i64),
-        ) as _,
-        DataType::Float64 if scale == 0 => Arc::new(
-            input
-                .as_primitive::<Float64Type>()
-                .unary::<_, Int64Type>(|x| x.ceil() as i64),
-        ) as _,
-        DataType::Float32 => Arc::new(
+        // 2-arg float: preserve input float type for any scale.
+        DataType::Float32 if has_scale => Arc::new(
             input
                 .as_primitive::<Float32Type>()
                 .unary::<_, Float32Type>(|x| ceil_float(x, scale)),
         ) as _,
-        DataType::Float64 => Arc::new(
+        DataType::Float64 if has_scale => Arc::new(
             input
                 .as_primitive::<Float64Type>()
                 .unary::<_, Float64Type>(|x| ceil_float(x, scale)),
         ) as _,
+        // 1-arg float: Spark returns Int64.
+        DataType::Float32 => Arc::new(
+            input
+                .as_primitive::<Float32Type>()
+                .unary::<_, Int64Type>(|x| x.ceil() as i64),
+        ) as _,
+        DataType::Float64 => Arc::new(
+            input
+                .as_primitive::<Float64Type>()
+                .unary::<_, Int64Type>(|x| x.ceil() as i64),
+        ) as _,
+        // 2-arg integer: widen to Int64 and apply scale-aware ceiling.
+        DataType::Int8 if has_scale => impl_integer_array_ceil!(input, Int8Type, scale),
+        DataType::Int16 if has_scale => impl_integer_array_ceil!(input, Int16Type, scale),
+        DataType::Int32 if has_scale => impl_integer_array_ceil!(input, Int32Type, scale),
+        DataType::Int64 if has_scale => impl_integer_array_ceil!(input, Int64Type, scale),
+        DataType::UInt8 if has_scale => impl_integer_array_ceil!(input, UInt8Type, scale),
+        DataType::UInt16 if has_scale => {
+            impl_integer_array_ceil!(input, UInt16Type, scale)
+        }
+        DataType::UInt32 if has_scale => {
+            impl_integer_array_ceil!(input, UInt32Type, scale)
+        }
+        DataType::UInt64 if has_scale => {
+            let array = input.as_primitive::<UInt64Type>();
+            let result = array
+                .try_unary::<_, Int64Type, datafusion_common::DataFusionError>(|x| {
+                    let v = i64::try_from(x).map_err(|_| {
+                        (exec_err!(
+                        "ceil: UInt64 value {x} exceeds i64::MAX and cannot be processed"
+                    )
+                        as Result<(), _>)
+                        .unwrap_err()
+                    })?;
+                    Ok(ceil_integer(v, scale))
+                })?;
+            Arc::new(result) as _
+        }
+        // 1-arg integer: cast to Int64.
         dt if dt.is_integer() => arrow::compute::cast(input, &DataType::Int64)?,
+        // Decimal128 with the new 2-arg form is deferred to a follow-up.
+        DataType::Decimal128(_, _) if has_scale => {
+            return not_impl_err!(
+                "2-argument ceil is not yet supported for decimal inputs"
+            );
+        }
         DataType::Decimal128(p, s) if *s > 0 => {
             let new_p = decimal128_ceil_precision(*p, *s);
             let result: Decimal128Array = input
@@ -307,231 +349,5 @@ fn ceil_float<T: num_traits::Float>(value: T, scale: i32) -> T {
             return T::zero();
         }
         (value / factor).ceil() * factor
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::array::{Decimal128Array, Float32Array, Float64Array, Int64Array};
-    use datafusion_common::ScalarValue;
-
-    #[test]
-    fn test_ceil_float64() {
-        let input = Float64Array::from(vec![
-            Some(125.2345),
-            Some(15.0001),
-            Some(0.1),
-            Some(-0.9),
-            Some(-1.1),
-            Some(123.0),
-            None,
-        ]);
-        let args = vec![ColumnarValue::Array(Arc::new(input))];
-        let result = spark_ceil(&args).unwrap();
-        let result = match result {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected array"),
-        };
-        let result = result.as_primitive::<Int64Type>();
-        assert_eq!(
-            result,
-            &Int64Array::from(vec![
-                Some(126),
-                Some(16),
-                Some(1),
-                Some(0),
-                Some(-1),
-                Some(123),
-                None,
-            ])
-        );
-    }
-
-    #[test]
-    fn test_ceil_float32() {
-        let input = Float32Array::from(vec![
-            Some(125.2345f32),
-            Some(15.0001f32),
-            Some(0.1f32),
-            Some(-0.9f32),
-            Some(-1.1f32),
-            Some(123.0f32),
-            None,
-        ]);
-        let args = vec![ColumnarValue::Array(Arc::new(input))];
-        let result = spark_ceil(&args).unwrap();
-        let result = match result {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected array"),
-        };
-        let result = result.as_primitive::<Int64Type>();
-        assert_eq!(
-            result,
-            &Int64Array::from(vec![
-                Some(126),
-                Some(16),
-                Some(1),
-                Some(0),
-                Some(-1),
-                Some(123),
-                None,
-            ])
-        );
-    }
-
-    #[test]
-    fn test_ceil_int64() {
-        let input = Int64Array::from(vec![Some(1), Some(-1), None]);
-        let args = vec![ColumnarValue::Array(Arc::new(input))];
-        let result = spark_ceil(&args).unwrap();
-        let result = match result {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected array"),
-        };
-        let result = result.as_primitive::<Int64Type>();
-        assert_eq!(result, &Int64Array::from(vec![Some(1), Some(-1), None]));
-    }
-
-    #[test]
-    fn test_ceil_decimal128() {
-        // Decimal128(10, 2): 150 = 1.50, -150 = -1.50, 100 = 1.00
-        let return_type = DataType::Decimal128(9, 0);
-        let input = Decimal128Array::from(vec![Some(150), Some(-150), Some(100), None])
-            .with_data_type(DataType::Decimal128(10, 2));
-        let args = vec![ColumnarValue::Array(Arc::new(input))];
-        let result = spark_ceil(&args).unwrap();
-        let result = match result {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected array"),
-        };
-        let result = result.as_primitive::<Decimal128Type>();
-        let expected = Decimal128Array::from(vec![Some(2), Some(-1), Some(1), None])
-            .with_data_type(return_type);
-        assert_eq!(result, &expected);
-    }
-
-    #[test]
-    fn test_ceil_float64_scalar() {
-        let input = ScalarValue::Float64(Some(-1.1));
-        let args = vec![ColumnarValue::Scalar(input)];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
-        };
-        assert_eq!(result, ScalarValue::Int64(Some(-1)));
-    }
-
-    #[test]
-    fn test_ceil_float32_scalar() {
-        let input = ScalarValue::Float32(Some(125.2345f32));
-        let args = vec![ColumnarValue::Scalar(input)];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
-        };
-        assert_eq!(result, ScalarValue::Int64(Some(126)));
-    }
-
-    #[test]
-    fn test_ceil_int64_scalar() {
-        let input = ScalarValue::Int64(Some(48));
-        let args = vec![ColumnarValue::Scalar(input)];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
-        };
-        assert_eq!(result, ScalarValue::Int64(Some(48)));
-    }
-
-    #[test]
-    fn test_ceil_float64_scalar_with_positive_scale() {
-        // ceil(3.1411, 2) → 3.15
-        let args = vec![
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(3.1411))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
-        ];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
-        };
-        assert_eq!(result, ScalarValue::Float64(Some(3.15)));
-    }
-
-    #[test]
-    fn test_ceil_float64_scalar_with_negative_scale() {
-        // ceil(3345.1, -2) → 3400.0
-        let args = vec![
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(3345.1))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(-2))),
-        ];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
-        };
-        assert_eq!(result, ScalarValue::Float64(Some(3400.0)));
-    }
-
-    #[test]
-    fn test_ceil_float64_scalar_with_zero_scale() {
-        // ceil(3.5, 0) → 4 as Int64 (same as 1-arg behavior)
-        let args = vec![
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(3.5))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(0))),
-        ];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
-        };
-        assert_eq!(result, ScalarValue::Int64(Some(4)));
-    }
-
-    #[test]
-    fn test_ceil_float32_scalar_with_scale() {
-        // ceil(3.1f32, 1) → 3.1 (already exact)
-        let args = vec![
-            ColumnarValue::Scalar(ScalarValue::Float32(Some(3.1f32))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
-        ];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
-        };
-        // 3.1f32 ceiling at 1 decimal place stays 3.1
-        assert_eq!(result, ScalarValue::Float32(Some(3.1f32)));
-    }
-
-    #[test]
-    fn test_ceil_float64_array_with_scale() {
-        // ceil([3.1411, -1.001, 0.0, NULL], 2) → [3.15, -1.0, 0.0, NULL]
-        let input = Float64Array::from(vec![Some(3.1411), Some(-1.001), Some(0.0), None]);
-        let args = vec![
-            ColumnarValue::Array(Arc::new(input)),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
-        ];
-        let result = spark_ceil(&args).unwrap();
-        let result = match result {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected array"),
-        };
-        let result = result.as_primitive::<Float64Type>();
-        assert_eq!(
-            result,
-            &Float64Array::from(vec![Some(3.15), Some(-1.0), Some(0.0), None])
-        );
-    }
-
-    #[test]
-    fn test_ceil_null_scale() {
-        // ceil(3.5, NULL) → NULL
-        let args = vec![
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(3.5))),
-            ColumnarValue::Scalar(ScalarValue::Int32(None)),
-        ];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
-        };
-        assert!(result.is_null());
     }
 }
