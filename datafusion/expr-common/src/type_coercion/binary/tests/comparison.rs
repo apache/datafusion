@@ -919,6 +919,18 @@ fn test_string_concat_coercion() -> Result<()> {
         Operator::StringConcat,
         DataType::BinaryView
     );
+    test_coercion_binary_rule!(
+        DataType::Binary,
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::BinaryView,
+        DataType::Binary,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
 
     // String
     test_coercion_binary_rule!(
