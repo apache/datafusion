@@ -33,8 +33,11 @@ on:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
-  
+
   merge_group:
+
+permissions:
+  contents: read
 
 jobs:
   security_audit:

@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
-      # Version fixed on purpose. It uses heuristics to detect typos, so upgrading 
+      # Version fixed on purpose. It uses heuristics to detect typos, so upgrading
       # it may cause checks to fail more often.
       # We can upgrade it manually once a while.
       - name: Install typos-cli
