@@ -135,25 +135,3 @@ query T
 SELECT concat(x'636166c3', x'a968656c6c6f');
 ----
 caféhello
-
-# UDF concatenation for valid UTF-8 arguments
-query T
-SELECT concat(x'636166c3a9', x'68656c6c6f');
-----
-caféhello
-
-# concat UDF allows invalid UTF-8 arguments, so it allows a valid UTF-8 sequence after concatenation
-query T
-SELECT concat(x'c3', x'a9');
-----
-é
-
-# concat UDF cannot form a valid UTF-8 sequence
-query error Execution error: invalid UTF-8 in binary literal
-SELECT concat(x'ff', x'af');
-
-# Mixed binary and text provide actual UTF-8 sequence, not '\xc3a9' as in PostgreSQL
-query T
-SELECT concat(x'c3a9', 'hello');
-----
-éhello

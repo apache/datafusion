@@ -328,6 +328,17 @@ SELECT x'636166c3a9' || x'68656c6c6f';
 ----
 636166c3a968656c6c6f
 
+# Pipe concatenation of binary and other kind of binary also provides a binary
+query ?
+SELECT x'636166c3a9' || arrow_cast(x'68656c6c6f', 'LargeBinary');
+----
+636166c3a968656c6c6f
+
+query ?
+SELECT x'636166c3a9' || arrow_cast(arrow_cast(x'68656c6c6f', 'LargeBinary'), 'BinaryView');
+----
+636166c3a968656c6c6f
+
 # Byte pipe operator is forbidden for mixed binary and text
 query error DataFusion error: Error during planning: Cannot infer common string type for string concat operation Binary || Utf8
 SELECT x'c3a9' || 'hello';
@@ -337,4 +348,3 @@ SELECT 'hello' || arrow_cast(arrow_cast('hello', 'Binary'), 'LargeBinary');
 
 query error DataFusion error: Error during planning: Cannot infer common string type for string concat operation Utf8 || BinaryView
 SELECT 'hello' || arrow_cast(arrow_cast('hello', 'Binary'), 'BinaryView');
-
