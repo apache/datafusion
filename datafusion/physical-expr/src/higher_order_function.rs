@@ -92,9 +92,6 @@ pub struct HigherOrderFunctionExpr {
     /// `args.len()`. Lambda variants carry the resolved inner [`LambdaExpr`]
     /// so `evaluate` doesn't walk through wrapper nodes.
     slots: Vec<ArgSlot>,
-    /// Cached value of [`HigherOrderUDF::clear_null_values`]. Avoids a virtual
-    /// call per non-lambda arg per batch.
-    clear_null_values: bool,
     /// The output field associated this expression
     ///
     /// For example, for `array_transform([2, 3], v -> v != 2)`, this will be
@@ -163,14 +160,12 @@ impl HigherOrderFunctionExpr {
         };
 
         let return_field = fun.return_field_from_args(ret_args)?;
-        let clear_null_values = fun.clear_null_values();
 
         Ok(Self {
             fun,
             name,
             args,
             slots,
-            clear_null_values,
             return_field,
             config_options,
         })
@@ -254,14 +249,13 @@ impl PartialEq for HigherOrderFunctionExpr {
             // The equality implementation is somewhat expensive, so let's short-circuit when possible.
             return true;
         }
-        // `slots` and `clear_null_values` are deterministic functions of `fun`
-        // and `args`, so they're not part of the comparison.
+        // `slots` is a deterministic function of `fun` and `args`, so it's
+        // not part of the comparison.
         let Self {
             fun,
             name,
             args,
             slots: _,
-            clear_null_values: _,
             return_field,
             config_options,
         } = self;
@@ -282,7 +276,6 @@ impl Hash for HigherOrderFunctionExpr {
             name,
             args,
             slots: _,
-            clear_null_values: _,
             return_field,
             config_options: _, // expensive to hash, and often equal
         } = self;
@@ -352,7 +345,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                 ArgSlot::Value => {
                     let value = arg.evaluate(batch)?;
 
-                    let value = if self.clear_null_values
+                    let value = if self.fun.clear_null_values()
                         && matches!(
                             value.data_type(),
                             DataType::List(_) | DataType::LargeList(_)
@@ -459,7 +452,6 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             fun: Arc::clone(&self.fun),
             args: children,
             slots: new_slots,
-            clear_null_values: self.clear_null_values,
             return_field: Arc::clone(&self.return_field),
             config_options: Arc::clone(&self.config_options),
         }))
