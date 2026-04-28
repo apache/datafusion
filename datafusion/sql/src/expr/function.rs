@@ -412,6 +412,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
+            // coerce fields because coercion may alter the lambda parameters
             let mut fields =
                 value_fields_with_higher_order_udf(&current_fields, fm.as_ref())?
                     .into_iter()

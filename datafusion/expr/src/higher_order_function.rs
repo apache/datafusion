@@ -521,8 +521,9 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
 
     /// Coerce value arguments of a function call to types that the function can evaluate also taking into
     /// account the *output type of it's lambdas*. This differs from [HigherOrderUDF::coerce_value_types]
-    /// that only has access to the type of it's value arguments. So that this method is called, the
-    /// function must have it's [HigherOrderSignature::coerce_values_for_lambdas] set to true
+    /// that only has access to the type of it's value arguments because it's called before the output type
+    /// of lambdas are known. So that this method is called, the function must have it's
+    /// [HigherOrderSignature::coerce_values_for_lambdas] set to true
     ///
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
@@ -646,6 +647,9 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     }
 
     /// Coerce value arguments of a function call to types that the function can evaluate.
+    /// Note that if you need to coerce values based on the output type of lambdas, you
+    /// must use [HigherOrderUDF::coerce_values_for_lambdas], as this function is used before
+    /// the output type of lambdas are known
     ///
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
