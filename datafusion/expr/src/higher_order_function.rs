@@ -21,6 +21,7 @@ use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::{ColumnarValue, Documentation, Expr};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
+use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
@@ -31,7 +32,6 @@ use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use arrow_schema::SchemaRef;
 
 /// The types of arguments for which a function has implementations.
 ///
