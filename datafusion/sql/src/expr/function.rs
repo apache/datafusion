@@ -17,22 +17,26 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{
-    DFSchema, Dependency, Diagnostic, Result, Span, internal_datafusion_err,
-    internal_err, not_impl_err, plan_datafusion_err, plan_err,
+    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, datatype::FieldExt,
+    internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
-    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
+    Expr, ExprSchemable, LambdaParametersProgress, SortExpr, ValueOrLambda, WindowFrame,
+    WindowFunctionDefinition,
     arguments::ArgumentName,
-    expr,
-    expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction},
+    expr::{
+        self, HigherOrderFunction, Lambda, NullTreatment, ScalarFunction, Unnest,
+        WildcardOptions, WindowFunction,
+    },
     planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
+    type_coercion::functions::value_fields_with_higher_order_udf,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
-    ObjectName, OrderByExpr, Spanned, WindowType,
+    LambdaFunction, ObjectName, OrderByExpr, Spanned, WindowType,
 };
 
 /// Suggest a valid function based on an invalid input function name
@@ -57,6 +61,7 @@ pub fn suggest_valid_function(
         let mut funcs = Vec::new();
 
         funcs.extend(ctx.udf_names());
+        funcs.extend(ctx.higher_order_function_names());
         funcs.extend(ctx.udaf_names());
 
         funcs
@@ -360,6 +365,184 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let verbose_alias = format!("{name}({arg_names})");
 
                 return Ok(Expr::ScalarFunction(inner).alias(verbose_alias));
+            }
+        }
+
+        if let Some(fm) = self.context_provider.get_higher_order_meta(&name) {
+            // plan non-lambda arguments first so we can get theirs datatype and call
+            // HigherOrderUDF::lambda_parameters to then plan the lambda arguments with
+            // resolved lambda variables
+            enum ExprOrLambda {
+                Expr(Expr),
+                Lambda(LambdaFunction),
+            }
+
+            let partially_planned = args
+                .into_iter()
+                .map(|a| match a {
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Lambda(
+                        lambda,
+                    ))) => {
+                        if !all_unique(&lambda.params) {
+                            return plan_err!(
+                                "lambda parameters names must be unique, got {}",
+                                lambda.params
+                            );
+                        }
+
+                        Ok(ExprOrLambda::Lambda(lambda))
+                    }
+                    _ => Ok(ExprOrLambda::Expr(self.sql_fn_arg_to_logical_expr(
+                        a,
+                        schema,
+                        planner_context,
+                    )?)),
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let current_fields = partially_planned
+                .iter()
+                .map(|e| match e {
+                    ExprOrLambda::Expr(expr) => {
+                        Ok(ValueOrLambda::Value(expr.to_field(schema)?.1))
+                    }
+                    ExprOrLambda::Lambda(_lambda_function) => {
+                        Ok(ValueOrLambda::Lambda(()))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            // coerce fields because coercion may alter the lambda parameters
+            let mut fields =
+                value_fields_with_higher_order_udf(&current_fields, fm.as_ref())?
+                    .into_iter()
+                    .map(|arg| match arg {
+                        ValueOrLambda::Value(value) => ValueOrLambda::Value(value),
+                        ValueOrLambda::Lambda(_lambda) => ValueOrLambda::Lambda(None),
+                    })
+                    .collect::<Vec<_>>();
+
+            let lambda_count = partially_planned
+                .iter()
+                .filter(|a| matches!(a, ExprOrLambda::Lambda(_)))
+                .count();
+
+            let mut step = 0;
+
+            let args = loop {
+                match fm.lambda_parameters(step, &fields)? {
+                    LambdaParametersProgress::Partial(params) => {
+                        let mut params = params.into_iter();
+
+                        if params.len() != lambda_count {
+                            return plan_err!(
+                                "{} lambda_parameters returned {} lambdas but {lambda_count} expected",
+                                fm.name(),
+                                params.len()
+                            );
+                        }
+
+                        for (arg, field) in
+                            std::iter::zip(&partially_planned, &mut fields)
+                        {
+                            match (arg, field) {
+                                (
+                                    ExprOrLambda::Lambda(lambda),
+                                    ValueOrLambda::Lambda(field),
+                                ) => {
+                                    let params = params.next().ok_or_else(|| {
+                                        internal_datafusion_err!(
+                                            "params len should have been checked above"
+                                        )
+                                    })?;
+                                    if let Some(params) = params {
+                                        let lambda = self.sql_lambda_to_logical_lambda(
+                                            planner_context,
+                                            schema,
+                                            lambda.clone(),
+                                            params,
+                                        )?;
+
+                                        *field = Some(lambda.body.to_field(schema)?.1);
+                                    }
+                                }
+                                (ExprOrLambda::Expr(_), ValueOrLambda::Value(_)) => {} // nothing to do
+                                (ExprOrLambda::Expr(_), ValueOrLambda::Lambda(_)) => {
+                                    return internal_err!(
+                                        "value_fields_with_higher_order_udf returned a value for a lambda argument"
+                                    );
+                                }
+                                (ExprOrLambda::Lambda(_), ValueOrLambda::Value(_)) => {
+                                    return internal_err!(
+                                        "value_fields_with_higher_order_udf returned a lambda for a value argument"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    LambdaParametersProgress::Complete(params) => {
+                        let mut params = params.into_iter();
+
+                        if params.len() != lambda_count {
+                            return plan_err!(
+                                "{} lambda_parameters returned {} lambdas but {lambda_count} expected",
+                                fm.name(),
+                                params.len()
+                            );
+                        }
+
+                        break partially_planned
+                            .into_iter()
+                            .map(|arg| match arg {
+                                ExprOrLambda::Expr(expr) => Ok(expr),
+                                ExprOrLambda::Lambda(lambda) => {
+                                    let params = params.next().ok_or_else(|| {
+                                        internal_datafusion_err!(
+                                            "params len should have been checked above"
+                                        )
+                                    })?;
+
+                                    Ok(Expr::Lambda(self.sql_lambda_to_logical_lambda(
+                                        planner_context,
+                                        schema,
+                                        lambda,
+                                        params,
+                                    )?))
+                                }
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                    }
+                }
+
+                let limit = fm.signature().lambda_parameters_max_iterations;
+
+                step += 1;
+
+                if step > limit {
+                    return plan_err!(
+                        "{} lambda_parameters called {limit} times without completion",
+                        fm.name()
+                    );
+                }
+            };
+
+            let inner = HigherOrderFunction::new(fm, args);
+
+            if name.eq_ignore_ascii_case(inner.name()) {
+                return Ok(Expr::HigherOrderFunction(inner));
+            } else {
+                // If the function is called by an alias, a verbose string representation is created
+                // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+                // to ensure the output column name matches the user's query.
+                let arg_names = inner
+                    .args
+                    .iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let verbose_alias = format!("{name}({arg_names})");
+
+                return Ok(Expr::HigherOrderFunction(inner).alias(verbose_alias));
             }
         }
 
@@ -729,6 +912,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
+    fn sql_lambda_to_logical_lambda(
+        &self,
+        planner_context: &mut PlannerContext,
+        schema: &DFSchema,
+        lambda: LambdaFunction,
+        lambda_params: Vec<FieldRef>,
+    ) -> Result<Lambda> {
+        if lambda.params.len() > lambda_params.len() {
+            return plan_err!(
+                "lambda defined {} params but UDF support only {}",
+                lambda.params.len(),
+                lambda_params.len()
+            );
+        }
+
+        let params = lambda
+            .params
+            .iter()
+            .map(|p| crate::utils::normalize_ident(p.clone()))
+            .collect();
+
+        let lambda_parameters = std::iter::zip(lambda_params, &params)
+            .map(|(f, n): (FieldRef, &String)| f.renamed(n.as_str()));
+
+        let mut planner_context = planner_context
+            .clone()
+            .with_lambda_parameters(lambda_parameters);
+
+        Ok(Lambda {
+            params,
+            body: Box::new(self.sql_expr_to_logical_expr(
+                *lambda.body,
+                schema,
+                &mut planner_context,
+            )?),
+        })
+    }
+
     pub(super) fn sql_fn_name_to_expr(
         &self,
         expr: SQLExpr,
@@ -953,6 +1174,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => {
                 plan_err!("unnest() can only be applied to array, struct and null")
             }
+        }
+    }
+}
+
+/// After normalization with [normalize_ident], check whether all params are unique
+///
+/// [normalize_ident]: crate::utils::normalize_ident
+fn all_unique(params: &[sqlparser::ast::Ident]) -> bool {
+    match params.len() {
+        0 | 1 => true,
+        2 => {
+            crate::utils::normalize_ident(params[0].clone())
+                != crate::utils::normalize_ident(params[1].clone())
+        }
+        _ => {
+            let mut set = HashSet::with_capacity(params.len());
+
+            params
+                .iter()
+                .map(|p| crate::utils::normalize_ident(p.clone()))
+                .all(|p| set.insert(p))
         }
     }
 }

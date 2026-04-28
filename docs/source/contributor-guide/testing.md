@@ -186,6 +186,34 @@ tested in the same way using the [doc_comment] crate. See the end of
 [doc_comment]: https://docs.rs/doc-comment/latest/doc_comment
 [core/src/lib.rs]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583
 
+## Documentation Link Checks
+
+Run the internal markdown link check locally:
+
+```shell
+source ci/scripts/utils/tool_versions.sh
+cargo install lychee --locked --version "${LYCHEE_VERSION}"
+bash ci/scripts/markdown_link_check.sh
+```
+
+Notes:
+
+- The script is run with `bash` and is compatible with the default Bash on macOS (no `mapfile` dependency).
+- The CI configuration currently checks internal markdown links only. External `http(s)` and `mailto` links are excluded to avoid flaky failures.
+
+When a link is broken, lychee prints the file and URL/path that failed. For example:
+
+```text
+[docs/source/user-guide/cli/overview.md]:
+  [ERROR] file:///.../docs/source/user-guide/cli/missing-page.md | Cannot find file: File not found. Check if file exists and path is correct
+```
+
+Rust doc comments are validated by rustdoc in CI and can be checked locally with:
+
+```shell
+bash ci/scripts/rust_docs.sh
+```
+
 ## Benchmarks
 
 ### Criterion Benchmarks

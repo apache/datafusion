@@ -21,6 +21,7 @@ use datafusion_common::{
     Column, DFSchema, Result, Span, TableReference, assert_or_internal_err,
     exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
+use datafusion_expr::expr::LambdaVariable;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
@@ -58,6 +59,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
             let normalize_ident = self.ident_normalizer.normalize(id);
+
+            // lambdas parameters have higher precedence
+            if let Some(field) = planner_context.lambda_parameters().get(&normalize_ident)
+            {
+                let mut lambda_var =
+                    LambdaVariable::new(normalize_ident, Some(Arc::clone(field)));
+                if self.options.collect_spans
+                    && let Some(span) = Span::try_from_sqlparser_span(id_span)
+                {
+                    lambda_var.spans_mut().add_span(span);
+                }
+                return Ok(Expr::LambdaVariable(lambda_var));
+            }
 
             // Check for qualified field with unqualified name
             if let Ok((qualifier, _)) =

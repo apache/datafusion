@@ -151,6 +151,13 @@ pub fn to_substrait_rex(
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::HigherOrderFunction(expr) => {
+            producer.handle_higher_order_function(expr, schema)
+        }
+        Expr::Lambda(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::LambdaVariable(expr) => {
+            not_impl_err!("Cannot convert {expr:?} to Substrait")
+        }
     }
 }
 
