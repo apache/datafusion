@@ -18,28 +18,53 @@
 use std::sync::Arc;
 
 use datafusion::{
+    datasource::TableProvider,
     error::{DataFusionError, Result},
+    execution::TaskContextProvider,
     prelude::SessionContext,
 };
-
-use abi_stable::library::{RootModule, development_utils::compute_library_path};
-use datafusion::datasource::TableProvider;
-use datafusion::execution::TaskContextProvider;
 use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
-use ffi_module_interface::TableProviderModuleRef;
+use ffi_module_interface::TableProviderModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Find the location of the library. This is specific to the build environment,
     // so you will need to change the approach here based on your use case.
-    let target: &std::path::Path = "../../../../target/".as_ref();
-    let library_path = compute_library_path::<TableProviderModuleRef>(target)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let lib_prefix = if cfg!(target_os = "windows") {
+        ""
+    } else {
+        "lib"
+    };
+    let lib_ext = if cfg!(target_os = "macos") {
+        "dylib"
+    } else if cfg!(target_os = "windows") {
+        "dll"
+    } else {
+        "so"
+    };
 
-    // Load the module
-    let table_provider_module =
-        TableProviderModuleRef::load_from_directory(&library_path)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let build_type = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+
+    let library_path = format!(
+        "../../../../target/{build_type}/{lib_prefix}ffi_example_table_provider.{lib_ext}"
+    );
+
+    // Load the library using libloading
+    let lib = unsafe {
+        libloading::Library::new(&library_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let get_module: libloading::Symbol<extern "C" fn() -> TableProviderModule> = unsafe {
+        lib.get(b"ffi_example_get_module")
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let table_provider_module = get_module();
 
     let ctx = Arc::new(SessionContext::new());
     let codec = FFI_LogicalExtensionCodec::new_default(
@@ -48,12 +73,7 @@ async fn main() -> Result<()> {
 
     // By calling the code below, the table provided will be created within
     // the module's code.
-    let ffi_table_provider =
-        table_provider_module
-            .create_table()
-            .ok_or(DataFusionError::NotImplemented(
-                "External table provider failed to implement create_table".to_string(),
-            ))?(codec);
+    let ffi_table_provider = (table_provider_module.create_table)(codec);
 
     // In order to access the table provider within this executable, we need to
     // turn it into a `TableProvider`.

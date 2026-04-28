@@ -584,17 +584,29 @@ impl LogicalPlan {
                 .map_elements(f)?
                 .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch })),
             LogicalPlan::Extension(Extension { node }) => {
-                // would be nice to avoid this copy -- maybe can
-                // update extension to just observer Exprs
-                let exprs = node.expressions().map_elements(f)?;
-                let plan = LogicalPlan::Extension(Extension {
-                    node: UserDefinedLogicalNode::with_exprs_and_inputs(
-                        node.as_ref(),
-                        exprs.data,
-                        node.inputs().into_iter().cloned().collect::<Vec<_>>(),
-                    )?,
-                });
-                Transformed::new(plan, exprs.transformed, exprs.tnr)
+                let raw_exprs = node.expressions();
+                if raw_exprs.is_empty() {
+                    // No expressions to transform — skip expensive clone of
+                    // all inputs and reconstruction via with_exprs_and_inputs.
+                    Transformed::no(LogicalPlan::Extension(Extension { node }))
+                } else {
+                    // TODO: a more general optimization would be to change
+                    // `UserDefinedLogicalNode::expressions()` to return
+                    // references (`&[Expr]`) instead of cloned `Vec<Expr>`,
+                    // and only clone + rebuild when the transform actually
+                    // modifies an expression. This would avoid the clone +
+                    // `with_exprs_and_inputs` rebuild even for non-empty
+                    // expression lists when the transform is a no-op.
+                    let exprs = raw_exprs.map_elements(f)?;
+                    let plan = LogicalPlan::Extension(Extension {
+                        node: UserDefinedLogicalNode::with_exprs_and_inputs(
+                            node.as_ref(),
+                            exprs.data,
+                            node.inputs().into_iter().cloned().collect::<Vec<_>>(),
+                        )?,
+                    });
+                    Transformed::new(plan, exprs.transformed, exprs.tnr)
+                }
             }
             LogicalPlan::TableScan(TableScan {
                 table_name,
@@ -808,7 +820,7 @@ impl LogicalPlan {
         transform_down_up_with_subqueries_impl(self, &mut f_down, &mut f_up)
     }
 
-    /// Similarly to [`Self::apply`], calls `f` on  this node and its inputs
+    /// Similarly to [`Self::apply`], calls `f` on this node and its inputs,
     /// including subqueries that may appear in expressions such as `IN (SELECT
     /// ...)`.
     pub fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
@@ -821,9 +833,7 @@ impl LogicalPlan {
                 | Expr::InSubquery(InSubquery { subquery, .. })
                 | Expr::SetComparison(SetComparison { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
-                    // use a synthetic plan so the collector sees a
-                    // LogicalPlan::Subquery (even though it is
-                    // actually a Subquery alias)
+                    // Wrap in LogicalPlan::Subquery to match f's signature
                     f(&LogicalPlan::Subquery(subquery.clone()))
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
@@ -886,6 +896,20 @@ impl LogicalPlan {
                     }),
                 _ => Ok(Transformed::no(expr)),
             })
+        })
+    }
+
+    /// Similar to [`Self::map_subqueries`], but only applies `f` to
+    /// uncorrelated subqueries (those with no outer column references).
+    pub fn map_uncorrelated_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        self.map_subqueries(|subquery_plan| match &subquery_plan {
+            LogicalPlan::Subquery(sq) if sq.outer_ref_columns.is_empty() => {
+                f(subquery_plan)
+            }
+            _ => Ok(Transformed::no(subquery_plan)),
         })
     }
 }
