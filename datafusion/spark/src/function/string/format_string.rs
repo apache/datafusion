@@ -862,6 +862,28 @@ fn take_numeric_param(s: &str, zero: bool) -> (NumericParam, &str) {
 }
 
 impl ConversionSpecifier {
+    /// Validates that the grouping separator flag is not used with scientific
+    /// notation conversions, matching Java/Spark behavior which throws
+    /// `FormatFlagsConversionMismatchException` for `%,e` / `%,E`.
+    fn validate_grouping_separator(&self) -> Result<()> {
+        if self.grouping_separator
+            && matches!(
+                self.conversion_type,
+                ConversionType::SciFloatLower | ConversionType::SciFloatUpper
+            )
+        {
+            return exec_err!(
+                "Grouping separator ',' flag is not compatible with scientific notation conversion '{}'",
+                if self.conversion_type == ConversionType::SciFloatUpper {
+                    'E'
+                } else {
+                    'e'
+                }
+            );
+        }
+        Ok(())
+    }
+
     pub fn format(&self, string: &mut String, value: &ScalarValue) -> Result<()> {
         match value {
             ScalarValue::Boolean(value) => match self.conversion_type {
@@ -1690,22 +1712,7 @@ impl ConversionSpecifier {
     }
 
     fn format_float(&self, writer: &mut String, value: f64) -> Result<()> {
-        // Java/Spark reject the grouping separator flag with scientific notation
-        if self.grouping_separator
-            && matches!(
-                self.conversion_type,
-                ConversionType::SciFloatLower | ConversionType::SciFloatUpper
-            )
-        {
-            return exec_err!(
-                "Grouping separator ',' flag is not compatible with scientific notation conversion '{}'",
-                if self.conversion_type == ConversionType::SciFloatUpper {
-                    'E'
-                } else {
-                    'e'
-                }
-            );
-        }
+        self.validate_grouping_separator()?;
 
         let mut prefix = String::new();
         let mut suffix = String::new();
@@ -1902,20 +1909,11 @@ impl ConversionSpecifier {
         match self.conversion_type {
             ConversionType::DecInt => {
                 let num_str = format!("{value}");
-                if self.grouping_separator {
-                    // Add thousands separators
-                    let mut result = String::new();
-                    let chars: Vec<char> = num_str.chars().collect();
-                    for (i, c) in chars.iter().enumerate() {
-                        if i > 0 && (chars.len() - i).is_multiple_of(3) {
-                            result.push(',');
-                        }
-                        result.push(*c);
-                    }
-                    s = result;
+                s = if self.grouping_separator {
+                    insert_thousands_separator(&num_str)
                 } else {
-                    s = num_str;
-                }
+                    num_str
+                };
             }
             ConversionType::HexIntLower => {
                 alt_prefix = "0x";
@@ -2020,22 +2018,7 @@ impl ConversionSpecifier {
     }
 
     fn format_decimal(&self, writer: &mut String, value: &str, scale: i64) -> Result<()> {
-        // Java/Spark reject the grouping separator flag with scientific notation
-        if self.grouping_separator
-            && matches!(
-                self.conversion_type,
-                ConversionType::SciFloatLower | ConversionType::SciFloatUpper
-            )
-        {
-            return exec_err!(
-                "Grouping separator ',' flag is not compatible with scientific notation conversion '{}'",
-                if self.conversion_type == ConversionType::SciFloatUpper {
-                    'E'
-                } else {
-                    'e'
-                }
-            );
-        }
+        self.validate_grouping_separator()?;
 
         let mut prefix = String::new();
         let upper = self.conversion_type.is_upper();
@@ -2669,6 +2652,76 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
             ],
             Ok(Some("1e+06")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_width_sign_float() -> Result<()> {
+        // %0,15.2f — zero-pad + grouping + width
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%0,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("0001,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %+,15.2f — force-sign + grouping + width (space-padded)
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%+,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("  +1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %-,15.2f — left-adjust + grouping + width
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%-,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
+            ],
+            Ok(Some("1,234,567.89   ")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_width_sign_decimal() -> Result<()> {
+        // %0,15.2f — zero-pad + grouping + width on decimal
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%0,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("0001,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // %+,15.2f — force-sign + grouping + width on decimal
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%+,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
+            ],
+            Ok(Some("  +1,234,567.89")),
             &str,
             Utf8,
             StringArray
