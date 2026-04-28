@@ -3702,12 +3702,16 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     ));
 
     // Case 1: None -> should round-trip as None (return all columns)
-    let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
-        .build()?;
+    let filter =
+        FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input)).build()?;
     let proto = PhysicalPlanNode::try_from_physical_plan(Arc::new(filter) as _, &codec)?;
     let roundtripped = proto.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
     let rt = roundtripped.as_ref().downcast_ref::<FilterExec>().unwrap();
-    assert_eq!(rt.projection(), None, "None projection must stay None after roundtrip");
+    assert_eq!(
+        rt.projection(),
+        None,
+        "None projection must stay None after roundtrip"
+    );
 
     // Case 2: Some(vec![]) -> must survive as Some([]), NOT silently become None
     let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
@@ -3716,7 +3720,11 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     let proto = PhysicalPlanNode::try_from_physical_plan(Arc::new(filter) as _, &codec)?;
     let roundtripped = proto.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
     let rt = roundtripped.as_ref().downcast_ref::<FilterExec>().unwrap();
-    assert_eq!(rt.projection(), Some(&vec![]), "Empty projection Some([]) must survive roundtrip, not become None");
+    assert_eq!(
+        rt.projection(),
+        Some(&vec![]),
+        "Empty projection Some([]) must survive roundtrip, not become None"
+    );
 
     // Case 3: Some(vec![2, 0]) -> partial projection must survive
     let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
@@ -3725,7 +3733,11 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     let proto = PhysicalPlanNode::try_from_physical_plan(Arc::new(filter) as _, &codec)?;
     let roundtripped = proto.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
     let rt = roundtripped.as_ref().downcast_ref::<FilterExec>().unwrap();
-    assert_eq!(rt.projection(), Some(&vec![2_usize, 0_usize]), "Partial projection must survive roundtrip");
+    assert_eq!(
+        rt.projection(),
+        Some(&vec![2_usize, 0_usize]),
+        "Partial projection must survive roundtrip"
+    );
 
     Ok(())
 }

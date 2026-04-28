@@ -724,7 +724,11 @@ impl protobuf::PhysicalPlanNode {
             is_full_projection &= idx == i;
             projection_vec.push(idx);
         }
-        let projection = if is_full_projection { None } else { Some(projection_vec) };
+        let projection = if is_full_projection {
+            None
+        } else {
+            Some(projection_vec)
+        };
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
             .with_batch_size(filter.batch_size as usize)
