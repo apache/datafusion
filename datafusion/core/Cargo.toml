@@ -144,6 +144,7 @@ datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
 liblzma = { workspace = true, optional = true }
 log = { workspace = true }

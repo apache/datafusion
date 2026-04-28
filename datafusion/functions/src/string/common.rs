@@ -19,10 +19,10 @@
 
 use std::sync::Arc;
 
-use crate::strings::append_view;
+use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder, append_view};
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, GenericStringBuilder, NullBufferBuilder,
-    OffsetSizeTrait, StringViewArray, StringViewBuilder, new_null_array,
+    Array, ArrayRef, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
+    StringViewArray, new_null_array,
 };
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -349,18 +349,30 @@ where
             >(array, op)?)),
             DataType::Utf8View => {
                 let string_array = as_string_view_array(array)?;
-                let mut string_builder =
-                    StringViewBuilder::with_capacity(string_array.len());
+                let item_len = string_array.len();
+                // Null-preserving: reuse the input null buffer as the output null buffer.
+                let nulls = string_array.nulls().cloned();
+                let mut builder = StringViewArrayBuilder::with_capacity(item_len);
 
-                for str in string_array.iter() {
-                    if let Some(str) = str {
-                        string_builder.append_value(op(str));
-                    } else {
-                        string_builder.append_null();
+                if let Some(ref n) = nulls {
+                    for i in 0..item_len {
+                        if n.is_null(i) {
+                            builder.append_placeholder();
+                        } else {
+                            // SAFETY: `n.is_null(i)` was false in the branch above.
+                            let s = unsafe { string_array.value_unchecked(i) };
+                            builder.append_value(&op(s));
+                        }
+                    }
+                } else {
+                    for i in 0..item_len {
+                        // SAFETY: no null buffer means every index is valid.
+                        let s = unsafe { string_array.value_unchecked(i) };
+                        builder.append_value(&op(s));
                     }
                 }
 
-                Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(nulls)?)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
@@ -400,17 +412,28 @@ where
     let start = offsets.first().unwrap().as_usize();
     let end = offsets.last().unwrap().as_usize();
     let capacity = (end - start) + PRE_ALLOC_BYTES;
-    let mut builder = GenericStringBuilder::<O>::with_capacity(item_len, capacity);
+    // Null-preserving: reuse the input null buffer as the output null buffer.
+    let nulls = string_array.nulls().cloned();
+    let mut builder = GenericStringArrayBuilder::<O>::with_capacity(item_len, capacity);
 
-    if string_array.null_count() == 0 {
-        let iter =
-            (0..item_len).map(|i| Some(op(unsafe { string_array.value_unchecked(i) })));
-        builder.extend(iter);
+    if let Some(ref n) = nulls {
+        for i in 0..item_len {
+            if n.is_null(i) {
+                builder.append_placeholder();
+            } else {
+                // SAFETY: `n.is_null(i)` was false in the branch above.
+                let s = unsafe { string_array.value_unchecked(i) };
+                builder.append_value(&op(s));
+            }
+        }
     } else {
-        let iter = string_array.iter().map(|string| string.map(&op));
-        builder.extend(iter);
+        for i in 0..item_len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_array.value_unchecked(i) };
+            builder.append_value(&op(s));
+        }
     }
-    Ok(Arc::new(builder.finish()))
+    Ok(Arc::new(builder.finish(nulls)?))
 }
 
 /// Fast path for case conversion on an all-ASCII string array. ASCII case

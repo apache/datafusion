@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::StableAbi;
 use datafusion_common::DataFusionError;
 use datafusion_expr::interval_arithmetic::Interval;
 
@@ -25,7 +24,7 @@ use crate::arrow_wrappers::WrappedArray;
 /// See [`Interval`] for the meaning of each field. Scalar values
 /// are passed as Arrow arrays of length 1.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_Interval {
     lower: WrappedArray,
     upper: WrappedArray,
