@@ -322,11 +322,11 @@ impl RepartitionExecState {
 
         let mut channels = HashMap::with_capacity(txs.len());
         for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
-            let reservation = Arc::new(Mutex::new(
+            let reservation = Arc::new(
                 MemoryConsumer::new(format!("{name}[{partition}]"))
                     .with_can_spill(true)
                     .register(context.memory_pool()),
-            ));
+            );
 
             // Create spill channels based on mode:
             // - preserve_order: one spill channel per (input, output) pair for proper FIFO ordering
@@ -1401,7 +1401,7 @@ impl RepartitionExec {
                 // if there is still a receiver, send to it
                 if let Some(channel) = output_channels.get_mut(&partition) {
                     let (batch_to_send, is_memory_batch) =
-                        match channel.reservation.lock().try_grow(size) {
+                        match channel.reservation.try_grow(size) {
                             Ok(_) => {
                                 // Memory available - send in-memory batch
                                 (RepartitionBatch::Memory(batch), true)
@@ -1419,7 +1419,7 @@ impl RepartitionExec {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         // Only shrink memory if it was a memory batch
                         if is_memory_batch {
-                            channel.reservation.lock().shrink(size);
+                            channel.reservation.shrink(size);
                         }
                         output_channels.remove(&partition);
                     }
@@ -1638,9 +1638,7 @@ impl PerPartitionStream {
                         Some(Some(v)) => match v {
                             Ok(RepartitionBatch::Memory(batch)) => {
                                 // Release memory and return batch
-                                self.reservation
-                                    .lock()
-                                    .shrink(batch.get_array_memory_size());
+                                self.reservation.shrink(batch.get_array_memory_size());
                                 return Poll::Ready(Some(Ok(batch)));
                             }
                             Ok(RepartitionBatch::Spilled) => {
