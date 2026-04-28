@@ -362,6 +362,15 @@ mod tests {
             &mut BooleanBufferBuilder,
         ),
     {
+        // Will cover such cases:
+        //   - exist null, input not null
+        //   - exist null, input null; values not equal
+        //   - exist null, input null; values equal
+        //   - exist not null, input null
+        //   - exist not null, input not null; values not equal
+        //   - exist not null, input not null; values equal
+
+        // Define PrimitiveGroupValueBuilder
         let mut builder =
             PrimitiveGroupValueBuilder::<Float32Type, true>::new(DataType::Float32);
         let builder_array = Arc::new(Float32Array::from(vec![
@@ -375,6 +384,7 @@ mod tests {
         ])) as ArrayRef;
         append(&mut builder, &builder_array, &[0, 1, 2, 3, 4, 5, 6]);
 
+        // Define input array
         let (_, values, _nulls) = Float32Array::from(vec![
             Some(1.0),
             Some(2.0),
@@ -386,6 +396,7 @@ mod tests {
         ])
         .into_parts();
 
+        // explicitly build a null buffer where one of the null values also happens to match
         let mut nulls = NullBufferBuilder::new(6);
         nulls.append_non_null();
         nulls.append_null();
@@ -396,6 +407,7 @@ mod tests {
         nulls.append_null();
         let input_array = Arc::new(Float32Array::new(values, nulls.finish())) as ArrayRef;
 
+        // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
@@ -477,14 +489,21 @@ mod tests {
             &mut BooleanBufferBuilder,
         ),
     {
+        // Will cover such cases:
+        //   - values equal
+        //   - values not equal
+
+        // Define PrimitiveGroupValueBuilder
         let mut builder =
             PrimitiveGroupValueBuilder::<Int64Type, false>::new(DataType::Int64);
         let builder_array =
             Arc::new(Int64Array::from(vec![Some(0), Some(1)])) as ArrayRef;
         append(&mut builder, &builder_array, &[0, 1]);
 
+        // Define input array
         let input_array = Arc::new(Int64Array::from(vec![Some(0), Some(2)])) as ArrayRef;
 
+        // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
@@ -501,6 +520,9 @@ mod tests {
 
     #[test]
     fn test_nullable_primitive_vectorized_operation_special_case() {
+        // Test the special `all nulls` or `not nulls` input array case
+        // for vectorized append and equal to
+
         let mut builder =
             PrimitiveGroupValueBuilder::<Int64Type, true>::new(DataType::Int64);
 

@@ -517,6 +517,7 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         let has_nulls = array.null_count() != 0;
         let array = array.as_byte_view::<B>();
         let has_buffers = !array.data_buffers().is_empty();
+        // call specialized version based on nulls and buffers presence
         match (has_nulls, has_buffers) {
             (true, true) => self.vectorized_equal_to_inner::<true, true>(
                 group_indices,
@@ -676,6 +677,9 @@ mod tests {
 
     #[test]
     fn test_byte_view_vectorized_operation_special_case() {
+        // Test the special `all nulls` or `not nulls` input array case
+        // for vectorized append and equal to
+
         let mut builder =
             ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
 
@@ -745,6 +749,32 @@ mod tests {
             &mut BooleanBufferBuilder,
         ),
     {
+        // Will cover such cases:
+        //   - exist null, input not null
+        //   - exist null, input null; values not equal
+        //   - exist null, input null; values equal
+        //   - exist not null, input null
+        //   - exist not null, input not null; value lens not equal
+        //   - exist not null, input not null; value not equal(inlined case)
+        //   - exist not null, input not null; value equal(inlined case)
+        //
+        //   - exist not null, input not null; value not equal
+        //     (non-inlined case + prefix not equal)
+        //
+        //   - exist not null, input not null; value not equal
+        //     (non-inlined case + value in `completed`)
+        //
+        //   - exist not null, input not null; value equal
+        //     (non-inlined case + value in `completed`)
+        //
+        //   - exist not null, input not null; value not equal
+        //     (non-inlined case + value in `in_progress`)
+        //
+        //   - exist not null, input not null; value equal
+        //     (non-inlined case + value in `in_progress`)
+
+        // Set the block size to 40 for ensuring some unlined values are in `in_progress`,
+        // and some are in `completed`, so both two branches in `value` function can be covered.
         let mut builder =
             ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
         let builder_array = Arc::new(StringViewArray::from(vec![
@@ -760,6 +790,7 @@ mod tests {
         ])) as ArrayRef;
         append(&mut builder, &builder_array, &[0, 1, 2, 3, 4, 5, 6, 7, 8]);
 
+        // Define input array
         let (views, buffer, _nulls) = StringViewArray::from(vec![
             Some("foo"),
             Some("bar"),
@@ -776,6 +807,7 @@ mod tests {
         ])
         .into_parts();
 
+        // explicitly build a null buffer where one of the null values also happens to match
         let mut nulls = NullBufferBuilder::new(9);
         nulls.append_non_null();
         nulls.append_null();
@@ -792,6 +824,7 @@ mod tests {
         let input_array =
             Arc::new(StringViewArray::new(views, buffer, nulls.finish())) as ArrayRef;
 
+        // Check
         let mut equal_to_results = make_true_buffer(input_array.len());
         equal_to(
             &builder,

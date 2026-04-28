@@ -269,6 +269,15 @@ mod tests {
             &mut BooleanBufferBuilder,
         ),
     {
+        // Will cover such cases:
+        //   - exist null, input not null
+        //   - exist null, input null; values not equal
+        //   - exist null, input null; values equal
+        //   - exist not null, input null
+        //   - exist not null, input not null; values not equal
+        //   - exist not null, input not null; values equal
+
+        // Define BooleanGroupValueBuilder
         let mut builder = BooleanGroupValueBuilder::<true>::new();
         let builder_array = Arc::new(BooleanArray::from(vec![
             None,
@@ -280,6 +289,7 @@ mod tests {
         ])) as ArrayRef;
         append(&mut builder, &builder_array, &[0, 1, 2, 3, 4, 5]);
 
+        // Define input array
         let (values, _nulls) = BooleanArray::from(vec![
             Some(true),
             Some(false),
@@ -290,6 +300,7 @@ mod tests {
         ])
         .into_parts();
 
+        // explicitly build a null buffer where one of the null values also happens to match
         let mut nulls = NullBufferBuilder::new(6);
         nulls.append_non_null();
         nulls.append_null();
@@ -299,6 +310,7 @@ mod tests {
         nulls.append_non_null();
         let input_array = Arc::new(BooleanArray::new(values, nulls.finish())) as ArrayRef;
 
+        // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
@@ -379,6 +391,11 @@ mod tests {
             &mut BooleanBufferBuilder,
         ),
     {
+        // Will cover such cases:
+        //   - values equal
+        //   - values not equal
+
+        // Define BooleanGroupValueBuilder
         let mut builder = BooleanGroupValueBuilder::<false>::new();
         let builder_array = Arc::new(BooleanArray::from(vec![
             Some(false),
@@ -388,6 +405,7 @@ mod tests {
         ])) as ArrayRef;
         append(&mut builder, &builder_array, &[0, 1, 2, 3]);
 
+        // Define input array
         let input_array = Arc::new(BooleanArray::from(vec![
             Some(false),
             Some(false),
@@ -395,6 +413,7 @@ mod tests {
             Some(true),
         ])) as ArrayRef;
 
+        // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
@@ -413,6 +432,9 @@ mod tests {
 
     #[test]
     fn test_nullable_boolean_vectorized_operation_special_case() {
+        // Test the special `all nulls` or `not nulls` input array case
+        // for vectorized append and equal to
+
         let mut builder = BooleanGroupValueBuilder::<true>::new();
 
         // All nulls input array

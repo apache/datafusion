@@ -565,6 +565,9 @@ mod tests {
 
     #[test]
     fn test_byte_vectorized_operation_special_case() {
+        // Test the special `all nulls` or `not nulls` input array case
+        // for vectorized append and equal to
+
         let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
 
         // All nulls input array
@@ -633,6 +636,15 @@ mod tests {
             &mut BooleanBufferBuilder,
         ),
     {
+        // Will cover such cases:
+        //   - exist null, input not null
+        //   - exist null, input null; values not equal
+        //   - exist null, input null; values equal
+        //   - exist not null, input null
+        //   - exist not null, input not null; values not equal
+        //   - exist not null, input not null; values equal
+
+        // Define ByteGroupValueBuilder
         let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
         let builder_array = Arc::new(StringArray::from(vec![
             None,
@@ -644,6 +656,7 @@ mod tests {
         ])) as ArrayRef;
         append(&mut builder, &builder_array, &[0, 1, 2, 3, 4, 5]);
 
+        // Define input array
         let (offsets, buffer, _nulls) = StringArray::from(vec![
             Some("foo"),
             Some("bar"),
@@ -654,6 +667,7 @@ mod tests {
         ])
         .into_parts();
 
+        // explicitly build a null buffer where one of the null values also happens to match
         let mut nulls = NullBufferBuilder::new(6);
         nulls.append_non_null();
         nulls.append_null();
@@ -664,6 +678,7 @@ mod tests {
         let input_array =
             Arc::new(StringArray::new(offsets, buffer, nulls.finish())) as ArrayRef;
 
+        // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
