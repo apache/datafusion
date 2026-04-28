@@ -75,7 +75,13 @@ pub struct HigherOrderSignature {
     pub volatility: Volatility,
     /// Whether [HigherOrderUDF::coerce_values_for_lambdas] should be called
     pub coerce_values_for_lambdas: bool,
+    /// The max number of times to call [HigherOrderUDF::lambda_parameters] before raising an error.
+    /// Used to guard against implementations that causes an infinite loop by endlessly returning
+    /// [LambdaParametersProgress::Partial]. Defaults to 256
+    pub lambda_parameters_max_iterations: usize,
 }
+
+const LAMBDA_PARAMETERS_MAX_ITERATIONS: usize = 256;
 
 impl HigherOrderSignature {
     /// Creates a new `HigherOrderSignature` from a given type signature and volatility.
@@ -84,6 +90,7 @@ impl HigherOrderSignature {
             type_signature,
             volatility,
             coerce_values_for_lambdas: false,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
         }
     }
 
@@ -93,6 +100,7 @@ impl HigherOrderSignature {
             type_signature: HigherOrderTypeSignature::UserDefined,
             volatility,
             coerce_values_for_lambdas: false,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
         }
     }
 
@@ -102,6 +110,7 @@ impl HigherOrderSignature {
             type_signature: HigherOrderTypeSignature::VariadicAny,
             volatility,
             coerce_values_for_lambdas: false,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
         }
     }
 
@@ -111,6 +120,7 @@ impl HigherOrderSignature {
             type_signature: HigherOrderTypeSignature::Any(arg_count),
             volatility,
             coerce_values_for_lambdas: false,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
         }
     }
 

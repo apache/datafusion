@@ -513,11 +513,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
 
+                let limit = fm.signature().lambda_parameters_max_iterations;
+
                 step += 1;
 
-                if step > 256 {
+                if step > limit {
                     return plan_err!(
-                        "{} lambda_parameters called 256 times without completion",
+                        "{} lambda_parameters called {limit} times without completion",
                         fm.name()
                     );
                 }
