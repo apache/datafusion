@@ -35,8 +35,8 @@ use rand::seq::IndexedRandom;
 use std::hint::black_box;
 use std::sync::Arc;
 
-const NUM_ROWS: usize = 10000;
-const LIST_SIZES: &[usize] = &[10, 100, 500];
+// (num_rows, list_size)
+const SIZES: &[(usize, usize)] = &[(5_000, 10), (10_000, 100), (10_000, 500)];
 const SEED: u64 = 42;
 const HAYSTACK_NULL_DENSITY: f64 = 0.1;
 const NEEDLE_DENSITY: f64 = 0.1;
@@ -60,16 +60,19 @@ fn bench_array_remove_int64(c: &mut Criterion) {
 
     let filler_values = [None, Some(1), Some(2), Some(3), Some(4), Some(5)];
     let needle = 0;
-    for &list_size in LIST_SIZES {
+    for &(num_rows, list_size) in SIZES {
         let list_array = create_list_array::<Int64Builder, _>(
-            NUM_ROWS,
+            num_rows,
             list_size,
             needle,
             &filler_values,
         );
         group.bench_with_input(
-            BenchmarkId::new("remove", list_size),
-            &list_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
@@ -88,9 +91,9 @@ fn bench_array_remove_n_int64(c: &mut Criterion) {
 
     let filler_values = [None, Some(1), Some(2), Some(3), Some(4), Some(5)];
     let needle = 0;
-    for &list_size in LIST_SIZES {
+    for &(num_rows, list_size) in SIZES {
         let list_array = create_list_array::<Int64Builder, _>(
-            NUM_ROWS,
+            num_rows,
             list_size,
             needle,
             &filler_values,
@@ -99,8 +102,11 @@ fn bench_array_remove_n_int64(c: &mut Criterion) {
         let n = 2.max(n);
 
         group.bench_with_input(
-            BenchmarkId::new("remove", list_size),
-            &list_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemoveN::new();
                 b.iter(|| {
@@ -123,16 +129,19 @@ fn bench_array_remove_all_int64(c: &mut Criterion) {
 
     let filler_values = [None, Some(1), Some(2), Some(3), Some(4), Some(5)];
     let needle = 0;
-    for &list_size in LIST_SIZES {
+    for &(num_rows, list_size) in SIZES {
         let list_array = create_list_array::<Int64Builder, _>(
-            NUM_ROWS,
+            num_rows,
             list_size,
             needle,
             &filler_values,
         );
         group.bench_with_input(
-            BenchmarkId::new("remove", list_size),
-            &list_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemoveAll::new();
                 b.iter(|| {
@@ -167,12 +176,15 @@ fn bench_array_remove_int64_nested(c: &mut Criterion) {
         &needle_scalar,
         &DataType::Int64,
     ));
-    for &list_size in LIST_SIZES {
+    for &(num_rows, list_size) in SIZES {
         let list_array =
-            create_nested_i64_list_array(NUM_ROWS, list_size, &needle, &filler_values);
+            create_nested_i64_list_array(num_rows, list_size, &needle, &filler_values);
         group.bench_with_input(
-            BenchmarkId::new("remove", list_size),
-            &list_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
@@ -207,14 +219,17 @@ fn bench_array_remove_n_int64_nested(c: &mut Criterion) {
         &needle_scalar,
         &DataType::Int64,
     ));
-    for &list_size in LIST_SIZES {
+    for &(num_rows, list_size) in SIZES {
         let list_array =
-            create_nested_i64_list_array(NUM_ROWS, list_size, &needle, &filler_values);
+            create_nested_i64_list_array(num_rows, list_size, &needle, &filler_values);
         let n = (NEEDLE_DENSITY / 2.0 * list_size as f64) as i64;
         let n = 2.max(n);
         group.bench_with_input(
-            BenchmarkId::new("remove", list_size),
-            &list_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemoveN::new();
                 b.iter(|| {
@@ -253,12 +268,15 @@ fn bench_array_remove_all_int64_nested(c: &mut Criterion) {
         &needle_scalar,
         &DataType::Int64,
     ));
-    for &list_size in LIST_SIZES {
+    for &(num_rows, list_size) in SIZES {
         let list_array =
-            create_nested_i64_list_array(NUM_ROWS, list_size, &needle, &filler_values);
+            create_nested_i64_list_array(num_rows, list_size, &needle, &filler_values);
         group.bench_with_input(
-            BenchmarkId::new("remove", list_size),
-            &list_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemoveAll::new();
                 b.iter(|| {
@@ -284,16 +302,19 @@ fn bench_array_remove_strings(c: &mut Criterion) {
         Some("hello"),
     ];
     let needle = "needle";
-    for &list_size in LIST_SIZES {
+    for &(num_rows, list_size) in SIZES {
         let list_array = create_list_array::<StringBuilder, _>(
-            NUM_ROWS,
+            num_rows,
             list_size,
             needle,
             &filler_values,
         );
         group.bench_with_input(
-            BenchmarkId::new("remove", list_size),
-            &list_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
@@ -312,16 +333,19 @@ fn bench_array_remove_boolean(c: &mut Criterion) {
 
     let filler_values = [None, Some(false)];
     let needle = true;
-    for &list_size in LIST_SIZES {
+    for &(num_rows, list_size) in SIZES {
         let list_array = create_list_array::<BooleanBuilder, _>(
-            NUM_ROWS,
+            num_rows,
             list_size,
             needle,
             &filler_values,
         );
         group.bench_with_input(
-            BenchmarkId::new("remove", list_size),
-            &list_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
@@ -348,16 +372,19 @@ fn bench_array_remove_fixed_size_binary(c: &mut Criterion) {
         Some([6_u8; SIZE]),
     ];
     let needle = [1_u8; SIZE];
-    for &list_size in LIST_SIZES {
+    for &(num_rows, list_size) in SIZES {
         let list_array = create_fixed_size_binary_list_array::<SIZE>(
-            NUM_ROWS,
+            num_rows,
             list_size,
             needle,
             &filler_values,
         );
         group.bench_with_input(
-            BenchmarkId::new("remove", list_size),
-            &list_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
