@@ -22,64 +22,45 @@
 See the current usage using `datafusion-cli --help`:
 
 ```bash
-Apache Arrow <dev@arrow.apache.org>
 Command Line Client for DataFusion query engine.
 
-USAGE:
-    datafusion-cli [OPTIONS]
+Usage: datafusion-cli [OPTIONS]
 
-OPTIONS:
-    -b, --batch-size <BATCH_SIZE>
-            The batch size of each query, or use DataFusion default
-
-    -c, --command <COMMAND>...
-            Execute the given command string(s), then exit
-
-        --color
-            Enables console syntax highlighting
-
-    -f, --file <FILE>...
-            Execute commands from file(s), then exit
-
-        --format <FORMAT>
-            [default: table] [possible values: csv, tsv, table, json, nd-json]
-
-    -h, --help
-            Print help information
-
-    -m, --memory-limit <MEMORY_LIMIT>
-            The memory pool limitation (e.g. '10g'), default to None (no limit)
-
-        --maxrows <MAXROWS>
-            The max number of rows to display for 'Table' format
-            [possible values: numbers(0/10/...), inf(no limit)] [default: 40]
-
-        --mem-pool-type <MEM_POOL_TYPE>
-            Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
-
-        --top-memory-consumers <TOP_MEMORY_CONSUMERS>
-            The number of top memory consumers to display when query fails due to memory exhaustion.
-            To disable memory consumer tracking, set this value to 0 [default: 3].
-            Please set one of the runtime configs: '--memory-limit' or '--mem-pool-type' to see 'top-memory-consumers' result when memory is exhausted.
-
-    -d, --disk-limit <DISK_LIMIT>
-            Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')
-
+Options:
+  -p, --data-path <DATA_PATH>
+          Path to your data, default to current directory
+  -b, --batch-size <BATCH_SIZE>
+          The batch size of each query, or use DataFusion default
+  -c, --command [<COMMAND>...]
+          Execute the given command string(s), then exit. Commands are expected to be non empty.
+  -m, --memory-limit <MEMORY_LIMIT>
+          The memory pool limitation (e.g. '10g'), default to None (no limit)
+  -f, --file [<FILE>...]
+          Execute commands from file(s), then exit
+  -r, --rc [<RC>...]
+          Run the provided files on startup instead of ~/.datafusionrc
+      --format <FORMAT>
+          [default: automatic] [possible values: csv, tsv, table, json, nd-json, automatic]
+  -q, --quiet
+          Reduce printing other than the results and work quietly
+      --mem-pool-type <MEM_POOL_TYPE>
+          Specify the memory pool type 'greedy' or 'fair' [default: greedy]
+      --top-memory-consumers <TOP_MEMORY_CONSUMERS>
+          The number of top memory consumers to display when query fails due to memory exhaustion. To disable memory consumer tracking, set this value to 0 [default: 3]
+      --maxrows <MAXROWS>
+          The max number of rows to display for 'Table' format
+          [possible values: numbers(0/10/...), inf(no limit)] [default: 40]
+      --color
+          Enables console syntax highlighting
+  -d, --disk-limit <DISK_LIMIT>
+          Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')
       --object-store-profiling <OBJECT_STORE_PROFILING>
           Specify the default object_store_profiling mode, defaults to 'disabled'.
           [possible values: disabled, summary, trace] [default: Disabled]
-
-    -p, --data-path <DATA_PATH>
-            Path to your data, default to current directory
-
-    -q, --quiet
-            Reduce printing other than the results and work quietly
-
-    -r, --rc <RC>...
-            Run the provided files on startup instead of ~/.datafusionrc
-
-    -V, --version
-            Print version information
+  -h, --help
+          Print help
+  -V, --version
+          Print version
 ```
 
 ## Commands

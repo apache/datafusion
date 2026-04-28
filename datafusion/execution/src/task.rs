@@ -31,7 +31,23 @@ use std::{collections::HashMap, sync::Arc};
 /// execution. Please see the documentation on [`SessionContext`] for more
 /// information.
 ///
+/// # Relationship with [`ExecutionProps`]
+///
+/// [`TaskContext`] is intentionally distinct from [`ExecutionProps`].
+/// [`ExecutionProps`] is state used while optimizing a logical
+/// plan and constructing a physical plan.
+///
+/// [`TaskContext`] is the runtime context passed to physical operators when
+/// executing a physical plan. It carries runtime services and session state
+/// needed at that stage, such as [`RuntimeEnv`], memory-pool access, session
+/// configuration, and function lookup.
+///
+/// Keeping these structures separate avoids threading execution/runtime state
+/// through planning APIs, and avoids making execution depend on planner-only
+/// scratch state.
+///
 /// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
+/// [`ExecutionProps`]: datafusion_expr::execution_props::ExecutionProps
 #[derive(Debug)]
 pub struct TaskContext {
     /// Session Id
