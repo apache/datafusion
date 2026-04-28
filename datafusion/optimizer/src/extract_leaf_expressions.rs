@@ -247,9 +247,7 @@ fn extract_from_plan(
                 Some(plan) => Ok(plan),
                 // No extractions for this input — recover the LogicalPlan
                 // without cloning (refcount is 1 since build returned None).
-                None => {
-                    Ok(Arc::try_unwrap(input_arc).unwrap_or_else(|arc| (*arc).clone()))
-                }
+                None => Ok(Arc::unwrap_or_clone(input_arc)),
             }
         })
         .collect::<Result<Vec<_>>>()?;

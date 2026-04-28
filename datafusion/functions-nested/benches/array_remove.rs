@@ -16,10 +16,10 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Decimal128Array, FixedSizeBinaryArray,
-    Float64Array, Int64Array, ListArray, StringArray,
+    Array, ArrayBuilder, ArrayRef, BooleanBuilder, FixedSizeBinaryArray, Int64Builder,
+    ListArray, ListBuilder, StringBuilder,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field};
 use criterion::{
     criterion_group, criterion_main, {BenchmarkId, Criterion},
@@ -27,63 +27,59 @@ use criterion::{
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
-use datafusion_functions_nested::remove::ArrayRemove;
+use datafusion_functions_nested::remove::{ArrayRemove, ArrayRemoveAll, ArrayRemoveN};
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::seq::IndexedRandom;
 use std::hint::black_box;
 use std::sync::Arc;
 
-const NUM_ROWS: usize = 10000;
-const ARRAY_SIZES: &[usize] = &[10, 100, 500];
+// (num_rows, list_size)
+// Settings tuned so benchmarks finish in approx 5 seconds
+const SIZES: &[(usize, usize)] = &[(4_000, 10), (10_000, 100), (10_000, 500)];
+const NESTED_SIZES: &[(usize, usize)] = &[(4_000, 10), (3_000, 100), (1_500, 300)];
 const SEED: u64 = 42;
-const NULL_DENSITY: f64 = 0.1;
+const HAYSTACK_NULL_DENSITY: f64 = 0.1;
+const NEEDLE_DENSITY: f64 = 0.1;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // Test array_remove with different data types and array sizes
-    // TODO: Add performance tests for nested datatypes
     bench_array_remove_int64(c);
-    bench_array_remove_f64(c);
+    bench_array_remove_n_int64(c);
+    bench_array_remove_all_int64(c);
+
+    bench_array_remove_int64_nested(c);
+    bench_array_remove_n_int64_nested(c);
+    bench_array_remove_all_int64_nested(c);
+
     bench_array_remove_strings(c);
-    bench_array_remove_binary(c);
     bench_array_remove_boolean(c);
-    bench_array_remove_decimal64(c);
     bench_array_remove_fixed_size_binary(c);
 }
 
 fn bench_array_remove_int64(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_remove_int64");
 
-    for &array_size in ARRAY_SIZES {
-        let list_array = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
-        let element_to_remove = ScalarValue::Int64(Some(1));
-        let args = create_args(list_array.clone(), element_to_remove.clone());
-
+    let filler_values = [None, Some(1), Some(2), Some(3), Some(4), Some(5)];
+    let needle = 0;
+    for &(num_rows, list_size) in SIZES {
+        let list_array = create_list_array::<Int64Builder, _>(
+            num_rows,
+            list_size,
+            needle,
+            &filler_values,
+        );
         group.bench_with_input(
-            BenchmarkId::new("remove", array_size),
-            &array_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: vec![
-                                Field::new("arr", list_array.data_type().clone(), false)
-                                    .into(),
-                                Field::new("el", DataType::Int64, false).into(),
-                            ],
-                            number_rows: NUM_ROWS,
-                            return_field: Field::new(
-                                "result",
-                                list_array.data_type().clone(),
-                                false,
-                            )
-                            .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
-                        })
-                        .unwrap(),
-                    )
+                    let args = create_args(list_array.clone(), ScalarValue::from(needle));
+                    black_box(udf.invoke_with_args(args).unwrap())
                 })
             },
         );
@@ -92,39 +88,202 @@ fn bench_array_remove_int64(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_array_remove_f64(c: &mut Criterion) {
-    let mut group = c.benchmark_group("array_remove_f64");
+fn bench_array_remove_n_int64(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_remove_n_int64");
 
-    for &array_size in ARRAY_SIZES {
-        let list_array = create_f64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
-        let element_to_remove = ScalarValue::Float64(Some(1.0));
-        let args = create_args(list_array.clone(), element_to_remove.clone());
+    let filler_values = [None, Some(1), Some(2), Some(3), Some(4), Some(5)];
+    let needle = 0;
+    for &(num_rows, list_size) in SIZES {
+        let list_array = create_list_array::<Int64Builder, _>(
+            num_rows,
+            list_size,
+            needle,
+            &filler_values,
+        );
+        let n = (NEEDLE_DENSITY / 2.0 * list_size as f64) as i64;
+        let n = 2.max(n);
 
         group.bench_with_input(
-            BenchmarkId::new("remove", array_size),
-            &array_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
+            |b, _| {
+                let udf = ArrayRemoveN::new();
+                b.iter(|| {
+                    let args = create_args_n(
+                        list_array.clone(),
+                        ScalarValue::from(needle),
+                        ScalarValue::from(n),
+                    );
+                    black_box(udf.invoke_with_args(args).unwrap())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_array_remove_all_int64(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_remove_all_int64");
+
+    let filler_values = [None, Some(1), Some(2), Some(3), Some(4), Some(5)];
+    let needle = 0;
+    for &(num_rows, list_size) in SIZES {
+        let list_array = create_list_array::<Int64Builder, _>(
+            num_rows,
+            list_size,
+            needle,
+            &filler_values,
+        );
+        group.bench_with_input(
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
+            |b, _| {
+                let udf = ArrayRemoveAll::new();
+                b.iter(|| {
+                    let args = create_args(list_array.clone(), ScalarValue::from(needle));
+                    black_box(udf.invoke_with_args(args).unwrap())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_array_remove_int64_nested(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_remove_int64_nested");
+
+    let filler_values = [
+        None,
+        Some(vec![Some(1), Some(0), Some(2), Some(0)]),
+        Some(vec![Some(1)]),
+        Some(vec![]),
+        Some(vec![Some(1), Some(0), Some(2), Some(4), None]),
+        Some(vec![None]),
+    ];
+    let needle = vec![Some(1), Some(0), Some(2), Some(4)];
+    let needle_scalar = needle
+        .iter()
+        .copied()
+        .map(ScalarValue::from)
+        .collect::<Vec<_>>();
+    let needle_scalar = ScalarValue::List(ScalarValue::new_list_nullable(
+        &needle_scalar,
+        &DataType::Int64,
+    ));
+    for &(num_rows, list_size) in NESTED_SIZES {
+        let list_array =
+            create_nested_i64_list_array(num_rows, list_size, &needle, &filler_values);
+        group.bench_with_input(
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: vec![
-                                Field::new("arr", list_array.data_type().clone(), false)
-                                    .into(),
-                                Field::new("el", DataType::Float64, false).into(),
-                            ],
-                            number_rows: NUM_ROWS,
-                            return_field: Field::new(
-                                "result",
-                                list_array.data_type().clone(),
-                                false,
-                            )
-                            .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
-                        })
-                        .unwrap(),
-                    )
+                    let args = create_args(list_array.clone(), needle_scalar.clone());
+                    black_box(udf.invoke_with_args(args).unwrap())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_array_remove_n_int64_nested(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_remove_n_int64_nested");
+
+    let filler_values = [
+        None,
+        Some(vec![Some(1), Some(0), Some(2), Some(0)]),
+        Some(vec![Some(1)]),
+        Some(vec![]),
+        Some(vec![Some(1), Some(0), Some(2), Some(4), None]),
+        Some(vec![None]),
+    ];
+    let needle = vec![Some(1), Some(0), Some(2), Some(4)];
+    let needle_scalar = needle
+        .iter()
+        .copied()
+        .map(ScalarValue::from)
+        .collect::<Vec<_>>();
+    let needle_scalar = ScalarValue::List(ScalarValue::new_list_nullable(
+        &needle_scalar,
+        &DataType::Int64,
+    ));
+    for &(num_rows, list_size) in NESTED_SIZES {
+        let list_array =
+            create_nested_i64_list_array(num_rows, list_size, &needle, &filler_values);
+        let n = (NEEDLE_DENSITY / 2.0 * list_size as f64) as i64;
+        let n = 2.max(n);
+        group.bench_with_input(
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
+            |b, _| {
+                let udf = ArrayRemoveN::new();
+                b.iter(|| {
+                    let args = create_args_n(
+                        list_array.clone(),
+                        needle_scalar.clone(),
+                        ScalarValue::from(n),
+                    );
+                    black_box(udf.invoke_with_args(args).unwrap())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_array_remove_all_int64_nested(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_remove_all_int64_nested");
+
+    let filler_values = [
+        None,
+        Some(vec![Some(1), Some(0), Some(2), Some(0)]),
+        Some(vec![Some(1)]),
+        Some(vec![]),
+        Some(vec![Some(1), Some(0), Some(2), Some(4), None]),
+        Some(vec![None]),
+    ];
+    let needle = vec![Some(1), Some(0), Some(2), Some(4)];
+    let needle_scalar = needle
+        .iter()
+        .copied()
+        .map(ScalarValue::from)
+        .collect::<Vec<_>>();
+    let needle_scalar = ScalarValue::List(ScalarValue::new_list_nullable(
+        &needle_scalar,
+        &DataType::Int64,
+    ));
+    for &(num_rows, list_size) in NESTED_SIZES {
+        let list_array =
+            create_nested_i64_list_array(num_rows, list_size, &needle, &filler_values);
+        group.bench_with_input(
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
+            |b, _| {
+                let udf = ArrayRemoveAll::new();
+                b.iter(|| {
+                    let args = create_args(list_array.clone(), needle_scalar.clone());
+                    black_box(udf.invoke_with_args(args).unwrap())
                 })
             },
         );
@@ -136,77 +295,33 @@ fn bench_array_remove_f64(c: &mut Criterion) {
 fn bench_array_remove_strings(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_remove_strings");
 
-    for &array_size in ARRAY_SIZES {
-        let list_array = create_string_list_array(NUM_ROWS, array_size, NULL_DENSITY);
-        let element_to_remove = ScalarValue::Utf8(Some("value_1".to_string()));
-        let args = create_args(list_array.clone(), element_to_remove.clone());
-
-        group.bench_with_input(
-            BenchmarkId::new("remove", array_size),
-            &array_size,
-            |b, _| {
-                let udf = ArrayRemove::new();
-                b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: vec![
-                                Field::new("arr", list_array.data_type().clone(), false)
-                                    .into(),
-                                Field::new("el", DataType::Utf8, false).into(),
-                            ],
-                            number_rows: NUM_ROWS,
-                            return_field: Field::new(
-                                "result",
-                                list_array.data_type().clone(),
-                                false,
-                            )
-                            .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
-                        })
-                        .unwrap(),
-                    )
-                })
-            },
+    let filler_values = [
+        None,
+        Some("neenee"),
+        Some("notthis"),
+        Some("value1"),
+        Some("abc"),
+        Some("hello"),
+    ];
+    let needle = "needle";
+    for &(num_rows, list_size) in SIZES {
+        let list_array = create_list_array::<StringBuilder, _>(
+            num_rows,
+            list_size,
+            needle,
+            &filler_values,
         );
-    }
-
-    group.finish();
-}
-
-fn bench_array_remove_binary(c: &mut Criterion) {
-    let mut group = c.benchmark_group("array_remove_binary");
-
-    for &array_size in ARRAY_SIZES {
-        let list_array = create_binary_list_array(NUM_ROWS, array_size, NULL_DENSITY);
-        let element_to_remove = ScalarValue::Binary(Some(b"value_1".to_vec()));
-        let args = create_args(list_array.clone(), element_to_remove.clone());
-
         group.bench_with_input(
-            BenchmarkId::new("remove", array_size),
-            &array_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: vec![
-                                Field::new("arr", list_array.data_type().clone(), false)
-                                    .into(),
-                                Field::new("el", DataType::Binary, false).into(),
-                            ],
-                            number_rows: NUM_ROWS,
-                            return_field: Field::new(
-                                "result",
-                                list_array.data_type().clone(),
-                                false,
-                            )
-                            .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
-                        })
-                        .unwrap(),
-                    )
+                    let args = create_args(list_array.clone(), ScalarValue::from(needle));
+                    black_box(udf.invoke_with_args(args).unwrap())
                 })
             },
         );
@@ -218,78 +333,26 @@ fn bench_array_remove_binary(c: &mut Criterion) {
 fn bench_array_remove_boolean(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_remove_boolean");
 
-    for &array_size in ARRAY_SIZES {
-        let list_array = create_boolean_list_array(NUM_ROWS, array_size, NULL_DENSITY);
-        let element_to_remove = ScalarValue::Boolean(Some(true));
-        let args = create_args(list_array.clone(), element_to_remove.clone());
-
-        group.bench_with_input(
-            BenchmarkId::new("remove", array_size),
-            &array_size,
-            |b, _| {
-                let udf = ArrayRemove::new();
-                b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: vec![
-                                Field::new("arr", list_array.data_type().clone(), false)
-                                    .into(),
-                                Field::new("el", DataType::Boolean, false).into(),
-                            ],
-                            number_rows: NUM_ROWS,
-                            return_field: Field::new(
-                                "result",
-                                list_array.data_type().clone(),
-                                false,
-                            )
-                            .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
-                        })
-                        .unwrap(),
-                    )
-                })
-            },
+    let filler_values = [None, Some(false)];
+    let needle = true;
+    for &(num_rows, list_size) in SIZES {
+        let list_array = create_list_array::<BooleanBuilder, _>(
+            num_rows,
+            list_size,
+            needle,
+            &filler_values,
         );
-    }
-
-    group.finish();
-}
-
-fn bench_array_remove_decimal64(c: &mut Criterion) {
-    let mut group = c.benchmark_group("array_remove_decimal64");
-
-    for &array_size in ARRAY_SIZES {
-        let list_array = create_decimal64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
-        let element_to_remove = ScalarValue::Decimal128(Some(100_i128), 10, 2);
-        let args = create_args(list_array.clone(), element_to_remove.clone());
-
         group.bench_with_input(
-            BenchmarkId::new("remove", array_size),
-            &array_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: vec![
-                                Field::new("arr", list_array.data_type().clone(), false)
-                                    .into(),
-                                Field::new("el", DataType::Decimal128(10, 2), false)
-                                    .into(),
-                            ],
-                            number_rows: NUM_ROWS,
-                            return_field: Field::new(
-                                "result",
-                                list_array.data_type().clone(),
-                                false,
-                            )
-                            .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
-                        })
-                        .unwrap(),
-                    )
+                    let args = create_args(list_array.clone(), ScalarValue::from(needle));
+                    black_box(udf.invoke_with_args(args).unwrap())
                 })
             },
         );
@@ -301,38 +364,37 @@ fn bench_array_remove_decimal64(c: &mut Criterion) {
 fn bench_array_remove_fixed_size_binary(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_remove_fixed_size_binary");
 
-    for &array_size in ARRAY_SIZES {
-        let list_array =
-            create_fixed_size_binary_list_array(NUM_ROWS, array_size, NULL_DENSITY);
-        let element_to_remove = ScalarValue::FixedSizeBinary(16, Some(vec![1u8; 16]));
-        let args = create_args(list_array.clone(), element_to_remove.clone());
-
+    const SIZE: usize = 16;
+    let filler_values = [
+        None,
+        Some([2_u8; SIZE]),
+        Some([3_u8; SIZE]),
+        Some([4_u8; SIZE]),
+        Some([5_u8; SIZE]),
+        Some([6_u8; SIZE]),
+    ];
+    let needle = [1_u8; SIZE];
+    for &(num_rows, list_size) in SIZES {
+        let list_array = create_fixed_size_binary_list_array::<SIZE>(
+            num_rows,
+            list_size,
+            needle,
+            &filler_values,
+        );
         group.bench_with_input(
-            BenchmarkId::new("remove", array_size),
-            &array_size,
+            BenchmarkId::new(
+                "remove",
+                format!("list size: {list_size}, num_rows: {num_rows}"),
+            ),
+            &(list_size, num_rows),
             |b, _| {
                 let udf = ArrayRemove::new();
                 b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: vec![
-                                Field::new("arr", list_array.data_type().clone(), false)
-                                    .into(),
-                                Field::new("el", DataType::FixedSizeBinary(16), false)
-                                    .into(),
-                            ],
-                            number_rows: NUM_ROWS,
-                            return_field: Field::new(
-                                "result",
-                                list_array.data_type().clone(),
-                                false,
-                            )
-                            .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
-                        })
-                        .unwrap(),
-                    )
+                    let args = create_args(
+                        list_array.clone(),
+                        ScalarValue::FixedSizeBinary(SIZE as i32, Some(needle.to_vec())),
+                    );
+                    black_box(udf.invoke_with_args(args).unwrap())
                 })
             },
         );
@@ -341,231 +403,150 @@ fn bench_array_remove_fixed_size_binary(c: &mut Criterion) {
     group.finish();
 }
 
-fn create_args(list_array: ArrayRef, element: ScalarValue) -> Vec<ColumnarValue> {
-    vec![
-        ColumnarValue::Array(list_array),
-        ColumnarValue::Scalar(element),
-    ]
+#[inline]
+fn create_args(haystack: ArrayRef, needle: ScalarValue) -> ScalarFunctionArgs {
+    let number_rows = haystack.len();
+    let haystack_type = haystack.data_type().clone();
+    let needle_type = needle.data_type().clone();
+    ScalarFunctionArgs {
+        args: vec![
+            ColumnarValue::Array(haystack),
+            ColumnarValue::Scalar(needle),
+        ],
+        arg_fields: vec![
+            Field::new("haystack", haystack_type.clone(), true).into(),
+            Field::new("needle", needle_type, true).into(),
+        ],
+        number_rows,
+        return_field: Field::new("result", haystack_type, true).into(),
+        config_options: Arc::new(ConfigOptions::default()),
+    }
 }
 
-fn create_int64_list_array(
+#[inline]
+fn create_args_n(
+    haystack: ArrayRef,
+    needle: ScalarValue,
+    n: ScalarValue,
+) -> ScalarFunctionArgs {
+    let number_rows = haystack.len();
+    let haystack_type = haystack.data_type().clone();
+    let needle_type = needle.data_type().clone();
+    let n_type = n.data_type().clone();
+    ScalarFunctionArgs {
+        args: vec![
+            ColumnarValue::Array(haystack),
+            ColumnarValue::Scalar(needle),
+            ColumnarValue::Scalar(n),
+        ],
+        arg_fields: vec![
+            Field::new("haystack", haystack_type.clone(), true).into(),
+            Field::new("needle", needle_type, true).into(),
+            Field::new("n", n_type, true).into(),
+        ],
+        number_rows,
+        return_field: Field::new("result", haystack_type, true).into(),
+        config_options: Arc::new(ConfigOptions::default()),
+    }
+}
+
+fn create_list_array<Builder, Item>(
     num_rows: usize,
-    array_size: usize,
-    null_density: f64,
-) -> ArrayRef {
+    list_size: usize,
+    needle_value: Item,
+    filler_values: &[Option<Item>],
+) -> ArrayRef
+where
+    Builder: ArrayBuilder + Default + Extend<Option<Item>>,
+    Item: Copy,
+{
     let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows * array_size)
+    let values = (0..num_rows)
         .map(|_| {
-            if rng.random::<f64>() < null_density {
+            if rng.random_bool(HAYSTACK_NULL_DENSITY) {
                 None
             } else {
-                Some(rng.random_range(0..array_size as i64))
+                let list = (0..list_size)
+                    .map(|_| {
+                        if rng.random_bool(NEEDLE_DENSITY) {
+                            Some(needle_value)
+                        } else {
+                            *filler_values.choose(&mut rng).unwrap()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                Some(list)
             }
         })
-        .collect::<Int64Array>();
-    let offsets = (0..=num_rows)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::Int64, true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
-    )
+        .collect::<Vec<_>>();
+    Arc::new(ListArray::from_nested_iter::<Builder, _, _, _>(values))
 }
 
-fn create_f64_list_array(
+fn create_fixed_size_binary_list_array<const SIZE: usize>(
     num_rows: usize,
-    array_size: usize,
-    null_density: f64,
+    list_size: usize,
+    needle_value: [u8; SIZE],
+    filler_values: &[Option<[u8; SIZE]>],
 ) -> ArrayRef {
     let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows * array_size)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
+    let mut buffer = Vec::with_capacity(num_rows * list_size);
+    for _ in 0..num_rows {
+        for _ in 0..list_size {
+            if rng.random_bool(NEEDLE_DENSITY) {
+                buffer.push(Some(needle_value));
             } else {
-                Some(rng.random_range(0..array_size as i64) as f64)
+                buffer.push(*filler_values.choose(&mut rng).unwrap());
             }
-        })
-        .collect::<Float64Array>();
-    let offsets = (0..=num_rows)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::Float64, true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
-    )
-}
-
-fn create_string_list_array(
-    num_rows: usize,
-    array_size: usize,
-    null_density: f64,
-) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows * array_size)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
-            } else {
-                let idx = rng.random_range(0..array_size);
-                Some(format!("value_{idx}"))
-            }
-        })
-        .collect::<StringArray>();
-    let offsets = (0..=num_rows)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::Utf8, true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
-    )
-}
-
-fn create_binary_list_array(
-    num_rows: usize,
-    array_size: usize,
-    null_density: f64,
-) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows * array_size)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
-            } else {
-                let idx = rng.random_range(0..array_size);
-                Some(format!("value_{idx}").into_bytes())
-            }
-        })
-        .collect::<BinaryArray>();
-    let offsets = (0..=num_rows)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::Binary, true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
-    )
-}
-
-fn create_boolean_list_array(
-    num_rows: usize,
-    array_size: usize,
-    null_density: f64,
-) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows * array_size)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
-            } else {
-                Some(rng.random::<bool>())
-            }
-        })
-        .collect::<BooleanArray>();
-    let offsets = (0..=num_rows)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::Boolean, true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
-    )
-}
-
-fn create_decimal64_list_array(
-    num_rows: usize,
-    array_size: usize,
-    null_density: f64,
-) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows * array_size)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
-            } else {
-                Some(rng.random_range(0..array_size) as i128 * 100)
-            }
-        })
-        .collect::<Decimal128Array>()
-        .with_precision_and_scale(10, 2)
-        .unwrap();
-    let offsets = (0..=num_rows)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::Decimal128(10, 2), true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
-    )
-}
-
-fn create_fixed_size_binary_list_array(
-    num_rows: usize,
-    array_size: usize,
-    null_density: f64,
-) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let mut buffer = Vec::with_capacity(num_rows * array_size * 16);
-    let mut null_buffer = Vec::with_capacity(num_rows * array_size);
-    for _ in 0..num_rows * array_size {
-        if rng.random::<f64>() < null_density {
-            null_buffer.push(false);
-            buffer.extend_from_slice(&[0u8; 16]);
-        } else {
-            null_buffer.push(true);
-            let mut bytes = [0u8; 16];
-            rng.fill(&mut bytes);
-            buffer.extend_from_slice(&bytes);
         }
     }
-    let nulls = arrow::buffer::NullBuffer::from_iter(null_buffer.iter().copied());
-    let values = FixedSizeBinaryArray::new(16, buffer.into(), Some(nulls));
-    let offsets = (0..=num_rows)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::FixedSizeBinary(16), true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
+    let values = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+        buffer.into_iter(),
+        SIZE as i32,
     )
+    .unwrap();
+
+    let null_buffer = NullBuffer::from_iter(
+        (0..num_rows).map(|_| rng.random_bool(1.0 - HAYSTACK_NULL_DENSITY)),
+    );
+
+    Arc::new(ListArray::new(
+        Field::new("item", DataType::FixedSizeBinary(SIZE as i32), true).into(),
+        OffsetBuffer::from_repeated_length(list_size, num_rows),
+        Arc::new(values),
+        Some(null_buffer),
+    ))
+}
+
+fn create_nested_i64_list_array(
+    num_rows: usize,
+    list_size: usize,
+    needle_value: &[Option<i64>],
+    filler_values: &[Option<Vec<Option<i64>>>],
+) -> ArrayRef {
+    let mut rng = StdRng::seed_from_u64(SEED);
+
+    let value_builder = Int64Builder::new();
+    let inner_builder = ListBuilder::new(value_builder);
+    let mut outer_builder = ListBuilder::new(inner_builder);
+
+    for _ in 0..num_rows {
+        if rng.random_bool(HAYSTACK_NULL_DENSITY) {
+            outer_builder.append(false);
+            continue;
+        }
+
+        for _ in 0..list_size {
+            let inner = outer_builder.values();
+            if rng.random_bool(NEEDLE_DENSITY) {
+                inner.append_value(needle_value.to_vec());
+            } else {
+                inner.append_option(filler_values.choose(&mut rng).unwrap().clone());
+            }
+        }
+        outer_builder.append(true);
+    }
+
+    Arc::new(outer_builder.finish())
 }
 
 criterion_group!(benches, criterion_benchmark);

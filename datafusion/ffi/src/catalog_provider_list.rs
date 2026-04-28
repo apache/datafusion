@@ -18,35 +18,36 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RString, RVec};
 use datafusion_catalog::{CatalogProvider, CatalogProviderList};
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
 use crate::catalog_provider::{FFI_CatalogProvider, ForeignCatalogProvider};
 use crate::execution::FFI_TaskContextProvider;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::util::FFI_Option;
 
 /// A stable struct for sharing [`CatalogProviderList`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_CatalogProviderList {
     /// Register a catalog
     pub register_catalog: unsafe extern "C" fn(
         &Self,
-        name: RString,
+        name: SString,
         catalog: &FFI_CatalogProvider,
-    ) -> ROption<FFI_CatalogProvider>,
+    ) -> FFI_Option<FFI_CatalogProvider>,
 
     /// List of existing catalogs
-    pub catalog_names: unsafe extern "C" fn(&Self) -> RVec<RString>,
+    pub catalog_names: unsafe extern "C" fn(&Self) -> SVec<SString>,
 
     /// Access a catalog
     pub catalog:
-        unsafe extern "C" fn(&Self, name: RString) -> ROption<FFI_CatalogProvider>,
+        unsafe extern "C" fn(&Self, name: SString) -> FFI_Option<FFI_CatalogProvider>,
 
     pub logical_codec: FFI_LogicalExtensionCodec,
 
@@ -96,7 +97,7 @@ impl FFI_CatalogProviderList {
 
 unsafe extern "C" fn catalog_names_fn_wrapper(
     provider: &FFI_CatalogProviderList,
-) -> RVec<RString> {
+) -> SVec<SString> {
     unsafe {
         let names = provider.inner().catalog_names();
         names.into_iter().map(|s| s.into()).collect()
@@ -105,9 +106,9 @@ unsafe extern "C" fn catalog_names_fn_wrapper(
 
 unsafe extern "C" fn register_catalog_fn_wrapper(
     provider: &FFI_CatalogProviderList,
-    name: RString,
+    name: SString,
     catalog: &FFI_CatalogProvider,
-) -> ROption<FFI_CatalogProvider> {
+) -> FFI_Option<FFI_CatalogProvider> {
     unsafe {
         let runtime = provider.runtime();
         let inner_provider = provider.inner();
@@ -128,8 +129,8 @@ unsafe extern "C" fn register_catalog_fn_wrapper(
 
 unsafe extern "C" fn catalog_fn_wrapper(
     provider: &FFI_CatalogProviderList,
-    name: RString,
-) -> ROption<FFI_CatalogProvider> {
+    name: SString,
+) -> FFI_Option<FFI_CatalogProvider> {
     unsafe {
         let runtime = provider.runtime();
         let inner_provider = provider.inner();

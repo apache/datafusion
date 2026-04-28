@@ -17,16 +17,20 @@
 
 //! Tree node implementation for Logical Expressions
 
-use crate::Expr;
-use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Cast,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, SetComparison,
-    TryCast, Unnest, WindowFunction, WindowFunctionParams,
+use crate::{
+    Expr,
+    expr::{
+        AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case,
+        Cast, GroupingSet, HigherOrderFunction, InList, InSubquery, Lambda, Like,
+        Placeholder, ScalarFunction, SetComparison, TryCast, Unnest, WindowFunction,
+        WindowFunctionParams,
+    },
 };
-
-use datafusion_common::Result;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRefContainer,
+use datafusion_common::{
+    Result,
+    tree_node::{
+        Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRefContainer,
+    },
 };
 
 /// Implementation of the [`TreeNode`] trait
@@ -78,7 +82,8 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard { .. }
-            | Expr::Placeholder(_) => Ok(TreeNodeRecursion::Continue),
+            | Expr::Placeholder(_)
+            | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 (left, right).apply_ref_elements(f)
             }
@@ -107,6 +112,8 @@ impl TreeNode for Expr {
             Expr::InList(InList { expr, list, .. }) => {
                 (expr, list).apply_ref_elements(f)
             }
+            Expr::HigherOrderFunction(HigherOrderFunction { func: _, args}) => args.apply_elements(f),
+            Expr::Lambda (Lambda{ params: _, body}) => body.apply_elements(f)
         }
     }
 
@@ -128,7 +135,8 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_, _) => Transformed::no(self),
+            | Expr::Literal(_, _)
+            | Expr::LambdaVariable(_) => Transformed::no(self),
             Expr::SetComparison(SetComparison {
                 expr,
                 subquery,
@@ -330,6 +338,14 @@ impl TreeNode for Expr {
                 .update_data(|(new_expr, new_list)| {
                     Expr::InList(InList::new(new_expr, new_list, negated))
                 }),
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                args.map_elements(f)?.update_data(|args| {
+                    Expr::HigherOrderFunction(HigherOrderFunction { func, args })
+                })
+            }
+            Expr::Lambda(Lambda { params, body }) => body
+                .map_elements(f)?
+                .update_data(|body| Expr::Lambda(Lambda { params, body })),
         })
     }
 }

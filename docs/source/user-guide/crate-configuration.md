@@ -54,7 +54,7 @@ More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifyin
 
 ## Optimizing Builds
 
-Here are several suggestions to get the Rust compler to produce faster code when
+Here are several suggestions to get the Rust compiler to produce faster code when
 compiling DataFusion. Note that these changes may increase compile time and
 binary size.
 

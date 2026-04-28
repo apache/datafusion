@@ -23,10 +23,12 @@ use datafusion_common::{
     NullEquality, RecursionUnnestOption, Result, ScalarValue, TableReference,
     UnnestOptions, exec_datafusion_err, internal_err, plan_datafusion_err,
 };
+use datafusion_execution::TaskContext;
 use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
+use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
@@ -52,7 +54,7 @@ use crate::protobuf::{
     },
 };
 
-use super::LogicalExtensionCodec;
+use super::{AsLogicalPlan, LogicalExtensionCodec};
 
 impl From<&protobuf::UnnestOptions> for UnnestOptions {
     fn from(opts: &protobuf::UnnestOptions) -> Self {
@@ -256,7 +258,7 @@ impl From<protobuf::NullTreatment> for NullTreatment {
 
 pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Expr, Error> {
     use protobuf::{logical_expr_node::ExprType, window_expr_node};
@@ -269,7 +271,7 @@ pub fn parse_expr(
     match expr_type {
         ExprType::BinaryExpr(binary_expr) => {
             let op = from_proto_binary_op(&binary_expr.op)?;
-            let operands = parse_exprs(&binary_expr.operands, registry, codec)?;
+            let operands = parse_exprs(&binary_expr.operands, ctx, codec)?;
 
             if operands.len() < 2 {
                 return Err(proto_error(
@@ -296,8 +298,8 @@ pub fn parse_expr(
                 .window_function
                 .as_ref()
                 .ok_or_else(|| Error::required("window_function"))?;
-            let partition_by = parse_exprs(&expr.partition_by, registry, codec)?;
-            let mut order_by = parse_sorts(&expr.order_by, registry, codec)?;
+            let partition_by = parse_exprs(&expr.partition_by, ctx, codec)?;
+            let mut order_by = parse_sorts(&expr.order_by, ctx, codec)?;
             let window_frame = expr
                 .window_frame
                 .as_ref()
@@ -329,7 +331,7 @@ pub fn parse_expr(
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
-                        None => registry
+                        None => ctx
                             .udaf(udaf_name)
                             .or_else(|_| codec.try_decode_udaf(udaf_name, &[]))?,
                     };
@@ -338,7 +340,7 @@ pub fn parse_expr(
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
                     let udwf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
-                        None => registry
+                        None => ctx
                             .udwf(udwf_name)
                             .or_else(|_| codec.try_decode_udwf(udwf_name, &[]))?,
                     };
@@ -346,7 +348,7 @@ pub fn parse_expr(
                 }
             };
 
-            let args = parse_exprs(&expr.exprs, registry, codec)?;
+            let args = parse_exprs(&expr.exprs, ctx, codec)?;
             let mut builder = Expr::from(WindowFunction::new(agg_fn, args))
                 .partition_by(partition_by)
                 .order_by(order_by)
@@ -357,8 +359,7 @@ pub fn parse_expr(
                 builder = builder.distinct();
             };
 
-            if let Some(filter) =
-                parse_optional_expr(expr.filter.as_deref(), registry, codec)?
+            if let Some(filter) = parse_optional_expr(expr.filter.as_deref(), ctx, codec)?
             {
                 builder = builder.filter(filter);
             }
@@ -366,7 +367,7 @@ pub fn parse_expr(
             builder.build().map_err(Error::DataFusionError)
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
-            parse_required_expr(alias.expr.as_deref(), registry, "expr", codec)?,
+            parse_required_expr(alias.expr.as_deref(), ctx, "expr", codec)?,
             alias
                 .relation
                 .first()
@@ -376,69 +377,69 @@ pub fn parse_expr(
         ))),
         ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(
             is_null.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsNotNullExpr(is_not_null) => Ok(Expr::IsNotNull(Box::new(
-            parse_required_expr(is_not_null.expr.as_deref(), registry, "expr", codec)?,
+            parse_required_expr(is_not_null.expr.as_deref(), ctx, "expr", codec)?,
         ))),
         ExprType::NotExpr(not) => Ok(Expr::Not(Box::new(parse_required_expr(
             not.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsTrue(msg) => Ok(Expr::IsTrue(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsFalse(msg) => Ok(Expr::IsFalse(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsUnknown(msg) => Ok(Expr::IsUnknown(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsNotTrue(msg) => Ok(Expr::IsNotTrue(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsNotFalse(msg) => Ok(Expr::IsNotFalse(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsNotUnknown(msg) => Ok(Expr::IsNotUnknown(Box::new(
-            parse_required_expr(msg.expr.as_deref(), registry, "expr", codec)?,
+            parse_required_expr(msg.expr.as_deref(), ctx, "expr", codec)?,
         ))),
         ExprType::Between(between) => Ok(Expr::Between(Between::new(
             Box::new(parse_required_expr(
                 between.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             between.negated,
             Box::new(parse_required_expr(
                 between.low.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             Box::new(parse_required_expr(
                 between.high.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
@@ -447,13 +448,13 @@ pub fn parse_expr(
             like.negated,
             Box::new(parse_required_expr(
                 like.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             Box::new(parse_required_expr(
                 like.pattern.as_deref(),
-                registry,
+                ctx,
                 "pattern",
                 codec,
             )?),
@@ -464,13 +465,13 @@ pub fn parse_expr(
             like.negated,
             Box::new(parse_required_expr(
                 like.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             Box::new(parse_required_expr(
                 like.pattern.as_deref(),
-                registry,
+                ctx,
                 "pattern",
                 codec,
             )?),
@@ -481,13 +482,13 @@ pub fn parse_expr(
             like.negated,
             Box::new(parse_required_expr(
                 like.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             Box::new(parse_required_expr(
                 like.pattern.as_deref(),
-                registry,
+                ctx,
                 "pattern",
                 codec,
             )?),
@@ -501,13 +502,13 @@ pub fn parse_expr(
                 .map(|e| {
                     let when_expr = parse_required_expr(
                         e.when_expr.as_ref(),
-                        registry,
+                        ctx,
                         "when_expr",
                         codec,
                     )?;
                     let then_expr = parse_required_expr(
                         e.then_expr.as_ref(),
-                        registry,
+                        ctx,
                         "then_expr",
                         codec,
                     )?;
@@ -515,16 +516,15 @@ pub fn parse_expr(
                 })
                 .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
             Ok(Expr::Case(Case::new(
-                parse_optional_expr(case.expr.as_deref(), registry, codec)?.map(Box::new),
+                parse_optional_expr(case.expr.as_deref(), ctx, codec)?.map(Box::new),
                 when_then_expr,
-                parse_optional_expr(case.else_expr.as_deref(), registry, codec)?
-                    .map(Box::new),
+                parse_optional_expr(case.else_expr.as_deref(), ctx, codec)?.map(Box::new),
             )))
         }
         ExprType::Cast(cast) => {
             let expr = Box::new(parse_required_expr(
                 cast.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?);
@@ -537,7 +537,7 @@ pub fn parse_expr(
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(
                 cast.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?);
@@ -551,10 +551,10 @@ pub fn parse_expr(
             )))
         }
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
-            parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
+            parse_required_expr(negative.expr.as_deref(), ctx, "expr", codec)?,
         ))),
         ExprType::Unnest(unnest) => {
-            let mut exprs = parse_exprs(&unnest.exprs, registry, codec)?;
+            let mut exprs = parse_exprs(&unnest.exprs, ctx, codec)?;
             if exprs.len() != 1 {
                 return Err(proto_error("Unnest must have exactly one expression"));
             }
@@ -563,11 +563,11 @@ pub fn parse_expr(
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
                 in_list.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
-            parse_exprs(&in_list.list, registry, codec)?,
+            parse_exprs(&in_list.list, ctx, codec)?,
             in_list.negated,
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
@@ -585,19 +585,19 @@ pub fn parse_expr(
         }) => {
             let scalar_fn = match fun_definition {
                 Some(buf) => codec.try_decode_udf(fun_name, buf)?,
-                None => registry
+                None => ctx
                     .udf(fun_name.as_str())
                     .or_else(|_| codec.try_decode_udf(fun_name, &[]))?,
             };
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
-                parse_exprs(args, registry, codec)?,
+                parse_exprs(args, ctx, codec)?,
             )))
         }
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = match &pb.fun_definition {
                 Some(buf) => codec.try_decode_udaf(&pb.fun_name, buf)?,
-                None => registry
+                None => ctx
                     .udaf(&pb.fun_name)
                     .or_else(|_| codec.try_decode_udaf(&pb.fun_name, &[]))?,
             };
@@ -616,10 +616,10 @@ pub fn parse_expr(
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,
-                parse_exprs(&pb.args, registry, codec)?,
+                parse_exprs(&pb.args, ctx, codec)?,
                 pb.distinct,
-                parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
-                parse_sorts(&pb.order_by, registry, codec)?,
+                parse_optional_expr(pb.filter.as_deref(), ctx, codec)?.map(Box::new),
+                parse_sorts(&pb.order_by, ctx, codec)?,
                 null_treatment,
             )))
         }
@@ -627,15 +627,15 @@ pub fn parse_expr(
         ExprType::GroupingSet(GroupingSetNode { expr }) => {
             Ok(Expr::GroupingSet(GroupingSets(
                 expr.iter()
-                    .map(|expr_list| parse_exprs(&expr_list.expr, registry, codec))
+                    .map(|expr_list| parse_exprs(&expr_list.expr, ctx, codec))
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
         }
         ExprType::Cube(CubeNode { expr }) => Ok(Expr::GroupingSet(GroupingSet::Cube(
-            parse_exprs(expr, registry, codec)?,
+            parse_exprs(expr, ctx, codec)?,
         ))),
         ExprType::Rollup(RollupNode { expr }) => Ok(Expr::GroupingSet(
-            GroupingSet::Rollup(parse_exprs(expr, registry, codec)?),
+            GroupingSet::Rollup(parse_exprs(expr, ctx, codec)?),
         )),
         ExprType::Placeholder(PlaceholderNode {
             id,
@@ -657,13 +657,41 @@ pub fn parse_expr(
                 )))
             }
         },
+        ExprType::ScalarSubqueryExpr(sq) => {
+            let subquery = parse_subquery(
+                sq.subquery
+                    .as_deref()
+                    .ok_or_else(|| Error::required("ScalarSubqueryExprNode.subquery"))?,
+                ctx,
+                codec,
+            )?;
+            Ok(Expr::ScalarSubquery(subquery))
+        }
     }
+}
+
+fn parse_subquery(
+    proto: &protobuf::SubqueryNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Subquery, Error> {
+    let plan_node = proto
+        .subquery
+        .as_ref()
+        .ok_or_else(|| Error::required("SubqueryNode.subquery"))?;
+    let plan = plan_node.try_into_logical_plan(ctx, codec)?;
+    let outer_ref_columns = parse_exprs(&proto.outer_ref_columns, ctx, codec)?;
+    Ok(Subquery {
+        subquery: Arc::new(plan),
+        outer_ref_columns,
+        spans: Default::default(),
+    })
 }
 
 /// Parse a vector of `protobuf::LogicalExprNode`s.
 pub fn parse_exprs<'a, I>(
     protos: I,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Vec<Expr>, Error>
 where
@@ -672,7 +700,7 @@ where
     let res = protos
         .into_iter()
         .map(|elem| {
-            parse_expr(elem, registry, codec).map_err(|e| plan_datafusion_err!("{}", e))
+            parse_expr(elem, ctx, codec).map_err(|e| plan_datafusion_err!("{}", e))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(res)
@@ -680,7 +708,7 @@ where
 
 pub fn parse_sorts<'a, I>(
     protos: I,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Vec<Sort>, Error>
 where
@@ -688,17 +716,17 @@ where
 {
     protos
         .into_iter()
-        .map(|sort| parse_sort(sort, registry, codec))
+        .map(|sort| parse_sort(sort, ctx, codec))
         .collect::<Result<Vec<Sort>, Error>>()
 }
 
 pub fn parse_sort(
     sort: &protobuf::SortExprNode,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Sort, Error> {
     Ok(Sort::new(
-        parse_required_expr(sort.expr.as_ref(), registry, "expr", codec)?,
+        parse_required_expr(sort.expr.as_ref(), ctx, "expr", codec)?,
         sort.asc,
         sort.nulls_first,
     ))
@@ -754,23 +782,23 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
 
 fn parse_optional_expr(
     p: Option<&protobuf::LogicalExprNode>,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Option<Expr>, Error> {
     match p {
-        Some(expr) => parse_expr(expr, registry, codec).map(Some),
+        Some(expr) => parse_expr(expr, ctx, codec).map(Some),
         None => Ok(None),
     }
 }
 
 fn parse_required_expr(
     p: Option<&protobuf::LogicalExprNode>,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     field: impl Into<String>,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Expr, Error> {
     match p {
-        Some(expr) => parse_expr(expr, registry, codec),
+        Some(expr) => parse_expr(expr, ctx, codec),
         None => Err(Error::required(field)),
     }
 }
