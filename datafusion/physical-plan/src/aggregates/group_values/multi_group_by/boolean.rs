@@ -22,7 +22,6 @@ use crate::aggregates::group_values::multi_group_by::{GroupColumn, nulls_equal_t
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
 use datafusion_common::Result;
-use itertools::izip;
 
 /// An implementation of [`GroupColumn`] for booleans
 ///
@@ -81,19 +80,14 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
         let array = array.as_boolean();
 
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
-
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to in previous column, don't need to check
-            if !*equal_to_result {
+        for (idx, (&lhs_row, &rhs_row)) in
+            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+        {
+            if !equal_to_results.get_bit(idx) {
                 continue;
             }
 
@@ -101,12 +95,16 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
                 let exist_null = self.nulls.is_null(lhs_row);
                 let input_null = array.is_null(rhs_row);
                 if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                    *equal_to_result = result;
+                    if !result {
+                        equal_to_results.set_bit(idx, false);
+                    }
                     continue;
                 }
             }
 
-            *equal_to_result = self.buffer.get_bit(lhs_row) == array.value(rhs_row);
+            if self.buffer.get_bit(lhs_row) != array.value(rhs_row) {
+                equal_to_results.set_bit(idx, false);
+            }
         }
     }
 
@@ -195,9 +193,19 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::NullBufferBuilder;
+    use arrow::array::{BooleanBufferBuilder, NullBufferBuilder};
 
     use super::*;
+
+    fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
+        let mut buf = BooleanBufferBuilder::new(n);
+        buf.append_n(n, true);
+        buf
+    }
+
+    fn to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
+        (0..buf.len()).map(|i| buf.get_bit(i)).collect()
+    }
 
     #[test]
     fn test_nullable_boolean_equal_to() {
@@ -213,10 +221,11 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut BooleanBufferBuilder| {
             let iter = lhs_rows.iter().zip(rhs_rows.iter());
             for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
+                equal_to_results
+                    .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
             }
         };
 
@@ -237,7 +246,7 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut BooleanBufferBuilder| {
             builder.vectorized_equal_to(
                 lhs_rows,
                 input_array,
@@ -257,18 +266,9 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut BooleanBufferBuilder,
         ),
     {
-        // Will cover such cases:
-        //   - exist null, input not null
-        //   - exist null, input null; values not equal
-        //   - exist null, input null; values equal
-        //   - exist not null, input null
-        //   - exist not null, input not null; values not equal
-        //   - exist not null, input not null; values equal
-
-        // Define PrimitiveGroupValueBuilder
         let mut builder = BooleanGroupValueBuilder::<true>::new();
         let builder_array = Arc::new(BooleanArray::from(vec![
             None,
@@ -280,7 +280,6 @@ mod tests {
         ])) as ArrayRef;
         append(&mut builder, &builder_array, &[0, 1, 2, 3, 4, 5]);
 
-        // Define input array
         let (values, _nulls) = BooleanArray::from(vec![
             Some(true),
             Some(false),
@@ -291,18 +290,16 @@ mod tests {
         ])
         .into_parts();
 
-        // explicitly build a null buffer where one of the null values also happens to match
         let mut nulls = NullBufferBuilder::new(6);
         nulls.append_non_null();
-        nulls.append_null(); // this sets Some(false) to null above
+        nulls.append_null();
         nulls.append_null();
         nulls.append_null();
         nulls.append_non_null();
         nulls.append_non_null();
         let input_array = Arc::new(BooleanArray::new(values, nulls.finish())) as ArrayRef;
 
-        // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5],
@@ -310,13 +307,14 @@ mod tests {
             &[0, 1, 2, 3, 4, 5],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(!equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(!equal_to_results[3]);
-        assert!(!equal_to_results[4]);
-        assert!(equal_to_results[5]);
+        assert!(!results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(!results[3]);
+        assert!(!results[4]);
+        assert!(results[5]);
     }
 
     #[test]
@@ -333,10 +331,11 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut BooleanBufferBuilder| {
             let iter = lhs_rows.iter().zip(rhs_rows.iter());
             for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
+                equal_to_results
+                    .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
             }
         };
 
@@ -357,7 +356,7 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut BooleanBufferBuilder| {
             builder.vectorized_equal_to(
                 lhs_rows,
                 input_array,
@@ -377,14 +376,9 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut BooleanBufferBuilder,
         ),
     {
-        // Will cover such cases:
-        //   - values equal
-        //   - values not equal
-
-        // Define PrimitiveGroupValueBuilder
         let mut builder = BooleanGroupValueBuilder::<false>::new();
         let builder_array = Arc::new(BooleanArray::from(vec![
             Some(false),
@@ -394,7 +388,6 @@ mod tests {
         ])) as ArrayRef;
         append(&mut builder, &builder_array, &[0, 1, 2, 3]);
 
-        // Define input array
         let input_array = Arc::new(BooleanArray::from(vec![
             Some(false),
             Some(false),
@@ -402,8 +395,7 @@ mod tests {
             Some(true),
         ])) as ArrayRef;
 
-        // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
             &[0, 1, 2, 3],
@@ -411,18 +403,16 @@ mod tests {
             &[0, 1, 2, 3],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(!equal_to_results[1]);
-        assert!(!equal_to_results[2]);
-        assert!(equal_to_results[3]);
+        assert!(results[0]);
+        assert!(!results[1]);
+        assert!(!results[2]);
+        assert!(results[3]);
     }
 
     #[test]
     fn test_nullable_boolean_vectorized_operation_special_case() {
-        // Test the special `all nulls` or `not nulls` input array case
-        // for vectorized append and equal to
-
         let mut builder = BooleanGroupValueBuilder::<true>::new();
 
         // All nulls input array
@@ -432,19 +422,20 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        let mut equal_to_results = make_true_buffer(all_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
 
         // All not nulls input array
         let all_not_nulls_input_array = Arc::new(BooleanArray::from(vec![
@@ -458,18 +449,19 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        let mut equal_to_results = make_true_buffer(all_not_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
     }
 }
