@@ -36,7 +36,9 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 // (num_rows, list_size)
-const SIZES: &[(usize, usize)] = &[(5_000, 10), (10_000, 100), (10_000, 500)];
+// Settings tuned so benchmarks finish in approx 5 seconds
+const SIZES: &[(usize, usize)] = &[(4_000, 10), (10_000, 100), (10_000, 500)];
+const NESTED_SIZES: &[(usize, usize)] = &[(4_000, 10), (3_000, 100), (1_500, 300)];
 const SEED: u64 = 42;
 const HAYSTACK_NULL_DENSITY: f64 = 0.1;
 const NEEDLE_DENSITY: f64 = 0.1;
@@ -176,7 +178,7 @@ fn bench_array_remove_int64_nested(c: &mut Criterion) {
         &needle_scalar,
         &DataType::Int64,
     ));
-    for &(num_rows, list_size) in SIZES {
+    for &(num_rows, list_size) in NESTED_SIZES {
         let list_array =
             create_nested_i64_list_array(num_rows, list_size, &needle, &filler_values);
         group.bench_with_input(
@@ -219,7 +221,7 @@ fn bench_array_remove_n_int64_nested(c: &mut Criterion) {
         &needle_scalar,
         &DataType::Int64,
     ));
-    for &(num_rows, list_size) in SIZES {
+    for &(num_rows, list_size) in NESTED_SIZES {
         let list_array =
             create_nested_i64_list_array(num_rows, list_size, &needle, &filler_values);
         let n = (NEEDLE_DENSITY / 2.0 * list_size as f64) as i64;
@@ -268,7 +270,7 @@ fn bench_array_remove_all_int64_nested(c: &mut Criterion) {
         &needle_scalar,
         &DataType::Int64,
     ));
-    for &(num_rows, list_size) in SIZES {
+    for &(num_rows, list_size) in NESTED_SIZES {
         let list_array =
             create_nested_i64_list_array(num_rows, list_size, &needle, &filler_values);
         group.bench_with_input(
