@@ -170,18 +170,33 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
         to_array.nulls(),
     );
 
-    for i in 0..len {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            builder.append_placeholder();
-            continue;
+    // Hoist the nulls.is_some() check out of the loop. LLVM does not always
+    // unswitch this loop on its own (the Utf8View body is large enough to
+    // exceed its cost-benefit threshold).
+    if let Some(nulls_ref) = nulls.as_ref() {
+        for i in 0..len {
+            if nulls_ref.is_null(i) {
+                builder.append_placeholder();
+                continue;
+            }
+            // SAFETY: union of input nulls is non-null at i, so each input is too.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            buffer.clear();
+            replace_into_string(&mut buffer, string, from, to);
+            builder.append_value(&buffer);
         }
-        // SAFETY: union of input nulls is non-null at i, so each input is too.
-        let string = unsafe { string_array.value_unchecked(i) };
-        let from = unsafe { from_array.value_unchecked(i) };
-        let to = unsafe { to_array.value_unchecked(i) };
-        buffer.clear();
-        replace_into_string(&mut buffer, string, from, to);
-        builder.append_value(&buffer);
+    } else {
+        for i in 0..len {
+            // SAFETY: i < len, and no input has a null buffer.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            buffer.clear();
+            replace_into_string(&mut buffer, string, from, to);
+            builder.append_value(&buffer);
+        }
     }
 
     Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
@@ -202,18 +217,33 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         to_array.nulls(),
     );
 
-    for i in 0..len {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            builder.append_placeholder();
-            continue;
+    // Hoist the nulls.is_some() check out of the loop. LLVM unswitches this
+    // automatically today, but kept explicit so the no-nulls fast path is not
+    // contingent on the optimizer's cost heuristic.
+    if let Some(nulls_ref) = nulls.as_ref() {
+        for i in 0..len {
+            if nulls_ref.is_null(i) {
+                builder.append_placeholder();
+                continue;
+            }
+            // SAFETY: union of input nulls is non-null at i, so each input is too.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            buffer.clear();
+            replace_into_string(&mut buffer, string, from, to);
+            builder.append_value(&buffer);
         }
-        // SAFETY: union of input nulls is non-null at i, so each input is too.
-        let string = unsafe { string_array.value_unchecked(i) };
-        let from = unsafe { from_array.value_unchecked(i) };
-        let to = unsafe { to_array.value_unchecked(i) };
-        buffer.clear();
-        replace_into_string(&mut buffer, string, from, to);
-        builder.append_value(&buffer);
+    } else {
+        for i in 0..len {
+            // SAFETY: i < len, and no input has a null buffer.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            buffer.clear();
+            replace_into_string(&mut buffer, string, from, to);
+            builder.append_value(&buffer);
+        }
     }
 
     Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
