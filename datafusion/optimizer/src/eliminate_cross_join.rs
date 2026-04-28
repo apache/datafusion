@@ -212,7 +212,12 @@ fn rewrite_children(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,
 ) -> Result<Transformed<LogicalPlan>> {
-    let transformed_plan = plan.map_children(|input| optimizer.rewrite(input, config))?;
+    // Process uncorrelated subqueries in expressions, then direct children.
+    let transformed_plan = plan
+        .map_uncorrelated_subqueries(|input| optimizer.rewrite(input, config))?
+        .transform_sibling(|plan| {
+            plan.map_children(|input| optimizer.rewrite(input, config))
+        })?;
 
     // recompute schema if the plan was transformed
     if transformed_plan.transformed {

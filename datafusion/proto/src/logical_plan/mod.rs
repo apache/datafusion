@@ -35,6 +35,7 @@ use crate::{
 use crate::protobuf::{ToProtoError, proto_error};
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_catalog::cte_worktable::CteWorkTable;
+use datafusion_catalog::empty::EmptyTable;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     Result, TableReference, ToDFSchema, assert_or_internal_err, context,
@@ -1065,6 +1066,35 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
+            LogicalPlanType::EmptyTableScan(scan) => {
+                let schema: Schema = convert_required!(scan.schema)?;
+                let schema = Arc::new(schema);
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| schema.index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
+
+                let filters =
+                    from_proto::parse_exprs(&scan.filters, ctx, extension_codec)?;
+
+                let table_name =
+                    from_table_reference(scan.table_name.as_ref(), "EmptyTableScan")?;
+
+                let provider = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+                LogicalPlanBuilder::scan_with_filters(
+                    table_name,
+                    provider_as_source(provider),
+                    projection,
+                    filters,
+                )?
+                .build()
+            }
             LogicalPlanType::Dml(dml_node) => {
                 Ok(LogicalPlan::Dml(datafusion_expr::DmlStatement::new(
                     from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
@@ -1277,6 +1307,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         )),
                     })
+                } else if provider.downcast_ref::<EmptyTable>().is_some() {
+                    let schema: protobuf::Schema = schema.as_ref().try_into()?;
+
+                    Ok(LogicalPlanNode {
+                        logical_plan_type: Some(LogicalPlanType::EmptyTableScan(
+                            protobuf::EmptyTableScanNode {
+                                table_name: Some(table_name.clone().into()),
+                                schema: Some(schema),
+                                projection,
+                                filters,
+                            },
+                        )),
+                    })
                 } else {
                     let schema: protobuf::Schema = schema.as_ref().try_into()?;
                     let mut bytes = vec![];
@@ -1321,10 +1364,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(serialize_expr(
+                            expr: Some(Box::new(serialize_expr(
                                 &filter.predicate,
                                 extension_codec,
-                            )?),
+                            )?)),
                         },
                     ))),
                 })
@@ -1440,7 +1483,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     null_equality.to_owned().into();
                 let filter = filter
                     .as_ref()
-                    .map(|e| serialize_expr(e, extension_codec))
+                    .map(|e| serialize_expr(e, extension_codec).map(Box::new))
                     .map_or(Ok(None), |v| v.map(Some))?;
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
@@ -1457,8 +1500,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Subquery(_) => {
-                not_impl_err!("LogicalPlan serde is not yet implemented for subqueries")
+            LogicalPlan::Subquery(subquery) => {
+                // Serialize the inner subquery plan directly — the
+                // LogicalPlan::Subquery wrapper is reconstructed during
+                // expression deserialization.
+                LogicalPlanNode::try_from_logical_plan(
+                    &subquery.subquery,
+                    extension_codec,
+                )
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(

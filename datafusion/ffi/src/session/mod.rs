@@ -20,19 +20,6 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use crate::arrow_wrappers::WrappedSchema;
-use crate::execution::FFI_TaskContext;
-use crate::execution_plan::FFI_ExecutionPlan;
-use crate::physical_expr::FFI_PhysicalExpr;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
-use crate::session::config::FFI_SessionConfig;
-use crate::udaf::FFI_AggregateUDF;
-use crate::udf::FFI_ScalarUDF;
-use crate::udwf::FFI_WindowUDF;
-use crate::util::FFIResult;
-use crate::{df_result, rresult, rresult_return};
-use abi_stable::StableAbi;
-use abi_stable::std_types::{RHashMap, RResult, RStr, RString, RVec};
 use arrow_schema::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use async_ffi::{FfiFuture, FutureExt};
@@ -57,7 +44,23 @@ use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::Session;
 use prost::Message;
+
+use stabby::str::Str as SStr;
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
+
+use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::FFI_TaskContext;
+use crate::execution_plan::FFI_ExecutionPlan;
+use crate::physical_expr::FFI_PhysicalExpr;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::session::config::FFI_SessionConfig;
+use crate::udaf::FFI_AggregateUDF;
+use crate::udf::FFI_ScalarUDF;
+use crate::udwf::FFI_WindowUDF;
+use crate::util::FFI_Result;
+use crate::{df_result, sresult, sresult_return};
 
 pub mod config;
 
@@ -74,34 +77,33 @@ pub mod config;
 /// which has methods that require `&dyn Session`. For usage within this crate
 /// we know the [`Session`] lifetimes are valid.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub(crate) struct FFI_SessionRef {
-    session_id: unsafe extern "C" fn(&Self) -> RStr,
+    session_id: unsafe extern "C" fn(&Self) -> SStr,
 
     config: unsafe extern "C" fn(&Self) -> FFI_SessionConfig,
 
-    create_physical_plan: unsafe extern "C" fn(
-        &Self,
-        logical_plan_serialized: RVec<u8>,
-    )
-        -> FfiFuture<FFIResult<FFI_ExecutionPlan>>,
+    create_physical_plan:
+        unsafe extern "C" fn(
+            &Self,
+            logical_plan_serialized: SVec<u8>,
+        ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>>,
 
     create_physical_expr: unsafe extern "C" fn(
         &Self,
-        expr_serialized: RVec<u8>,
+        expr_serialized: SVec<u8>,
         schema: WrappedSchema,
-    ) -> FFIResult<FFI_PhysicalExpr>,
+    ) -> FFI_Result<FFI_PhysicalExpr>,
 
-    scalar_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_ScalarUDF>,
+    scalar_functions: unsafe extern "C" fn(&Self) -> SVec<(SString, FFI_ScalarUDF)>,
 
-    aggregate_functions:
-        unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_AggregateUDF>,
+    aggregate_functions: unsafe extern "C" fn(&Self) -> SVec<(SString, FFI_AggregateUDF)>,
 
-    window_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
+    window_functions: unsafe extern "C" fn(&Self) -> SVec<(SString, FFI_WindowUDF)>,
 
-    table_options: unsafe extern "C" fn(&Self) -> RHashMap<RString, RString>,
+    table_options: unsafe extern "C" fn(&Self) -> SVec<(SString, SString)>,
 
-    default_table_options: unsafe extern "C" fn(&Self) -> RHashMap<RString, RString>,
+    default_table_options: unsafe extern "C" fn(&Self) -> SVec<(SString, SString)>,
 
     task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
 
@@ -148,7 +150,7 @@ impl FFI_SessionRef {
     }
 }
 
-unsafe extern "C" fn session_id_fn_wrapper(session: &FFI_SessionRef) -> RStr<'_> {
+unsafe extern "C" fn session_id_fn_wrapper(session: &FFI_SessionRef) -> SStr<'_> {
     let session = session.inner();
     session.session_id().into()
 }
@@ -160,8 +162,8 @@ unsafe extern "C" fn config_fn_wrapper(session: &FFI_SessionRef) -> FFI_SessionC
 
 unsafe extern "C" fn create_physical_plan_fn_wrapper(
     session: &FFI_SessionRef,
-    logical_plan_serialized: RVec<u8>,
-) -> FfiFuture<FFIResult<FFI_ExecutionPlan>> {
+    logical_plan_serialized: SVec<u8>,
+) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
     unsafe {
         let runtime = session.runtime().clone();
         let session = session.clone();
@@ -169,14 +171,14 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
             let session = session.inner();
             let task_ctx = session.task_ctx();
 
-            let logical_plan = rresult_return!(logical_plan_from_bytes(
+            let logical_plan = sresult_return!(logical_plan_from_bytes(
                 logical_plan_serialized.as_slice(),
                 task_ctx.as_ref(),
             ));
 
             let physical_plan = session.create_physical_plan(&logical_plan).await;
 
-            rresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, runtime)))
+            sresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, runtime)))
         }
         .into_ffi()
     }
@@ -184,9 +186,9 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
 
 unsafe extern "C" fn create_physical_expr_fn_wrapper(
     session: &FFI_SessionRef,
-    expr_serialized: RVec<u8>,
+    expr_serialized: SVec<u8>,
     schema: WrappedSchema,
-) -> FFIResult<FFI_PhysicalExpr> {
+) -> FFI_Result<FFI_PhysicalExpr> {
     let codec: Arc<dyn LogicalExtensionCodec> = (&session.logical_codec).into();
     let session = session.inner();
 
@@ -194,17 +196,17 @@ unsafe extern "C" fn create_physical_expr_fn_wrapper(
     let logical_expr =
         parse_expr(&logical_expr, session.task_ctx().as_ref(), codec.as_ref()).unwrap();
     let schema: SchemaRef = schema.into();
-    let schema: DFSchema = rresult_return!(schema.try_into());
+    let schema: DFSchema = sresult_return!(schema.try_into());
 
     let physical_expr =
-        rresult_return!(session.create_physical_expr(logical_expr, &schema));
+        sresult_return!(session.create_physical_expr(logical_expr, &schema));
 
-    RResult::ROk(physical_expr.into())
+    FFI_Result::Ok(physical_expr.into())
 }
 
 unsafe extern "C" fn scalar_functions_fn_wrapper(
     session: &FFI_SessionRef,
-) -> RHashMap<RString, FFI_ScalarUDF> {
+) -> SVec<(SString, FFI_ScalarUDF)> {
     let session = session.inner();
     session
         .scalar_functions()
@@ -215,7 +217,7 @@ unsafe extern "C" fn scalar_functions_fn_wrapper(
 
 unsafe extern "C" fn aggregate_functions_fn_wrapper(
     session: &FFI_SessionRef,
-) -> RHashMap<RString, FFI_AggregateUDF> {
+) -> SVec<(SString, FFI_AggregateUDF)> {
     let session = session.inner();
     session
         .aggregate_functions()
@@ -231,7 +233,7 @@ unsafe extern "C" fn aggregate_functions_fn_wrapper(
 
 unsafe extern "C" fn window_functions_fn_wrapper(
     session: &FFI_SessionRef,
-) -> RHashMap<RString, FFI_WindowUDF> {
+) -> SVec<(SString, FFI_WindowUDF)> {
     let session = session.inner();
     session
         .window_functions()
@@ -240,13 +242,13 @@ unsafe extern "C" fn window_functions_fn_wrapper(
         .collect()
 }
 
-fn table_options_to_rhash(mut options: TableOptions) -> RHashMap<RString, RString> {
+fn table_options_to_rhash(mut options: TableOptions) -> SVec<(SString, SString)> {
     // It is important that we mutate options here and set current format
     // to None so that when we call `entries()` we get ALL format entries.
     // We will pass current_format as a special case and strip it on the
     // other side of the boundary.
     let current_format = options.current_format.take();
-    let mut options: HashMap<RString, RString> = options
+    let mut options: HashMap<SString, SString> = options
         .entries()
         .into_iter()
         .filter_map(|entry| entry.value.map(|v| (entry.key.into(), v.into())))
@@ -263,12 +265,12 @@ fn table_options_to_rhash(mut options: TableOptions) -> RHashMap<RString, RStrin
         );
     }
 
-    options.into()
+    options.into_iter().collect()
 }
 
 unsafe extern "C" fn table_options_fn_wrapper(
     session: &FFI_SessionRef,
-) -> RHashMap<RString, RString> {
+) -> SVec<(SString, SString)> {
     let session = session.inner();
     let table_options = session.table_options();
     table_options_to_rhash(table_options.clone())
@@ -276,7 +278,7 @@ unsafe extern "C" fn table_options_fn_wrapper(
 
 unsafe extern "C" fn default_table_options_fn_wrapper(
     session: &FFI_SessionRef,
-) -> RHashMap<RString, RString> {
+) -> SVec<(SString, SString)> {
     let session = session.inner();
     let table_options = session.default_table_options();
 
@@ -412,7 +414,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                     let udf = <Arc<dyn ScalarUDFImpl>>::from(&kv_pair.1);
 
                     (
-                        kv_pair.0.into_string(),
+                        kv_pair.0.to_string(),
                         Arc::new(ScalarUDF::new_from_shared_impl(udf)),
                     )
                 })
@@ -423,7 +425,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                     let udaf = <Arc<dyn AggregateUDFImpl>>::from(&kv_pair.1);
 
                     (
-                        kv_pair.0.into_string(),
+                        kv_pair.0.to_string(),
                         Arc::new(AggregateUDF::new_from_shared_impl(udaf)),
                     )
                 })
@@ -434,7 +436,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                     let udwf = <Arc<dyn WindowUDFImpl>>::from(&kv_pair.1);
 
                     (
-                        kv_pair.0.into_string(),
+                        kv_pair.0.to_string(),
                         Arc::new(WindowUDF::new_from_shared_impl(udwf)),
                     )
                 })
@@ -461,10 +463,10 @@ impl Clone for FFI_SessionRef {
     }
 }
 
-fn table_options_from_rhashmap(options: RHashMap<RString, RString>) -> TableOptions {
+fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOptions {
     let mut options: HashMap<String, String> = options
         .into_iter()
-        .map(|kv_pair| (kv_pair.0.into_string(), kv_pair.1.into_string()))
+        .map(|kv_pair| (kv_pair.0.to_string(), kv_pair.1.to_string()))
         .collect();
     let current_format = options.remove("datafusion_ffi.table_current_format");
 
@@ -574,7 +576,7 @@ impl Session for ForeignSession {
 
             let physical_expr = df_result!((self.session.create_physical_expr)(
                 &self.session,
-                logical_expr.into(),
+                logical_expr.into_iter().collect(),
                 schema
             ))?;
 
@@ -636,9 +638,11 @@ impl Session for ForeignSession {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::execution::SessionStateBuilder;
+    use datafusion_common::DataFusionError;
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
