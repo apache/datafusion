@@ -953,21 +953,25 @@ fn test_string_concat_coercion() -> Result<()> {
     );
 
     // Mixed string-binary
-    for dt in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
-        assert!(
-            BinaryTypeCoercer::new(&DataType::Binary, &Operator::StringConcat, &dt,)
-                .get_input_types()
-                .is_err(),
-            "{}",
-            dt
-        );
-        assert!(
-            BinaryTypeCoercer::new(&dt, &Operator::StringConcat, &DataType::Binary,)
-                .get_input_types()
-                .is_err(),
-            "{}",
-            dt
-        );
+    for string_dt in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        for binary_dt in [
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+        ] {
+            assert!(
+                BinaryTypeCoercer::new(&binary_dt, &Operator::StringConcat, &string_dt,)
+                    .get_input_types()
+                    .is_err(),
+                "{binary_dt} || {string_dt}"
+            );
+            assert!(
+                BinaryTypeCoercer::new(&string_dt, &Operator::StringConcat, &binary_dt,)
+                    .get_input_types()
+                    .is_err(),
+                "{string_dt} || {binary_dt}"
+            );
+        }
     }
 
     // Mixed string-other
