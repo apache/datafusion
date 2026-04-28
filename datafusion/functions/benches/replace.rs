@@ -30,8 +30,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Build a string array, dropping the null buffer when `null_density == 0.0`
-/// so the resulting array matches what real DataFusion produces for a column
-/// with no nulls (`nulls() == None`, not `Some(all-valid)`).
 fn make_string_array<O: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
@@ -68,10 +66,12 @@ fn create_args<O: OffsetSizeTrait>(
     to_len: usize,
     null_density: f32,
 ) -> Vec<ColumnarValue> {
+    // Apply `null_density` only to the string column; `from` and `to` are
+    // typically not NULL in real-world workloads.
     if force_view_types {
         let string_array = Arc::new(make_string_view_array(size, null_density, str_len));
-        let from_array = Arc::new(make_string_view_array(size, null_density, from_len));
-        let to_array = Arc::new(make_string_view_array(size, null_density, to_len));
+        let from_array = Arc::new(make_string_view_array(size, 0.0, from_len));
+        let to_array = Arc::new(make_string_view_array(size, 0.0, to_len));
         vec![
             ColumnarValue::Array(string_array),
             ColumnarValue::Array(from_array),
@@ -79,8 +79,8 @@ fn create_args<O: OffsetSizeTrait>(
         ]
     } else {
         let string_array = Arc::new(make_string_array::<O>(size, null_density, str_len));
-        let from_array = Arc::new(make_string_array::<O>(size, null_density, from_len));
-        let to_array = Arc::new(make_string_array::<O>(size, null_density, to_len));
+        let from_array = Arc::new(make_string_array::<O>(size, 0.0, from_len));
+        let to_array = Arc::new(make_string_array::<O>(size, 0.0, to_len));
 
         vec![
             ColumnarValue::Array(string_array),
