@@ -39,9 +39,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       logs: ${{ steps.check_semver.outputs.logs }}
+      # Default to "success" so the comment job clears any stale comment
+      # when the check step is skipped (e.g. no published crates changed).
+      result: ${{ steps.check_semver.outputs.result || 'success' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
 
@@ -87,7 +90,14 @@ jobs:
             sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          exit $EXIT_CODE
+          # Pass the result through an output instead of failing the job:
+          # a detected breaking change should surface as a PR comment, not a
+          # red check, so PR authors aren't confused by an intentional break.
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+          fi
 
   # Post or remove a sticky comment on the PR based on the semver check result.
   comment-on-pr:
@@ -100,7 +110,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           sparse-checkout: ci/scripts
 
@@ -109,7 +119,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          CHECK_RESULT: ${{ needs.check-semver.result }}
+          CHECK_RESULT: ${{ needs.check-semver.outputs.result }}
           SEMVER_LOGS: ${{ needs.check-semver.outputs.logs }}
         run: |
           ci/scripts/changed_crates.sh comment \

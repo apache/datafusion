@@ -106,13 +106,16 @@ cmd_comment() {
     local body="${MARKER}
 Thank you for opening this pull request!
 
-Reviewer note: [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported the current version number is not SemVer-compatible with the changes made since the last release.
+Reviewer note: [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported the current version number is not SemVer-compatible with the changes in this pull request (compared against the base branch).
 
-Details:
+<details>
+<summary>Details</summary>
 
 \`\`\`
 ${logs}
-\`\`\`"
+\`\`\`
+
+</details>"
 
     if [ -n "$comment_id" ]; then
         echo "comment already exists, updating content"
