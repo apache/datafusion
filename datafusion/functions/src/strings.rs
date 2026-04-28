@@ -604,7 +604,17 @@ impl StringViewArrayBuilder {
         let offset: u32 = i32::try_from(self.in_progress.len())
             .expect("offset exceeds i32::MAX") as u32;
         self.in_progress.extend_from_slice(v);
-        self.views.push(make_view(v, buffer_index, offset));
+
+        // Build the ByteView inline rather than going through `make_view`,
+        // which is marked as `[inline(never)]`.
+        let view = ByteView {
+            length,
+            // SAFETY: length > 12 here, so v has at least 4 bytes.
+            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
+            buffer_index,
+            offset,
+        };
+        self.views.push(view.into());
     }
 
     /// Append an empty placeholder row. The corresponding slot must be

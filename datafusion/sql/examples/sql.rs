@@ -21,11 +21,11 @@ use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, TableReference, plan_err};
-use datafusion_expr::WindowUDF;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{
     AggregateUDF, ScalarUDF, TableSource, logical_plan::builder::LogicalTableSource,
 };
+use datafusion_expr::{HigherOrderUDF, WindowUDF};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
@@ -138,6 +138,10 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
+    fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+        None
+    }
+
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.udafs.get(name).cloned()
     }
@@ -155,6 +159,10 @@ impl ContextProvider for MyContextProvider {
     }
 
     fn udf_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn higher_order_function_names(&self) -> Vec<String> {
         Vec::new()
     }
 
