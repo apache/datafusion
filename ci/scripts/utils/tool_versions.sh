@@ -21,3 +21,4 @@
 # It is intended to be sourced by other scripts and should not be executed directly.
 
 PRETTIER_VERSION="2.7.1"
+LYCHEE_VERSION="0.23.0"

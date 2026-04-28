@@ -55,6 +55,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 log = { workspace = true }
 num-traits = { workspace = true }

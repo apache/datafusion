@@ -27,16 +27,33 @@ pub fn from_scalar_function(
     fun: &expr::ScalarFunction,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
+    from_function(producer, fun.name(), &fun.args, schema)
+}
+
+pub fn from_higher_order_function(
+    producer: &mut impl SubstraitProducer,
+    fun: &expr::HigherOrderFunction,
+    schema: &DFSchemaRef,
+) -> datafusion::common::Result<Expression> {
+    from_function(producer, fun.name(), &fun.args, schema)
+}
+
+fn from_function(
+    producer: &mut impl SubstraitProducer,
+    name: &str,
+    args: &[Expr],
+    schema: &DFSchemaRef,
+) -> datafusion::common::Result<Expression> {
     let mut arguments: Vec<FunctionArgument> = vec![];
-    for arg in &fun.args {
+    for arg in args {
         arguments.push(FunctionArgument {
             arg_type: Some(ArgType::Value(producer.handle_expr(arg, schema)?)),
         });
     }
 
-    let arguments = custom_argument_handler(fun.name(), arguments);
+    let arguments = custom_argument_handler(name, arguments);
 
-    let function_anchor = producer.register_function(fun.name().to_string());
+    let function_anchor = producer.register_function(name.to_string());
     #[expect(deprecated)]
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {

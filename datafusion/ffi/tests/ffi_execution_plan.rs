@@ -49,12 +49,7 @@ mod tests {
             Arc::new(EmptyExec::new(schema))
         }
 
-        let child_plan =
-            module
-                .create_empty_exec()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External module failed to implement create_empty_exec".to_string(),
-                ))?();
+        let child_plan = (module.create_empty_exec)();
         let child_plan: Arc<dyn ExecutionPlan> = (&child_plan)
             .try_into()
             .expect("should be able create plan");
