@@ -309,6 +309,39 @@ mod tests {
         .into_array(list.len())
     }
 
+    fn run_any_match_div(
+        list: impl arrow::array::Array + Clone + 'static,
+    ) -> Result<ArrayRef> {
+        let schema = DFSchema::from_unqualified_fields(
+            vec![Field::new(
+                "list",
+                list.data_type().clone(),
+                list.is_nullable(),
+            )]
+            .into(),
+            HashMap::new(),
+        )?;
+
+        let x = Expr::LambdaVariable(LambdaVariable::new(
+            "x".to_string(),
+            Some(Arc::new(Field::new("x", DataType::Int32, true))),
+        ));
+        // predicate: (100 / x) > 5 — panics on divide by zero if x == 0 is evaluated
+        create_physical_expr(
+            &Expr::HigherOrderFunction(HigherOrderFunction::new(
+                array_any_match_higher_order_function(),
+                vec![col("list"), lambda(["x"], (lit(100i32) / x).gt(lit(5i32)))],
+            )),
+            &schema,
+            &ExecutionProps::new(),
+        )?
+        .evaluate(&RecordBatch::try_new(
+            Arc::clone(schema.inner()),
+            vec![Arc::new(list.clone())],
+        )?)?
+        .into_array(list.len())
+    }
+
     fn make_list(values: Vec<i32>, offsets: OffsetBuffer<i32>) -> ListArray {
         make_list_with_nulls(values, offsets, None)
     }
@@ -402,6 +435,38 @@ mod tests {
         assert_eq!(
             result.as_any().downcast_ref::<BooleanArray>().unwrap(),
             &BooleanArray::from(vec![Some(false), Some(false)])
+        );
+        Ok(())
+    }
+
+    // 0 in the null row would cause divide by zero if the predicate is evaluated on it.
+    #[test]
+    fn test_any_match_does_not_evaluate_predicate_on_null_row_values() -> Result<()> {
+        let list = make_list_with_nulls(
+            vec![1, 2, 0, 4, 5],
+            OffsetBuffer::from_lengths(vec![3, 2]),
+            Some(NullBuffer::from(vec![false, true])),
+        );
+        let result = run_any_match_div(list)?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![None, Some(true)])
+        );
+        Ok(())
+    }
+
+    // 0 before the slice offset would cause divide by zero if evaluated.
+    #[test]
+    fn test_any_match_does_not_evaluate_predicate_on_unreachable_values() -> Result<()> {
+        let list = make_list(
+            vec![0, 4, 5, 50, 100],
+            OffsetBuffer::from_lengths(vec![1, 2, 2]),
+        )
+        .slice(1, 2);
+        let result = run_any_match_div(list)?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(true), Some(false)])
         );
         Ok(())
     }
