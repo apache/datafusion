@@ -3680,7 +3680,8 @@ async fn roundtrip_issue_18602_complex_filter_decode_recursion() -> Result<()> {
     LIMIT 20";
 
     roundtrip_test_sql_with_context(sql, &ctx).await
-    
+}
+
 #[tokio::test]
 async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     use datafusion::physical_plan::memory::MemoryExec;
