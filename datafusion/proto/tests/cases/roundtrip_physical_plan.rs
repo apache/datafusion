@@ -3722,7 +3722,7 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     let rt = roundtripped.as_ref().downcast_ref::<FilterExec>().unwrap();
     assert_eq!(
         rt.projection().as_deref(),
-        Some(&[]),
+        Some(&[][..]),
         "Empty projection Some([]) must survive roundtrip, not become None"
     );
 
@@ -3735,7 +3735,7 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     let rt = roundtripped.as_ref().downcast_ref::<FilterExec>().unwrap();
     assert_eq!(
         rt.projection().as_deref(),
-        Some(&[2_usize, 0_usize]),
+        Some(&[2_usize, 0_usize][..]),
         "Partial projection must survive roundtrip"
     );
 
