@@ -287,9 +287,21 @@ pub enum ValueOrLambda<V, L> {
     Lambda(L),
 }
 
-/// The return of [HigherOrderUDF::lambda_parameters]
+/// Represents a step during the resolution of the parameters of all lambdas of a given
+/// higher-order function via [HigherOrderUDF::lambda_parameters]. It's valid that the
+/// fields of a given lambda changes between steps, and is up to the implementation to
+/// provide during the function evaluation the parameters that matches the fields returned
+/// at the [LambdaParametersProgress::Complete] step. See [HigherOrderUDF::lambda_parameters]
+/// docs for more details
 pub enum LambdaParametersProgress {
+    /// The parameters of some lambdas are unknown due to a dependency on another lambda output field
+    /// or are placeholders due to a dependency on it's own output field. It's perfectly valid to
+    /// contain only `Some`'s and not a single `None`, representing lambdas that depends only on itself
+    /// and not on others. [HigherOrderUDF::lambda_parameters] will be called again with the output
+    /// field of all lambdas with known parameters.
     Partial(Vec<Option<Vec<FieldRef>>>),
+    /// There are no unmet dependencies and all parameters are known, [HigherOrderUDF::lambda_parameters]
+    /// will not be called again
     Complete(Vec<Vec<FieldRef>>),
 }
 
