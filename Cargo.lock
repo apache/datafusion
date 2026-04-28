@@ -2248,6 +2248,7 @@ dependencies = [
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
  "datafusion-macros",
+ "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "hashbrown 0.17.0",
  "itertools 0.14.0",
