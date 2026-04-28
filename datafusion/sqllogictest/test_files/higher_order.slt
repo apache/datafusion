@@ -1,0 +1,286 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## Higher Order Function Tests
+#############
+
+statement ok
+set datafusion.sql_parser.dialect = databricks;
+
+statement ok
+CREATE TABLE t (list array<int>, number int)
+AS VALUES
+([1, 50], 10),
+([4, 50], 40),
+([7, 50], 60);
+
+statement ok
+CREATE TABLE with_null_list (list array<int>)
+AS VALUES
+([1, 2]),
+(NULL);
+
+statement ok
+CREATE TABLE fully_null_list (list array<int>)
+AS VALUES
+(NULL),
+(NULL);
+
+query ?
+SELECT array_transform([1,2,3,4,5], v -> v*2);
+----
+[2, 4, 6, 8, 10]
+
+query ?
+SELECT array_transform([1,2,3,4,5], v -> repeat("a", v));
+----
+[a, aa, aaa, aaaa, aaaaa]
+
+query ?
+SELECT array_transform([1,2,3,4,5], v -> list_repeat("a", v));
+----
+[[a], [a, a], [a, a, a], [a, a, a, a], [a, a, a, a, a]]
+
+# return scalar
+query I?
+SELECT t.number, array_transform([1, 2], e1 -> 24) from t;
+----
+10 [24, 24]
+40 [24, 24]
+60 [24, 24]
+
+# shadows parent lambda variable
+query ?
+SELECT array_transform([[1, 2]], a -> array_transform(a, a -> a+1))
+----
+[[2, 3]]
+
+# multiple nesting
+query ?
+SELECT array_transform([[[1], [2], [3]]], a -> array_transform(a, b -> array_transform(b, c -> c*2)));
+----
+[[[2], [4], [6]]]
+
+# parameter shadows unqualified column
+query I?
+SELECT number, array_transform([1, 2], number -> number+1) from t;
+----
+10 [2, 3]
+40 [2, 3]
+60 [2, 3]
+
+# type coercion inside lambda body
+query ?
+SELECT array_transform([t.number], v -> v + 3.0) from t;
+----
+[13.0]
+[43.0]
+[63.0]
+
+query TT
+EXPLAIN SELECT array_transform([t.number], v -> v + 3.0) from t;
+----
+logical_plan
+01)Projection: array_transform(make_array(t.number), (v) -> CAST(v AS Float64) + Float64(3))
+02)--TableScan: t projection=[number]
+physical_plan
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> CAST(v@0 AS Float64) + 3) as array_transform(make_array(t.number),(v) -> v + Float64(3))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#cse should not eliminate subtrees containing lambdas
+query TT
+explain select array_transform([t.number], v -> 5), array_transform([t.number+1], v -> 5) from t;
+----
+logical_plan
+01)Projection: array_transform(make_array(t.number), (v) -> Int64(5)), array_transform(make_array(CAST(t.number AS Int64) + Int64(1)), (v) -> Int64(5))
+02)--TableScan: t projection=[number]
+physical_plan
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> 5) as array_transform(make_array(t.number),(v) -> Int64(5)), array_transform(make_array(CAST(number@0 AS Int64) + 1), (v) -> 5) as array_transform(make_array(t.number + Int64(1)),(v) -> Int64(5))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#cse should not eliminate subtrees containing lambda variables
+query TT
+explain select array_transform([t.number], v -> v*2), array_transform([t.number], v -> v*2-1) from t;
+----
+logical_plan
+01)Projection: array_transform(__common_expr_1 AS make_array(t.number), (v) -> CAST(v AS Int64) * Int64(2)), array_transform(__common_expr_1 AS make_array(t.number), (v) -> CAST(v AS Int64) * Int64(2) - Int64(1))
+02)--Projection: make_array(t.number) AS __common_expr_1
+03)----TableScan: t projection=[number]
+physical_plan
+01)ProjectionExec: expr=[array_transform(__common_expr_1@0, (v) -> CAST(v@0 AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(__common_expr_1@0, (v) -> CAST(v@0 AS Int64) * 2 - 1) as array_transform(make_array(t.number),(v) -> v * Int64(2) - Int64(1))]
+02)--ProjectionExec: expr=[make_array(number@0) as __common_expr_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+# test that sql planner plans resolved lambda variables, as v[1] planning checks the datatype of lhs
+query ?
+SELECT array_transform([[10, 20]], v -> v[1]);
+----
+[10]
+
+
+# expr simplifier inside lambda body
+query TT
+EXPLAIN SELECT array_transform([t.number], v -> v = v) from t;
+----
+logical_plan
+01)Projection: array_transform(make_array(t.number), (v) -> v IS NOT NULL OR Boolean(NULL)) AS array_transform(make_array(t.number),(v) -> v = v)
+02)--TableScan: t projection=[number]
+physical_plan
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> v@0 IS NOT NULL OR NULL) as array_transform(make_array(t.number),(v) -> v = v)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+# array_transform coercion rules
+query TT
+explain select array_transform(arrow_cast(t.list, 'ListView(Int32)'), a -> a+1) from t;
+----
+logical_plan
+01)Projection: array_transform(CAST(CAST(t.list AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a AS Int64) + Int64(1)) AS array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))
+02)--TableScan: t projection=[list]
+physical_plan
+01)ProjectionExec: expr=[array_transform(CAST(CAST(list@0 AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a@0 AS Int64) + 1) as array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query ?
+select array_transform(arrow_cast(t.list, 'ListView(Int32)'), a -> a+1) from t;
+----
+[2, 51]
+[5, 51]
+[8, 51]
+
+# higher order function with inner case using lambda variables only
+query ?
+select array_transform([3, 5, 0], v -> case when v > 1 then 2 when v > 4 then 6 else 8 end);
+----
+[2, 2, 8]
+
+#case with inner higher order function
+query I??
+select 
+    t.number,
+    t.list,
+    case 
+        when t.number > 30 then array_transform(t.list, v -> v+1)
+        else array_transform(t.list, v -> v*2)
+    end
+from t
+order by t.number;
+----
+10 [1, 50] [2, 100]
+40 [4, 50] [5, 51]
+60 [7, 50] [8, 51]
+
+# array_transform coercion rules
+query TT
+explain select array_transform(arrow_cast(t.list, 'FixedSizeList(2, Int32)'), a -> a+1) from t;
+----
+logical_plan
+01)Projection: array_transform(CAST(CAST(t.list AS FixedSizeList(2 x Int32)) AS List(Int32)), (a) -> CAST(a AS Int64) + Int64(1)) AS array_transform(arrow_cast(t.list,Utf8("FixedSizeList(2, Int32)")),(a) -> a + Int64(1))
+02)--TableScan: t projection=[list]
+physical_plan
+01)ProjectionExec: expr=[array_transform(CAST(CAST(list@0 AS FixedSizeList(2 x Int32)) AS List(Int32)), (a) -> CAST(a@0 AS Int64) + 1) as array_transform(arrow_cast(t.list,Utf8("FixedSizeList(2, Int32)")),(a) -> a + Int64(1))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query ?
+select array_transform(arrow_cast(t.list, 'FixedSizeList(2, Int32)'), a -> a+1) from t;
+----
+[2, 51]
+[5, 51]
+[8, 51]
+
+query ?
+select array_transform(arrow_cast(list, 'FixedSizeList(2, Int32)'), a -> a+1) from fully_null_list;
+----
+NULL
+NULL
+
+query ?
+select array_transform(arrow_cast(list, 'FixedSizeList(2, Int32)'), a -> a+1) from with_null_list;
+----
+[2, 3]
+NULL
+
+query ?
+select array_transform(list, a -> a+1) from with_null_list;
+----
+[2, 3]
+NULL
+
+# empty sublists fast path
+query ?
+select array_transform([], v -> v+1);
+----
+[]
+
+# all null fast path
+query ?
+select array_transform(list, v -> v+1) from fully_null_list;
+----
+NULL
+NULL
+
+# higher order function with inner case using lambda variables and captured column(capture not supported yet)
+query error DataFusion error: Error during planning: lambda doesn't support column capture
+select array_transform([3, 5, 9], v -> case when v > 1 then t.number when v > 4 then 6 else 8 end) from t;
+
+# higher order function with inner case using captured column only(capture not supported yet)
+query error DataFusion error: Error during planning: lambda doesn't support column capture
+select array_transform([3, 5, 9], v -> case when t.number > 1 then 2 when t.number > 4 then 6 else 8 end) from t;
+
+query error
+select array_transform();
+----
+DataFusion error: Error during planning: array_transform function requires 1 value arguments, got 0
+
+
+query error DataFusion error: Error during planning: array_transform expected a list as first argument, got Int64
+select array_transform(1, v -> v*2);
+
+query error DataFusion error: Error during planning: array_transform expects a value followed by a lambda, got Lambda\(None\) and Value\(Field \{ name: "make_array\(Int64\(1\),Int64\(2\)\)", data_type: List\(Field \{ data_type: Int64, nullable: true \}\), nullable: true \}\)
+select array_transform(v -> v*2, [1, 2]);
+
+query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 1
+SELECT array_transform([1, 2], (e, i, j) -> i);
+
+query error DataFusion error: Error during planning: lambda parameters names must be unique, got \(v, v\)
+SELECT array_transform([1], (v, v) -> v*2);
+
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,12\)\.\.Location\(1,13\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,17\)\.\.Location\(1,18\)\) \}\), syntax: Arrow \}\)
+SELECT abs(v -> v);
+
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,8\)\.\.Location\(1,9\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,13\)\.\.Location\(1,14\)\) \}\), syntax: Arrow \}\)
+SELECT v -> v;
+
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,34\)\.\.Location\(1,35\)\) \}\), body: BinaryOp \{ left: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,39\)\.\.Location\(1,40\)\) \}\), op: Plus, right: Value\(ValueWithSpan \{ value: Number\("1", false\), span: Span\(Location\(1,41\)\.\.Location\(1,42\)\) \}\) \}, syntax: Arrow \}\)
+SELECT array_transform([1], v -> v -> v+1);
+
+query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 30"\)
+SELECT array_transform([1], () -> 1);
+
+statement ok
+drop table t;
+
+statement ok
+drop table with_null_list;
+
+statement ok
+drop table fully_null_list;
+
+statement ok
+set datafusion.sql_parser.dialect = generic;
