@@ -69,10 +69,8 @@ fn create_args<O: OffsetSizeTrait>(
     null_density: f32,
 ) -> Vec<ColumnarValue> {
     if force_view_types {
-        let string_array =
-            Arc::new(make_string_view_array(size, null_density, str_len));
-        let from_array =
-            Arc::new(make_string_view_array(size, null_density, from_len));
+        let string_array = Arc::new(make_string_view_array(size, null_density, str_len));
+        let from_array = Arc::new(make_string_view_array(size, null_density, from_len));
         let to_array = Arc::new(make_string_view_array(size, null_density, to_len));
         vec![
             ColumnarValue::Array(string_array),
@@ -80,10 +78,8 @@ fn create_args<O: OffsetSizeTrait>(
             ColumnarValue::Array(to_array),
         ]
     } else {
-        let string_array =
-            Arc::new(make_string_array::<O>(size, null_density, str_len));
-        let from_array =
-            Arc::new(make_string_array::<O>(size, null_density, from_len));
+        let string_array = Arc::new(make_string_array::<O>(size, null_density, str_len));
+        let from_array = Arc::new(make_string_array::<O>(size, null_density, from_len));
         let to_array = Arc::new(make_string_array::<O>(size, null_density, to_len));
 
         vec![
