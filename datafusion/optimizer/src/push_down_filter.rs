@@ -262,7 +262,10 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Cast(_)
         | Expr::TryCast(_)
         | Expr::InList { .. }
-        | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::ScalarFunction(_)
+        | Expr::HigherOrderFunction(_)
+        | Expr::Lambda(_)
+        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction(_)
@@ -1144,8 +1147,16 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
 
-                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+                // Filters containing scalar subqueries cannot be pushed to
+                // providers because the subquery result is not available
+                // until execution time.
+                let (subquery_filters, pushdown_candidates): (Vec<&Expr>, Vec<&Expr>) =
                     filter_predicates
+                        .into_iter()
+                        .partition(|pred| pred.contains_scalar_subquery());
+
+                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+                    pushdown_candidates
                         .into_iter()
                         .partition(|pred| pred.is_volatile());
 
@@ -1178,11 +1189,13 @@ impl OptimizerRule for PushDownFilter {
                     .cloned()
                     .collect();
 
-                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type, and also include volatile filters
+                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
+                // and also include volatile and subquery-containing filters
                 let new_predicate: Vec<Expr> = zip
                     .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
                     .map(|(pred, _)| pred)
                     .chain(volatile_filters)
+                    .chain(subquery_filters)
                     .cloned()
                     .collect();
 

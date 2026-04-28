@@ -18,45 +18,45 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RResult, RString, RVec};
 use datafusion_catalog::{CatalogProvider, SchemaProvider};
 use datafusion_common::error::Result;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
 use crate::execution::FFI_TaskContextProvider;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider};
-use crate::util::FFIResult;
-use crate::{df_result, rresult_return};
+use crate::util::{FFI_Option, FFI_Result};
+use crate::{df_result, sresult_return};
 
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_CatalogProvider {
-    pub schema_names: unsafe extern "C" fn(provider: &Self) -> RVec<RString>,
+    pub schema_names: unsafe extern "C" fn(provider: &Self) -> SVec<SString>,
 
     pub schema: unsafe extern "C" fn(
         provider: &Self,
-        name: RString,
-    ) -> ROption<FFI_SchemaProvider>,
+        name: SString,
+    ) -> FFI_Option<FFI_SchemaProvider>,
 
-    pub register_schema: unsafe extern "C" fn(
-        provider: &Self,
-        name: RString,
-        schema: &FFI_SchemaProvider,
-    )
-        -> FFIResult<ROption<FFI_SchemaProvider>>,
+    pub register_schema:
+        unsafe extern "C" fn(
+            provider: &Self,
+            name: SString,
+            schema: &FFI_SchemaProvider,
+        ) -> FFI_Result<FFI_Option<FFI_SchemaProvider>>,
 
-    pub deregister_schema: unsafe extern "C" fn(
-        provider: &Self,
-        name: RString,
-        cascade: bool,
-    )
-        -> FFIResult<ROption<FFI_SchemaProvider>>,
+    pub deregister_schema:
+        unsafe extern "C" fn(
+            provider: &Self,
+            name: SString,
+            cascade: bool,
+        ) -> FFI_Result<FFI_Option<FFI_SchemaProvider>>,
 
     pub logical_codec: FFI_LogicalExtensionCodec,
 
@@ -106,7 +106,7 @@ impl FFI_CatalogProvider {
 
 unsafe extern "C" fn schema_names_fn_wrapper(
     provider: &FFI_CatalogProvider,
-) -> RVec<RString> {
+) -> SVec<SString> {
     unsafe {
         let names = provider.inner().schema_names();
         names.into_iter().map(|s| s.into()).collect()
@@ -115,8 +115,8 @@ unsafe extern "C" fn schema_names_fn_wrapper(
 
 unsafe extern "C" fn schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
-    name: RString,
-) -> ROption<FFI_SchemaProvider> {
+    name: SString,
+) -> FFI_Option<FFI_SchemaProvider> {
     unsafe {
         let maybe_schema = provider.inner().schema(name.as_str());
         maybe_schema
@@ -133,16 +133,16 @@ unsafe extern "C" fn schema_fn_wrapper(
 
 unsafe extern "C" fn register_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
-    name: RString,
+    name: SString,
     schema: &FFI_SchemaProvider,
-) -> FFIResult<ROption<FFI_SchemaProvider>> {
+) -> FFI_Result<FFI_Option<FFI_SchemaProvider>> {
     unsafe {
         let runtime = provider.runtime();
         let inner_provider = provider.inner();
         let schema: Arc<dyn SchemaProvider> = schema.into();
 
         let returned_schema =
-            rresult_return!(inner_provider.register_schema(name.as_str(), schema))
+            sresult_return!(inner_provider.register_schema(name.as_str(), schema))
                 .map(|schema| {
                     FFI_SchemaProvider::new_with_ffi_codec(
                         schema,
@@ -152,23 +152,23 @@ unsafe extern "C" fn register_schema_fn_wrapper(
                 })
                 .into();
 
-        RResult::ROk(returned_schema)
+        FFI_Result::Ok(returned_schema)
     }
 }
 
 unsafe extern "C" fn deregister_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
-    name: RString,
+    name: SString,
     cascade: bool,
-) -> FFIResult<ROption<FFI_SchemaProvider>> {
+) -> FFI_Result<FFI_Option<FFI_SchemaProvider>> {
     unsafe {
         let runtime = provider.runtime();
         let inner_provider = provider.inner();
 
         let maybe_schema =
-            rresult_return!(inner_provider.deregister_schema(name.as_str(), cascade));
+            sresult_return!(inner_provider.deregister_schema(name.as_str(), cascade));
 
-        RResult::ROk(
+        FFI_Result::Ok(
             maybe_schema
                 .map(|schema| {
                     FFI_SchemaProvider::new_with_ffi_codec(

@@ -27,7 +27,9 @@ use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DFSchema, GetExt, Result, TableReference, plan_err};
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
-use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, Expr, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
+};
 use datafusion_functions_nested::expr_fn::make_array;
 use datafusion_sql::planner::ContextProvider;
 
@@ -54,6 +56,7 @@ impl Display for MockCsvType {
 #[derive(Default)]
 pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     type_planner: Option<Arc<dyn TypePlanner>>,
@@ -93,6 +96,17 @@ impl MockSessionState {
     pub fn with_window_function(mut self, window_function: Arc<WindowUDF>) -> Self {
         self.window_functions
             .insert(window_function.name().to_string(), window_function);
+        self
+    }
+
+    pub fn with_higher_order_function(
+        mut self,
+        higher_order_function: Arc<dyn HigherOrderUDF>,
+    ) -> Self {
+        self.higher_order_functions.insert(
+            higher_order_function.name().to_string(),
+            higher_order_function,
+        );
         self
     }
 }
@@ -244,6 +258,21 @@ impl ContextProvider for MockContextProvider {
                     false,
                 ),
             ])),
+            "multi_array_table" => Ok(Schema::new(vec![
+                Field::new(
+                    "column_a",
+                    DataType::List(Arc::new(Field::new_list_field(
+                        DataType::Int64,
+                        true,
+                    ))),
+                    false,
+                ),
+                Field::new(
+                    "column_b",
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+                    false,
+                ),
+            ])),
             "@quoted_identifier_names_table" => Ok(Schema::new(vec![Field::new(
                 "@column",
                 DataType::UInt32,
@@ -260,6 +289,10 @@ impl ContextProvider for MockContextProvider {
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
         self.state.scalar_functions.get(name).cloned()
+    }
+
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+        self.state.higher_order_functions.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
@@ -295,6 +328,10 @@ impl ContextProvider for MockContextProvider {
 
     fn udf_names(&self) -> Vec<String> {
         self.state.scalar_functions.keys().cloned().collect()
+    }
+
+    fn higher_order_function_names(&self) -> Vec<String> {
+        self.state.higher_order_functions.keys().cloned().collect()
     }
 
     fn udaf_names(&self) -> Vec<String> {

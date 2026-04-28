@@ -73,3 +73,59 @@ impl CompressionTypeVariant {
         !matches!(self, &Self::UNCOMPRESSED)
     }
 }
+
+/// CSV quote style
+///
+/// Controls when fields are quoted when writing CSV files.
+/// Corresponds to [`arrow::csv::QuoteStyle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CsvQuoteStyle {
+    /// Quote all fields
+    Always,
+    /// Only quote fields when necessary (default)
+    #[default]
+    Necessary,
+    /// Quote all non-numeric fields
+    NonNumeric,
+    /// Never quote fields
+    Never,
+}
+
+impl FromStr for CsvQuoteStyle {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "always" => Ok(Self::Always),
+            "necessary" => Ok(Self::Necessary),
+            "non_numeric" | "nonnumeric" => Ok(Self::NonNumeric),
+            "never" => Ok(Self::Never),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported CSV quote style {s}"
+            ))),
+        }
+    }
+}
+
+impl From<CsvQuoteStyle> for arrow::csv::QuoteStyle {
+    fn from(style: CsvQuoteStyle) -> Self {
+        match style {
+            CsvQuoteStyle::Always => Self::Always,
+            CsvQuoteStyle::NonNumeric => Self::NonNumeric,
+            CsvQuoteStyle::Never => Self::Never,
+            CsvQuoteStyle::Necessary => Self::Necessary,
+        }
+    }
+}
+
+impl Display for CsvQuoteStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Self::Always => "Always",
+            Self::Necessary => "Necessary",
+            Self::NonNumeric => "NonNumeric",
+            Self::Never => "Never",
+        };
+        write!(f, "{str}")
+    }
+}
