@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use crate::ScalarFunctionExpr;
+use crate::scalar_subquery::ScalarSubqueryExpr;
 use crate::{
     PhysicalExpr,
     expressions::{self, Column, Literal, binary, like, similar_to},
@@ -396,6 +397,35 @@ pub fn create_physical_expr(
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
+        Expr::ScalarSubquery(sq) => {
+            match execution_props.subquery_indexes.get(sq) {
+                Some(&index) => {
+                    let schema = sq.subquery.schema();
+                    if schema.fields().len() != 1 {
+                        return plan_err!(
+                            "Scalar subquery must return exactly one column, got {}",
+                            schema.fields().len()
+                        );
+                    }
+                    let dt = schema.field(0).data_type().clone();
+                    let nullable = schema.field(0).is_nullable();
+                    Ok(Arc::new(ScalarSubqueryExpr::new(
+                        dt,
+                        nullable,
+                        index,
+                        execution_props.subquery_results.clone(),
+                    )))
+                }
+                None => {
+                    // Not found: either a correlated subquery that wasn't
+                    // rewritten to a join, or an uncorrelated one that wasn't
+                    // registered by the physical planner.
+                    not_impl_err!(
+                        "Physical plan does not support logical expression {e:?}"
+                    )
+                }
+            }
+        }
         Expr::Placeholder(Placeholder { id, .. }) => {
             exec_err!("Placeholder '{id}' was not provided a value for execution.")
         }
