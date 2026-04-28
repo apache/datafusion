@@ -798,40 +798,6 @@ fn can_enable_blocked_groups(
     group_values_supports_blocked && accumulators_support_blocked
 }
 
-// fn maybe_enable_blocked_groups(
-//     context: &TaskContext,
-//     group_values: &mut dyn GroupValues,
-//     accumulators: &mut [Box<dyn GroupsAccumulator>],
-//     block_size: usize,
-//     group_ordering: &GroupOrdering,
-// ) -> Result<bool> {
-//     if !context
-//         .session_config()
-//         .options()
-//         .execution
-//         .enable_aggregation_blocked_groups
-//         || !matches!(group_ordering, GroupOrdering::None)
-//         || !matches!(context.memory_pool().memory_limit(), MemoryLimit::Infinite)
-//     {
-//         return Ok(false);
-//     }
-
-//     let group_values_supports_blocked = group_values.supports_blocked_groups();
-//     let accumulators_support_blocked =
-//         accumulators.iter().all(|acc| acc.supports_blocked_groups());
-
-//     match (group_values_supports_blocked, accumulators_support_blocked) {
-//         (true, true) => {
-//             group_values.alter_block_size(Some(block_size))?;
-//             accumulators
-//                 .iter_mut()
-//                 .try_for_each(|acc| acc.alter_block_size(Some(block_size)))?;
-//             Ok(true)
-//         }
-//         _ => Ok(false),
-//     }
-// }
-
 impl Stream for GroupedHashAggregateStream {
     type Item = Result<RecordBatch>;
 
