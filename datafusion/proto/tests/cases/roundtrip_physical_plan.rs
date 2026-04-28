@@ -3708,7 +3708,7 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     let roundtripped = proto.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
     let rt = roundtripped.as_ref().downcast_ref::<FilterExec>().unwrap();
     assert_eq!(
-        rt.projection(),
+        rt.projection().as_ref(),
         None,
         "None projection must stay None after roundtrip"
     );
@@ -3721,8 +3721,8 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     let roundtripped = proto.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
     let rt = roundtripped.as_ref().downcast_ref::<FilterExec>().unwrap();
     assert_eq!(
-        rt.projection(),
-        Some(&vec![]),
+        rt.projection().as_ref(),
+        Some(&[]),
         "Empty projection Some([]) must survive roundtrip, not become None"
     );
 
@@ -3734,8 +3734,8 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     let roundtripped = proto.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
     let rt = roundtripped.as_ref().downcast_ref::<FilterExec>().unwrap();
     assert_eq!(
-        rt.projection(),
-        Some(&vec![2_usize, 0_usize]),
+        rt.projection().as_ref(),
+        Some(&[2_usize, 0_usize]),
         "Partial projection must survive roundtrip"
     );
 
