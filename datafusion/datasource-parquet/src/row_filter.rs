@@ -385,10 +385,10 @@ impl<'schema> PushdownChecker<'schema> {
         &mut self,
         node: &Arc<dyn PhysicalExpr>,
     ) -> Option<TreeNodeRecursion> {
-        let column = if let Some(expr) = node.as_any().downcast_ref::<IsNotNullExpr>() {
-            expr.arg().as_any().downcast_ref::<Column>()
-        } else if let Some(expr) = node.as_any().downcast_ref::<IsNullExpr>() {
-            expr.arg().as_any().downcast_ref::<Column>()
+        let column = if let Some(expr) = node.downcast_ref::<IsNotNullExpr>() {
+            expr.arg().downcast_ref::<Column>()
+        } else if let Some(expr) = node.downcast_ref::<IsNullExpr>() {
+            expr.arg().downcast_ref::<Column>()
         } else {
             None
         }?;
