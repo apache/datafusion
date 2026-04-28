@@ -3695,9 +3695,8 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
         Field::new("c", DataType::Int32, false),
     ]));
 
-    let input: Arc<dyn ExecutionPlan> = Arc::new(
-        MemoryExec::try_new(&[], Arc::clone(&schema), None)?
-    );
+    let input: Arc<dyn ExecutionPlan> =
+        Arc::new(MemoryExec::try_new(&[], Arc::clone(&schema), None)?);
 
     let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
         Arc::new(Column::new("a", 0)),
@@ -3706,12 +3705,16 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
     ));
 
     // Case 1: None -> should round-trip as None (return all columns)
-    let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
-        .build()?;
+    let filter =
+        FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input)).build()?;
     let proto = PhysicalPlanNode::try_from_physical_plan(Arc::new(filter) as _, &codec)?;
     let roundtripped = proto.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
     let rt = roundtripped.as_any().downcast_ref::<FilterExec>().unwrap();
-    assert_eq!(rt.projection(), None, "None projection must stay None after roundtrip");
+    assert_eq!(
+        rt.projection(),
+        None,
+        "None projection must stay None after roundtrip"
+    );
 
     // Case 2: Some(vec![]) -> must survive as Some([]), NOT silently become None
     let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
@@ -3741,4 +3744,3 @@ async fn test_filter_exec_projection_serde_roundtrip() -> Result<()> {
 
     Ok(())
 }
-
