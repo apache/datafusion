@@ -206,9 +206,9 @@ where
 
     fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         self.map.clear();
-        self.values.clear();
         self.null_group = None;
         self.block_size = block_size;
+        self.values = VecBlocks::new(block_size);
 
         // As mentioned above, we ensure the `single block` always exist
         // in `flat mode`
@@ -263,7 +263,7 @@ where
                             if hash != h {
                                 return false;
                             }
-                                
+
                             let block_id = O::get_block_id(idx);
                             let block_offset = O::get_block_offset(idx);
                             self.values[block_id as usize]
