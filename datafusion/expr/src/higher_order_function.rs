@@ -222,7 +222,7 @@ pub struct LambdaArgument {
     /// (and across every nested-list iteration when the lambda is called once
     /// per outer sublist), avoiding the per-call `Schema::new` build that
     /// includes constructing the internal name -> index map.
-    schema: Arc<Schema>,
+    schema: SchemaRef,
 }
 
 impl LambdaArgument {
