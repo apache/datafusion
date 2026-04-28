@@ -820,7 +820,7 @@ impl LogicalPlan {
         transform_down_up_with_subqueries_impl(self, &mut f_down, &mut f_up)
     }
 
-    /// Similarly to [`Self::apply`], calls `f` on  this node and its inputs
+    /// Similarly to [`Self::apply`], calls `f` on this node and its inputs,
     /// including subqueries that may appear in expressions such as `IN (SELECT
     /// ...)`.
     pub fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
@@ -833,9 +833,7 @@ impl LogicalPlan {
                 | Expr::InSubquery(InSubquery { subquery, .. })
                 | Expr::SetComparison(SetComparison { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
-                    // use a synthetic plan so the collector sees a
-                    // LogicalPlan::Subquery (even though it is
-                    // actually a Subquery alias)
+                    // Wrap in LogicalPlan::Subquery to match f's signature
                     f(&LogicalPlan::Subquery(subquery.clone()))
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
@@ -898,6 +896,20 @@ impl LogicalPlan {
                     }),
                 _ => Ok(Transformed::no(expr)),
             })
+        })
+    }
+
+    /// Similar to [`Self::map_subqueries`], but only applies `f` to
+    /// uncorrelated subqueries (those with no outer column references).
+    pub fn map_uncorrelated_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        self.map_subqueries(|subquery_plan| match &subquery_plan {
+            LogicalPlan::Subquery(sq) if sq.outer_ref_columns.is_empty() => {
+                f(subquery_plan)
+            }
+            _ => Ok(Transformed::no(subquery_plan)),
         })
     }
 }

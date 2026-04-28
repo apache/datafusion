@@ -24,14 +24,19 @@ pub mod proxy;
 pub mod string_utils;
 
 use crate::assert_or_internal_err;
-use crate::error::{_exec_datafusion_err, _internal_datafusion_err};
+use crate::error::{_exec_datafusion_err, _exec_err, _internal_datafusion_err};
 use crate::{Result, ScalarValue};
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
     cast::AsArray,
 };
+use arrow::array::{
+    Datum, GenericListArray, Int32Array, Int64Array, MutableArrayData, make_array,
+};
 use arrow::array::{LargeListViewArray, ListViewArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::compute::kernels::cmp::neq;
+use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 #[cfg(feature = "sql")]
@@ -1005,11 +1010,137 @@ pub fn take_function_args<const N: usize, T>(
     })
 }
 
+/// Returns the inner values of a list, or an error otherwise
+/// For [`ListArray`] and [`LargeListArray`], if it's sliced, it returns a
+/// sliced array too. Therefore, too reconstruct a list using it,
+/// you must adjust the offsets using [`adjust_offsets_for_slice`]
+pub fn list_values(array: &dyn Array) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::List(_) => Ok(sliced_list_values(array.as_list::<i32>())),
+        DataType::LargeList(_) => Ok(sliced_list_values(array.as_list::<i64>())),
+        DataType::FixedSizeList(_, _) => {
+            Ok(Arc::clone(array.as_fixed_size_list().values()))
+        }
+        other => _exec_err!("expected list, got {other}"),
+    }
+}
+
+fn sliced_list_values<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> ArrayRef {
+    let values = list.values();
+    let offsets = list.offsets();
+
+    if let (Some(first), Some(last)) = (offsets.first(), offsets.last()) {
+        let first = first.as_usize();
+        let last = last.as_usize();
+
+        if first != 0 || last != values.len() {
+            return values.slice(first, last - first);
+        }
+    }
+
+    Arc::clone(values)
+}
+
+/// If `list` is sliced, returns an adjusted offset buffer so that
+/// it points to the sliced portion of the list values, and not the whole list values
+pub fn adjust_offsets_for_slice<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> OffsetBuffer<O> {
+    let offsets = list.offsets();
+
+    if let (Some(first), Some(last)) = (offsets.first(), offsets.last())
+        && (!first.is_zero() || last.as_usize() != list.values().len())
+    {
+        let offsets = offsets.iter().map(|offset| *offset - *first).collect();
+
+        //todo: use unsafe Offset::new_unchecked?
+        return OffsetBuffer::new(offsets);
+    }
+
+    offsets.clone()
+}
+
+/// For lists and large lists, truncates the sublist of null values
+/// Otherwise returns an error
+pub fn remove_list_null_values(array: &ArrayRef) -> Result<ArrayRef> {
+    // todo: handle list view and map
+    match array.data_type() {
+        DataType::List(_) => Ok(Arc::new(truncate_list_nulls(array.as_list::<i32>())?)),
+        DataType::LargeList(_) => {
+            Ok(Arc::new(truncate_list_nulls(array.as_list::<i64>())?))
+        }
+        dt => _exec_err!("expected List or LargeList, got {dt}"),
+    }
+}
+
+fn truncate_list_nulls<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> Result<GenericListArray<O>> {
+    if let Some(nulls) = list.nulls()
+        && nulls.null_count() > 0
+    {
+        let lengths = length(list)?;
+        let zero: &dyn Datum = if lengths.data_type() == &DataType::Int32 {
+            &Int32Array::new_scalar(0)
+        } else {
+            &Int64Array::new_scalar(0)
+        };
+
+        let not_empty = neq(&lengths, zero)?;
+        let null_and_non_empty = &!nulls.inner() & not_empty.values();
+
+        if null_and_non_empty.count_set_bits() > 0 {
+            let array_data = list.values().to_data();
+            let offsets = list.offsets();
+            let capacity = offsets[offsets.len() - 1] - offsets[0];
+            let mut mutable_array_data =
+                MutableArrayData::new(vec![&array_data], false, capacity.as_usize());
+
+            let valid_or_empty = nulls.inner() | &!not_empty.values();
+
+            for (start, end) in valid_or_empty.set_slices() {
+                mutable_array_data.extend(
+                    0,
+                    offsets[start].as_usize(),
+                    offsets[end].as_usize(),
+                );
+            }
+
+            let lengths = std::iter::zip(offsets.lengths(), nulls)
+                .map(|(length, is_valid)| if is_valid { length } else { 0 });
+
+            let offsets = OffsetBuffer::from_lengths(lengths);
+            let values = make_array(mutable_array_data.freeze());
+
+            let field = match list.data_type() {
+                DataType::List(field) => field,
+                DataType::LargeList(field) => field,
+                _ => unreachable!(),
+            };
+
+            return Ok(GenericListArray::try_new(
+                Arc::clone(field),
+                offsets,
+                values,
+                list.nulls().cloned(),
+            )?);
+        }
+    }
+    Ok(list.clone())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::ScalarValue::Null;
-    use arrow::array::Float64Array;
+    use arrow::{
+        array::{Float64Array, Int32Array},
+        buffer::NullBuffer,
+        datatypes::Int32Type,
+    };
+    use sqlparser::ast::Ident;
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -1308,5 +1439,130 @@ mod tests {
         let expected = vec![vec![1, 4], vec![2, 5], vec![3, 6]];
         assert_eq!(expected, transposed);
         Ok(())
+    }
+
+    #[test]
+    fn test_sliced_list_values() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(6), Some(7)]),
+        ];
+
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        assert_eq!(
+            sliced_list_values(&list).as_primitive(),
+            &Int32Array::from(vec![
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+                Some(6),
+                Some(7)
+            ])
+        );
+
+        assert_eq!(
+            sliced_list_values(&list.slice(0, 1)).as_primitive(),
+            &Int32Array::from(vec![Some(0), Some(1), Some(2)])
+        );
+
+        assert_eq!(
+            sliced_list_values(&list.slice(2, 1)).as_primitive(),
+            &Int32Array::from(vec![Some(3), None, Some(5)])
+        );
+
+        assert_eq!(
+            sliced_list_values(&list.slice(3, 1)).as_primitive(),
+            &Int32Array::from(vec![Some(6), Some(7)])
+        );
+
+        assert!(sliced_list_values(&list.slice(0, 0)).is_empty());
+        assert!(sliced_list_values(&list.slice(1, 0)).is_empty());
+        assert!(sliced_list_values(&list.slice(3, 0)).is_empty());
+    }
+
+    #[test]
+    fn test_adjust_offsets() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(6), Some(7)]),
+        ];
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list),
+            OffsetBuffer::from_lengths([3, 0, 3, 2])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(0, 1)),
+            OffsetBuffer::from_lengths([3])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(1, 2)),
+            OffsetBuffer::from_lengths([0, 3])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(1, 3)),
+            OffsetBuffer::from_lengths([0, 3, 2])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(0, 0)),
+            OffsetBuffer::from_lengths([])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(1, 0)),
+            OffsetBuffer::from_lengths([])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(3, 0)),
+            OffsetBuffer::from_lengths([])
+        );
+    }
+
+    fn create_i32_list(
+        values: impl Into<Int32Array>,
+        offsets: OffsetBuffer<i32>,
+        nulls: Option<NullBuffer>,
+    ) -> ListArray {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+
+        ListArray::new(list_field, offsets, Arc::new(values.into()), nulls)
+    }
+
+    #[test]
+    fn test_remove_list_null_values_list() {
+        let list = Arc::new(create_i32_list(
+            vec![100, 20, 10, 0, 0, 0, 0, 1, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![3, 4, 0, 2, 0]),
+            Some(NullBuffer::from(vec![true, false, false, true, false])),
+        )) as ArrayRef;
+
+        let res = remove_list_null_values(&list).unwrap();
+        let res = res.as_list::<i32>();
+
+        let expected = Arc::new(create_i32_list(
+            vec![100, 20, 10, 1, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![3, 0, 0, 2, 0]),
+            Some(NullBuffer::from(vec![true, false, false, true, false])),
+        )) as ArrayRef;
+        let expected = expected.as_list::<i32>();
+
+        assert_eq!(res, expected);
+        // check above skips inner value of nulls
+        assert_eq!(res.values(), expected.values());
+        assert_eq!(res.offsets(), expected.offsets());
     }
 }
