@@ -1351,7 +1351,9 @@ mod tests {
     use datafusion_common::TableReference;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+    use datafusion_expr::{
+        AggregateUDF, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
+    };
 
     use super::*;
 
@@ -1391,6 +1393,10 @@ mod tests {
             None
         }
 
+        fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+            None
+        }
+
         fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
             match name {
                 "sum" => Some(datafusion_functions_aggregate::sum::sum_udaf()),
@@ -1411,6 +1417,10 @@ mod tests {
         }
 
         fn udf_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn higher_order_function_names(&self) -> Vec<String> {
             Vec::new()
         }
 

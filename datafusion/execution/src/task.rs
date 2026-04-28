@@ -21,7 +21,7 @@ use crate::{
 };
 use datafusion_common::{Result, internal_datafusion_err, plan_datafusion_err};
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
 
@@ -58,6 +58,8 @@ pub struct TaskContext {
     session_config: SessionConfig,
     /// Scalar functions associated with this task context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    /// Higher order functions associated with this task context
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
     /// Aggregate functions associated with this task context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions associated with this task context
@@ -76,6 +78,7 @@ impl Default for TaskContext {
             task_id: None,
             session_config: SessionConfig::new(),
             scalar_functions: HashMap::new(),
+            higher_order_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             runtime,
@@ -89,11 +92,13 @@ impl TaskContext {
     /// Most users will use [`SessionContext::task_ctx`] to create [`TaskContext`]s
     ///
     /// [`SessionContext::task_ctx`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.task_ctx
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         task_id: Option<String>,
         session_id: String,
         session_config: SessionConfig,
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+        higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         window_functions: HashMap<String, Arc<WindowUDF>>,
         runtime: Arc<RuntimeEnv>,
@@ -103,6 +108,7 @@ impl TaskContext {
             session_id,
             session_config,
             scalar_functions,
+            higher_order_functions,
             aggregate_functions,
             window_functions,
             runtime,
@@ -138,6 +144,10 @@ impl TaskContext {
         &self.scalar_functions
     }
 
+    pub fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+        &self.higher_order_functions
+    }
+
     pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         &self.aggregate_functions
     }
@@ -169,6 +179,16 @@ impl FunctionRegistry for TaskContext {
 
         result.cloned().ok_or_else(|| {
             plan_datafusion_err!("There is no UDF named \"{name}\" in the TaskContext")
+        })
+    }
+
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+        let result = self.higher_order_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            plan_datafusion_err!(
+                "There is no higher-order function named \"{name}\" in the TaskContext"
+            )
         })
     }
 
@@ -214,8 +234,25 @@ impl FunctionRegistry for TaskContext {
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 
+    fn register_higher_order_function(
+        &mut self,
+        function: Arc<dyn HigherOrderUDF>,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        function.aliases().iter().for_each(|alias| {
+            self.higher_order_functions
+                .insert(alias.clone(), Arc::clone(&function));
+        });
+        Ok(self
+            .higher_order_functions
+            .insert(function.name().into(), function))
+    }
+
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
+    }
+
+    fn higher_order_function_names(&self) -> HashSet<String> {
+        self.higher_order_functions.keys().cloned().collect()
     }
 
     fn udafs(&self) -> HashSet<String> {
@@ -269,6 +306,7 @@ mod tests {
             HashMap::default(),
             HashMap::default(),
             HashMap::default(),
+            HashMap::default(),
             runtime,
         );
 
@@ -298,6 +336,7 @@ mod tests {
             Some("task_id".to_string()),
             "session_id".to_string(),
             session_config,
+            HashMap::default(),
             HashMap::default(),
             HashMap::default(),
             HashMap::default(),
