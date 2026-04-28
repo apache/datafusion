@@ -204,51 +204,6 @@ pub fn concat_elements_utf8view(
     Ok(result.finish())
 }
 
-/// Concatenates two `GenericBinaryArray`s element-wise.
-/// If either element is `Null`, the result element is also `Null`.
-///
-/// # Errors
-/// - Returns an error if the input arrays have different lengths.
-/// - Panics if any concatenated string exceeds `T::Offset::MAX` in length.
-pub fn concat_elements_binary_array<T: OffsetSizeTrait>(
-    left: &GenericBinaryArray<T>,
-    right: &GenericBinaryArray<T>,
-) -> std::result::Result<GenericBinaryArray<T>, ArrowError> {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(format!(
-            "Arrays must have the same length: {} != {}",
-            left.len(),
-            right.len()
-        )));
-    }
-    // data capacity is unknown, so pass zero
-    let mut result = GenericBinaryBuilder::<T>::with_capacity(left.len(), 0);
-
-    // Avoid reallocations by writing to a reused buffer (note we could be even
-    // more efficient by creating the view directly here and avoid the buffer
-    // but that would be more complex)
-    let mut buffer = MutableBuffer::new(0);
-
-    // Pre-compute combined null bitmap, so the per-row NULL check is more
-    // efficient
-    let nulls = NullBuffer::union(left.nulls(), right.nulls());
-
-    for i in 0..left.len() {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            result.append_null();
-        } else {
-            let l = left.value(i);
-            let r = right.value(i);
-            buffer.clear();
-            buffer.extend_from_slice(l);
-            buffer.extend_from_slice(r);
-            // No try-version of append_value because it panics on overflow
-            result.append_value(&buffer);
-        }
-    }
-    Ok(result.finish())
-}
-
 /// Concatenates two `BinaryViewArray`s element-wise.
 /// If either element is `Null`, the result element is also `Null`.
 ///

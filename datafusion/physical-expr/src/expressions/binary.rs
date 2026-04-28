@@ -24,7 +24,9 @@ use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
-use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use arrow::compute::kernels::concat_elements::{
+    concat_element_binary, concat_elements_utf8,
+};
 use arrow::compute::{SlicesIterator, cast, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
@@ -46,8 +48,8 @@ use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
-    concat_elements_binary_array, concat_elements_binary_view_array,
-    concat_elements_utf8view, regex_match_dyn, regex_match_dyn_scalar,
+    concat_elements_binary_view_array, concat_elements_utf8view, regex_match_dyn,
+    regex_match_dyn_scalar,
 };
 
 /// Binary expression
@@ -942,11 +944,11 @@ fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
             left.as_string_view(),
             right.as_string_view(),
         )?),
-        DataType::Binary => Arc::new(concat_elements_binary_array::<i32>(
+        DataType::Binary => Arc::new(concat_element_binary::<i32>(
             left.as_binary(),
             right.as_binary(),
         )?),
-        DataType::LargeBinary => Arc::new(concat_elements_binary_array::<i64>(
+        DataType::LargeBinary => Arc::new(concat_element_binary::<i64>(
             left.as_binary(),
             right.as_binary(),
         )?),
