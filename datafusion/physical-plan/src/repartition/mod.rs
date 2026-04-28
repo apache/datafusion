@@ -1038,12 +1038,11 @@ impl ExecutionPlan for RepartitionExec {
                 // Store streams from all the input partitions:
                 // Each input partition gets its own spill reader to maintain proper FIFO ordering
                 //
-                // Use a separate metrics set for the intermediate PerPartitionStream
-                // instances. These feed into the StreamingMerge which is the actual
-                // output — only the merge's BaselineMetrics should contribute to the
-                // operator's reported output_rows. Without this, every row would be
-                // counted twice (once by PerPartitionStream, once by StreamingMerge).
-                let intermediate_metrics = ExecutionPlanMetricsSet::new();
+                // Pass None for metrics here — these intermediate streams feed into
+                // StreamingMerge which is the actual output. Only the merge's
+                // BaselineMetrics should contribute to the operator's reported
+                // output_rows. Without this, every row would be counted twice
+                // (once by PerPartitionStream, once by StreamingMerge).
                 let input_streams = rx
                     .into_iter()
                     .zip(spill_readers)
@@ -1056,7 +1055,7 @@ impl ExecutionPlan for RepartitionExec {
                             Arc::clone(&reservation),
                             spill_stream,
                             1, // Each receiver handles one input partition
-                            BaselineMetrics::new(&intermediate_metrics, partition),
+                            None,
                             None, // subsequent merge sort already does batching https://github.com/apache/datafusion/blob/e4dcf0c85611ad0bd291f03a8e03fe56d773eb16/datafusion/physical-plan/src/sorts/merge.rs#L286
                         )) as SendableRecordBatchStream
                     })
@@ -1095,7 +1094,7 @@ impl ExecutionPlan for RepartitionExec {
                     reservation,
                     spill_stream,
                     num_input_partitions,
-                    BaselineMetrics::new(&metrics, partition),
+                    Some(BaselineMetrics::new(&metrics, partition)),
                     Some(context.session_config().batch_size()),
                 )) as SendableRecordBatchStream)
             }
@@ -1583,8 +1582,8 @@ struct PerPartitionStream {
     /// each sending None when complete. We must wait for all of them.
     remaining_partitions: usize,
 
-    /// Execution metrics
-    baseline_metrics: BaselineMetrics,
+    /// Execution metrics (None in preserve-order mode where StreamingMerge owns the metrics)
+    baseline_metrics: Option<BaselineMetrics>,
 
     /// None for sort preserving variant (merge sort already does coalescing)
     batch_coalescer: Option<LimitedBatchCoalescer>,
@@ -1599,7 +1598,7 @@ impl PerPartitionStream {
         reservation: SharedMemoryReservation,
         spill_stream: SendableRecordBatchStream,
         num_input_partitions: usize,
-        baseline_metrics: BaselineMetrics,
+        baseline_metrics: Option<BaselineMetrics>,
         batch_size: Option<usize>,
     ) -> Self {
         let batch_coalescer =
@@ -1622,8 +1621,11 @@ impl PerPartitionStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         use futures::StreamExt;
-        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
-        let _timer = cloned_time.timer();
+        let elapsed = self
+            .baseline_metrics
+            .as_ref()
+            .map(|m| m.elapsed_compute().clone());
+        let _timer = elapsed.as_ref().map(|t| t.timer());
 
         loop {
             match self.state {
@@ -1703,7 +1705,10 @@ impl PerPartitionStream {
         cx: &mut Context<'_>,
         coalescer: &mut LimitedBatchCoalescer,
     ) -> Poll<Option<Result<RecordBatch>>> {
-        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
+        let cloned_time = self
+            .baseline_metrics
+            .as_ref()
+            .map(|m| m.elapsed_compute().clone());
         let mut completed = false;
 
         loop {
@@ -1716,7 +1721,7 @@ impl PerPartitionStream {
 
             match ready!(self.poll_next_inner(cx)) {
                 Some(Ok(batch)) => {
-                    let _timer = cloned_time.timer();
+                    let _timer = cloned_time.as_ref().map(|t| t.timer());
                     if let Err(err) = coalescer.push_batch(batch) {
                         return Poll::Ready(Some(Err(err)));
                     }
@@ -1726,7 +1731,7 @@ impl PerPartitionStream {
                 }
                 None => {
                     completed = true;
-                    let _timer = cloned_time.timer();
+                    let _timer = cloned_time.as_ref().map(|t| t.timer());
                     if let Err(err) = coalescer.finish() {
                         return Poll::Ready(Some(Err(err)));
                     }
@@ -1750,7 +1755,11 @@ impl Stream for PerPartitionStream {
         } else {
             poll = self.poll_next_inner(cx);
         }
-        self.baseline_metrics.record_poll(poll)
+        if let Some(metrics) = &self.baseline_metrics {
+            metrics.record_poll(poll)
+        } else {
+            poll
+        }
     }
 }
 
