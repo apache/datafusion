@@ -749,10 +749,9 @@ impl SessionContext {
                     Arc::clone(self.state().config().options()),
                 )
                 .without_query_execution_start_time();
-                let plan = self.state().optimizer().optimize(
+                let plan = self.state().optimize_with_config(
                     Arc::unwrap_or_clone(input),
                     &optimizer_context,
-                    |_1, _2| {},
                 )?;
                 self.state
                     .write()
