@@ -724,6 +724,7 @@ impl protobuf::PhysicalPlanNode {
             is_full_projection &= idx == i;
             projection_vec.push(idx);
         }
+        let projection = if is_full_projection { None } else { Some(projection_vec) };
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
             .with_batch_size(filter.batch_size as usize)
@@ -2336,8 +2337,10 @@ impl protobuf::PhysicalPlanNode {
                     ),
                     default_filter_selectivity: exec.default_selectivity() as u32,
                     projection: match exec.projection() {
-                    None => (0..exec.input().schema().fields().len()).map(|i| i as u32).collect(),
-                    Some(v) => v.iter().map(|x| *x as u32).collect(),
+                        None => (0..exec.input().schema().fields().len())
+                            .map(|i| i as u32)
+                            .collect(),
+                        Some(v) => v.iter().map(|x| *x as u32).collect(),
                     },
                     batch_size: exec.batch_size() as u32,
                     fetch: exec.fetch().map(|f| f as u32),
