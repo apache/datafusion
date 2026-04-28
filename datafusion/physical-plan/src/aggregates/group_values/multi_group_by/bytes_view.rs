@@ -16,14 +16,13 @@
 // under the License.
 
 use crate::aggregates::group_values::multi_group_by::{
-    GroupColumn, Nulls, nulls_equal_to,
+    EqualToResults, GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray, make_view};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
-use itertools::izip;
 use std::marker::PhantomData;
 use std::mem::{replace, size_of};
 use std::sync::Arc;
@@ -126,22 +125,20 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         lhs_rows: &[usize],
         array: &GenericByteViewArray<B>,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut EqualToResults,
     ) {
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
-
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to, don't need to check
-            if !*equal_to_result {
+        for (idx, (&lhs_row, &rhs_row)) in
+            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+        {
+            if !equal_to_results.get_bit(idx) {
                 continue;
             }
 
-            *equal_to_result =
-                self.do_equal_to_inner::<HAS_NULLS, HAS_BUFFERS>(lhs_row, array, rhs_row);
+            if !self.do_equal_to_inner::<HAS_NULLS, HAS_BUFFERS>(lhs_row, array, rhs_row) {
+                let chunk_idx = idx / 64;
+                let bit_pos = idx % 64;
+                equal_to_results.and_chunk(chunk_idx, !(1u64 << bit_pos));
+            }
         }
     }
 
@@ -513,7 +510,7 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         group_indices: &[usize],
         array: &ArrayRef,
         rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut EqualToResults,
     ) {
         let has_nulls = array.null_count() != 0;
         let array = array.as_byte_view::<B>();
@@ -583,6 +580,7 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
 mod tests {
     use std::sync::Arc;
 
+    use crate::aggregates::group_values::multi_group_by::EqualToResults;
     use crate::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
     use arrow::array::{ArrayRef, AsArray, NullBufferBuilder, StringViewArray};
     use arrow::datatypes::StringViewType;
@@ -627,10 +625,10 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut EqualToResults| {
             let iter = lhs_rows.iter().zip(rhs_rows.iter());
             for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
+                equal_to_results.set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
             }
         };
 
@@ -651,7 +649,7 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut EqualToResults| {
             builder.vectorized_equal_to(
                 lhs_rows,
                 input_array,
@@ -683,19 +681,21 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        let mut equal_to_results = EqualToResults::new();
+        equal_to_results.reset(all_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = equal_to_results.to_vec();
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
 
         // All not nulls input array
         let all_not_nulls_input_array = Arc::new(StringViewArray::from(vec![
@@ -709,19 +709,21 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        let mut equal_to_results = EqualToResults::new();
+        equal_to_results.reset(all_not_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = equal_to_results.to_vec();
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
     }
 
     fn test_byte_view_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
@@ -732,7 +734,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut EqualToResults,
         ),
     {
         // Will cover such cases:
@@ -811,7 +813,8 @@ mod tests {
             Arc::new(StringViewArray::new(views, buffer, nulls.finish())) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; input_array.len()];
+        let mut equal_to_results = EqualToResults::new();
+        equal_to_results.reset(input_array.len());
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5, 6, 7, 7, 7, 8, 8],
@@ -819,19 +822,20 @@ mod tests {
             &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
             &mut equal_to_results,
         );
+        let results = equal_to_results.to_vec();
 
-        assert!(!equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(!equal_to_results[3]);
-        assert!(!equal_to_results[4]);
-        assert!(!equal_to_results[5]);
-        assert!(equal_to_results[6]);
-        assert!(!equal_to_results[7]);
-        assert!(!equal_to_results[8]);
-        assert!(equal_to_results[9]);
-        assert!(!equal_to_results[10]);
-        assert!(equal_to_results[11]);
+        assert!(!results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(!results[3]);
+        assert!(!results[4]);
+        assert!(!results[5]);
+        assert!(results[6]);
+        assert!(!results[7]);
+        assert!(!results[8]);
+        assert!(results[9]);
+        assert!(!results[10]);
+        assert!(results[11]);
     }
 
     #[test]
