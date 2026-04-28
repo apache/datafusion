@@ -61,8 +61,12 @@ fn bench_array_remove_int64(c: &mut Criterion) {
     let filler_values = [None, Some(1), Some(2), Some(3), Some(4), Some(5)];
     let needle = 0;
     for &list_size in LIST_SIZES {
-        let list_array =
-            create_list_array::<Int64Builder, _>(list_size, needle, &filler_values);
+        let list_array = create_list_array::<Int64Builder, _>(
+            NUM_ROWS,
+            list_size,
+            needle,
+            &filler_values,
+        );
         group.bench_with_input(
             BenchmarkId::new("remove", list_size),
             &list_size,
@@ -85,8 +89,12 @@ fn bench_array_remove_n_int64(c: &mut Criterion) {
     let filler_values = [None, Some(1), Some(2), Some(3), Some(4), Some(5)];
     let needle = 0;
     for &list_size in LIST_SIZES {
-        let list_array =
-            create_list_array::<Int64Builder, _>(list_size, needle, &filler_values);
+        let list_array = create_list_array::<Int64Builder, _>(
+            NUM_ROWS,
+            list_size,
+            needle,
+            &filler_values,
+        );
         let n = (NEEDLE_DENSITY / 2.0 * list_size as f64) as i64;
         let n = 2.max(n);
 
@@ -116,8 +124,12 @@ fn bench_array_remove_all_int64(c: &mut Criterion) {
     let filler_values = [None, Some(1), Some(2), Some(3), Some(4), Some(5)];
     let needle = 0;
     for &list_size in LIST_SIZES {
-        let list_array =
-            create_list_array::<Int64Builder, _>(list_size, needle, &filler_values);
+        let list_array = create_list_array::<Int64Builder, _>(
+            NUM_ROWS,
+            list_size,
+            needle,
+            &filler_values,
+        );
         group.bench_with_input(
             BenchmarkId::new("remove", list_size),
             &list_size,
@@ -156,7 +168,8 @@ fn bench_array_remove_int64_nested(c: &mut Criterion) {
         &DataType::Int64,
     ));
     for &list_size in LIST_SIZES {
-        let list_array = create_nested_i64_list_array(list_size, &needle, &filler_values);
+        let list_array =
+            create_nested_i64_list_array(NUM_ROWS, list_size, &needle, &filler_values);
         group.bench_with_input(
             BenchmarkId::new("remove", list_size),
             &list_size,
@@ -195,7 +208,8 @@ fn bench_array_remove_n_int64_nested(c: &mut Criterion) {
         &DataType::Int64,
     ));
     for &list_size in LIST_SIZES {
-        let list_array = create_nested_i64_list_array(list_size, &needle, &filler_values);
+        let list_array =
+            create_nested_i64_list_array(NUM_ROWS, list_size, &needle, &filler_values);
         let n = (NEEDLE_DENSITY / 2.0 * list_size as f64) as i64;
         let n = 2.max(n);
         group.bench_with_input(
@@ -240,7 +254,8 @@ fn bench_array_remove_all_int64_nested(c: &mut Criterion) {
         &DataType::Int64,
     ));
     for &list_size in LIST_SIZES {
-        let list_array = create_nested_i64_list_array(list_size, &needle, &filler_values);
+        let list_array =
+            create_nested_i64_list_array(NUM_ROWS, list_size, &needle, &filler_values);
         group.bench_with_input(
             BenchmarkId::new("remove", list_size),
             &list_size,
@@ -270,8 +285,12 @@ fn bench_array_remove_strings(c: &mut Criterion) {
     ];
     let needle = "needle";
     for &list_size in LIST_SIZES {
-        let list_array =
-            create_list_array::<StringBuilder, _>(list_size, needle, &filler_values);
+        let list_array = create_list_array::<StringBuilder, _>(
+            NUM_ROWS,
+            list_size,
+            needle,
+            &filler_values,
+        );
         group.bench_with_input(
             BenchmarkId::new("remove", list_size),
             &list_size,
@@ -294,8 +313,12 @@ fn bench_array_remove_boolean(c: &mut Criterion) {
     let filler_values = [None, Some(false)];
     let needle = true;
     for &list_size in LIST_SIZES {
-        let list_array =
-            create_list_array::<BooleanBuilder, _>(list_size, needle, &filler_values);
+        let list_array = create_list_array::<BooleanBuilder, _>(
+            NUM_ROWS,
+            list_size,
+            needle,
+            &filler_values,
+        );
         group.bench_with_input(
             BenchmarkId::new("remove", list_size),
             &list_size,
@@ -327,6 +350,7 @@ fn bench_array_remove_fixed_size_binary(c: &mut Criterion) {
     let needle = [1_u8; SIZE];
     for &list_size in LIST_SIZES {
         let list_array = create_fixed_size_binary_list_array::<SIZE>(
+            NUM_ROWS,
             list_size,
             needle,
             &filler_values,
@@ -352,6 +376,7 @@ fn bench_array_remove_fixed_size_binary(c: &mut Criterion) {
 
 #[inline]
 fn create_args(haystack: ArrayRef, needle: ScalarValue) -> ScalarFunctionArgs {
+    let number_rows = haystack.len();
     let haystack_type = haystack.data_type().clone();
     let needle_type = needle.data_type().clone();
     ScalarFunctionArgs {
@@ -363,7 +388,7 @@ fn create_args(haystack: ArrayRef, needle: ScalarValue) -> ScalarFunctionArgs {
             Field::new("haystack", haystack_type.clone(), true).into(),
             Field::new("needle", needle_type, true).into(),
         ],
-        number_rows: NUM_ROWS,
+        number_rows,
         return_field: Field::new("result", haystack_type, true).into(),
         config_options: Arc::new(ConfigOptions::default()),
     }
@@ -375,6 +400,7 @@ fn create_args_n(
     needle: ScalarValue,
     n: ScalarValue,
 ) -> ScalarFunctionArgs {
+    let number_rows = haystack.len();
     let haystack_type = haystack.data_type().clone();
     let needle_type = needle.data_type().clone();
     let n_type = n.data_type().clone();
@@ -389,13 +415,14 @@ fn create_args_n(
             Field::new("needle", needle_type, true).into(),
             Field::new("n", n_type, true).into(),
         ],
-        number_rows: NUM_ROWS,
+        number_rows,
         return_field: Field::new("result", haystack_type, true).into(),
         config_options: Arc::new(ConfigOptions::default()),
     }
 }
 
 fn create_list_array<Builder, Item>(
+    num_rows: usize,
     list_size: usize,
     needle_value: Item,
     filler_values: &[Option<Item>],
@@ -405,7 +432,7 @@ where
     Item: Copy,
 {
     let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..NUM_ROWS)
+    let values = (0..num_rows)
         .map(|_| {
             if rng.random_bool(HAYSTACK_NULL_DENSITY) {
                 None
@@ -427,13 +454,14 @@ where
 }
 
 fn create_fixed_size_binary_list_array<const SIZE: usize>(
+    num_rows: usize,
     list_size: usize,
     needle_value: [u8; SIZE],
     filler_values: &[Option<[u8; SIZE]>],
 ) -> ArrayRef {
     let mut rng = StdRng::seed_from_u64(SEED);
-    let mut buffer = Vec::with_capacity(NUM_ROWS * list_size);
-    for _ in 0..NUM_ROWS {
+    let mut buffer = Vec::with_capacity(num_rows * list_size);
+    for _ in 0..num_rows {
         for _ in 0..list_size {
             if rng.random_bool(NEEDLE_DENSITY) {
                 buffer.push(Some(needle_value));
@@ -449,18 +477,19 @@ fn create_fixed_size_binary_list_array<const SIZE: usize>(
     .unwrap();
 
     let null_buffer = NullBuffer::from_iter(
-        (0..NUM_ROWS).map(|_| rng.random_bool(1.0 - HAYSTACK_NULL_DENSITY)),
+        (0..num_rows).map(|_| rng.random_bool(1.0 - HAYSTACK_NULL_DENSITY)),
     );
 
     Arc::new(ListArray::new(
         Field::new("item", DataType::FixedSizeBinary(SIZE as i32), true).into(),
-        OffsetBuffer::from_repeated_length(list_size, NUM_ROWS),
+        OffsetBuffer::from_repeated_length(list_size, num_rows),
         Arc::new(values),
         Some(null_buffer),
     ))
 }
 
 fn create_nested_i64_list_array(
+    num_rows: usize,
     list_size: usize,
     needle_value: &[Option<i64>],
     filler_values: &[Option<Vec<Option<i64>>>],
@@ -471,7 +500,7 @@ fn create_nested_i64_list_array(
     let inner_builder = ListBuilder::new(value_builder);
     let mut outer_builder = ListBuilder::new(inner_builder);
 
-    for _ in 0..NUM_ROWS {
+    for _ in 0..num_rows {
         if rng.random_bool(HAYSTACK_NULL_DENSITY) {
             outer_builder.append(false);
             continue;
