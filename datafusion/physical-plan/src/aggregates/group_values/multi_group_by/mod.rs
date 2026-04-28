@@ -82,7 +82,7 @@ pub trait GroupColumn: Send + Sync {
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut EqualToResults,
+        equal_to_results: &mut [bool],
     );
 
     /// The vectorized version `append_val`
@@ -235,8 +235,8 @@ struct VectorizedOperationBuffers {
     /// The `vectorized_equal_to` group indices buffer
     equal_to_group_indices: Vec<usize>,
 
-    /// The `vectorized_equal_to` result buffer (bitmask)
-    equal_to_results: EqualToResults,
+    /// The `vectorized_equal_to` result buffer
+    equal_to_results: Vec<bool>,
 
     /// The buffer for storing row indices found not equal to
     /// exist groups in `group_values` in `vectorized_equal_to`.
@@ -249,6 +249,7 @@ impl VectorizedOperationBuffers {
         self.append_row_indices.clear();
         self.equal_to_row_indices.clear();
         self.equal_to_group_indices.clear();
+        self.equal_to_results.clear();
         self.remaining_row_indices.clear();
     }
 }
@@ -614,13 +615,15 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         // 1. Perform `vectorized_equal_to` for `rows` in `vectorized_equal_to_group_indices`
         //    and `group_indices` in `vectorized_equal_to_group_indices`
-        let n = self
-            .vectorized_operation_buffers
-            .equal_to_group_indices
-            .len();
         let mut equal_to_results =
             mem::take(&mut self.vectorized_operation_buffers.equal_to_results);
-        equal_to_results.reset(n);
+        equal_to_results.clear();
+        equal_to_results.resize(
+            self.vectorized_operation_buffers
+                .equal_to_group_indices
+                .len(),
+            true,
+        );
 
         for (col_idx, group_col) in self.group_values.iter().enumerate() {
             group_col.vectorized_equal_to(
@@ -640,7 +643,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .iter()
             .enumerate()
         {
-            let equal_to_result = equal_to_results.get_bit(idx);
+            let equal_to_result = equal_to_results[idx];
 
             // Equal to case, set the `group_indices` to `rows` in `groups`
             if equal_to_result {
@@ -1233,90 +1236,6 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::BinaryView
             | DataType::Boolean
     )
-}
-
-/// Bitmask tracking which rows are still potentially equal across column comparisons:
-/// - Bit `i` = 1 means row `i` has not yet been determined unequal
-/// - Bit `i` = 0 means row `i` is already known to be unequal
-pub struct EqualToResults {
-    chunks: Vec<u64>,
-    len: usize,
-}
-
-impl EqualToResults {
-    pub fn new() -> Self {
-        Self {
-            chunks: Vec::new(),
-            len: 0,
-        }
-    }
-
-    /// Reset to all-true (`1` bits) for `n` rows
-    pub fn reset(&mut self, n: usize) {
-        self.len = n;
-        let n_full = n / 64;
-        let remainder = n % 64;
-        let total = n_full + usize::from(remainder > 0);
-
-        self.chunks.resize(total, 0);
-        self.chunks[..n_full].fill(!0u64);
-        if remainder > 0 {
-            self.chunks[n_full] = (1u64 << remainder) - 1;
-        }
-    }
-
-    #[inline]
-    pub fn get_bit(&self, i: usize) -> bool {
-        debug_assert!(i < self.len);
-        (self.chunks[i / 64] >> (i % 64)) & 1 == 1
-    }
-
-    #[inline]
-    pub fn get_chunk(&self, chunk_idx: usize) -> u64 {
-        self.chunks[chunk_idx]
-    }
-
-    #[inline]
-    pub fn and_chunk(&mut self, chunk_idx: usize, mask: u64) {
-        self.chunks[chunk_idx] &= mask;
-    }
-
-    #[inline]
-    pub fn n_chunks(&self) -> usize {
-        self.chunks.len()
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    #[inline]
-    pub fn set_bit(&mut self, i: usize, value: bool) {
-        debug_assert!(i < self.len);
-        if value {
-            self.chunks[i / 64] |= 1u64 << (i % 64);
-        } else {
-            self.chunks[i / 64] &= !(1u64 << (i % 64));
-        }
-    }
-
-    /// Convert to `Vec<bool>` for testing.
-    #[cfg(test)]
-    pub fn to_vec(&self) -> Vec<bool> {
-        (0..self.len).map(|i| self.get_bit(i)).collect()
-    }
-}
-
-impl Default for EqualToResults {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 ///Shows how many `null`s there are in an array
