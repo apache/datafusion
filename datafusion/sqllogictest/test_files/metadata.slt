@@ -48,11 +48,9 @@ NULL bar
 3 baz
 
 query I rowsort
-SELECT (
-  SELECT id FROM table_with_metadata
-  ) UNION (
-  SELECT id FROM table_with_metadata
-  );
+SELECT id FROM table_with_metadata
+UNION
+SELECT id FROM table_with_metadata;
 ----
 1
 3
