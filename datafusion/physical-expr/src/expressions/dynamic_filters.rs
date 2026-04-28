@@ -56,6 +56,7 @@ impl FilterState {
 /// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
 ///
 /// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
+#[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
     /// This is necessary because the dynamic filter may be initialized with a placeholder (e.g. `lit(true)`)
@@ -65,10 +66,6 @@ pub struct DynamicFilterPhysicalExpr {
     /// If any of the children were remapped / modified (e.g. to adjust for projections) we need to keep track of the new children
     /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
-    /// Unique identifier for this dynamic filter.
-    ///
-    /// Derived filters (ex. via `with_new_children`) should inherit the expression id of the source filter.
-    expression_id: u64,
     /// The source of dynamic filters.
     inner: Arc<RwLock<Inner>>,
     /// Broadcasts filter state (updates and completion) to all waiters.
@@ -82,11 +79,17 @@ pub struct DynamicFilterPhysicalExpr {
 
 /// Atomic internal state of a [`DynamicFilterPhysicalExpr`].
 ///
+/// `expression_id` lives here because it identifies the actual filter expression `expr`.
+/// Derived `DynamicFilterPhysicalExpr`s (e.g. via [`PhysicalExpr::with_new_children`]) are
+/// the same logical filter and must report the same `expression_id`.
+///
 /// **Warning:** exposed publicly solely so that proto (de)serialization in
 /// `datafusion-proto` can read and rebuild this state. Do not treat this type
 /// or its layout as a stable API.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Inner {
+    /// A unique identifier for the expression.
+    pub expression_id: u64,
     /// A counter that gets incremented every time the expression is updated so that we can track changes cheaply.
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
     pub generation: u64,
@@ -97,21 +100,20 @@ pub struct Inner {
     pub is_complete: bool,
 }
 
-// TODO: Include expression_id in debug output.
+// TODO: Include expression_id in Debug output.
 //
 // See https://github.com/apache/datafusion/issues/20418. Currently, plan nodes
-// like `HashJoinExec`, `AggregateExec`,  `SortExec` do not serialize their
-// dynamic filter. This causes round trips to fail on the `expression_id`
-// because it is regenerated on deserialization.
-impl std::fmt::Debug for DynamicFilterPhysicalExpr {
+// like `HashJoinExec`, `AggregateExec`, `SortExec` do not serialize their
+// dynamic filter. They auto-create one on decode with a fresh `expression_id`,
+// so a round-trip Debug comparison would diverge purely on the id even when
+// the rest of the state is preserved. Excluding it from Debug keeps those
+// roundtrip equality assertions meaningful until that work lands.
+impl std::fmt::Debug for Inner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DynamicFilterPhysicalExpr")
-            .field("children", &self.children)
-            .field("remapped_children", &self.remapped_children)
-            .field("inner", &self.inner)
-            .field("state_watch", &self.state_watch)
-            .field("data_type", &self.data_type)
-            .field("nullable", &self.nullable)
+        f.debug_struct("Inner")
+            .field("generation", &self.generation)
+            .field("expr", &self.expr)
+            .field("is_complete", &self.is_complete)
             .finish()
     }
 }
@@ -119,6 +121,7 @@ impl std::fmt::Debug for DynamicFilterPhysicalExpr {
 impl Inner {
     fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self {
+            expression_id: random::<u64>(),
             // Start with generation 1 which gives us a different result for [`PhysicalExpr::generation`] than the default 0.
             // This is not currently used anywhere but it seems useful to have this simple distinction.
             generation: 1,
@@ -201,7 +204,6 @@ impl DynamicFilterPhysicalExpr {
         Self {
             children,
             remapped_children: None, // Initially no remapped children
-            expression_id: Self::new_expression_id(),
             inner: Arc::new(RwLock::new(Inner::new(inner))),
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
@@ -272,6 +274,8 @@ impl DynamicFilterPhysicalExpr {
         let mut current = self.inner.write();
         let new_generation = current.generation + 1;
         *current = Inner {
+            // Preserve the expression id across updates.
+            expression_id: current.expression_id,
             generation: new_generation,
             expr: new_expr,
             is_complete: current.is_complete,
@@ -376,11 +380,6 @@ impl DynamicFilterPhysicalExpr {
         write!(f, " ]")
     }
 
-    /// Generate a new expression id for this filter.
-    fn new_expression_id() -> u64 {
-        random::<u64>()
-    }
-
     /// Return the filter's original children (before any remapping).
     ///
     /// **Warning:** intended only for `datafusion-proto` (de)serialization.
@@ -399,13 +398,11 @@ impl DynamicFilterPhysicalExpr {
     }
 
     /// Rebuild a `DynamicFilterPhysicalExpr` from its stored parts. Used by
-    /// proto deserialization to preserve `expression_id` across a roundtrip
-    /// rather than minting a fresh one.
+    /// proto deserialization.
     ///
     /// **Warning:** intended only for `datafusion-proto` (de)serialization.
     /// Not a stable API.
     pub fn from_parts(
-        expression_id: u64,
         children: Vec<Arc<dyn PhysicalExpr>>,
         remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
         inner: Inner,
@@ -424,7 +421,6 @@ impl DynamicFilterPhysicalExpr {
         Self {
             children,
             remapped_children,
-            expression_id,
             inner: Arc::new(RwLock::new(inner)),
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
@@ -437,12 +433,7 @@ impl DynamicFilterPhysicalExpr {
     /// **Warning:** intended only for `datafusion-proto` (de)serialization.
     /// Not a stable API.
     pub fn inner(&self) -> Inner {
-        let guard = self.inner.read();
-        Inner {
-            generation: guard.generation,
-            expr: Arc::clone(&guard.expr),
-            is_complete: guard.is_complete,
-        }
+        self.inner.read().clone()
     }
 }
 
@@ -462,9 +453,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         Ok(Arc::new(Self {
             children: self.children.clone(),
             remapped_children: Some(children),
-            // Note that we ensure the derived expression linked to `self`
-            // via the unique identifier.
-            expression_id: self.expression_id,
+            // Note: expression_id is preserved
             inner: Arc::clone(&self.inner),
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
@@ -547,7 +536,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     }
 
     fn expression_id(&self) -> Option<u64> {
-        Some(self.expression_id)
+        Some(self.inner.read().expression_id)
     }
 }
 
@@ -1006,9 +995,8 @@ mod test {
             .expect("Update should succeed");
         reassigned.mark_complete();
 
-        // Capture the parts and reconstruct.
+        // Capture the parts and reconstruct. `expression_id` rides in `inner`.
         let reconstructed = DynamicFilterPhysicalExpr::from_parts(
-            reassigned.expression_id,
             reassigned.original_children().to_vec(),
             reassigned.remapped_children().map(|r| r.to_vec()),
             reassigned.inner(),
@@ -1072,6 +1060,25 @@ mod test {
         assert_eq!(
             derived_expression_id, source_expression_id,
             "derived filters should carry forward the source expression id",
+        );
+
+        // `update()` rewrites the entire `Inner` struct in place; pin down
+        // that the rewrite preserves `expression_id`.
+        source
+            .update(lit(99) as Arc<dyn PhysicalExpr>)
+            .expect("update should succeed");
+        assert_eq!(
+            source.expression_id().unwrap(),
+            source_expression_id,
+            "update() must not change expression_id",
+        );
+
+        // `mark_complete()` also touches `Inner`; same invariant.
+        source.mark_complete();
+        assert_eq!(
+            source.expression_id().unwrap(),
+            source_expression_id,
+            "mark_complete() must not change expression_id",
         );
     }
 }

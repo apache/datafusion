@@ -550,10 +550,10 @@ pub fn parse_physical_expr_with_converter(
 
             let base_filter: Arc<dyn PhysicalExpr> =
                 Arc::new(DynamicFilterPhysicalExpr::from_parts(
-                    expression_id,
                     children,
                     remapped_children,
                     DynamicFilterInner {
+                        expression_id,
                         generation: dynamic_filter.generation,
                         expr: inner_expr,
                         is_complete: dynamic_filter.is_complete,
