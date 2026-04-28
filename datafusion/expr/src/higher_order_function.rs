@@ -218,11 +218,21 @@ pub struct LambdaArgument {
     /// For example, for `array_transform([2], v -> -v)`,
     /// this will be the physical expression of `-v`
     body: Arc<dyn PhysicalExpr>,
+    /// Cached schema built from `params`. Reused across every `evaluate` call
+    /// (and across every nested-list iteration when the lambda is called once
+    /// per outer sublist), avoiding the per-call `Schema::new` build that
+    /// includes constructing the internal name -> index map.
+    schema: Arc<Schema>,
 }
 
 impl LambdaArgument {
     pub fn new(params: Vec<FieldRef>, body: Arc<dyn PhysicalExpr>) -> Self {
-        Self { params, body }
+        let schema = Arc::new(Schema::new(params.clone()));
+        Self {
+            params,
+            body,
+            schema,
+        }
     }
 
     /// Evaluate this lambda
@@ -238,9 +248,7 @@ impl LambdaArgument {
             .map(|arg| arg())
             .collect::<Result<_>>()?;
 
-        let schema = Arc::new(Schema::new(self.params.clone()));
-
-        let batch = RecordBatch::try_new(schema, columns)?;
+        let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
 
         self.body.evaluate(&batch)
     }
