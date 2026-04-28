@@ -78,6 +78,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-macros = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
