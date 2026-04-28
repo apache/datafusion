@@ -18,12 +18,13 @@
 //! [`HigherOrderUDF`] definitions for array_any_match function.
 
 use arrow::{
-    array::{Array, AsArray, BooleanArray, new_null_array},
+    array::{Array, AsArray, BooleanArray, BooleanBuilder, new_null_array},
+    buffer::NullBuffer,
     datatypes::{ArrowNativeType, DataType, Field, FieldRef},
 };
 use datafusion_common::{
-    Result, exec_err, plan_err,
-    utils::{list_values, take_function_args},
+    Result, exec_datafusion_err, exec_err, plan_err,
+    utils::{adjust_offsets_for_slice, list_values, take_function_args},
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
@@ -202,25 +203,26 @@ impl HigherOrderUDF for ArrayAnyMatch {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution(format!(
+                exec_datafusion_err!(
                     "{} predicate must return boolean array",
                     self.name()
-                ))
+                )
             })?;
 
-        let mut results = Vec::with_capacity(list_array.len());
+        let mut values = BooleanBuilder::with_capacity(list_array.len());
 
+        // Maps predicate results (flat over all elements) back to one Boolean per row.
+        // Uses adjusted offsets so sliced lists index correctly into the predicate array.
         macro_rules! process_list {
             ($list_typed:expr) => {{
-                let offsets = $list_typed.offsets();
+                let offsets = adjust_offsets_for_slice($list_typed);
                 for i in 0..$list_typed.len() {
-                    if $list_typed.is_null(i) {
-                        results.push(None);
-                        continue;
-                    }
                     let start = offsets[i].as_usize();
                     let end = offsets[i + 1].as_usize();
-                    results.push(any_match_for_range(predicate_bool, start, end));
+                    // any_match_for_range returns None when nulls poison the result;
+                    // null rows produce an empty range and return Some(false), but their
+                    // null bit is preserved by attaching the original null bitmap below.
+                    values.append_option(any_match_for_range(predicate_bool, start, end));
                 }
             }};
         }
@@ -235,7 +237,13 @@ impl HigherOrderUDF for ArrayAnyMatch {
             other => return exec_err!("expected list, got {other}"),
         }
 
-        Ok(ColumnarValue::Array(Arc::new(BooleanArray::from(results))))
+        let (boolean_buffer, predicate_nulls) = values.finish().into_parts();
+        // Merge: a row is null if the input list row was null or the predicate returned null.
+        let nulls = NullBuffer::union(list_array.nulls(), predicate_nulls.as_ref());
+        Ok(ColumnarValue::Array(Arc::new(BooleanArray::new(
+            boolean_buffer,
+            nulls,
+        ))))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -249,7 +257,7 @@ mod tests {
 
     use arrow::{
         array::{ArrayRef, BooleanArray, Int32Array, ListArray, RecordBatch},
-        buffer::OffsetBuffer,
+        buffer::{NullBuffer, OffsetBuffer},
         datatypes::{DataType, Field},
     };
     use datafusion_common::{DFSchema, Result};
@@ -261,7 +269,7 @@ mod tests {
     };
     use datafusion_physical_expr::create_physical_expr;
 
-    use crate::any_match::array_any_match_higher_order_function;
+    use crate::array_any_match::array_any_match_higher_order_function;
 
     fn run_any_match(
         list: impl arrow::array::Array + Clone + 'static,
@@ -302,11 +310,19 @@ mod tests {
     }
 
     fn make_list(values: Vec<i32>, offsets: OffsetBuffer<i32>) -> ListArray {
+        make_list_with_nulls(values, offsets, None)
+    }
+
+    fn make_list_with_nulls(
+        values: Vec<i32>,
+        offsets: OffsetBuffer<i32>,
+        nulls: Option<NullBuffer>,
+    ) -> ListArray {
         ListArray::new(
             Arc::new(Field::new_list_field(DataType::Int32, true)),
             offsets,
             Arc::new(Int32Array::from(values)),
-            None,
+            nulls,
         )
     }
 
@@ -350,6 +366,42 @@ mod tests {
         assert_eq!(
             result.as_any().downcast_ref::<BooleanArray>().unwrap(),
             &BooleanArray::from(vec![Some(true), Some(false)])
+        );
+        Ok(())
+    }
+
+    // Predicate must not be evaluated on elements belonging to null rows.
+    // The 10 in the null row would satisfy x > 5, but the row result must be None.
+    #[test]
+    fn test_any_match_should_not_evaluate_predicate_on_values_underlying_null()
+    -> Result<()> {
+        let list = make_list_with_nulls(
+            vec![1, 2, 10, 1, 2],
+            OffsetBuffer::from_lengths(vec![3, 2]),
+            Some(NullBuffer::from(vec![false, true])),
+        );
+        let result = run_any_match(list)?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![None, Some(false)])
+        );
+        Ok(())
+    }
+
+    // Predicate must not be evaluated on elements before the slice offset.
+    // The 10 before the slice would satisfy x > 5, but it is unreachable.
+    #[test]
+    fn test_any_match_on_sliced_list_should_not_evaluate_on_unreachable_values()
+    -> Result<()> {
+        let list = make_list(
+            vec![10, 1, 2, 1, 2],
+            OffsetBuffer::from_lengths(vec![1, 2, 2]),
+        )
+        .slice(1, 2);
+        let result = run_any_match(list)?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(false), Some(false)])
         );
         Ok(())
     }
