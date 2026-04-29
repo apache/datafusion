@@ -17,11 +17,15 @@
 
 use std::sync::Arc;
 
-use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
+use super::LogicalExtensionCodec;
+use crate::protobuf::{
+    CsvOptions as CsvOptionsProto, CsvQuoteStyle as CsvQuoteStyleProto,
+    JsonOptions as JsonOptionsProto,
+};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     TableReference, exec_datafusion_err, exec_err, not_impl_err,
-    parsers::CompressionTypeVariant,
+    parsers::{CompressionTypeVariant, CsvQuoteStyle},
 };
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
@@ -29,8 +33,6 @@ use datafusion_datasource_csv::file_format::CsvFormatFactory;
 use datafusion_datasource_json::file_format::JsonFormatFactory;
 use datafusion_execution::TaskContext;
 use prost::Message;
-
-use super::LogicalExtensionCodec;
 
 #[derive(Debug)]
 pub struct CsvLogicalExtensionCodec;
@@ -63,6 +65,13 @@ impl CsvOptionsProto {
                     .map_or(vec![], |v| vec![v as u8]),
                 truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
                 compression_level: options.compression_level,
+                quote_style: options.quote_style as i32,
+                ignore_leading_whitespace: options
+                    .ignore_leading_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
+                ignore_trailing_whitespace: options
+                    .ignore_trailing_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
             }
         } else {
             CsvOptionsProto::default()
@@ -154,6 +163,23 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 Some(proto.truncated_rows[0] != 0)
             },
             compression_level: proto.compression_level,
+            quote_style: match CsvQuoteStyleProto::try_from(proto.quote_style) {
+                Ok(CsvQuoteStyleProto::Always) => CsvQuoteStyle::Always,
+                Ok(CsvQuoteStyleProto::NonNumeric) => CsvQuoteStyle::NonNumeric,
+                Ok(CsvQuoteStyleProto::Never) => CsvQuoteStyle::Never,
+                Ok(CsvQuoteStyleProto::Necessary) => CsvQuoteStyle::Necessary,
+                _ => CsvQuoteStyle::Necessary,
+            },
+            ignore_leading_whitespace: if proto.ignore_leading_whitespace.is_empty() {
+                None
+            } else {
+                Some(proto.ignore_leading_whitespace[0] != 0)
+            },
+            ignore_trailing_whitespace: if proto.ignore_trailing_whitespace.is_empty() {
+                None
+            } else {
+                Some(proto.ignore_trailing_whitespace[0] != 0)
+            },
         }
     }
 }

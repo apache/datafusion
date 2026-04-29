@@ -74,6 +74,9 @@ use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::scalar_subquery::{
+    ScalarSubqueryExec, ScalarSubqueryLink,
+};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
@@ -102,6 +105,7 @@ use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
     ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
     WindowFrame, WindowFrameBound, WindowUDF,
+    execution_props::{ScalarSubqueryResults, SubqueryIndex},
 };
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -109,15 +113,15 @@ use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::min_max::max_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
+use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
-    DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
     PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf;
@@ -2556,9 +2560,8 @@ fn custom_proto_converter_intercepts() -> Result<()> {
     impl PhysicalProtoConverterExtension for CustomConverterInterceptor {
         fn proto_to_execution_plan(
             &self,
-            ctx: &TaskContext,
-            codec: &dyn PhysicalExtensionCodec,
             proto: &protobuf::PhysicalPlanNode,
+            ctx: &PhysicalPlanDecodeContext<'_>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             {
                 let mut counter = self
@@ -2567,7 +2570,7 @@ fn custom_proto_converter_intercepts() -> Result<()> {
                     .map_err(|err| exec_datafusion_err!("{err}"))?;
                 *counter += 1;
             }
-            proto.try_into_physical_plan_with_converter(ctx, codec, self)
+            self.default_proto_to_execution_plan(proto, ctx)
         }
 
         fn execution_plan_to_proto(
@@ -2595,9 +2598,8 @@ fn custom_proto_converter_intercepts() -> Result<()> {
         fn proto_to_physical_expr(
             &self,
             proto: &PhysicalExprNode,
-            ctx: &TaskContext,
             input_schema: &Schema,
-            codec: &dyn PhysicalExtensionCodec,
+            ctx: &PhysicalPlanDecodeContext<'_>,
         ) -> Result<Arc<dyn PhysicalExpr>>
         where
             Self: Sized,
@@ -2609,7 +2611,7 @@ fn custom_proto_converter_intercepts() -> Result<()> {
                     .map_err(|err| exec_datafusion_err!("{err}"))?;
                 *counter += 1;
             }
-            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
+            self.default_proto_to_physical_expr(proto, input_schema, ctx)
         }
 
         fn physical_expr_to_proto(
@@ -2837,14 +2839,11 @@ fn test_backward_compatibility_no_expr_id() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter {};
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
 
     // Should deserialize without error
-    let result = proto_converter.proto_to_physical_expr(
-        &proto,
-        ctx.task_ctx().as_ref(),
-        &schema,
-        &codec,
-    )?;
+    let result = proto_converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
 
     // Verify the result is correct
     let col = result.downcast_ref::<Column>().expect("Expected Column");
@@ -2964,17 +2963,14 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DeduplicatingProtoConverter {};
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
 
     // Serialize the expression
     let proto = proto_converter.physical_expr_to_proto(&binary_expr, &codec)?;
 
     // First expression deserialization
-    let expr1 = proto_converter.proto_to_physical_expr(
-        &proto,
-        ctx.task_ctx().as_ref(),
-        &schema,
-        &codec,
-    )?;
+    let expr1 = proto_converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
 
     // Check that deduplication worked within the deserialization
     let binary1 = expr1
@@ -2986,12 +2982,7 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
     );
 
     // Second expression deserialization
-    let expr2 = proto_converter.proto_to_physical_expr(
-        &proto,
-        ctx.task_ctx().as_ref(),
-        &schema,
-        &codec,
-    )?;
+    let expr2 = proto_converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
 
     // Check that the second expression was also deserialized correctly
     let binary2 = expr2
@@ -3165,6 +3156,243 @@ fn roundtrip_lead_with_default_value() -> Result<()> {
         InputOrderMode::Sorted,
         true,
     )?))
+}
+
+/// Verify that ScalarSubqueryExpr nodes in the input plan are connected to the
+/// same shared results container as ScalarSubqueryExec after a proto round-trip.
+#[test]
+fn roundtrip_scalar_subquery_exec() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let results = ScalarSubqueryResults::new(1);
+
+    // Build the input plan: a filter whose predicate references the
+    // scalar subquery result via ScalarSubqueryExpr.
+    let sq_expr = Arc::new(ScalarSubqueryExpr::new(
+        DataType::Int64,
+        true,
+        SubqueryIndex::new(0),
+        results.clone(),
+    ));
+    let predicate = binary(col("a", &schema)?, Operator::Eq, sq_expr, &schema)?;
+    let filter =
+        FilterExec::try_new(predicate, Arc::new(EmptyExec::new(schema.clone())))?;
+
+    // Build a trivial subquery plan.
+    let subquery_plan =
+        Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Int64,
+            true,
+        )]))));
+
+    let exec: Arc<dyn ExecutionPlan> = Arc::new(ScalarSubqueryExec::new(
+        Arc::new(filter),
+        vec![ScalarSubqueryLink {
+            plan: subquery_plan,
+            index: SubqueryIndex::new(0),
+        }],
+        results,
+    ));
+
+    // Perform the round-trip using DeduplicatingProtoConverter, which
+    // creates a DeduplicatingDeserializer that threads scalar subquery
+    // results through expression deserialization.
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DeduplicatingProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&exec),
+        &codec,
+        &converter,
+    )?;
+    let ctx = SessionContext::new();
+    let deserialized = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &converter,
+    )?;
+
+    // Verify the deserialized ScalarSubqueryExec's results container is
+    // shared with the ScalarSubqueryExpr in the input plan.
+    let sq_exec = deserialized
+        .downcast_ref::<ScalarSubqueryExec>()
+        .expect("expected ScalarSubqueryExec");
+    let exec_results = sq_exec.results();
+
+    // Walk the input plan to find the ScalarSubqueryExpr and verify it
+    // points to the same results container.
+    let filter_exec = sq_exec
+        .input()
+        .downcast_ref::<FilterExec>()
+        .expect("expected FilterExec");
+    let binary_expr = filter_exec
+        .predicate()
+        .downcast_ref::<BinaryExpr>()
+        .expect("expected BinaryExpr");
+    let deserialized_sq_expr = binary_expr
+        .right()
+        .downcast_ref::<ScalarSubqueryExpr>()
+        .expect("expected ScalarSubqueryExpr");
+
+    assert!(
+        ScalarSubqueryResults::ptr_eq(exec_results, deserialized_sq_expr.results()),
+        "ScalarSubqueryExpr should share the same results container as ScalarSubqueryExec"
+    );
+    Ok(())
+}
+
+/// Verify that nested ScalarSubqueryExec nodes deserialize with distinct
+/// scoped results containers, and that each ScalarSubqueryExpr is wired to the
+/// container for its own surrounding ScalarSubqueryExec.
+#[test]
+fn roundtrip_nested_scalar_subquery_exec_scopes_results() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let subquery_schema =
+        Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]));
+
+    let inner_results = ScalarSubqueryResults::new(1);
+    let inner_sq_expr = Arc::new(ScalarSubqueryExpr::new(
+        DataType::Int64,
+        true,
+        SubqueryIndex::new(0),
+        inner_results.clone(),
+    ));
+    let inner_predicate =
+        binary(col("a", &schema)?, Operator::Eq, inner_sq_expr, &schema)?;
+    let inner_filter = Arc::new(FilterExec::try_new(
+        inner_predicate,
+        Arc::new(EmptyExec::new(schema.clone())),
+    )?);
+    let inner_exec: Arc<dyn ExecutionPlan> = Arc::new(ScalarSubqueryExec::new(
+        inner_filter,
+        vec![ScalarSubqueryLink {
+            plan: Arc::new(EmptyExec::new(subquery_schema.clone())),
+            index: SubqueryIndex::new(0),
+        }],
+        inner_results,
+    ));
+
+    let outer_results = ScalarSubqueryResults::new(1);
+    let outer_sq_expr = Arc::new(ScalarSubqueryExpr::new(
+        DataType::Int64,
+        true,
+        SubqueryIndex::new(0),
+        outer_results.clone(),
+    ));
+    let outer_predicate =
+        binary(col("a", &schema)?, Operator::Eq, outer_sq_expr, &schema)?;
+    let outer_filter = Arc::new(FilterExec::try_new(outer_predicate, inner_exec)?);
+    let outer_exec: Arc<dyn ExecutionPlan> = Arc::new(ScalarSubqueryExec::new(
+        outer_filter,
+        vec![ScalarSubqueryLink {
+            plan: Arc::new(EmptyExec::new(subquery_schema)),
+            index: SubqueryIndex::new(0),
+        }],
+        outer_results,
+    ));
+
+    let bytes = datafusion_proto::bytes::physical_plan_to_bytes(Arc::clone(&outer_exec))?;
+    let ctx = SessionContext::new();
+    let deserialized = datafusion_proto::bytes::physical_plan_from_bytes(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+    )?;
+
+    let outer_exec = deserialized
+        .downcast_ref::<ScalarSubqueryExec>()
+        .expect("expected outer ScalarSubqueryExec");
+    let outer_results = outer_exec.results();
+    let outer_filter = outer_exec
+        .input()
+        .downcast_ref::<FilterExec>()
+        .expect("expected outer FilterExec");
+    let outer_binary = outer_filter
+        .predicate()
+        .downcast_ref::<BinaryExpr>()
+        .expect("expected outer BinaryExpr");
+    let outer_sq_expr = outer_binary
+        .right()
+        .downcast_ref::<ScalarSubqueryExpr>()
+        .expect("expected outer ScalarSubqueryExpr");
+
+    let inner_exec = outer_filter
+        .input()
+        .downcast_ref::<ScalarSubqueryExec>()
+        .expect("expected inner ScalarSubqueryExec");
+    let inner_results = inner_exec.results();
+    let inner_filter = inner_exec
+        .input()
+        .downcast_ref::<FilterExec>()
+        .expect("expected inner FilterExec");
+    let inner_binary = inner_filter
+        .predicate()
+        .downcast_ref::<BinaryExpr>()
+        .expect("expected inner BinaryExpr");
+    let inner_sq_expr = inner_binary
+        .right()
+        .downcast_ref::<ScalarSubqueryExpr>()
+        .expect("expected inner ScalarSubqueryExpr");
+
+    assert!(
+        ScalarSubqueryResults::ptr_eq(outer_results, outer_sq_expr.results()),
+        "outer ScalarSubqueryExpr should use outer ScalarSubqueryExec results"
+    );
+    assert!(
+        ScalarSubqueryResults::ptr_eq(inner_results, inner_sq_expr.results()),
+        "inner ScalarSubqueryExpr should use inner ScalarSubqueryExec results"
+    );
+    assert!(
+        !ScalarSubqueryResults::ptr_eq(outer_results, inner_results),
+        "nested ScalarSubqueryExec nodes should not share results containers"
+    );
+    assert!(
+        !ScalarSubqueryResults::ptr_eq(outer_results, inner_sq_expr.results()),
+        "inner ScalarSubqueryExpr must not read from outer results"
+    );
+    assert!(
+        !ScalarSubqueryResults::ptr_eq(inner_results, outer_sq_expr.results()),
+        "outer ScalarSubqueryExpr must not read from inner results"
+    );
+
+    Ok(())
+}
+
+/// Verify that the default physical plan bytes round-trip preserves executable
+/// scalar subquery plans.
+#[tokio::test]
+async fn roundtrip_scalar_subquery_exec_with_default_converter_executes() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "SELECT x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y)) AS s \
+               FROM (VALUES (2), (1)) AS t(x) \
+               ORDER BY s";
+
+    let initial_plan = ctx.sql(sql).await?.create_physical_plan().await?;
+    assert!(
+        format!("{initial_plan:?}").contains("ScalarSubqueryExec"),
+        "expected ScalarSubqueryExec in plan:\n{initial_plan:?}"
+    );
+
+    let bytes =
+        datafusion_proto::bytes::physical_plan_to_bytes(Arc::clone(&initial_plan))?;
+    let roundtripped = datafusion_proto::bytes::physical_plan_from_bytes(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+    )?;
+    assert!(
+        format!("{roundtripped:?}").contains("ScalarSubqueryExec"),
+        "expected ScalarSubqueryExec after roundtrip:\n{roundtripped:?}"
+    );
+
+    let batches = datafusion::physical_plan::common::collect(
+        roundtripped.execute(0, ctx.task_ctx())?,
+    )
+    .await?;
+    datafusion::assert_batches_eq!(
+        &["+----+", "| s  |", "+----+", "| 21 |", "| 22 |", "+----+",],
+        &batches
+    );
+
+    Ok(())
 }
 
 /// Test that a chain of the same operator (a AND b AND c) is linearized

@@ -68,9 +68,9 @@ select unnest(struct(1,2,3)) as ignored_alias;
 query TTT
 describe select unnest(struct(1,2,3)) as ignored_alias;
 ----
-__unnest_placeholder(struct(Int64(1),Int64(2),Int64(3))).c0 Int64 YES
-__unnest_placeholder(struct(Int64(1),Int64(2),Int64(3))).c1 Int64 YES
-__unnest_placeholder(struct(Int64(1),Int64(2),Int64(3))).c2 Int64 YES
+struct(Int64(1),Int64(2),Int64(3)).c0 Int64 YES
+struct(Int64(1),Int64(2),Int64(3)).c1 Int64 YES
+struct(Int64(1),Int64(2),Int64(3)).c2 Int64 YES
 
 ## Basic unnest list expression in from clause
 query I
@@ -608,18 +608,20 @@ query TT
 explain select unnest(unnest(column3)), column3 from recursive_unnest_table;
 ----
 logical_plan
-01)Unnest: lists[] structs[__unnest_placeholder(UNNEST(recursive_unnest_table.column3))]
-02)--Projection: __unnest_placeholder(recursive_unnest_table.column3,depth=1) AS UNNEST(recursive_unnest_table.column3) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), recursive_unnest_table.column3
-03)----Unnest: lists[__unnest_placeholder(recursive_unnest_table.column3)|depth=1] structs[]
-04)------Projection: recursive_unnest_table.column3 AS __unnest_placeholder(recursive_unnest_table.column3), recursive_unnest_table.column3
-05)--------TableScan: recursive_unnest_table projection=[column3]
+01)Projection: __unnest_placeholder(UNNEST(recursive_unnest_table.column3)).c0 AS UNNEST(recursive_unnest_table.column3).c0, __unnest_placeholder(UNNEST(recursive_unnest_table.column3)).c1 AS UNNEST(recursive_unnest_table.column3).c1, recursive_unnest_table.column3
+02)--Unnest: lists[] structs[__unnest_placeholder(UNNEST(recursive_unnest_table.column3))]
+03)----Projection: __unnest_placeholder(recursive_unnest_table.column3,depth=1) AS UNNEST(recursive_unnest_table.column3) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), recursive_unnest_table.column3
+04)------Unnest: lists[__unnest_placeholder(recursive_unnest_table.column3)|depth=1] structs[]
+05)--------Projection: recursive_unnest_table.column3 AS __unnest_placeholder(recursive_unnest_table.column3), recursive_unnest_table.column3
+06)----------TableScan: recursive_unnest_table projection=[column3]
 physical_plan
-01)UnnestExec
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----ProjectionExec: expr=[__unnest_placeholder(recursive_unnest_table.column3,depth=1)@0 as __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), column3@1 as column3]
-04)------UnnestExec
-05)--------ProjectionExec: expr=[column3@0 as __unnest_placeholder(recursive_unnest_table.column3), column3@0 as column3]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[__unnest_placeholder(UNNEST(recursive_unnest_table.column3)).c0@0 as UNNEST(recursive_unnest_table.column3).c0, __unnest_placeholder(UNNEST(recursive_unnest_table.column3)).c1@1 as UNNEST(recursive_unnest_table.column3).c1, column3@2 as column3]
+02)--UnnestExec
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------ProjectionExec: expr=[__unnest_placeholder(recursive_unnest_table.column3,depth=1)@0 as __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), column3@1 as column3]
+05)--------UnnestExec
+06)----------ProjectionExec: expr=[column3@0 as __unnest_placeholder(recursive_unnest_table.column3), column3@0 as column3]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 ## unnest->field_access->unnest->unnest
 query I?
@@ -824,9 +826,9 @@ d e {c0: f}
 query TTT
 describe select unnest(column1) c1 from nested_unnest_table;
 ----
-__unnest_placeholder(nested_unnest_table.column1).c0 Utf8 YES
-__unnest_placeholder(nested_unnest_table.column1).c1 Utf8 YES
-__unnest_placeholder(nested_unnest_table.column1).c2 Struct("c0": Utf8) YES
+nested_unnest_table.column1.c0 Utf8 YES
+nested_unnest_table.column1.c1 Utf8 YES
+nested_unnest_table.column1.c2 Struct("c0": Utf8) YES
 
 query II??I??
 select unnest(column5), * from unnest_table;
@@ -1098,15 +1100,17 @@ EXPLAIN WITH unnested AS (
 ) SELECT * FROM unnested order by 1;
 ----
 logical_plan
-01)Sort: unnested.__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0 ASC NULLS LAST
+01)Sort: unnested.struct(t.column1,t.column2,t.column3).c0 ASC NULLS LAST
 02)--SubqueryAlias: unnested
-03)----Unnest: lists[] structs[__unnest_placeholder(struct(t.column1,t.column2,t.column3))]
-04)------Projection: struct(t.column1, t.column2, t.column3) AS __unnest_placeholder(struct(t.column1,t.column2,t.column3))
-05)--------TableScan: t projection=[column1, column2, column3]
+03)----Projection: __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0 AS struct(t.column1,t.column2,t.column3).c0, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c1 AS struct(t.column1,t.column2,t.column3).c1, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c2 AS struct(t.column1,t.column2,t.column3).c2
+04)------Unnest: lists[] structs[__unnest_placeholder(struct(t.column1,t.column2,t.column3))]
+05)--------Projection: struct(t.column1, t.column2, t.column3) AS __unnest_placeholder(struct(t.column1,t.column2,t.column3))
+06)----------TableScan: t projection=[column1, column2, column3]
 physical_plan
-01)SortExec: expr=[__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--UnnestExec
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_tuples.parquet]]}, projection=[struct(column1@0, column2@1, column3@2) as __unnest_placeholder(struct(t.column1,t.column2,t.column3))], file_type=parquet
+01)SortExec: expr=[struct(t.column1,t.column2,t.column3).c0@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0@0 as struct(t.column1,t.column2,t.column3).c0, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c1@1 as struct(t.column1,t.column2,t.column3).c1, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c2@2 as struct(t.column1,t.column2,t.column3).c2]
+03)----UnnestExec
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_tuples.parquet]]}, projection=[struct(column1@0, column2@1, column3@2) as __unnest_placeholder(struct(t.column1,t.column2,t.column3))], file_type=parquet
 
 # cleanup
 statement ok
@@ -1152,12 +1156,14 @@ EXPLAIN SELECT UNNEST(column1), column2 FROM t ORDER BY column2;
 ----
 logical_plan
 01)Sort: t.column2 ASC NULLS LAST
-02)--Unnest: lists[] structs[__unnest_placeholder(t.column1)]
-03)----Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2
-04)------TableScan: t projection=[column1, column2]
+02)--Projection: __unnest_placeholder(t.column1).s1 AS t.column1.s1, __unnest_placeholder(t.column1).s2 AS t.column1.s2, __unnest_placeholder(t.column1).s3 AS t.column1.s3, t.column2
+03)----Unnest: lists[] structs[__unnest_placeholder(t.column1)]
+04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2
+05)--------TableScan: t projection=[column1, column2]
 physical_plan
-01)UnnestExec
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_struct.parquet]]}, projection=[column1@0 as __unnest_placeholder(t.column1), column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
+01)ProjectionExec: expr=[__unnest_placeholder(t.column1).s1@0 as t.column1.s1, __unnest_placeholder(t.column1).s2@1 as t.column1.s2, __unnest_placeholder(t.column1).s3@2 as t.column1.s3, column2@3 as column2]
+02)--UnnestExec
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_struct.parquet]]}, projection=[column1@0 as __unnest_placeholder(t.column1), column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
 
 # cleanup
 statement ok
@@ -1220,12 +1226,12 @@ EXPLAIN SELECT UNNEST(UNNEST(column1)), UNNEST(column2), UNNEST(column3), column
 ----
 logical_plan
 01)Sort: t.column4 ASC NULLS LAST
-02)--Projection: __unnest_placeholder(t.column1,depth=2) AS UNNEST(UNNEST(t.column1)), __unnest_placeholder(t.column2,depth=1) AS UNNEST(t.column2), __unnest_placeholder(t.column3).s1, __unnest_placeholder(t.column3).s2, __unnest_placeholder(t.column3).s3, t.column4
+02)--Projection: __unnest_placeholder(t.column1,depth=2) AS UNNEST(UNNEST(t.column1)), __unnest_placeholder(t.column2,depth=1) AS UNNEST(t.column2), __unnest_placeholder(t.column3).s1 AS t.column3.s1, __unnest_placeholder(t.column3).s2 AS t.column3.s2, __unnest_placeholder(t.column3).s3 AS t.column3.s3, t.column4
 03)----Unnest: lists[__unnest_placeholder(t.column1)|depth=2, __unnest_placeholder(t.column2)|depth=1] structs[__unnest_placeholder(t.column3)]
 04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2 AS __unnest_placeholder(t.column2), t.column3 AS __unnest_placeholder(t.column3), t.column4
 05)--------TableScan: t projection=[column1, column2, column3, column4]
 physical_plan
-01)ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=2)@0 as UNNEST(UNNEST(t.column1)), __unnest_placeholder(t.column2,depth=1)@1 as UNNEST(t.column2), __unnest_placeholder(t.column3).s1@2 as __unnest_placeholder(t.column3).s1, __unnest_placeholder(t.column3).s2@3 as __unnest_placeholder(t.column3).s2, __unnest_placeholder(t.column3).s3@4 as __unnest_placeholder(t.column3).s3, column4@5 as column4]
+01)ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=2)@0 as UNNEST(UNNEST(t.column1)), __unnest_placeholder(t.column2,depth=1)@1 as UNNEST(t.column2), __unnest_placeholder(t.column3).s1@2 as t.column3.s1, __unnest_placeholder(t.column3).s2@3 as t.column3.s2, __unnest_placeholder(t.column3).s3@4 as t.column3.s3, column4@5 as column4]
 02)--UnnestExec
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_struct_arrays.parquet]]}, projection=[column1@0 as __unnest_placeholder(t.column1), column2@1 as __unnest_placeholder(t.column2), column3@2 as __unnest_placeholder(t.column3), column4], output_ordering=[column4@3 ASC NULLS LAST], file_type=parquet
 

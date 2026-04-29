@@ -17,13 +17,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, GenericStringArray, GenericStringBuilder, OffsetSizeTrait,
-    StringViewBuilder,
-};
+use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::datatypes::DataType;
 
+use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
@@ -157,21 +155,35 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         return Ok(initcap_ascii_array(string_array));
     }
 
-    let mut builder = GenericStringBuilder::<T>::with_capacity(
-        string_array.len(),
+    let len = string_array.len();
+    let mut builder = GenericStringArrayBuilder::<T>::with_capacity(
+        len,
         string_array.value_data().len(),
     );
 
     let mut container = String::new();
-    string_array.iter().for_each(|str| match str {
-        Some(s) => {
+    let nulls = string_array.nulls().cloned();
+    if let Some(ref n) = nulls {
+        for i in 0..len {
+            if n.is_null(i) {
+                builder.append_placeholder();
+            } else {
+                // SAFETY: not null per check above.
+                let s = unsafe { string_array.value_unchecked(i) };
+                initcap_string(s, &mut container);
+                builder.append_value(&container);
+            }
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_array.value_unchecked(i) };
             initcap_string(s, &mut container);
             builder.append_value(&container);
         }
-        None => builder.append_null(),
-    });
+    }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
 /// Fast path for `Utf8` or `LargeUtf8` arrays that are ASCII-only. We can use a
@@ -232,18 +244,32 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
 
 fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_view_array = as_string_view_array(&args[0])?;
-    let mut builder = StringViewBuilder::with_capacity(string_view_array.len());
+    let len = string_view_array.len();
+    let mut builder = StringViewArrayBuilder::with_capacity(len);
     let mut container = String::new();
 
-    string_view_array.iter().for_each(|str| match str {
-        Some(s) => {
+    let nulls = string_view_array.nulls().cloned();
+    if let Some(ref n) = nulls {
+        for i in 0..len {
+            if n.is_null(i) {
+                builder.append_placeholder();
+            } else {
+                // SAFETY: not null per check above.
+                let s = unsafe { string_view_array.value_unchecked(i) };
+                initcap_string(s, &mut container);
+                builder.append_value(&container);
+            }
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_view_array.value_unchecked(i) };
             initcap_string(s, &mut container);
             builder.append_value(&container);
         }
-        None => builder.append_null(),
-    });
+    }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
 fn initcap_string(input: &str, container: &mut String) {

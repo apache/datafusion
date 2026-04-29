@@ -30,6 +30,7 @@ use std::{
     borrow::Cow,
     fmt::{self, Debug, Display},
     sync::Arc,
+    vec::IntoIter,
 };
 
 // public exports
@@ -432,6 +433,38 @@ impl Display for MetricsSet {
     }
 }
 
+impl IntoIterator for MetricsSet {
+    type Item = Arc<Metric>;
+    type IntoIter = IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.metrics.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a MetricsSet {
+    type Item = &'a Arc<Metric>;
+    type IntoIter = std::slice::Iter<'a, Arc<Metric>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.metrics.iter()
+    }
+}
+
+impl Extend<Arc<Metric>> for MetricsSet {
+    fn extend<I: IntoIterator<Item = Arc<Metric>>>(&mut self, iter: I) {
+        self.metrics.extend(iter);
+    }
+}
+
+impl FromIterator<Arc<Metric>> for MetricsSet {
+    fn from_iter<T: IntoIterator<Item = Arc<Metric>>>(iter: T) -> Self {
+        Self {
+            metrics: iter.into_iter().collect(),
+        }
+    }
+}
+
 /// A set of [`Metric`]s for an individual operator.
 ///
 /// This structure is intended as a convenience for execution plan
@@ -462,6 +495,14 @@ impl ExecutionPlanMetricsSet {
     pub fn clone_inner(&self) -> MetricsSet {
         let guard = self.inner.lock();
         (*guard).clone()
+    }
+}
+
+impl From<MetricsSet> for ExecutionPlanMetricsSet {
+    fn from(metrics: MetricsSet) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(metrics)),
+        }
     }
 }
 
@@ -750,6 +791,52 @@ mod tests {
                 panic!("Not a timestamp");
             }
         };
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut metrics = MetricsSet::new();
+        let m1 = Arc::new(Metric::new(MetricValue::OutputRows(Count::new()), None));
+        let m2 = Arc::new(Metric::new(MetricValue::SpillCount(Count::new()), None));
+
+        metrics.extend([Arc::clone(&m1), Arc::clone(&m2)]);
+        assert_eq!(metrics.iter().count(), 2);
+
+        let m3 = Arc::new(Metric::new(MetricValue::SpilledBytes(Count::new()), None));
+        metrics.extend(std::iter::once(Arc::clone(&m3)));
+        assert_eq!(metrics.iter().count(), 3);
+    }
+
+    #[test]
+    fn test_collect() {
+        let m1 = Arc::new(Metric::new(MetricValue::OutputRows(Count::new()), None));
+        let m2 = Arc::new(Metric::new(MetricValue::SpillCount(Count::new()), None));
+
+        let metrics: MetricsSet =
+            vec![Arc::clone(&m1), Arc::clone(&m2)].into_iter().collect();
+        assert_eq!(metrics.iter().count(), 2);
+
+        let empty: MetricsSet = std::iter::empty().collect();
+        assert_eq!(empty.iter().count(), 0);
+    }
+
+    #[test]
+    fn test_into_iterator_by_ref() {
+        let mut metrics = MetricsSet::new();
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::OutputRows(Count::new()),
+            None,
+        )));
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::SpillCount(Count::new()),
+            None,
+        )));
+
+        let mut count = 0;
+        for _m in &metrics {
+            count += 1;
+        }
+        assert_eq!(count, 2);
     }
 
     #[test]

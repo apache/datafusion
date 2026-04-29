@@ -17,13 +17,12 @@
 
 use std::sync::Arc;
 
-use abi_stable::{export_root_module, prefix_type::PrefixTypeTrait};
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::{common::record_batch, datasource::MemTable};
 use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use datafusion_ffi::table_provider::FFI_TableProvider;
-use ffi_module_interface::{TableProviderModule, TableProviderModuleRef};
+use ffi_module_interface::TableProviderModule;
 
 fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
     let end_value = start_value + num_values as i32;
@@ -56,11 +55,10 @@ extern "C" fn construct_simple_table_provider(
     FFI_TableProvider::new_with_ffi_codec(Arc::new(table_provider), true, None, codec)
 }
 
-#[export_root_module]
+#[unsafe(no_mangle)]
 /// This defines the entry point for using the module.
-pub fn get_simple_memory_table() -> TableProviderModuleRef {
+pub extern "C" fn ffi_example_get_module() -> TableProviderModule {
     TableProviderModule {
         create_table: construct_simple_table_provider,
     }
-    .leak_into_prefix()
 }

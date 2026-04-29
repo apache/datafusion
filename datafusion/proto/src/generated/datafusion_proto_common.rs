@@ -619,6 +619,15 @@ pub struct CsvWriterOptions {
     /// Optional flag whether to double quotes, instead of escaping. Defaults to `true`
     #[prost(bool, tag = "11")]
     pub double_quote: bool,
+    /// Quote style for CSV writing
+    #[prost(enumeration = "CsvQuoteStyle", tag = "12")]
+    pub quote_style: i32,
+    /// Whether to ignore leading whitespace in string values
+    #[prost(bool, tag = "13")]
+    pub ignore_leading_whitespace: bool,
+    /// Whether to ignore trailing whitespace in string values
+    #[prost(bool, tag = "14")]
+    pub ignore_trailing_whitespace: bool,
 }
 /// Options controlling CSV format
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -680,6 +689,15 @@ pub struct CsvOptions {
     /// Optional compression level
     #[prost(uint32, optional, tag = "19")]
     pub compression_level: ::core::option::Option<u32>,
+    /// Quote style for CSV writing
+    #[prost(enumeration = "CsvQuoteStyle", tag = "20")]
+    pub quote_style: i32,
+    /// Whether to ignore leading whitespace in string values
+    #[prost(bytes = "vec", tag = "21")]
+    pub ignore_leading_whitespace: ::prost::alloc::vec::Vec<u8>,
+    /// Whether to ignore trailing whitespace in string values
+    #[prost(bytes = "vec", tag = "22")]
+    pub ignore_trailing_whitespace: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1201,6 +1219,38 @@ impl CompressionTypeVariant {
             "XZ" => Some(Self::Xz),
             "ZSTD" => Some(Self::Zstd),
             "UNCOMPRESSED" => Some(Self::Uncompressed),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CsvQuoteStyle {
+    Necessary = 0,
+    Always = 1,
+    NonNumeric = 2,
+    Never = 3,
+}
+impl CsvQuoteStyle {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Necessary => "NECESSARY",
+            Self::Always => "ALWAYS",
+            Self::NonNumeric => "NON_NUMERIC",
+            Self::Never => "NEVER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "NECESSARY" => Some(Self::Necessary),
+            "ALWAYS" => Some(Self::Always),
+            "NON_NUMERIC" => Some(Self::NonNumeric),
+            "NEVER" => Some(Self::Never),
             _ => None,
         }
     }
