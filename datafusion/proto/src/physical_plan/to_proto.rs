@@ -252,6 +252,29 @@ pub fn serialize_physical_expr(
     )
 }
 
+/// Concrete [`PhysicalExprEncode`] driver used to back
+/// [`PhysicalExprEncodeCtx`] when expressions invoke `PhysicalExpr::try_to_proto`.
+///
+/// Wraps the existing extension codec + converter pair so individual
+/// expressions can recurse into children without depending on
+/// `datafusion-proto` directly.
+///
+/// [`PhysicalExprEncode`]: datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode
+/// [`PhysicalExprEncodeCtx`]: datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx
+struct ConverterEncoder<'a> {
+    codec: &'a dyn PhysicalExtensionCodec,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
+
+impl datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode
+    for ConverterEncoder<'_>
+{
+    fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<protobuf::PhysicalExprNode> {
+        self.proto_converter
+            .physical_expr_to_proto(expr, self.codec)
+    }
+}
+
 /// Serialize a `PhysicalExpr` to default protobuf representation.
 ///
 /// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
@@ -265,6 +288,21 @@ pub fn serialize_physical_expr_with_converter(
 ) -> Result<protobuf::PhysicalExprNode> {
     let expr = value.as_ref();
     let expr_id = value.expression_id();
+
+    // Give the expression a chance to serialize itself first. Returning
+    // `Ok(Some(node))` lets expressions with private state (e.g.
+    // `DynamicFilterPhysicalExpr`) avoid exposing pub-for-proto accessors.
+    // `Ok(None)` falls through to the downcast chain below — that's the
+    // default for built-in expressions which haven't been migrated yet.
+    let encoder = ConverterEncoder {
+        codec,
+        proto_converter,
+    };
+    let ctx = datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx::new(&encoder);
+    if let Some(node) = expr.try_to_proto(&ctx)? {
+        return Ok(node);
+    }
+
     // HashTableLookupExpr is used for dynamic filter pushdown in hash joins.
     // It contains an Arc<dyn JoinHashMapType> (the build-side hash table) which
     // cannot be serialized - the hash table is a runtime structure built during

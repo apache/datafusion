@@ -477,6 +477,95 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn expression_id(&self) -> Option<u64> {
         None
     }
+
+    /// Serialize this expression to a [`PhysicalExprNode`] proto message.
+    ///
+    /// Returning `Ok(None)` means "this expression does not know how to
+    /// serialize itself"; the caller (typically `datafusion-proto`) will fall
+    /// back to its existing codec / extension paths. This matches today's
+    /// behavior for expressions that aren't built into `datafusion-proto`.
+    ///
+    /// Returning `Ok(Some(node))` means the expression has serialized itself
+    /// fully; the caller should not try any further fallback path.
+    ///
+    /// Returning `Err(_)` means a real serialization failure (e.g. the
+    /// expression knows it should serialize but a child failed).
+    ///
+    /// The motivating use case is letting expressions with private state
+    /// (e.g. `DynamicFilterPhysicalExpr`'s `RwLock`-protected inner fields)
+    /// reach into their own internals for `try_to_proto`/`try_from_proto`
+    /// without having to expose `pub` accessors to `datafusion-proto`. See
+    /// <https://github.com/apache/datafusion/issues/21835>.
+    ///
+    /// The `try_` prefix matches the fallible `try_from_proto` decode
+    /// constructors (and the `TryFromProto` trait in `datafusion-proto`);
+    /// both sides of the round-trip are fallible and named consistently.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        Ok(None)
+    }
+}
+
+/// Encode-side context for [`PhysicalExpr::try_to_proto`].
+///
+/// Expression authors only ever see [`proto_encode::PhysicalExprEncodeCtx`]:
+/// a concrete struct with stable methods. Internally it dispatches to a
+/// [`proto_encode::PhysicalExprEncode`] implementor that lives in
+/// `datafusion-proto`, which is what lets `physical-expr-common` stay free
+/// of `datafusion-proto` as a dep.
+///
+/// More specialized helpers (e.g. encoding UDFs/UDAFs/UDWFs through the
+/// extension codec) can be added to the context as expressions migrate;
+/// today they're not required because the encoder forwards to the existing
+/// codec via the proto converter.
+#[cfg(feature = "proto")]
+pub mod proto_encode {
+    use std::sync::Arc;
+
+    use datafusion_common::Result;
+    use datafusion_proto_models::protobuf::PhysicalExprNode;
+
+    use super::PhysicalExpr;
+
+    /// Encoder context handed to [`super::PhysicalExpr::try_to_proto`].
+    ///
+    /// Wraps an internal [`PhysicalExprEncode`] trait object so callers see a
+    /// stable concrete type while implementations can evolve in
+    /// `datafusion-proto`.
+    pub struct PhysicalExprEncodeCtx<'a> {
+        encoder: &'a dyn PhysicalExprEncode,
+    }
+
+    impl<'a> PhysicalExprEncodeCtx<'a> {
+        /// Construct a new encode context. Typically called by
+        /// `datafusion-proto`; expression authors receive `&PhysicalExprEncodeCtx`.
+        pub fn new(encoder: &'a dyn PhysicalExprEncode) -> Self {
+            Self { encoder }
+        }
+
+        /// Encode a child expression. Routes through the configured encoder
+        /// so dedup-aware encoding is preserved.
+        pub fn encode_child(
+            &self,
+            expr: &Arc<dyn PhysicalExpr>,
+        ) -> Result<PhysicalExprNode> {
+            self.encoder.encode(expr)
+        }
+    }
+
+    /// Internal dispatch trait. Implementors live in `datafusion-proto` and
+    /// wrap the existing `PhysicalExtensionCodec` +
+    /// `PhysicalProtoConverterExtension` plumbing. Expression authors should
+    /// use [`PhysicalExprEncodeCtx`] instead of calling this directly.
+    pub trait PhysicalExprEncode {
+        /// Encode an expression to a protobuf node.
+        fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode>;
+    }
 }
 
 #[deprecated(

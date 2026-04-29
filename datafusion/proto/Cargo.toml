@@ -64,7 +64,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-table = { workspace = true }
 datafusion-physical-expr = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
+datafusion-physical-expr-common = { workspace = true, features = ["proto"] }
 datafusion-physical-plan = { workspace = true }
 datafusion-proto-common = { workspace = true }
 datafusion-proto-models = { workspace = true }
