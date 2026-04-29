@@ -27,6 +27,9 @@ Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_serie
 # Test parquet-only output_rows_skew metric (WITH ORDER(x) → preserve_order scan)
 # --------------------------------------------
 
+# Parquet supports dynamic work scheduling by default; per-partition data
+# sources might steal work from siblings, making row counts per partition
+# non-deterministic. Forcing `WITH ORDER` disables this behavior.
 statement ok
 set datafusion.explain.analyze_level = dev;
 
