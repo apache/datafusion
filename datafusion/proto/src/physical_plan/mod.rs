@@ -716,8 +716,10 @@ impl protobuf::PhysicalPlanNode {
             })?;
 
         let filter_selectivity = filter.default_filter_selectivity.try_into();
-        // Determine if the projection is full to optimize used memory,
-        // storing `None` in this case.
+        // Preserve the `None` state across proto boundaries. Proto cannot distinguish
+        // between `None` (full projection) and `Some(vec![])` (empty projection) since
+        // both serialize as an empty list. If all columns are included, we reconstruct
+        // `None` to avoid losing this semantic distinction on deserialization.
         let num_fields = input.schema().fields().len();
         let mut is_full_projection = filter.projection.len() == num_fields;
         let mut projection_vec: Vec<usize> = Vec::with_capacity(filter.projection.len());
