@@ -599,11 +599,17 @@ pub fn base_type(data_type: &DataType) -> DataType {
     match data_type {
         DataType::List(field)
         | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
         | DataType::FixedSizeList(field, _) => base_type(field.data_type()),
         _ => data_type.to_owned(),
     }
 }
 
+// TODO: Modify this to also allow specifying how listviews should be treated.
+//       For example if cast to List (default) or maintain as ListView (requires
+//       function to implement support for ListViews)
+//       https://github.com/apache/datafusion/issues/21777
 /// Information about how to coerce lists.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ListCoercion {
@@ -657,6 +663,19 @@ pub fn coerced_type_with_base_type_only(
                 *len,
             )
         }
+        (DataType::ListView(field), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
+
+            DataType::ListView(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
         (DataType::LargeList(field), _) => {
             let field_type = coerced_type_with_base_type_only(
                 field.data_type(),
@@ -665,6 +684,19 @@ pub fn coerced_type_with_base_type_only(
             );
 
             DataType::LargeList(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
+        (DataType::LargeListView(field), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
+
+            DataType::LargeListView(Arc::new(Field::new(
                 field.name(),
                 field_type,
                 field.is_nullable(),
@@ -687,10 +719,28 @@ pub fn coerced_fixed_size_list_to_list(data_type: &DataType) -> DataType {
                 field.is_nullable(),
             )))
         }
+        DataType::ListView(field) => {
+            let field_type = coerced_fixed_size_list_to_list(field.data_type());
+
+            DataType::ListView(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
         DataType::LargeList(field) => {
             let field_type = coerced_fixed_size_list_to_list(field.data_type());
 
             DataType::LargeList(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
+        DataType::LargeListView(field) => {
+            let field_type = coerced_fixed_size_list_to_list(field.data_type());
+
+            DataType::LargeListView(Arc::new(Field::new(
                 field.name(),
                 field_type,
                 field.is_nullable(),
@@ -706,6 +756,8 @@ pub fn list_ndims(data_type: &DataType) -> u64 {
     match data_type {
         DataType::List(field)
         | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
         | DataType::FixedSizeList(field, _) => 1 + list_ndims(field.data_type()),
         _ => 0,
     }
