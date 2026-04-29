@@ -21,7 +21,7 @@ use datafusion::logical_expr::Expr;
 use std::sync::Arc;
 use substrait::proto::expression::FieldReference;
 use substrait::proto::expression::field_reference::ReferenceType::DirectReference;
-use substrait::proto::expression::field_reference::RootType;
+use substrait::proto::expression::field_reference::{LambdaParameterReference, RootType};
 use substrait::proto::expression::reference_segment::ReferenceType::StructField;
 
 pub async fn from_field_reference(
@@ -56,9 +56,9 @@ pub(crate) fn from_substrait_field_reference(
                     Some(RootType::Expression(_)) => not_impl_err!(
                         "Expression root type in field reference is not supported"
                     ),
-                    Some(RootType::LambdaParameterReference(_)) => not_impl_err!(
-                        "Lambda parameter reference in field reference is not yet supported"
-                    ),
+                    Some(RootType::LambdaParameterReference(
+                        LambdaParameterReference { steps_out },
+                    )) => consumer.lambda_variable(*steps_out as usize, field_idx),
                 }
             }
             _ => not_impl_err!(

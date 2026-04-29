@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_literal_expr};
-use datafusion::common::{DFSchemaRef, ScalarValue, not_impl_err};
+use datafusion::common::datatype::FieldExt;
+use datafusion::common::{
+    DFSchemaRef, ScalarValue, internal_datafusion_err, not_impl_err, substrait_err,
+};
 use datafusion::logical_expr::{Between, BinaryExpr, Expr, Like, Operator, expr};
 use substrait::proto::expression::{RexType, ScalarFunction};
 use substrait::proto::function_argument::ArgType;
@@ -35,7 +38,68 @@ pub fn from_higher_order_function(
     fun: &expr::HigherOrderFunction,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    from_function(producer, fun.name(), &fun.args, schema)
+    let mut lambda_parameters = fun.lambda_parameters(schema)?.into_iter();
+
+    let num_lambdas = fun
+        .args
+        .iter()
+        .filter(|arg| matches!(arg, Expr::Lambda(_)))
+        .count();
+
+    if lambda_parameters.len() != num_lambdas {
+        return substrait_err!(
+            "{} returned {} lambdas but {num_lambdas} expected",
+            fun.name(),
+            lambda_parameters.len()
+        );
+    }
+
+    let arguments = fun
+        .args
+        .iter()
+        .map(|arg| {
+            let arg = match arg {
+                Expr::Lambda(l) => {
+                    let lambda_parameters =
+                        lambda_parameters.next().ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "lambda_parameters len should have been checked above"
+                            )
+                        })?;
+
+                    let named_lambda_parameters =
+                        std::iter::zip(&l.params, lambda_parameters)
+                            .map(|(name, parameter)| parameter.renamed(name))
+                            .collect();
+
+                    producer.push_lambda_parameters(named_lambda_parameters)?;
+
+                    let arg = producer.handle_expr(arg, schema)?;
+
+                    producer.pop_lambda_parameters()?;
+
+                    Ok(arg)
+                }
+                _ => producer.handle_expr(arg, schema),
+            }?;
+
+            Ok(FunctionArgument {
+                arg_type: Some(ArgType::Value(arg)),
+            })
+        })
+        .collect::<datafusion::common::Result<_>>()?;
+
+    let function_anchor = producer.register_function(fun.name().to_string());
+    #[expect(deprecated)]
+    Ok(Expression {
+        rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+            function_reference: function_anchor,
+            arguments,
+            output_type: None,
+            options: vec![],
+            args: vec![],
+        })),
+    })
 }
 
 fn from_function(

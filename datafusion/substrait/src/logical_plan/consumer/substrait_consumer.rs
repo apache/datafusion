@@ -23,21 +23,27 @@ use super::{
     from_substrait_rex, from_window_function,
 };
 use crate::extensions::Extensions;
+use crate::logical_plan::consumer::{
+    field_from_substrait_type_without_names, from_lambda,
+};
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::catalog::TableProvider;
+use datafusion::common::datatype::FieldExt;
 use datafusion::common::{
     DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
+use datafusion::logical_expr::expr::LambdaVariable;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
+use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
-use substrait::proto;
 use substrait::proto::expression as substrait_expression;
 use substrait::proto::expression::{
     Enum, FieldReference, IfThen, Literal, MultiOrList, Nested, ScalarFunction,
     SingularOrList, SwitchExpression, WindowFunction,
 };
+use substrait::proto::{self, Type};
 use substrait::proto::{
     AggregateRel, ConsistentPartitionWindowRel, CrossRel, DynamicParameter, ExchangeRel,
     Expression, ExtensionLeafRel, ExtensionMultiRel, ExtensionSingleRel, FetchRel,
@@ -62,17 +68,19 @@ use substrait::proto::{
 /// # use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 /// # use std::sync::Arc;
 /// # use substrait::proto;
-/// # use substrait::proto::{ExtensionLeafRel, FilterRel, ProjectRel};
+/// # use substrait::proto::{ExtensionLeafRel, FilterRel, ProjectRel, Type};
 /// # use datafusion::arrow::datatypes::DataType;
 /// # use datafusion::logical_expr::expr::ScalarFunction;
 /// # use datafusion_substrait::extensions::Extensions;
 /// # use datafusion_substrait::logical_plan::consumer::{
-/// #     from_project_rel, from_substrait_rel, from_substrait_rex, SubstraitConsumer
+/// #     from_project_rel, from_substrait_rel, from_substrait_rex, SubstraitConsumer, DefaultSubstraitLambdaConsumer
 /// # };
 ///
 /// struct CustomSubstraitConsumer {
 ///     extensions: Arc<Extensions>,
 ///     state: Arc<SessionState>,
+///     // You can reuse existing consumer code related to lambdas
+///     lambda_consumer: DefaultSubstraitLambdaConsumer,
 /// }
 ///
 /// #[async_trait]
@@ -94,6 +102,35 @@ use substrait::proto::{
 ///     fn get_function_registry(&self) -> &impl FunctionRegistry {
 ///         self.state.as_ref()
 ///     }
+///
+///     fn with_lambda_parameters(
+///        &self,
+///        lambda_parameters: &[Type],
+///        input_schema: &DFSchema,
+///    ) -> datafusion::common::Result<(Vec<String>, Self)> {
+///        let (names, lambda_consumer) = self.lambda_consumer.with_lambda_parameters(
+///            self,
+///            lambda_parameters,
+///            input_schema,
+///        )?;
+///
+///        Ok((
+///            names,
+///            Self {
+///                extensions: self.extensions.clone(),
+///                state: self.state.clone(),
+///                lambda_consumer,
+///            },
+///        ))
+///    }
+///
+///    fn lambda_variable(
+///        &self,
+///        steps_out: usize,
+///        field_idx: usize,
+///    ) -> datafusion::common::Result<Expr> {
+///        self.lambda_consumer.lambda_variable(steps_out, field_idx)
+///    }
 ///
 ///     // You can reuse existing consumer code to assist in handling advanced extensions
 ///     async fn consume_project(&self, rel: &ProjectRel) -> Result<LogicalPlan> {
@@ -384,6 +421,14 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         ))
     }
 
+    async fn consume_lambda(
+        &self,
+        expr: &proto::expression::Lambda,
+        input_schema: &DFSchema,
+    ) -> datafusion::common::Result<Expr> {
+        from_lambda(self, expr, input_schema).await
+    }
+
     // Outer Schema Stack
     // These methods manage a stack of outer schemas for correlated subquery support.
     // When entering a subquery, the enclosing query's schema is pushed onto the stack.
@@ -481,6 +526,27 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         };
         substrait_err!("Missing handler for user-defined literals {}", type_ref)
     }
+
+    // Lambda related methods
+
+    /// Returns a new instance of this consumer which includes the given `lambda_parameters` and the names they got assigned
+    ///
+    /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaConsumer] and forward this method to it
+    fn with_lambda_parameters(
+        &self,
+        lambda_parameters: &[Type],
+        input_schema: &DFSchema,
+    ) -> datafusion::common::Result<(Vec<String>, Self)>;
+
+    /// Returns an expression corresponding to the lambda variable with the given field_idx within the lambda it originates from,
+    /// at the lambda `step_outs` of the current scope
+    ///
+    /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaConsumer] and forward this method to it
+    fn lambda_variable(
+        &self,
+        steps_out: usize,
+        field_idx: usize,
+    ) -> datafusion::common::Result<Expr>;
 }
 
 /// Default SubstraitConsumer for converting standard Substrait without user-defined extensions.
@@ -490,6 +556,7 @@ pub struct DefaultSubstraitConsumer<'a> {
     pub(super) extensions: &'a Extensions,
     pub(super) state: &'a SessionState,
     outer_schemas: RwLock<Vec<Arc<DFSchema>>>,
+    lambda_consumer: DefaultSubstraitLambdaConsumer,
 }
 
 impl<'a> DefaultSubstraitConsumer<'a> {
@@ -498,6 +565,7 @@ impl<'a> DefaultSubstraitConsumer<'a> {
             extensions,
             state,
             outer_schemas: RwLock::new(Vec::new()),
+            lambda_consumer: DefaultSubstraitLambdaConsumer::new(),
         }
     }
 }
@@ -593,6 +661,124 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
         }
         let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
+    }
+
+    fn with_lambda_parameters(
+        &self,
+        lambda_parameters: &[Type],
+        input_schema: &DFSchema,
+    ) -> datafusion::common::Result<(Vec<String>, Self)> {
+        let (names, lambda_consumer) = self.lambda_consumer.with_lambda_parameters(
+            self,
+            lambda_parameters,
+            input_schema,
+        )?;
+
+        Ok((
+            names,
+            Self {
+                extensions: self.extensions,
+                state: self.state,
+                outer_schemas: RwLock::new(self.outer_schemas.read().unwrap().clone()),
+                lambda_consumer,
+            },
+        ))
+    }
+
+    fn lambda_variable(
+        &self,
+        steps_out: usize,
+        field_idx: usize,
+    ) -> datafusion::common::Result<Expr> {
+        self.lambda_consumer.lambda_variable(steps_out, field_idx)
+    }
+}
+
+/// Default implementation of lambda related methods of the [SubstraitConsumer] trait
+///
+/// Can be embedded into a custom [SubstraitConsumer] to implement them
+pub struct DefaultSubstraitLambdaConsumer {
+    lambdas_parameters: VecDeque<Vec<FieldRef>>,
+    next_lambda_parameter: usize,
+}
+
+impl Default for DefaultSubstraitLambdaConsumer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DefaultSubstraitLambdaConsumer {
+    pub fn new() -> Self {
+        Self {
+            lambdas_parameters: VecDeque::new(),
+            next_lambda_parameter: 0,
+        }
+    }
+
+    pub fn with_lambda_parameters(
+        &self,
+        consumer: &impl SubstraitConsumer,
+        lambda_parameters: &[Type],
+        input_schema: &DFSchema,
+    ) -> datafusion::common::Result<(Vec<String>, Self)> {
+        let mut next_lambda_parameter = self.next_lambda_parameter;
+
+        let lambda_parameters = lambda_parameters
+            .iter()
+            .map(|ty| {
+                loop {
+                    let default_name = format!("p{next_lambda_parameter}");
+
+                    next_lambda_parameter += 1;
+
+                    // avoid conflicts with column names
+                    if !input_schema.has_column_with_unqualified_name(&default_name) {
+                        break Ok(field_from_substrait_type_without_names(consumer, ty)?
+                            .renamed(&default_name));
+                    }
+                }
+            })
+            .collect::<datafusion::common::Result<Vec<_>>>()?;
+
+        let names = lambda_parameters.iter().map(|f| f.name().clone()).collect();
+
+        let mut lambdas_parameters = self.lambdas_parameters.clone();
+
+        lambdas_parameters.push_front(lambda_parameters);
+
+        Ok((
+            names,
+            Self {
+                lambdas_parameters,
+                next_lambda_parameter,
+            },
+        ))
+    }
+
+    pub fn lambda_variable(
+        &self,
+        steps_out: usize,
+        field_idx: usize,
+    ) -> datafusion::common::Result<Expr> {
+        let Some(lambda_parameters) = &self.lambdas_parameters.get(steps_out) else {
+            return substrait_err!(
+                "No lambda at {steps_out} steps out, got only {}",
+                self.lambdas_parameters.len()
+            );
+        };
+
+        let Some(var) = lambda_parameters.get(field_idx) else {
+            return substrait_err!(
+                "No lambda field at index {field_idx}, got only {}",
+                lambda_parameters.len()
+            );
+        };
+
+        Ok(Expr::LambdaVariable(LambdaVariable::new(
+            var.name().clone(),
+            Some(Arc::clone(var)),
+        )))
     }
 }
 

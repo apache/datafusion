@@ -17,8 +17,13 @@
 
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
+use datafusion::execution::FunctionRegistry;
 use datafusion::functions_nested::map::map;
-use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::logical_expr::{
+    ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
+    HigherOrderSignature, HigherOrderUDF, LambdaParametersProgress, LogicalPlanBuilder,
+    ValueOrLambda,
+};
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
@@ -27,7 +32,9 @@ use datafusion_substrait::logical_plan::{
 use std::cmp::Ordering;
 use std::mem::size_of_val;
 
-use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit,
+};
 use datafusion::common::tree_node::Transformed;
 use datafusion::common::{DFSchema, DFSchemaRef, Spans, not_impl_err, plan_err};
 use datafusion::error::Result;
@@ -1888,6 +1895,222 @@ async fn roundtrip_placeholder_typed_utf8() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
+    let mut ctx = create_context().await?;
+
+    ctx.register_higher_order_function(Arc::new(ArrayTransform::new()))
+        .unwrap();
+
+    let data3_fields = vec![
+        Field::new("p1", DataType::Int64, true), // lambda parameters should not conflict with this column
+    ];
+    let data3 = Schema::new(data3_fields);
+    let mut data3_options = CsvReadOptions::new();
+    data3_options.schema = Some(&data3);
+    data3_options.has_header = false;
+    ctx.register_csv("data3", "tests/testdata/empty.csv", data3_options)
+        .await?;
+
+    // simple
+    roundtrip_with_ctx(
+        "SELECT array_transform2([data3.p1], p0 -> p0 * 2) from data3",
+        ctx.clone(),
+    )
+    .await?;
+
+    // dont use the parameter
+    roundtrip_with_ctx(
+        "SELECT array_transform2([data3.p1], p0 -> 3) from data3",
+        ctx.clone(),
+    )
+    .await?;
+
+    // multiple parameters using both
+    roundtrip_with_ctx(
+        "SELECT array_transform2([data3.p1], (p0, p2) -> p0 * p2) from data3",
+        ctx.clone(),
+    )
+    .await?;
+
+    // multiple parameters only last
+    roundtrip_with_ctx(
+        "SELECT array_transform2([data3.p1], (p0, p2) -> 2 * p2) from data3",
+        ctx.clone(),
+    )
+    .await?;
+
+    // multiple parameters use none
+    roundtrip_with_ctx(
+        "SELECT array_transform2([data3.p1], (p0, p2) -> 3) from data3",
+        ctx.clone(),
+    )
+    .await?;
+
+    // nested without variable shadowing
+    roundtrip_with_ctx("SELECT array_transform2([[data3.p1]], p0 -> array_transform2(p0, p2 -> p2 * 2)) from data3", ctx.clone())
+        .await?;
+
+    // there's no support for lambda capturing columns or variables of outer lambdas yet so assert the plans instead of round tripping
+    // also, since substrait doesn't encode lambda parameters names, they got generated, non-conflicting names during consumption
+    // this also requires to assert against the generated plan and check the correct parameter usage instead of round tripping
+
+    // nested with multiple parameters without variable shadowing
+    let plan = generate_plan_from_sql_with_ctx(
+        "SELECT array_transform2([[data3.p1]], (a, ai) -> array_transform2(a, (v, vi) -> ai * v * vi)) from data3",
+        true,
+        true,
+        &ctx,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @"
+    Projection: array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_transform2(p0, (p3, p4) -> p2 * p3 * p4)) AS array_transform2(make_array(make_array(data3.p1)),(a, ai) -> array_transform2(a,(v, vi) -> ai * v * vi))
+      TableScan: data3 projection=[p1]
+    "
+    );
+
+    // nested with variable shadowing.
+    let plan = generate_plan_from_sql_with_ctx(
+        "SELECT array_transform2([[data3.p1]], v -> array_transform2(v, v -> v * 2)) from data3",
+        true,
+        true,
+        &ctx,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @"
+    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_transform2(p0, (p2) -> p2 * Int64(2))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_transform2(v,(v) -> v * Int64(2)))
+      TableScan: data3 projection=[p1]
+    "
+    );
+
+    // nested with variable shadowing with multiple parameters
+    let plan = generate_plan_from_sql_with_ctx(
+        "SELECT array_transform2([[data3.p1]], (v, i) -> array_transform2(v, (v, i) -> v * i)) from data3",
+        true,
+        true,
+        &ctx,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @"
+    Projection: array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_transform2(p0, (p3, p4) -> p3 * p4)) AS array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_transform2(v,(v, i) -> v * i))
+      TableScan: data3 projection=[p1]
+    "
+    );
+
+    // nested with variable shadowing and later reuse of the shadowed var after exiting the shadowing expression
+    let plan = generate_plan_from_sql_with_ctx(
+        "SELECT array_transform2(
+                [[data3.p1]],
+                v -> array_concat(
+                    -- when entering this expression, inner v is pushed into the producer and shadows outer v, but after exiting this,
+                    -- it should be removed and unshadow the outer v, so that it can be used in the next expression
+                    array_transform2(v, v -> v * 2),
+                    array_transform2(v, v -> v * 2)
+                )
+            ) from data3",
+        true,
+        true,
+        &ctx,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @"
+    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p2) -> p2 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
+      TableScan: data3 projection=[p1]
+    "
+    );
+
+    Ok(())
+}
+
+// todo use core array_transform when it supports multiple lambda parameters
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ArrayTransform {
+    signature: HigherOrderSignature,
+}
+
+impl ArrayTransform {
+    pub fn new() -> Self {
+        Self {
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl HigherOrderUDF for ArrayTransform {
+    fn name(&self) -> &str {
+        "array_transform2"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn signature(&self) -> &HigherOrderSignature {
+        &self.signature
+    }
+
+    fn lambda_parameters(
+        &self,
+        _step: usize,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> Result<LambdaParametersProgress> {
+        let [ValueOrLambda::Value(list), ValueOrLambda::Lambda(_)] = fields else {
+            unreachable!()
+        };
+
+        let field = match list.data_type() {
+            DataType::List(field) => field,
+            _ => unreachable!(),
+        };
+
+        Ok(LambdaParametersProgress::Complete(vec![vec![
+            Arc::clone(field),
+            Arc::new(Field::new("", DataType::Int64, true)),
+        ]]))
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: HigherOrderReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        let [ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)] = args.arg_fields
+        else {
+            unreachable!()
+        };
+
+        let field = Arc::new(Field::new(
+            Field::LIST_FIELD_DEFAULT_NAME,
+            lambda.data_type().clone(),
+            lambda.is_nullable(),
+        ));
+
+        let return_type = match list.data_type() {
+            DataType::List(_) => DataType::List(field),
+            _ => unreachable!(),
+        };
+
+        Ok(Arc::new(Field::new("", return_type, list.is_nullable())))
+    }
+
+    fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+        Ok(ColumnarValue::Scalar(ScalarValue::new_default(
+            args.return_type(),
+        )?))
+    }
+}
+
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
     // search for target_rel and field value in proto
     match &rel.rel_type {
@@ -2029,6 +2252,15 @@ async fn generate_plan_from_sql(
     optimized: bool,
 ) -> Result<LogicalPlan> {
     let ctx = create_context().await?;
+    generate_plan_from_sql_with_ctx(sql, assert_schema, optimized, &ctx).await
+}
+
+async fn generate_plan_from_sql_with_ctx(
+    sql: &str,
+    assert_schema: bool,
+    optimized: bool,
+    ctx: &SessionContext,
+) -> Result<LogicalPlan> {
     let df: DataFrame = ctx.sql(sql).await?;
 
     let plan = if optimized {
