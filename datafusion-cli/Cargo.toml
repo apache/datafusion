@@ -85,4 +85,4 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 # Required because we pull serde_json with a feature to get consistent pg display,
 # but its not directly used.
 [package.metadata.cargo-machete]
-ignored = "serde_json"
+ignored = ["serde_json"]

@@ -94,6 +94,10 @@ tokio = { workspace = true, features = [
     "parking_lot",
 ] }
 
+# Required for spill compression codec support (see comment on arrow-ipc dependency above).
+[package.metadata.cargo-machete]
+ignored = ["arrow-ipc"]
+
 [[bench]]
 harness = false
 name = "partial_ordering"
