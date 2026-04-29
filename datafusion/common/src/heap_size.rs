@@ -59,7 +59,17 @@ impl DFHeapSize for Statistics {
 
 impl DFHeapSize for TableReference {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        self.table().heap_size(ctx)
+        match self {
+            TableReference::Bare { table } => table.heap_size(ctx),
+            TableReference::Partial { schema, table } => {
+                schema.heap_size(ctx) + table.heap_size(ctx)
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => catalog.heap_size(ctx) + schema.heap_size(ctx) + table.heap_size(ctx),
+        }
     }
 }
 
