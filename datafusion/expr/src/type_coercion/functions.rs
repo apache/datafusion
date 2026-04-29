@@ -537,12 +537,12 @@ fn get_valid_types(
                         element_types.push(DataType::Null);
                         nested_item_nullability.push(None);
                     }
-                    DataType::List(field) => {
+                    DataType::List(field) | DataType::ListView(field) => {
                         element_types.push(field.data_type().clone());
                         nested_item_nullability.push(Some(field.is_nullable()));
                         fixed_size = false;
                     }
-                    DataType::LargeList(field) => {
+                    DataType::LargeList(field) | DataType::LargeListView(field) => {
                         element_types.push(field.data_type().clone());
                         nested_item_nullability.push(Some(field.is_nullable()));
                         large_list = true;
@@ -580,6 +580,8 @@ fn get_valid_types(
                     ArrayFunctionArgument::Index => DataType::Int64,
                     ArrayFunctionArgument::String => DataType::Utf8,
                     ArrayFunctionArgument::Element => element_type.clone(),
+                    // TODO: support maintaining ListView types here
+                    // https://github.com/apache/datafusion/issues/21777
                     ArrayFunctionArgument::Array => {
                         if current_type.is_null() {
                             DataType::Null
@@ -611,6 +613,8 @@ fn get_valid_types(
         match array_type {
             DataType::List(_)
             | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
             | DataType::FixedSizeList(_, _) => {
                 let array_type = coerced_fixed_size_list_to_list(array_type);
                 Some(array_type)
@@ -1044,7 +1048,7 @@ fn coerced_from<'a>(
 
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
-        (List(_) | LargeList(_), _)
+        (List(_) | LargeList(_) | ListView(_) | LargeListView(_), _)
             if base_type(type_from).is_null()
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {
@@ -1492,6 +1496,54 @@ mod tests {
             vec![vec![
                 DataType::new_large_list(DataType::Utf8, true),
                 DataType::new_large_list(DataType::Utf8, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::ListView(Field::new_list_field(DataType::Int32, true).into()),
+            DataType::new_list(DataType::Int32, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Int32, true),
+                DataType::new_list(DataType::Int32, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::LargeListView(Field::new_list_field(DataType::Int32, true).into()),
+            DataType::new_list(DataType::Int32, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Int32, true),
+                DataType::new_large_list(DataType::Int32, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::ListView(Field::new_list_field(DataType::Int32, true).into()),
+            DataType::ListView(Field::new_list_field(DataType::Int32, true).into()),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Int32, true),
+                DataType::new_list(DataType::Int32, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::LargeListView(Field::new_list_field(DataType::Int32, true).into()),
+            DataType::LargeListView(Field::new_list_field(DataType::Int32, true).into()),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Int32, true),
+                DataType::new_large_list(DataType::Int32, true),
             ]]
         );
 
