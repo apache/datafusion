@@ -55,12 +55,51 @@ pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 /// | Column count and data types match positionally | Returns a new `RecordBatch` that shares the original data buffers (zero-copy) but carries `expected_schema`. |
 /// | Column count or data types are incompatible | Returns `Err(internal_err!(...))`. |
 ///
+/// # Zero-copy guarantee
+///
+/// When a rename is performed the underlying `Arc<dyn Array>` column buffers are **not**
+/// copied; only the `Arc<Schema>` wrapper is replaced.  The rename is therefore O(n\_cols)
+/// in time and allocations, independent of the number of rows.
+///
 /// # Why not `RecordBatch::with_schema`?
 ///
 /// [`RecordBatch::with_schema`] validates data-type compatibility but does **not**
-/// rename fields.  It also allocates a new schema comparison on every call even when
-/// the schemas are identical.  `normalize_batch_schema` uses pointer equality first
-/// and only falls back to field-level inspection when truly necessary.
+/// rename fields.  It also performs a full structural schema comparison on every call
+/// even when the schemas are pointer-identical.  `normalize_batch_schema` uses
+/// [`Arc::ptr_eq`] first and only falls back to field-level inspection when truly
+/// necessary, making the common (no-op) path cheaper.
+///
+/// # When to use this helper
+///
+/// Call `normalize_batch_schema` in the output path of any [`crate::ExecutionPlan`]
+/// that assembles its output from **independently-planned sub-trees** whose schemas
+/// may diverge in field names.  The prime example is `RecursiveQueryExec`, which
+/// merges the anchor and recursive terms; these are planned separately and the
+/// recursive term may use different column names.
+///
+/// You do **not** need this helper when:
+/// * the operator builds its output `RecordBatch` itself (joins, aggregations, sorts);
+///   those paths already construct the batch with the correct schema.
+/// * the planner guarantees schema alignment through explicit coercion projections
+///   before the operator runs (e.g. `UnionExec`, which relies on the logical planner
+///   to insert casts/renames on non-primary branches).
+///
+/// # Operator audit (as of 2026-04-29)
+///
+/// The following operators have been reviewed and confirmed **safe without this
+/// helper** because they either construct output batches locally or rely on
+/// planner-level schema coercion:
+///
+/// | Operator | Why safe |
+/// |---|---|
+/// | `RecursiveQueryExec` | **Uses this helper** since PR #21770. |
+/// | `UnionExec` / `InterleaveExec` | Routes each partition directly to one child stream; `union_schema` uses child-0 field names and the logical planner inserts coercion projections on other branches. Planner-guaranteed alignment. |
+/// | `SortExec` | Builds output via `StreamingMergeBuilder`; does not forward raw child batches. |
+/// | `SortPreservingMergeExec` | Same as `SortExec` — merge is performed over locally reconstructed cursors. |
+/// | Hash / Sort-merge / Nested-loop / Cross joins | Construct output columns from join result buffers with an explicit `output_schema`. |
+///
+/// If you add a new operator that forwards child batches across independently-planned
+/// boundaries, add it to this table and consider calling `normalize_batch_schema`.
 pub fn normalize_batch_schema(
     batch: RecordBatch,
     expected_schema: &SchemaRef,
