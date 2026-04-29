@@ -3828,9 +3828,7 @@ mod tests {
             .build()?;
         let e = plan(&logical_plan).await.unwrap_err().to_string();
 
-        let expected = r#"expr: BinaryExpr { left: BinaryExpr { left: Column { name: "c1", index: 0 }, op: Eq, right: Literal { value: Utf8("a"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false, preselection_threshold: 0.2 }"#;
-
-        assert_contains!(format!("{execution_plan:?}"), expected);
+        assert_contains!(&e, "Cannot cast string 'a' to value of Int64 type");
 
         Ok(())
     }
