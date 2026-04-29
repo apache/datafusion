@@ -568,6 +568,91 @@ pub mod proto_encode {
     }
 }
 
+/// Decode-side counterpart to [`proto_encode`].
+///
+/// Expression authors implement an associated `try_from_proto` on their
+/// concrete type, with the signature
+///
+/// ```ignore
+/// fn try_from_proto(
+///     node: &PhysicalExprNode,
+///     ctx: &PhysicalExprDecodeCtx<'_>,
+/// ) -> Result<Arc<dyn PhysicalExpr>>
+/// ```
+///
+/// It takes the whole [`PhysicalExprNode`] — the exact inverse of what
+/// [`PhysicalExpr::try_to_proto`] returns — so the constructor can also see
+/// outer-node fields such as `expr_id`. The central match in
+/// `datafusion-proto` dispatches `ExprType` variants to these constructors.
+///
+/// As with the encode side, the public surface is a struct (not a `&dyn`
+/// trait) so future fields/helpers (registries for third-party expressions,
+/// schema-resolution caches, etc.) can be added without changing the
+/// signature every expression depends on.
+///
+/// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+#[cfg(feature = "proto")]
+pub mod proto_decode {
+    use std::sync::Arc;
+
+    use arrow::datatypes::Schema;
+    use datafusion_common::Result;
+    use datafusion_proto_models::protobuf::PhysicalExprNode;
+
+    use super::PhysicalExpr;
+
+    /// Decoder context handed to per-expression `try_from_proto` constructors.
+    ///
+    /// Wraps an internal [`PhysicalExprDecode`] trait object plus a borrowed
+    /// schema. The trait stays an implementation detail of `datafusion-proto`;
+    /// expression authors only see this struct.
+    pub struct PhysicalExprDecodeCtx<'a> {
+        schema: &'a Schema,
+        decoder: &'a dyn PhysicalExprDecode,
+    }
+
+    impl<'a> PhysicalExprDecodeCtx<'a> {
+        /// Construct a new decode context. Typically called by
+        /// `datafusion-proto`; expression authors receive
+        /// `&PhysicalExprDecodeCtx`.
+        pub fn new(schema: &'a Schema, decoder: &'a dyn PhysicalExprDecode) -> Self {
+            Self { schema, decoder }
+        }
+
+        /// The schema bound to this decode context. Use it for column lookups,
+        /// data-type resolution, etc.
+        pub fn schema(&self) -> &Schema {
+            self.schema
+        }
+
+        /// Decode an expression node, recursing into child sub-expressions.
+        ///
+        /// Routes built-in `ExprType` variants through `datafusion-proto`'s
+        /// central match and forwards extension nodes to the registered codec
+        /// (today via [`PhysicalExtensionCodec::try_decode_expr`]; later via
+        /// a per-type registry — see #21835).
+        ///
+        /// [`PhysicalExtensionCodec::try_decode_expr`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/physical_plan/trait.PhysicalExtensionCodec.html#method.try_decode_expr
+        pub fn decode(&self, node: &PhysicalExprNode) -> Result<Arc<dyn PhysicalExpr>> {
+            self.decoder.decode(node, self.schema)
+        }
+    }
+
+    /// Internal dispatch trait. Implementors live in `datafusion-proto`.
+    /// Expression authors should use [`PhysicalExprDecodeCtx`] instead of
+    /// calling this directly.
+    pub trait PhysicalExprDecode {
+        /// Decode a proto node into a concrete `PhysicalExpr`. The schema is
+        /// passed alongside so implementations can support recursive children
+        /// and rebind the context per call (e.g. for nested plans).
+        fn decode(
+            &self,
+            node: &PhysicalExprNode,
+            schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>>;
+    }
+}
+
 #[deprecated(
     since = "50.0.0",
     note = "Use `datafusion_expr_common::dyn_eq` instead"

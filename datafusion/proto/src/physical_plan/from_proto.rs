@@ -57,19 +57,13 @@ use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
     PhysicalProtoConverterExtension,
 };
-use crate::convert::{FromProto, TryFromProto};
+use crate::convert::TryFromProto;
 use crate::logical_plan::{self};
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::{convert_required, convert_required_proto, protobuf};
 use datafusion_physical_expr::expressions::{
     DynamicFilterInner, DynamicFilterPhysicalExpr,
 };
-
-impl FromProto<&protobuf::PhysicalColumn> for Column {
-    fn from_proto(c: &protobuf::PhysicalColumn) -> Column {
-        Column::new(&c.name, c.index as usize)
-    }
-}
 
 /// Parses a physical sort expression from a protobuf.
 ///
@@ -267,11 +261,24 @@ pub fn parse_physical_expr_with_converter(
         .as_ref()
         .ok_or_else(|| proto_error("Unexpected empty physical expression"))?;
 
+    // Decoder context handed to per-expression `try_from_proto` constructors.
+    // This is the new shape the codebase is migrating toward (see #21835);
+    // for now only `Column` is migrated and the rest of the variants are still
+    // matched inline.
+    let decoder = ConverterDecoder {
+        ctx,
+        proto_converter,
+    };
+    let decode_ctx =
+        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(
+            input_schema,
+            &decoder,
+        );
+
     let pexpr: Arc<dyn PhysicalExpr> = match expr_type {
-        ExprType::Column(c) => {
-            let pcol = Column::from_proto(c);
-            Arc::new(pcol)
-        }
+        // Migrated expressions take the whole `PhysicalExprNode` and unwrap
+        // their own `ExprType` variant (see #21835); this match only routes.
+        ExprType::Column(_) => Column::try_from_proto(proto, &decode_ctx)?,
         ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(binary_expr) => {
@@ -902,6 +909,33 @@ impl TryFromProto<&protobuf::FileSinkConfig> for FileSinkConfig {
             file_extension: conf.file_extension.clone(),
             file_output_mode,
         })
+    }
+}
+
+/// Concrete [`PhysicalExprDecode`] driver that backs
+/// [`PhysicalExprDecodeCtx`] inside `parse_physical_expr_with_converter`.
+///
+/// Today this is a thin wrapper that re-enters the central match through
+/// `proto_to_physical_expr`; once more expressions migrate, the central match
+/// shrinks and a future builder-style decoder can take over.
+///
+/// [`PhysicalExprDecode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode
+/// [`PhysicalExprDecodeCtx`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx
+struct ConverterDecoder<'a, 'b> {
+    ctx: &'a PhysicalPlanDecodeContext<'b>,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
+
+impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode
+    for ConverterDecoder<'_, '_>
+{
+    fn decode(
+        &self,
+        node: &protobuf::PhysicalExprNode,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.proto_converter
+            .proto_to_physical_expr(node, schema, self.ctx)
     }
 }
 
