@@ -183,6 +183,7 @@ parquet = { version = "58.1.0", default-features = false, features = [
 ] }
 pbjson = { version = "0.9.0" }
 pbjson-types = "0.9"
+pin-project = "1"
 # Should match arrow-flight's version of prost.
 prost = "0.14.1"
 rand = "0.9"
@@ -190,7 +191,7 @@ recursive = "0.1.1"
 regex = "1.12"
 rstest = "0.26.1"
 serde_json = "1"
-sha2 = "^0.10.9"
+sha2 = "^0.11.0"
 sqlparser = { version = "0.61.0", default-features = false, features = ["std", "visitor"] }
 strum = "0.28.0"
 strum_macros = "0.28.0"
