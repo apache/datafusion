@@ -49,6 +49,7 @@ use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
     PhysicalProtoConverterExtension, encode_human_display_alias,
 };
+use crate::convert::TryFromProto;
 use crate::protobuf::{
     self, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     physical_aggregate_expr_node, physical_window_expr_node,
@@ -178,9 +179,7 @@ pub fn serialize_physical_window_expr(
         codec,
         proto_converter,
     )?;
-    let window_frame: protobuf::WindowFrame = window_frame
-        .as_ref()
-        .try_into()
+    let window_frame = protobuf::WindowFrame::try_from_proto(window_frame.as_ref())
         .map_err(|e| internal_datafusion_err!("{e}"))?;
 
     Ok(protobuf::PhysicalWindowExprNode {
@@ -642,10 +641,10 @@ fn serialize_when_then_expr(
     })
 }
 
-impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
+impl TryFromProto<&PartitionedFile> for protobuf::PartitionedFile {
     type Error = DataFusionError;
 
-    fn try_from(pf: &PartitionedFile) -> Result<Self> {
+    fn try_from_proto(pf: &PartitionedFile) -> Result<Self> {
         let last_modified = pf.object_meta.last_modified;
         let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
             DataFusionError::Plan(format!(
@@ -661,16 +660,20 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
+            range: pf
+                .range
+                .as_ref()
+                .map(protobuf::FileRange::try_from_proto)
+                .transpose()?,
             statistics: pf.statistics.as_ref().map(|s| s.as_ref().into()),
         })
     }
 }
 
-impl TryFrom<&FileRange> for protobuf::FileRange {
+impl TryFromProto<&FileRange> for protobuf::FileRange {
     type Error = DataFusionError;
 
-    fn try_from(value: &FileRange) -> Result<Self> {
+    fn try_from_proto(value: &FileRange) -> Result<Self> {
         Ok(protobuf::FileRange {
             start: value.start,
             end: value.end,
@@ -678,14 +681,14 @@ impl TryFrom<&FileRange> for protobuf::FileRange {
     }
 }
 
-impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
+impl TryFromProto<&[PartitionedFile]> for protobuf::FileGroup {
     type Error = DataFusionError;
 
-    fn try_from(gr: &[PartitionedFile]) -> Result<Self, Self::Error> {
+    fn try_from_proto(gr: &[PartitionedFile]) -> Result<Self, Self::Error> {
         Ok(protobuf::FileGroup {
             files: gr
                 .iter()
-                .map(|f| f.try_into())
+                .map(protobuf::PartitionedFile::try_from_proto)
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
@@ -699,7 +702,7 @@ pub fn serialize_file_scan_config(
     let file_groups = conf
         .file_groups
         .iter()
-        .map(|p| p.files().try_into())
+        .map(|p| protobuf::FileGroup::try_from_proto(p.files()))
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut output_orderings = vec![];
@@ -797,48 +800,48 @@ pub fn serialize_record_batches(batches: &[RecordBatch]) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-impl TryFrom<&JsonSink> for protobuf::JsonSink {
+impl TryFromProto<&JsonSink> for protobuf::JsonSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &JsonSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &JsonSink) -> Result<Self, Self::Error> {
         Ok(Self {
-            config: Some(value.config().try_into()?),
+            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
             writer_options: Some(value.writer_options().try_into()?),
         })
     }
 }
 
-impl TryFrom<&CsvSink> for protobuf::CsvSink {
+impl TryFromProto<&CsvSink> for protobuf::CsvSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &CsvSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &CsvSink) -> Result<Self, Self::Error> {
         Ok(Self {
-            config: Some(value.config().try_into()?),
+            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
             writer_options: Some(value.writer_options().try_into()?),
         })
     }
 }
 
 #[cfg(feature = "parquet")]
-impl TryFrom<&ParquetSink> for protobuf::ParquetSink {
+impl TryFromProto<&ParquetSink> for protobuf::ParquetSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &ParquetSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &ParquetSink) -> Result<Self, Self::Error> {
         Ok(Self {
-            config: Some(value.config().try_into()?),
+            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
             parquet_options: Some(value.parquet_options().try_into()?),
         })
     }
 }
 
-impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
+impl TryFromProto<&FileSinkConfig> for protobuf::FileSinkConfig {
     type Error = DataFusionError;
 
-    fn try_from(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
+    fn try_from_proto(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
         let file_groups = conf
             .file_group
             .iter()
-            .map(TryInto::try_into)
+            .map(protobuf::PartitionedFile::try_from_proto)
             .collect::<Result<Vec<_>>>()?;
         let table_paths = conf
             .table_paths

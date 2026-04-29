@@ -2473,12 +2473,11 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-proto-common",
+ "datafusion-proto-models",
  "doc-comment",
  "object_store",
- "pbjson 0.9.0",
  "pretty_assertions",
  "prost",
- "serde",
  "serde_json",
  "tokio",
 ]
@@ -2490,6 +2489,16 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "doc-comment",
+ "pbjson 0.9.0",
+ "prost",
+ "serde",
+]
+
+[[package]]
+name = "datafusion-proto-models"
+version = "53.1.0"
+dependencies = [
+ "datafusion-proto-common",
  "pbjson 0.9.0",
  "prost",
  "serde",

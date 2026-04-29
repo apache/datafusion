@@ -57,15 +57,16 @@ use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
     PhysicalProtoConverterExtension,
 };
+use crate::convert::{FromProto, TryFromProto};
 use crate::logical_plan::{self};
 use crate::protobuf::physical_expr_node::ExprType;
-use crate::{convert_required, protobuf};
+use crate::{convert_required, convert_required_proto, protobuf};
 use datafusion_physical_expr::expressions::{
     DynamicFilterInner, DynamicFilterPhysicalExpr,
 };
 
-impl From<&protobuf::PhysicalColumn> for Column {
-    fn from(c: &protobuf::PhysicalColumn) -> Column {
+impl FromProto<&protobuf::PhysicalColumn> for Column {
+    fn from_proto(c: &protobuf::PhysicalColumn) -> Column {
         Column::new(&c.name, c.index as usize)
     }
 }
@@ -154,7 +155,7 @@ pub fn parse_physical_window_expr(
     let window_frame = proto
         .window_frame
         .as_ref()
-        .map(|wf| wf.clone().try_into())
+        .map(|wf| datafusion_expr::WindowFrame::try_from_proto(wf.clone()))
         .transpose()
         .map_err(|e| internal_datafusion_err!("{e}"))?
         .ok_or_else(|| {
@@ -268,7 +269,7 @@ pub fn parse_physical_expr_with_converter(
 
     let pexpr: Arc<dyn PhysicalExpr> = match expr_type {
         ExprType::Column(c) => {
-            let pcol: Column = c.into();
+            let pcol = Column::from_proto(c);
             Arc::new(pcol)
         }
         ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
@@ -694,7 +695,7 @@ pub fn parse_protobuf_file_scan_config(
     let file_groups = proto
         .file_groups
         .iter()
-        .map(|f| f.try_into())
+        .map(FileGroup::try_from_proto)
         .collect::<Result<Vec<_>, _>>()?;
 
     let object_store_url = match proto.object_store_url.is_empty() {
@@ -763,10 +764,10 @@ pub fn parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
     Ok(batches)
 }
 
-impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
+impl TryFromProto<&protobuf::PartitionedFile> for PartitionedFile {
     type Error = DataFusionError;
 
-    fn try_from(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
+    fn try_from_proto(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
         let mut pf = PartitionedFile::new_from_meta(ObjectMeta {
             location: Path::parse(val.path.as_str())
                 .map_err(|e| proto_error(format!("Invalid object_store path: {e}")))?,
@@ -782,7 +783,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 .collect::<Result<Vec<_>, _>>()?,
         );
         if let Some(range) = val.range.as_ref() {
-            let file_range: FileRange = range.try_into()?;
+            let file_range = FileRange::try_from_proto(range)?;
             pf = pf.with_range(file_range.start, file_range.end);
         }
         if let Some(proto_stats) = val.statistics.as_ref() {
@@ -792,10 +793,10 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
     }
 }
 
-impl TryFrom<&protobuf::FileRange> for FileRange {
+impl TryFromProto<&protobuf::FileRange> for FileRange {
     type Error = DataFusionError;
 
-    fn try_from(value: &protobuf::FileRange) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &protobuf::FileRange) -> Result<Self, Self::Error> {
         Ok(FileRange {
             start: value.start,
             end: value.end,
@@ -803,61 +804,61 @@ impl TryFrom<&protobuf::FileRange> for FileRange {
     }
 }
 
-impl TryFrom<&protobuf::FileGroup> for FileGroup {
+impl TryFromProto<&protobuf::FileGroup> for FileGroup {
     type Error = DataFusionError;
 
-    fn try_from(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
+    fn try_from_proto(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
         let files = val
             .files
             .iter()
-            .map(|f| f.try_into())
+            .map(PartitionedFile::try_from_proto)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(FileGroup::new(files))
     }
 }
 
-impl TryFrom<&protobuf::JsonSink> for JsonSink {
+impl TryFromProto<&protobuf::JsonSink> for JsonSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            convert_required!(value.config)?,
+            convert_required_proto!(FileSinkConfig, value.config)?,
             convert_required!(value.writer_options)?,
         ))
     }
 }
 
 #[cfg(feature = "parquet")]
-impl TryFrom<&protobuf::ParquetSink> for ParquetSink {
+impl TryFromProto<&protobuf::ParquetSink> for ParquetSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            convert_required!(value.config)?,
+            convert_required_proto!(FileSinkConfig, value.config)?,
             convert_required!(value.parquet_options)?,
         ))
     }
 }
 
-impl TryFrom<&protobuf::CsvSink> for CsvSink {
+impl TryFromProto<&protobuf::CsvSink> for CsvSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            convert_required!(value.config)?,
+            convert_required_proto!(FileSinkConfig, value.config)?,
             convert_required!(value.writer_options)?,
         ))
     }
 }
 
-impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
+impl TryFromProto<&protobuf::FileSinkConfig> for FileSinkConfig {
     type Error = DataFusionError;
 
-    fn try_from(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
+    fn try_from_proto(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
         let file_group = FileGroup::new(
             conf.file_groups
                 .iter()
-                .map(|f| f.try_into())
+                .map(PartitionedFile::try_from_proto)
                 .collect::<Result<Vec<_>>>()?,
         );
         let table_paths = conf
@@ -920,10 +921,10 @@ mod tests {
             version: None,
         });
 
-        let proto = protobuf::PartitionedFile::try_from(&pf).unwrap();
+        let proto = protobuf::PartitionedFile::try_from_proto(&pf).unwrap();
         assert_eq!(proto.path, path_str);
 
-        let pf2 = PartitionedFile::try_from(&proto).unwrap();
+        let pf2 = PartitionedFile::try_from_proto(&proto).unwrap();
         assert_eq!(pf2.object_meta.location.as_ref(), path_str);
         assert_eq!(pf2.object_meta.location, pf.object_meta.location);
         assert_eq!(pf2.object_meta.size, pf.object_meta.size);
@@ -941,7 +942,7 @@ mod tests {
             statistics: None,
         };
 
-        let err = PartitionedFile::try_from(&proto).unwrap_err();
+        let err = PartitionedFile::try_from_proto(&proto).unwrap_err();
         assert!(err.to_string().contains("Invalid object_store path"));
     }
 }

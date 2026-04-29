@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,17 +17,5 @@
 # specific language governing permissions and limitations
 # under the License.
 
-headerPath = "Apache-2.0-ASF.txt"
-
-includes = [
-    "*.rs",
-    "*.py",
-    "*.ts",
-]
-
-excludes = [
-    # generated code
-    "datafusion/proto/src/generated/",
-    "datafusion/proto-common/src/generated/",
-    "datafusion/proto-models/src/generated/",
-]
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root" && cargo run --manifest-path datafusion/proto-models/gen/Cargo.toml
