@@ -528,11 +528,12 @@ enum TypeCategory {
 impl From<&DataType> for TypeCategory {
     fn from(data_type: &DataType) -> Self {
         match data_type {
-            // Dict is a special type in arrow, we check the value type
+            // Dict and REE are special types in arrow, we check the value type.
             DataType::Dictionary(_, v) => {
                 let v = v.as_ref();
                 TypeCategory::from(v)
             }
+            DataType::RunEndEncoded(_, v) => TypeCategory::from(v.data_type()),
             _ => {
                 if data_type.is_numeric() {
                     return TypeCategory::Numeric;
@@ -708,6 +709,27 @@ fn type_union_resolution_coercion(
                 )),
                 None => None,
             }
+        }
+        (
+            DataType::RunEndEncoded(lhs_run, lhs_val),
+            DataType::RunEndEncoded(rhs_run, rhs_val),
+        ) => {
+            let new_run =
+                type_union_resolution_coercion(lhs_run.data_type(), rhs_run.data_type())?;
+            let new_val =
+                type_union_resolution_coercion(lhs_val.data_type(), rhs_val.data_type())?;
+            Some(DataType::RunEndEncoded(
+                Arc::new(lhs_run.as_ref().clone().with_data_type(new_run)),
+                Arc::new(lhs_val.as_ref().clone().with_data_type(new_val)),
+            ))
+        }
+        (DataType::RunEndEncoded(run, val), other)
+        | (other, DataType::RunEndEncoded(run, val)) => {
+            let new_val = type_union_resolution_coercion(val.data_type(), other)?;
+            Some(DataType::RunEndEncoded(
+                Arc::clone(run),
+                Arc::new(val.as_ref().clone().with_data_type(new_val)),
+            ))
         }
         (DataType::Struct(lhs), DataType::Struct(rhs)) => {
             if lhs.len() != rhs.len() {
