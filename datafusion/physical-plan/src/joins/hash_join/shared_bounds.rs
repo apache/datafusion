@@ -28,7 +28,7 @@ use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
-    HashExpr, HashTableLookupExpr, MultiMapLookupExpr, SeededRandomState,
+    HashTableLookupExpr, MultiMapLookupExpr, SeededRandomState,
 };
 use arrow::array::{Array, ArrayRef};
 use arrow::compute::concat;
@@ -38,7 +38,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
+    BinaryExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
@@ -80,65 +80,57 @@ impl PartitionBounds {
     }
 }
 
-/// Creates a membership predicate for filter pushdown.
-///
-/// If `inlist_values` is provided (for small build sides), creates an InList expression.
-/// Otherwise, creates a HashTableLookup expression (for large build sides).
-///
-/// Supports both single-column and multi-column joins using struct expressions.
-fn create_membership_predicate(
+/// Build a `IN (SET)` predicate over `on_right` from a deduplicated build-side
+/// array. Single-column joins compare scalars directly; multi-column joins
+/// wrap the right-hand columns in a `struct(...)` to match the build side's
+/// shape.
+fn create_inlist_predicate(
     on_right: &[PhysicalExprRef],
-    pushdown: PushdownStrategy,
-    random_state: &SeededRandomState,
+    in_list_array: ArrayRef,
     schema: &Schema,
-) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-    match pushdown {
-        // Use InList expression for small build sides
-        PushdownStrategy::InList(in_list_array) => {
-            // Build the expression to compare against
-            let expr = if on_right.len() == 1 {
-                // Single column: col IN (val1, val2, ...)
-                Arc::clone(&on_right[0])
-            } else {
-                let fields = build_struct_fields(
-                    on_right
-                        .iter()
-                        .map(|r| r.data_type(schema))
-                        .collect::<Result<Vec<_>>>()?
-                        .as_ref(),
-                )?;
-
-                // The return field name and the function field name don't really matter here.
-                let return_field =
-                    Arc::new(Field::new("struct", DataType::Struct(fields), true));
-
-                Arc::new(ScalarFunctionExpr::new(
-                    "struct",
-                    struct_func(),
-                    on_right.to_vec(),
-                    return_field,
-                    Arc::new(ConfigOptions::default()),
-                )) as Arc<dyn PhysicalExpr>
-            };
-
-            // Use InListExpr::try_new_from_array() to build an InList with static_filter optimization (hash-based lookup)
-            Ok(Some(Arc::new(InListExpr::try_new_from_array(
-                expr,
-                in_list_array,
-                false,
-                schema,
-            )?)))
-        }
-        // Use hash table lookup for large build sides
-        PushdownStrategy::Map(hash_map) => Ok(Some(Arc::new(HashTableLookupExpr::new(
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let expr = if on_right.len() == 1 {
+        Arc::clone(&on_right[0])
+    } else {
+        let fields = build_struct_fields(
+            on_right
+                .iter()
+                .map(|r| r.data_type(schema))
+                .collect::<Result<Vec<_>>>()?
+                .as_ref(),
+        )?;
+        let return_field = Arc::new(Field::new("struct", DataType::Struct(fields), true));
+        Arc::new(ScalarFunctionExpr::new(
+            "struct",
+            struct_func(),
             on_right.to_vec(),
-            random_state.clone(),
-            hash_map,
-            "hash_lookup".to_string(),
-        )) as Arc<dyn PhysicalExpr>)),
-        // Empty partition - should not create a filter for this
-        PushdownStrategy::Empty => Ok(None),
-    }
+            return_field,
+            Arc::new(ConfigOptions::default()),
+        )) as Arc<dyn PhysicalExpr>
+    };
+
+    Ok(Arc::new(InListExpr::try_new_from_array(
+        expr,
+        in_list_array,
+        false,
+        schema,
+    )?))
+}
+
+/// Build a single-map `hash_lookup` predicate over `on_right` against `map`.
+/// Used by the CollectLeft path; the Partitioned path emits
+/// [`MultiMapLookupExpr`] over multiple maps instead.
+fn create_hash_lookup_predicate(
+    on_right: &[PhysicalExprRef],
+    map: Arc<Map>,
+    random_state: &SeededRandomState,
+) -> Arc<dyn PhysicalExpr> {
+    Arc::new(HashTableLookupExpr::new(
+        on_right.to_vec(),
+        random_state.clone(),
+        map,
+        "hash_lookup".to_string(),
+    ))
 }
 
 /// Creates a bounds predicate from partition bounds.
@@ -309,22 +301,53 @@ pub(crate) struct SharedBuildAccumulator {
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter expressions
     on_right: Vec<PhysicalExprRef>,
-    /// Random state for partitioning (RepartitionExec's hash function with 0,0,0,0 seeds)
-    /// Used for PartitionedHashLookupPhysicalExpr
-    repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
 }
 
-/// Strategy for filter pushdown (decided at collection time)
-#[derive(Clone)]
-pub(crate) enum PushdownStrategy {
-    /// Use InList for small build sides (< 128MB)
-    InList(ArrayRef),
-    /// Use map lookup for large build sides
-    Map(Arc<Map>),
-    /// There was no data in this partition, do not build a dynamic filter for it
-    Empty,
+/// Build-side data needed to construct a dynamic filter for one partition.
+///
+/// `map` is always set for non-empty partitions (the join's hash table is
+/// built unconditionally). `inlist` is additionally set when the build side
+/// fit under both the per-partition InList caps
+/// (`hash_join_inlist_pushdown_max_size` /
+/// `hash_join_inlist_pushdown_max_distinct_values`) — that's our signal that
+/// the partition's keys are small enough to participate in parquet stats /
+/// bloom-filter pruning at the scan when collapsed across partitions.
+#[derive(Clone, Default)]
+pub(crate) struct PushdownStrategy {
+    /// Hash table for the partition's build side. `None` if the partition was
+    /// empty.
+    pub(crate) map: Option<Arc<Map>>,
+    /// Concatenable array of build-side join keys (single column or struct
+    /// of columns). `Some` when the build side was small enough for the
+    /// InList pushdown; otherwise `None` and the filter falls back to
+    /// `hash_lookup` / `multi_hash_lookup`.
+    pub(crate) inlist: Option<ArrayRef>,
+}
+
+impl PushdownStrategy {
+    pub(crate) fn empty() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn from_map(map: Arc<Map>) -> Self {
+        Self {
+            map: Some(map),
+            inlist: None,
+        }
+    }
+
+    pub(crate) fn from_map_and_inlist(map: Arc<Map>, inlist: ArrayRef) -> Self {
+        Self {
+            map: Some(map),
+            inlist: Some(inlist),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.map.is_none()
+    }
 }
 
 /// Build-side data reported by a single partition
@@ -416,7 +439,6 @@ impl SharedBuildAccumulator {
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
-        repartition_random_state: SeededRandomState,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -461,7 +483,6 @@ impl SharedBuildAccumulator {
             completion_notify: Notify::new(),
             dynamic_filter,
             on_right,
-            repartition_random_state,
             probe_schema: right_child.schema(),
         }
     }
@@ -626,15 +647,10 @@ impl SharedBuildAccumulator {
         match finalize_input {
             FinalizeInput::CollectLeft(partition) => match partition {
                 PartitionStatus::Reported(partition_data) => {
-                    let membership_expr = create_membership_predicate(
-                        &self.on_right,
-                        partition_data.pushdown.clone(),
-                        &HASH_JOIN_SEED,
-                        self.probe_schema.as_ref(),
-                    )?;
+                    let membership_expr =
+                        self.collect_left_membership(&partition_data.pushdown)?;
                     let bounds_expr =
                         create_bounds_predicate(&self.on_right, &partition_data.bounds);
-
                     if let Some(filter_expr) =
                         combine_membership_and_bounds(membership_expr, bounds_expr)
                     {
@@ -653,21 +669,18 @@ impl SharedBuildAccumulator {
                 }
             },
             FinalizeInput::Partitioned(partitions) => {
-                let num_partitions = partitions.len();
-
-                let mut real_partitions: Vec<(usize, &PartitionData)> = Vec::new();
-                let mut empty_partition_ids = Vec::new();
+                let mut real_partitions: Vec<&PartitionData> = Vec::new();
                 let mut has_canceled_unknown = false;
-
-                for (partition_id, partition) in partitions.iter().enumerate() {
+                for partition in partitions.iter() {
                     match partition {
                         PartitionStatus::Reported(partition)
-                            if matches!(partition.pushdown, PushdownStrategy::Empty) =>
+                            if partition.pushdown.is_empty() =>
                         {
-                            empty_partition_ids.push(partition_id);
+                            // Empty partitions contribute neither a map nor
+                            // an InList; nothing to add to the filter.
                         }
                         PartitionStatus::Reported(partition) => {
-                            real_partitions.push((partition_id, partition));
+                            real_partitions.push(partition);
                         }
                         PartitionStatus::CanceledUnknown => {
                             has_canceled_unknown = true;
@@ -680,107 +693,8 @@ impl SharedBuildAccumulator {
                     }
                 }
 
-                // Fast paths: when no partition is canceled, classify the
-                // reported partitions and route to a shape that drops the
-                // routing CASE. Two shapes today:
-                //   1. All-Map → `global_minmax AND multi_hash_lookup`. Hashes
-                //      the join keys once and ORs contain_hashes across every
-                //      partition's hash table.
-                //   2. All-InList with a small enough cross-partition union
-                //      → `global_minmax AND merged_in_list`. Worth taking
-                //      because a small global InList can participate in
-                //      parquet stats / bloom-filter pruning at the scan,
-                //      which a `multi_hash_lookup` can't.
-                // Anything else (canceled, mixed, or merged InList over the
-                // cap) falls through to the legacy routing CASE.
-                if !has_canceled_unknown && !real_partitions.is_empty() {
-                    let mut maps: Vec<Arc<Map>> =
-                        Vec::with_capacity(real_partitions.len());
-                    let mut inlist_arrays: Vec<ArrayRef> =
-                        Vec::with_capacity(real_partitions.len());
-                    let mut all_map = true;
-                    let mut all_inlist = true;
-                    let mut total_inlist_len: usize = 0;
-                    for (_, p) in &real_partitions {
-                        match &p.pushdown {
-                            PushdownStrategy::Map(m) => {
-                                maps.push(Arc::clone(m));
-                                all_inlist = false;
-                            }
-                            PushdownStrategy::InList(arr) => {
-                                total_inlist_len += arr.len();
-                                inlist_arrays.push(Arc::clone(arr));
-                                all_map = false;
-                            }
-                            PushdownStrategy::Empty => {
-                                all_map = false;
-                                all_inlist = false;
-                            }
-                        }
-                    }
-
-                    let bounds_refs: Vec<&PartitionBounds> =
-                        real_partitions.iter().map(|(_, p)| &p.bounds).collect();
-                    let global_bounds_expr = compute_global_bounds(&bounds_refs)
-                        .as_ref()
-                        .and_then(|b| create_bounds_predicate(&self.on_right, b));
-
-                    // Threshold on the cross-partition merged InList. Two
-                    // reasons for keeping it small:
-                    //   1. Below ~this many values the merged `IN (SET)` can
-                    //      participate in parquet stats / bloom-filter
-                    //      pruning at the scan, which a `multi_hash_lookup`
-                    //      cannot — that's the headline win.
-                    //   2. Past this size, runtime regresses vs. the routing
-                    //      CASE (the larger static_filter hash set blows out
-                    //      of L1 and the win flips). On TPC-H SF=1 a sweep
-                    //      from 20 to 2000 picked 20–50 as the sweet spot.
-                    const MERGED_INLIST_MAX_TOTAL_LEN: usize = 20;
-
-                    if all_inlist
-                        && total_inlist_len <= MERGED_INLIST_MAX_TOTAL_LEN
-                        && let Some(merged) = merge_inlist_arrays(&inlist_arrays)
-                        && let Some(membership) = create_membership_predicate(
-                            &self.on_right,
-                            PushdownStrategy::InList(merged),
-                            &HASH_JOIN_SEED,
-                            self.probe_schema.as_ref(),
-                        )?
-                    {
-                        let filter_expr = combine_membership_and_bounds(
-                            Some(membership),
-                            global_bounds_expr,
-                        )
-                        .unwrap_or_else(|| lit(true));
-                        self.dynamic_filter.update(filter_expr)?;
-                        return Ok(());
-                    }
-
-                    if all_map && !maps.is_empty() {
-                        let multi_lookup = Arc::new(MultiMapLookupExpr::new(
-                            self.on_right.clone(),
-                            HASH_JOIN_SEED.clone(),
-                            maps,
-                            "multi_hash_lookup".to_string(),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
-                        let filter_expr = combine_membership_and_bounds(
-                            Some(multi_lookup),
-                            global_bounds_expr,
-                        )
-                        .unwrap_or_else(|| lit(true));
-                        self.dynamic_filter.update(filter_expr)?;
-                        return Ok(());
-                    }
-                }
-
-                let filter_expr = self.build_case_routing_filter(
-                    num_partitions,
-                    &real_partitions,
-                    &empty_partition_ids,
-                    has_canceled_unknown,
-                )?;
-
+                let filter_expr = self
+                    .build_partitioned_filter(&real_partitions, has_canceled_unknown)?;
                 self.dynamic_filter.update(filter_expr)?;
             }
         }
@@ -788,82 +702,141 @@ impl SharedBuildAccumulator {
         Ok(())
     }
 
-    /// Build the per-partition `CASE (hash_repartition % N) WHEN p THEN
-    /// per_partition_filter ELSE … END` routing expression. Used as the fallback
-    /// when the all-Map fast path doesn't apply (any InList/Empty partition,
-    /// any canceled partition, or no real partitions).
-    fn build_case_routing_filter(
+    /// CollectLeft has a single shared build side, so we always have one
+    /// `Map`. We prefer the InList expression when it's available (the build
+    /// side fit under the InList caps) because it's directly representable in
+    /// parquet stats / bloom-filter pruning at the scan; otherwise fall back
+    /// to a single `hash_lookup` against the map.
+    fn collect_left_membership(
         &self,
-        num_partitions: usize,
-        real_partitions: &[(usize, &PartitionData)],
-        empty_partition_ids: &[usize],
+        pushdown: &PushdownStrategy,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        if let Some(arr) = &pushdown.inlist {
+            return Ok(Some(create_inlist_predicate(
+                &self.on_right,
+                Arc::clone(arr),
+                self.probe_schema.as_ref(),
+            )?));
+        }
+        Ok(pushdown.map.as_ref().map(|map| {
+            create_hash_lookup_predicate(&self.on_right, Arc::clone(map), &HASH_JOIN_SEED)
+        }))
+    }
+
+    /// Build the dynamic filter for `PartitionMode::Partitioned`. The filter
+    /// is decoupled from the repartition strategy: regardless of whether
+    /// individual partitions chose Map or InList for their pushdown, we
+    /// always emit `(global_minmax AND ([merged_in_list AND] multi_hash_lookup))`.
+    /// This drops the legacy `CASE hash_repartition % N WHEN p THEN … END`
+    /// routing expression entirely.
+    ///
+    /// * `global_minmax` — envelope of every partition's per-column min/max.
+    ///   Cheap short-circuit and the only piece visible to scan-level
+    ///   `pruning_predicate` extraction.
+    /// * `merged_in_list` — concatenated build keys when every reported
+    ///   partition produced an `InList` array and the cross-partition union
+    ///   is small enough (≤ `MERGED_INLIST_MAX_TOTAL_LEN`). Worth carrying
+    ///   because a small `IN (SET)` participates in parquet stats /
+    ///   bloom-filter pruning, which `multi_hash_lookup` cannot.
+    /// * `multi_hash_lookup` — runtime hash-table probe across every
+    ///   partition's `Map`, hashing the join keys once.
+    ///
+    /// The `has_canceled_unknown` case is the only one that can't safely use
+    /// this shape (we'd be missing maps for the canceled partitions). We
+    /// could keep a CASE just for that case, but the query is in the middle
+    /// of being torn down — emit `lit(true)` and let the join do whatever
+    /// filtering it can on its own.
+    fn build_partitioned_filter(
+        &self,
+        real_partitions: &[&PartitionData],
         has_canceled_unknown: bool,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        let routing_hash_expr = Arc::new(HashExpr::new(
-            self.on_right.clone(),
-            self.repartition_random_state.clone(),
-            "hash_repartition".to_string(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let modulo_expr = Arc::new(BinaryExpr::new(
-            routing_hash_expr,
-            Operator::Modulo,
-            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let mut real_branches = Vec::with_capacity(real_partitions.len());
-        for (partition_id, partition) in real_partitions {
-            let membership_expr = create_membership_predicate(
-                &self.on_right,
-                partition.pushdown.clone(),
-                &HASH_JOIN_SEED,
-                self.probe_schema.as_ref(),
-            )?;
-            let bounds_expr = create_bounds_predicate(&self.on_right, &partition.bounds);
-            let then_expr = combine_membership_and_bounds(membership_expr, bounds_expr)
-                .unwrap_or_else(|| lit(true));
-            real_branches.push((
-                lit(ScalarValue::UInt64(Some(*partition_id as u64))),
-                then_expr,
-            ));
+        if has_canceled_unknown {
+            return Ok(lit(true));
+        }
+        if real_partitions.is_empty() {
+            return Ok(lit(false));
         }
 
-        let filter_expr = if has_canceled_unknown {
-            let mut when_then_branches = empty_partition_ids
-                .iter()
-                .map(|partition_id| {
-                    (
-                        lit(ScalarValue::UInt64(Some(*partition_id as u64))),
-                        lit(false),
-                    )
-                })
-                .collect::<Vec<_>>();
-            when_then_branches.extend(real_branches);
+        let bounds_refs: Vec<&PartitionBounds> =
+            real_partitions.iter().map(|p| &p.bounds).collect();
+        let global_bounds_expr = compute_global_bounds(&bounds_refs)
+            .as_ref()
+            .and_then(|b| create_bounds_predicate(&self.on_right, b));
 
-            if when_then_branches.is_empty() {
-                lit(true)
-            } else {
-                Arc::new(CaseExpr::try_new(
-                    Some(modulo_expr),
-                    when_then_branches,
-                    Some(lit(true)),
-                )?) as Arc<dyn PhysicalExpr>
-            }
-        } else if real_branches.is_empty() {
-            lit(false)
-        } else if real_branches.len() == 1
-            && empty_partition_ids.len() + 1 == num_partitions
+        // Threshold on the cross-partition merged InList. Two reasons for
+        // keeping it small:
+        //   1. Below this many values the merged `IN (SET)` can participate
+        //      in parquet stats / bloom-filter pruning at the scan; a
+        //      `multi_hash_lookup` cannot.
+        //   2. Past this size the larger static_filter hash set blows out
+        //      of L1 and runtime regresses. A TPC-H SF=1 cap sweep from 20
+        //      to 2000 picked 20–50 as the sweet spot.
+        const MERGED_INLIST_MAX_TOTAL_LEN: usize = 20;
+
+        // Try to build a merged InList. Only fires when *every* reported
+        // partition contributed an InList array AND the cross-partition
+        // union is small. The merged InList is already the union of every
+        // partition's build-side keys, so when present it fully replaces
+        // `multi_hash_lookup` — no need to AND a redundant probe on top.
+        let membership_expr = if let Some(merged) =
+            self.try_build_merged_inlist(real_partitions, MERGED_INLIST_MAX_TOTAL_LEN)?
         {
-            Arc::clone(&real_branches[0].1)
+            Some(merged)
         } else {
-            Arc::new(CaseExpr::try_new(
-                Some(modulo_expr),
-                real_branches,
-                Some(lit(false)),
-            )?) as Arc<dyn PhysicalExpr>
+            let maps: Vec<Arc<Map>> = real_partitions
+                .iter()
+                .filter_map(|p| p.pushdown.map.clone())
+                .collect();
+            if maps.is_empty() {
+                // Defensive: every reported (non-empty) partition is
+                // supposed to carry a Map. Falling through to None means
+                // we degrade to bounds-only filtering.
+                None
+            } else {
+                Some(Arc::new(MultiMapLookupExpr::new(
+                    self.on_right.clone(),
+                    HASH_JOIN_SEED.clone(),
+                    maps,
+                    "multi_hash_lookup".to_string(),
+                )) as Arc<dyn PhysicalExpr>)
+            }
         };
 
-        Ok(filter_expr)
+        Ok(
+            combine_membership_and_bounds(membership_expr, global_bounds_expr)
+                .unwrap_or_else(|| lit(true)),
+        )
+    }
+
+    /// If every reported partition contributed an InList array and their
+    /// concatenated length stays within `cap`, return the merged
+    /// `(struct(...))? IN (SET) ([…])` expression — otherwise `None`.
+    fn try_build_merged_inlist(
+        &self,
+        real_partitions: &[&PartitionData],
+        cap: usize,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let mut total = 0usize;
+        let mut arrays: Vec<ArrayRef> = Vec::with_capacity(real_partitions.len());
+        for p in real_partitions {
+            let Some(arr) = &p.pushdown.inlist else {
+                return Ok(None);
+            };
+            total += arr.len();
+            if total > cap {
+                return Ok(None);
+            }
+            arrays.push(Arc::clone(arr));
+        }
+        let Some(merged) = merge_inlist_arrays(&arrays) else {
+            return Ok(None);
+        };
+        Ok(Some(create_inlist_predicate(
+            &self.on_right,
+            merged,
+            self.probe_schema.as_ref(),
+        )?))
     }
 }
 
@@ -895,7 +868,6 @@ mod tests {
             completion_notify: Notify::new(),
             dynamic_filter,
             on_right: vec![],
-            repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema,
         }
     }
@@ -930,7 +902,7 @@ mod tests {
                 &mut guard,
                 PartitionBuildData::Partitioned {
                     partition_id: 0,
-                    pushdown: PushdownStrategy::Empty,
+                    pushdown: PushdownStrategy::empty(),
                     bounds: PartitionBounds::new(vec![]),
                 },
             )

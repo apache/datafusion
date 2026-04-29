@@ -51,7 +51,6 @@ use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
 };
-use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -1316,9 +1315,9 @@ impl ExecutionPlan for HashJoinExec {
             .with_category(MetricCategory::Rows)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
-        // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
-        // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
-        let repartition_random_state = REPARTITION_RANDOM_STATE;
+        // Initialize build_accumulator lazily with runtime partition counts
+        // (only if enabled). The dynamic filter no longer routes by repartition
+        // hash, so REPARTITION_RANDOM_STATE is not needed here.
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -1335,7 +1334,6 @@ impl ExecutionPlan for HashJoinExec {
                             self.right.as_ref(),
                             filter,
                             on_right,
-                            repartition_random_state,
                         ))
                     })))
                 })
@@ -2038,29 +2036,31 @@ async fn collect_left_input(
 
     let map = Arc::new(join_hash_map);
 
+    // The `Map` is always built (the join itself uses it). The optional
+    // `inlist` array is set when the build side fit under the per-partition
+    // InList caps — that's our signal that this partition's keys are small
+    // enough to participate in parquet stats / bloom-filter pruning when
+    // collapsed across partitions on the probe-side scan.
     let membership = if num_rows == 0 {
-        PushdownStrategy::Empty
+        PushdownStrategy::empty()
     } else {
-        // If the build side is small enough we can use IN list pushdown.
-        // If it's too big we fall back to pushing down a reference to the hash table.
-        // See `PushdownStrategy` for more details.
         let estimated_size = left_values
             .iter()
             .map(|arr| arr.get_array_memory_size())
             .sum::<usize>();
-        if left_values.is_empty()
-            || left_values[0].is_empty()
-            || estimated_size > config.optimizer.hash_join_inlist_pushdown_max_size
-            || map.num_of_distinct_key()
-                > config
+        let fits_inlist = !left_values.is_empty()
+            && !left_values[0].is_empty()
+            && estimated_size <= config.optimizer.hash_join_inlist_pushdown_max_size
+            && map.num_of_distinct_key()
+                <= config
                     .optimizer
-                    .hash_join_inlist_pushdown_max_distinct_values
+                    .hash_join_inlist_pushdown_max_distinct_values;
+        if fits_inlist
+            && let Some(in_list_values) = build_struct_inlist_values(&left_values)?
         {
-            PushdownStrategy::Map(Arc::clone(&map))
-        } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
-            PushdownStrategy::InList(in_list_values)
+            PushdownStrategy::from_map_and_inlist(Arc::clone(&map), in_list_values)
         } else {
-            PushdownStrategy::Map(Arc::clone(&map))
+            PushdownStrategy::from_map(Arc::clone(&map))
         }
     };
 
