@@ -40,7 +40,7 @@ pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 
 /// Normalize a [`RecordBatch`] so that its embedded schema matches `expected_schema`.
 ///
-/// Execution operators declare their output schema via [`ExecutionPlan::schema`], but
+/// Execution operators declare their output schema via [`crate::ExecutionPlan::schema`], but
 /// child plans—particularly those planned independently such as the recursive term of
 /// a recursive CTE—may produce batches whose field *names* differ from the declared
 /// schema even though the data types are identical.  Downstream consumers that key on
