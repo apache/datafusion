@@ -28,6 +28,8 @@ name: Deploy DataFusion site
 
 jobs:
   build-docs:
+    permissions:
+      contents: write
     name: Build docs
     runs-on: ubuntu-latest
     steps:

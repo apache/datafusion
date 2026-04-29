@@ -20,6 +20,7 @@
 mod baseline;
 mod builder;
 mod custom;
+mod elapsed_compute;
 mod expression;
 mod value;
 
@@ -38,6 +39,7 @@ use std::{
 pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
 pub use custom::CustomMetricValue;
+pub use elapsed_compute::{ElapsedComputeFuture, ElapsedComputeFutureExt};
 pub use expression::ExpressionEvaluatorMetrics;
 pub use value::{
     Count, Gauge, MetricValue, PruningMetrics, RatioMergeStrategy, RatioMetrics,

@@ -170,6 +170,18 @@ pub trait Dialect: Send + Sync {
         Ok(None)
     }
 
+    /// Allows the dialect to override higher order function unparsing if the dialect has specific rules.
+    /// Returns None if the default unparsing should be used, or Some(ast::Expr) if there is
+    /// a custom implementation for the function.
+    fn higher_order_function_to_sql_overrides(
+        &self,
+        _unparser: &Unparser,
+        _func_name: &str,
+        _args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        Ok(None)
+    }
+
     /// Allows the dialect to choose to omit window frame in unparsing
     /// based on function name and window frame bound
     /// Returns false if specific function name / window frame bound indicates no window frame is needed in unparsing

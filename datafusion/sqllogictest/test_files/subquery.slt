@@ -688,8 +688,10 @@ query TT
 explain SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1
 ----
 logical_plan
-01)Projection: t1.t1_id, Int32(NULL) AS t2_id
-02)--TableScan: t1 projection=[t1_id]
+01)Projection: t1.t1_id, (<subquery>)
+02)--Subquery:
+03)----EmptyRelation: rows=0
+04)--TableScan: t1 projection=[t1_id]
 
 query II rowsort
 SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1
@@ -720,26 +722,79 @@ query TT
 explain select (select count(*) from t1) as b
 ----
 logical_plan
-01)Projection: __scalar_sq_1.count(*) AS b
-02)--SubqueryAlias: __scalar_sq_1
+01)Projection: (<subquery>) AS b
+02)--Subquery:
 03)----Projection: count(Int64(1)) AS count(*)
 04)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 05)--------TableScan: t1 projection=[]
+06)--EmptyRelation: rows=1
 
 #simple_uncorrelated_scalar_subquery2
 query TT
 explain select (select count(*) from t1) as b, (select count(1) from t2)
 ----
 logical_plan
-01)Projection: __scalar_sq_1.count(*) AS b, __scalar_sq_2.count(Int64(1)) AS count(Int64(1))
-02)--Left Join: 
-03)----SubqueryAlias: __scalar_sq_1
-04)------Projection: count(Int64(1)) AS count(*)
-05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-06)----------TableScan: t1 projection=[]
-07)----SubqueryAlias: __scalar_sq_2
-08)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-09)--------TableScan: t2 projection=[]
+01)Projection: (<subquery>) AS b, (<subquery>)
+02)--Subquery:
+03)----Projection: count(Int64(1)) AS count(*)
+04)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+05)--------TableScan: t1 projection=[]
+06)--Subquery:
+07)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+08)------TableScan: t2 projection=[]
+09)--EmptyRelation: rows=1
+
+# Verify projection pushdown works inside uncorrelated scalar subqueries.
+# Each test targets a different early-return path in OptimizeProjections
+# to ensure subquery plans are optimized regardless of where the subquery
+# expression appears.
+
+# Subquery in a Filter predicate: the TableScan inside the subquery should
+# only read t2_id, not all columns.
+query TT
+explain select t1_id from t1 where t1_id > (select max(t2_id) from t2)
+----
+logical_plan
+01)Filter: t1.t1_id > (<subquery>)
+02)--Subquery:
+03)----Aggregate: groupBy=[[]], aggr=[[max(t2.t2_id)]]
+04)------TableScan: t2 projection=[t2_id]
+05)--TableScan: t1 projection=[t1_id]
+
+# Subquery in a Projection expression
+query TT
+explain select t1_id, (select max(t2_id) from t2) as max_t2 from t1
+----
+logical_plan
+01)Projection: t1.t1_id, (<subquery>) AS max_t2
+02)--Subquery:
+03)----Aggregate: groupBy=[[]], aggr=[[max(t2.t2_id)]]
+04)------TableScan: t2 projection=[t2_id]
+05)--TableScan: t1 projection=[t1_id]
+
+# Subquery in an Aggregate expression
+query TT
+explain select sum(t1_int + (select min(t2_int) from t2)) as s from t1
+----
+logical_plan
+01)Projection: sum(t1.t1_int + min(t2.t2_int)) AS s
+02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(t1.t1_int + (<subquery>) AS Int64))]]
+03)----Subquery:
+04)------Aggregate: groupBy=[[]], aggr=[[min(t2.t2_int)]]
+05)--------TableScan: t2 projection=[t2_int]
+06)----TableScan: t1 projection=[t1_int]
+
+# Subquery in a Window expression
+query TT
+explain select t1_id, sum(t1_int + (select min(t2_int) from t2)) over () as win from t1
+----
+logical_plan
+01)Projection: t1.t1_id, sum(t1.t1_int + min(t2.t2_int)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS win
+02)--WindowAggr: windowExpr=[[sum(CAST(t1.t1_int + (<subquery>) AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Subquery:
+04)------Aggregate: groupBy=[[]], aggr=[[min(t2.t2_int)]]
+05)--------TableScan: t2 projection=[t2_int]
+06)----TableScan: t1 projection=[t1_id, t1_int]
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
@@ -748,22 +803,23 @@ query TT
 explain select (select count(*) from t1) as b, (select count(1) from t2)
 ----
 logical_plan
-01)Projection: __scalar_sq_1.count(*) AS b, __scalar_sq_2.count(Int64(1)) AS count(Int64(1))
-02)--Left Join: 
-03)----SubqueryAlias: __scalar_sq_1
-04)------Projection: count(Int64(1)) AS count(*)
-05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-06)----------TableScan: t1 projection=[]
-07)----SubqueryAlias: __scalar_sq_2
-08)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-09)--------TableScan: t2 projection=[]
+01)Projection: (<subquery>) AS b, (<subquery>)
+02)--Subquery:
+03)----Projection: count(Int64(1)) AS count(*)
+04)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+05)--------TableScan: t1 projection=[]
+06)--Subquery:
+07)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+08)------TableScan: t2 projection=[]
+09)--EmptyRelation: rows=1
 physical_plan
-01)ProjectionExec: expr=[count(*)@0 as b, count(Int64(1))@1 as count(Int64(1))]
-02)--NestedLoopJoinExec: join_type=Left
-03)----ProjectionExec: expr=[4 as count(*)]
-04)------PlaceholderRowExec
-05)----ProjectionExec: expr=[4 as count(Int64(1))]
-06)------PlaceholderRowExec
+01)ScalarSubqueryExec: subqueries=2
+02)--ProjectionExec: expr=[scalar_subquery(<pending>) as b, scalar_subquery(<pending>) as count(Int64(1))]
+03)----PlaceholderRowExec
+04)--ProjectionExec: expr=[4 as count(*)]
+05)----PlaceholderRowExec
+06)--ProjectionExec: expr=[4 as count(Int64(1))]
+07)----PlaceholderRowExec
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
@@ -1669,6 +1725,316 @@ drop table employees;
 statement count 0
 drop table project_assignments;
 
+#############
+## Uncorrelated scalar subquery row-count semantics
+## A scalar subquery must return at most one row; returning more is an error.
+#############
+
+statement ok
+CREATE TABLE sq_values(v INT) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE sq_main(x INT) AS VALUES (10), (20);
+
+statement ok
+CREATE TABLE sq_empty(v INT) AS VALUES (1) LIMIT 0;
+
+# Scalar subquery returning multiple rows in SELECT position → error
+query error DataFusion error: Execution error: Scalar subquery returned more than one row
+SELECT (SELECT v FROM sq_values);
+
+# Scalar subquery returning multiple rows in WHERE position → error
+query error DataFusion error: Execution error: Scalar subquery returned more than one row
+SELECT x FROM sq_main WHERE x > (SELECT v FROM sq_values);
+
+# Scalar subquery returning multiple rows as a function argument → error
+query error DataFusion error: Execution error: Scalar subquery returned more than one row
+SELECT x + (SELECT v FROM sq_values) FROM sq_main;
+
+# Scalar subquery returning exactly one row → success
+query I
+SELECT (SELECT v FROM sq_values LIMIT 1);
+----
+1
+
+# Scalar subquery returning exactly one row in WHERE → success
+query I rowsort
+SELECT x FROM sq_main WHERE x > (SELECT v FROM sq_values LIMIT 1);
+----
+10
+20
+
+# Scalar subquery returning zero rows → NULL
+query I
+SELECT (SELECT v FROM sq_empty);
+----
+NULL
+
+# Scalar subquery returning zero rows in arithmetic → NULL propagation
+query I
+SELECT x + (SELECT v FROM sq_empty) FROM sq_main;
+----
+NULL
+NULL
+
+# Scalar subquery returning zero rows in WHERE comparison → no matching rows
+query I
+SELECT x FROM sq_main WHERE x > (SELECT v FROM sq_empty);
+----
+
+# Aggregated subquery always returns one row, even on empty input → success
+query I
+SELECT (SELECT count(*) FROM sq_empty);
+----
+0
+
+# Aggregated subquery on multi-row table → success (aggregation reduces to 1 row)
+query I
+SELECT (SELECT max(v) FROM sq_values);
+----
+3
+
+# Multiple scalar subqueries, one returns multiple rows → error
+query error DataFusion error: Execution error: Scalar subquery returned more than one row
+SELECT (SELECT count(*) FROM sq_empty), (SELECT v FROM sq_values);
+
+#############
+## Uncorrelated scalar subqueries in various expression contexts
+#############
+
+# HAVING clause with uncorrelated scalar subquery
+query II rowsort
+SELECT x, count(*) AS cnt FROM sq_main GROUP BY x
+HAVING count(*) > (SELECT min(v) FROM sq_values);
+----
+
+# CASE WHEN with uncorrelated scalar subquery as condition
+query T rowsort
+SELECT CASE WHEN x > (SELECT min(v) FROM sq_values)
+            THEN 'big' ELSE 'small' END AS label
+FROM sq_main;
+----
+big
+big
+
+# ORDER BY with uncorrelated scalar subquery
+query I
+SELECT x FROM sq_main ORDER BY x + (SELECT max(v) FROM sq_values);
+----
+10
+20
+
+# Aggregate function argument containing uncorrelated scalar subquery
+query I
+SELECT sum(x + (SELECT max(v) FROM sq_values)) AS s FROM sq_main;
+----
+36
+
+# JOIN ON condition with uncorrelated scalar subquery
+query II rowsort
+SELECT l.x, r.x AS rx
+FROM sq_main AS l JOIN sq_main AS r
+ON l.x = r.x + (SELECT min(v) FROM sq_values);
+----
+
+# Nested uncorrelated-in-uncorrelated scalar subquery.
+query I
+SELECT (SELECT max(v) + (SELECT min(v) FROM sq_values) FROM sq_values);
+----
+4
+
+# Verify nested subqueries are not hoisted: the root ScalarSubqueryExec
+# should manage only the outer subquery (subqueries=1), not both.
+query TT
+EXPLAIN SELECT (SELECT max(v) + (SELECT min(v) FROM sq_values) FROM sq_values);
+----
+logical_plan
+01)Projection: (<subquery>)
+02)--Subquery:
+03)----Projection: max(sq_values.v) + (<subquery>)
+04)------Subquery:
+05)--------Aggregate: groupBy=[[]], aggr=[[min(sq_values.v)]]
+06)----------TableScan: sq_values projection=[v]
+07)------Aggregate: groupBy=[[]], aggr=[[max(sq_values.v)]]
+08)--------TableScan: sq_values projection=[v]
+09)--EmptyRelation: rows=1
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--ProjectionExec: expr=[scalar_subquery(<pending>) as max(sq_values.v) + min(sq_values.v)]
+03)----PlaceholderRowExec
+04)--ScalarSubqueryExec: subqueries=1
+05)----ProjectionExec: expr=[max(sq_values.v)@0 + scalar_subquery(<pending>) as max(sq_values.v) + min(sq_values.v)]
+06)------AggregateExec: mode=Single, gby=[], aggr=[max(sq_values.v)]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----AggregateExec: mode=Single, gby=[], aggr=[min(sq_values.v)]
+09)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# CTE as source inside uncorrelated scalar subquery
+query I
+SELECT (SELECT s FROM (WITH cte AS (SELECT max(v) AS s FROM sq_values) SELECT s FROM cte));
+----
+3
+
+# Window function with uncorrelated scalar subquery
+query II rowsort
+SELECT x, sum(x + (SELECT max(v) FROM sq_values)) OVER () AS win_sum FROM sq_main;
+----
+10 36
+20 36
+
+# Duplicate uncorrelated scalar subqueries only appear in the query plan once
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+query TT
+explain SELECT (SELECT max(v) FROM sq_values) + (SELECT max(v) FROM sq_values) AS doubled;
+----
+logical_plan
+01)Projection: __common_expr_1 + __common_expr_1 AS doubled
+02)--Projection: (<subquery>) AS __common_expr_1
+03)----Subquery:
+04)------Aggregate: groupBy=[[]], aggr=[[max(sq_values.v)]]
+05)--------TableScan: sq_values projection=[v]
+06)----EmptyRelation: rows=1
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--ProjectionExec: expr=[__common_expr_1@0 + __common_expr_1@0 as doubled]
+03)----ProjectionExec: expr=[scalar_subquery(<pending>) as __common_expr_1]
+04)------PlaceholderRowExec
+05)--AggregateExec: mode=Single, gby=[], aggr=[max(sq_values.v)]
+06)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+#############
+## Additional edge cases inspired by DuckDB scalar subquery bugs and tests.
+## References:
+##   DuckDB issue #13639: volatile functions in uncorrelated subqueries
+##   DuckDB issue #13469 / PR #13514: multi-row error semantics
+##   DuckDB issue #4113: uncorrelated scalar subquery wrong results
+##   DuckDB test: test/sql/subquery/scalar/test_uncorrelated_scalar_subquery.test
+##   DuckDB test: test/sql/subquery/scalar/test_scalar_subquery.test
+##   DuckDB test: test/sql/subquery/scalar/test_scalar_subquery_cte.test
+##   DuckDB test: test/sql/order/test_limit.test
+##   DuckDB PR #8519: TopN optimization with scalar subquery in LIMIT/OFFSET
+#############
+
+# Volatile function in uncorrelated subquery: random() is evaluated once and
+# the same value is used for every outer row. Both Postgres and DuckDB (#13639)
+# exhibit this behavior; it is correct per the SQL standard.
+# We cannot assert the exact value, but we can verify all rows are identical.
+query B
+SELECT count(DISTINCT r) = 1 FROM (
+  SELECT (SELECT random()) AS r
+  FROM (VALUES (1), (2), (3)) AS t(x)
+);
+----
+true
+
+# Subquery as GROUP BY key.
+# Ref: DuckDB test_uncorrelated_scalar_subquery.test, test #6
+query II
+SELECT (SELECT 42) AS k, max(x) FROM (VALUES (1), (2), (3)) AS t(x) GROUP BY k;
+----
+42 3
+
+# Subquery inside an aggregate function argument.
+# Ref: DuckDB test_uncorrelated_scalar_subquery.test, test #7
+query II
+SELECT x, max((SELECT 42)) FROM (VALUES (1), (2), (3)) AS t(x) GROUP BY x ORDER BY x;
+----
+1 42
+2 42
+3 42
+
+# Doubly-nested constant subquery.
+# Ref: DuckDB test_scalar_subquery.test
+query I
+SELECT (SELECT (SELECT 42));
+----
+42
+
+# Triple-nested constant subquery.
+query I
+SELECT (SELECT (SELECT (SELECT 99)));
+----
+99
+
+# Star expansion: single column is OK.
+# Ref: DuckDB test_uncorrelated_scalar_subquery.test, tests #16-17
+query I
+SELECT (SELECT * FROM (VALUES (1)) AS t(x));
+----
+1
+
+# Star expansion: two columns must error.
+query error Too many columns
+SELECT (SELECT * FROM (VALUES (1, 2)) AS t(x, y));
+
+# Subquery in BETWEEN bounds.
+query I
+SELECT x FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)
+WHERE x BETWEEN (SELECT 2) AND (SELECT 4)
+ORDER BY x;
+----
+2
+3
+4
+
+# DISTINCT subquery returning exactly one distinct value (multi-row input).
+query I
+SELECT (SELECT DISTINCT 42 FROM (VALUES (1), (2), (3)) AS t(x));
+----
+42
+
+# DISTINCT subquery returning multiple distinct values must error.
+query error DataFusion error: Execution error: Scalar subquery returned more than one row
+SELECT (SELECT DISTINCT x FROM (VALUES (1), (2), (3)) AS t(x));
+
+# NULL comparison semantics through subquery boundary.
+# Ref: DuckDB test_scalar_subquery.test, NULL edge cases
+query B
+SELECT 1 = (SELECT CAST(NULL AS INT));
+----
+NULL
+
+query B
+SELECT CAST(NULL AS INT) = (SELECT 1);
+----
+NULL
+
+# Nested CTE inside scalar subquery.
+# Ref: DuckDB test_scalar_subquery_cte.test, nested CTE test
+query I
+SELECT (WITH cte1 AS (WITH cte2 AS (SELECT 42) SELECT * FROM cte2) SELECT * FROM cte1);
+----
+42
+
+# Subquery in LIMIT: not yet supported, verify clear error message.
+# Ref: DuckDB PR #8519, DuckDB test/sql/order/test_limit.test
+query error This feature is not implemented: Unsupported LIMIT expression
+SELECT * FROM (VALUES (1), (2), (3)) AS t(x) ORDER BY x LIMIT (SELECT 2);
+
+# Subquery in OFFSET: not yet supported, verify clear error message.
+query error This feature is not implemented: Unsupported OFFSET expression
+SELECT * FROM (VALUES (1), (2), (3)) AS t(x) ORDER BY x OFFSET (SELECT 1);
+
+# UNION ALL subquery with ORDER BY + LIMIT 1 to avoid multi-row error.
+query I
+SELECT (SELECT v FROM (SELECT 1 AS v UNION ALL SELECT 2) AS t ORDER BY v LIMIT 1);
+----
+1
+
+statement count 0
+DROP TABLE sq_values;
+
+statement count 0
+DROP TABLE sq_main;
+
+statement count 0
+DROP TABLE sq_empty;
+
 # https://github.com/apache/datafusion/issues/21205
 statement ok
 CREATE TABLE dup_filter_t1(id INTEGER) AS VALUES (1), (2), (3);
@@ -1736,3 +2102,38 @@ DROP TABLE sq_name_t1;
 
 statement ok
 DROP TABLE sq_name_t2;
+
+# Test: scalar subquery in filter on a partition column of a partitioned table.
+# This exercises the code path where filters are pushed down to the table
+# provider for partition pruning. Scalar subqueries must not be pushed to the
+# provider because the subquery result is not available at partition listing
+# time.
+
+query I
+COPY (VALUES(1, 'a'), (2, 'b'), (3, 'c'))
+TO 'test_files/scratch/subquery/partition_pruning/part=1/file1.parquet';
+----
+3
+
+query I
+COPY (VALUES(4, 'd'), (5, 'e'))
+TO 'test_files/scratch/subquery/partition_pruning/part=2/file1.parquet';
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE subquery_partitioned
+STORED AS PARQUET
+LOCATION 'test_files/scratch/subquery/partition_pruning/';
+
+query IT
+SELECT column1, column2 FROM subquery_partitioned
+WHERE part = (SELECT 1)
+ORDER BY column1;
+----
+1 a
+2 b
+3 c
+
+statement ok
+DROP TABLE subquery_partitioned;
