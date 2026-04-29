@@ -120,7 +120,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
         // As a optimization, we ensure the `single block` always exist
         // in flat mode, it can eliminate an expansive row-level empty checking
         let mut values = VecBlocks::new(None);
-        values.push_block(Vec::new());
+        values.push_block(Vec::with_capacity(128));
 
         Self {
             data_type,
