@@ -60,7 +60,7 @@ impl ArrayFormatterFactory for DFArrayFormatterFactory {
         };
 
         registration
-            .create_df_extension_type(field.extension_type_metadata())?
+            .create_df_extension_type(field.data_type(), field.extension_type_metadata())?
             .create_array_formatter(array, options)
             .map_err(ArrowError::from)
     }

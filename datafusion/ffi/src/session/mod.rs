@@ -22,8 +22,6 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
-use arrow_schema::SchemaRef;
-use arrow_schema::ffi::FFI_ArrowSchema;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigFileType, ConfigOptions, TableOptions};
@@ -47,11 +45,6 @@ use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::Session;
 use prost::Message;
 
-use stabby::str::Str as SStr;
-use stabby::string::String as SString;
-use stabby::vec::Vec as SVec;
-use tokio::runtime::Handle;
-use datafusion_expr::registry::{ExtensionTypeRegistry, ExtensionTypeRegistryRef};
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;
@@ -63,6 +56,10 @@ use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
 use crate::util::FFI_Result;
 use crate::{df_result, sresult, sresult_return};
+use stabby::str::Str as SStr;
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
+use tokio::runtime::Handle;
 
 pub mod config;
 

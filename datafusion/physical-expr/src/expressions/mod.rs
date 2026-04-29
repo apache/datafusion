@@ -59,4 +59,5 @@ pub use not::{NotExpr, not};
 pub use try_cast::{TryCastExpr, try_cast};
 pub use unknown_column::UnKnownColumn;
 
+pub use cast::cast_with_extension;
 pub(crate) use cast::cast_with_target_field;

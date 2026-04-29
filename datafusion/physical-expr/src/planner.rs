@@ -29,6 +29,7 @@ use arrow::compute::CastOptions;
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::FieldExt;
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, ToDFSchema, exec_err, internal_datafusion_err,
@@ -304,7 +305,6 @@ pub fn create_physical_expr(
             };
 
             // Need to figure out what happened here
-
 
             if !field.metadata().is_empty() {
                 if let Some(registry) = &execution_props.extension_types

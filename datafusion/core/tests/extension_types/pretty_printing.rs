@@ -23,6 +23,7 @@ use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
+use datafusion_expr::planner::TypePlanner;
 use datafusion_expr::registry::MemoryExtensionTypeRegistry;
 use insta::assert_snapshot;
 use std::sync::Arc;

@@ -23,14 +23,7 @@ use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use arrow::datatypes::Field;
 use arrow_schema::DataType;
-use arrow_schema::extension::{
-    Bool8, ExtensionType, FixedShapeTensor, Json, Opaque, TimestampWithOffset, Uuid,
-    VariableShapeTensor,
-};
-use datafusion_common::types::{
-    DFBool8, DFExtensionTypeRef, DFFixedShapeTensor, DFJson, DFOpaque,
-    DFTimestampWithOffset, DFUuid, DFVariableShapeTensor,
-};
+use datafusion_common::types::DFExtensionTypeRef;
 use datafusion_common::{HashMap, Result, not_impl_err, plan_datafusion_err};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
@@ -450,68 +443,70 @@ impl MemoryExtensionTypeRegistry {
     /// Pre-registers the [canonical extension types](https://arrow.apache.org/docs/format/CanonicalExtensions.html)
     /// in the extension type registry.
     pub fn new_with_canonical_extension_types() -> Self {
-        let mapping = [
-            ExtensionTypeRegistration::new_arc(
-                FixedShapeTensor::NAME,
-                |storage_type, metadata| {
-                    Ok(Arc::new(DFFixedShapeTensor::try_new(
-                        storage_type,
-                        FixedShapeTensor::deserialize_metadata(metadata)?,
-                    )?))
-                },
-            ),
-            ExtensionTypeRegistration::new_arc(
-                VariableShapeTensor::NAME,
-                |storage_type, metadata| {
-                    Ok(Arc::new(DFVariableShapeTensor::try_new(
-                        storage_type,
-                        VariableShapeTensor::deserialize_metadata(metadata)?,
-                    )?))
-                },
-            ),
-            ExtensionTypeRegistration::new_arc(Json::NAME, |storage_type, metadata| {
-                Ok(Arc::new(DFJson::try_new(
-                    storage_type,
-                    Json::deserialize_metadata(metadata)?,
-                )?))
-            }),
-            ExtensionTypeRegistration::new_arc(Uuid::NAME, |storage_type, metadata| {
-                Ok(Arc::new(DFUuid::try_new(
-                    storage_type,
-                    Uuid::deserialize_metadata(metadata)?,
-                )?))
-            }),
-            ExtensionTypeRegistration::new_arc(Opaque::NAME, |storage_type, metadata| {
-                Ok(Arc::new(DFOpaque::try_new(
-                    storage_type,
-                    Opaque::deserialize_metadata(metadata)?,
-                )?))
-            }),
-            ExtensionTypeRegistration::new_arc(Bool8::NAME, |storage_type, metadata| {
-                Ok(Arc::new(DFBool8::try_new(
-                    storage_type,
-                    Bool8::deserialize_metadata(metadata)?,
-                )?))
-            }),
-            ExtensionTypeRegistration::new_arc(
-                TimestampWithOffset::NAME,
-                |storage_type, metadata| {
-                    Ok(Arc::new(DFTimestampWithOffset::try_new(
-                        storage_type,
-                        TimestampWithOffset::deserialize_metadata(metadata)?,
-                    )?))
-                },
-            ),
-        ];
+        // Figure out what happened here
+        // let mapping = [
+        //     ExtensionTypeRegistration::new_arc(
+        //         FixedShapeTensor::NAME,
+        //         |storage_type, metadata| {
+        //             Ok(Arc::new(DFFixedShapeTensor::try_new(
+        //                 storage_type,
+        //                 FixedShapeTensor::deserialize_metadata(metadata)?,
+        //             )?))
+        //         },
+        //     ),
+        //     ExtensionTypeRegistration::new_arc(
+        //         VariableShapeTensor::NAME,
+        //         |storage_type, metadata| {
+        //             Ok(Arc::new(DFVariableShapeTensor::try_new(
+        //                 storage_type,
+        //                 VariableShapeTensor::deserialize_metadata(metadata)?,
+        //             )?))
+        //         },
+        //     ),
+        //     ExtensionTypeRegistration::new_arc(Json::NAME, |storage_type, metadata| {
+        //         Ok(Arc::new(DFJson::try_new(
+        //             storage_type,
+        //             Json::deserialize_metadata(metadata)?,
+        //         )?))
+        //     }),
+        //     ExtensionTypeRegistration::new_arc(Uuid::NAME, |storage_type, metadata| {
+        //         Ok(Arc::new(DFUuid::try_new(
+        //             storage_type,
+        //             Uuid::deserialize_metadata(metadata)?,
+        //         )?))
+        //     }),
+        //     ExtensionTypeRegistration::new_arc(Opaque::NAME, |storage_type, metadata| {
+        //         Ok(Arc::new(DFOpaque::try_new(
+        //             storage_type,
+        //             Opaque::deserialize_metadata(metadata)?,
+        //         )?))
+        //     }),
+        //     ExtensionTypeRegistration::new_arc(Bool8::NAME, |storage_type, metadata| {
+        //         Ok(Arc::new(DFBool8::try_new(
+        //             storage_type,
+        //             Bool8::deserialize_metadata(metadata)?,
+        //         )?))
+        //     }),
+        //     ExtensionTypeRegistration::new_arc(
+        //         TimestampWithOffset::NAME,
+        //         |storage_type, metadata| {
+        //             Ok(Arc::new(DFTimestampWithOffset::try_new(
+        //                 storage_type,
+        //                 TimestampWithOffset::deserialize_metadata(metadata)?,
+        //             )?))
+        //         },
+        //     ),
+        // ];
 
-        let mut extension_types = HashMap::new();
-        for registration in mapping.into_iter() {
-            extension_types.insert(registration.type_name().to_owned(), registration);
-        }
+        // let mut extension_types = HashMap::new();
+        // for registration in mapping.into_iter() {
+        //     extension_types.insert(registration.type_name().to_owned(), registration);
+        // }
 
-        Self {
-            extension_types: Arc::new(RwLock::new(HashMap::from(extension_types))),
-        }
+        // Self {
+        //     extension_types: Arc::new(RwLock::new(HashMap::from(extension_types))),
+        // }
+        Self::new_empty()
     }
 
     /// Creates a new [MemoryExtensionTypeRegistry] with the provided `types`.

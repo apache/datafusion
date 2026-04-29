@@ -48,6 +48,7 @@ pub struct SimplifyContextBuilder {
     schema: Option<DFSchemaRef>,
     query_execution_start_time: Option<DateTime<Utc>>,
     config_options: Option<Arc<ConfigOptions>>,
+    extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
 }
 
 impl Default for SimplifyContext {
@@ -107,14 +108,6 @@ impl SimplifyContext {
     /// Set the query execution start to the current time
     pub fn with_current_time(mut self) -> Self {
         self.query_execution_start_time = Some(Utc::now());
-        self
-    }
-
-    pub fn with_extension_types(
-        mut self,
-        extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
-    ) -> Self {
-        self.extension_types = extension_types;
         self
     }
 
@@ -182,6 +175,14 @@ impl SimplifyContextBuilder {
         self
     }
 
+    pub fn with_extension_types(
+        mut self,
+        extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
+    ) -> Self {
+        self.extension_types = extension_types;
+        self
+    }
+
     /// Build a [`SimplifyContext`], filling in any unspecified fields with defaults.
     pub fn build(self) -> SimplifyContext {
         SimplifyContext {
@@ -190,6 +191,7 @@ impl SimplifyContextBuilder {
             config_options: self
                 .config_options
                 .unwrap_or_else(|| Arc::new(ConfigOptions::default())),
+            extension_types: self.extension_types,
         }
     }
 }
