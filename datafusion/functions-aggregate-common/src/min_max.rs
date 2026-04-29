@@ -18,8 +18,8 @@
 //! Basic min/max functionality shared across DataFusion aggregate functions
 
 use arrow::array::{
-    ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
     DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
     Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
@@ -141,10 +141,25 @@ macro_rules! min_max_generic {
     }};
 }
 
-// min/max of two scalar values of the same type
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
-        Ok(match ($VALUE, $DELTA) {
+        match choose_min_max!($OP) {
+            Ordering::Greater => Ok(min_max_scalar_impl!($VALUE, $DELTA, min)),
+            Ordering::Less => Ok(min_max_scalar_impl!($VALUE, $DELTA, max)),
+            Ordering::Equal => {
+                unreachable!("min/max comparisons do not use equal ordering")
+            }
+        }
+    }};
+}
+
+// min/max of two logically compatible scalar values.
+// Dictionary scalars participate by comparing their inner logical values.
+// When both inputs are dictionaries, matching key types are preserved in the
+// result; differing key types remain an unexpected invariant violation.
+macro_rules! min_max_scalar_impl {
+    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
+        match ($VALUE, $DELTA) {
             (ScalarValue::Null, ScalarValue::Null) => ScalarValue::Null,
             (
                 lhs @ ScalarValue::Decimal32(lhsv, lhsp, lhss),
@@ -413,14 +428,52 @@ macro_rules! min_max {
                 min_max_generic!(lhs, rhs, $OP)
             }
 
+            (
+                ScalarValue::Dictionary(lhs_dict_key_type, lhs_dict_value),
+                ScalarValue::Dictionary(rhs_dict_key_type, rhs_dict_value),
+            ) => {
+                if lhs_dict_key_type != rhs_dict_key_type {
+                    return internal_err!(
+                        "MIN/MAX is not expected to receive dictionary scalars with different key types ({:?} vs {:?})",
+                        lhs_dict_key_type,
+                        rhs_dict_key_type
+                    );
+                }
+
+                let result = min_max_scalar(
+                    lhs_dict_value.as_ref(),
+                    rhs_dict_value.as_ref(),
+                    choose_min_max!($OP),
+                )?;
+                ScalarValue::Dictionary(lhs_dict_key_type.clone(), Box::new(result))
+            }
+            (ScalarValue::Dictionary(_, lhs_dict_value), rhs_scalar) => {
+                min_max_scalar(lhs_dict_value.as_ref(), rhs_scalar, choose_min_max!($OP))?
+            }
+            (lhs_scalar, ScalarValue::Dictionary(_, rhs_dict_value)) => {
+                min_max_scalar(lhs_scalar, rhs_dict_value.as_ref(), choose_min_max!($OP))?
+            }
+
             e => {
                 return internal_err!(
-                    "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
+                    "MIN/MAX is not expected to receive logically incompatible scalar values {:?}",
                     e
                 )
             }
-        })
+        }
     }};
+}
+
+fn min_max_scalar(
+    lhs: &ScalarValue,
+    rhs: &ScalarValue,
+    ordering: Ordering,
+) -> Result<ScalarValue> {
+    match ordering {
+        Ordering::Greater => Ok(min_max_scalar_impl!(lhs, rhs, min)),
+        Ordering::Less => Ok(min_max_scalar_impl!(lhs, rhs, max)),
+        Ordering::Equal => unreachable!("min/max comparisons do not use equal ordering"),
+    }
 }
 
 /// An accumulator to compute the maximum value
@@ -760,16 +813,11 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
-        DataType::Struct(_) => min_max_batch_generic(values, Ordering::Greater)?,
-        DataType::List(_) => min_max_batch_generic(values, Ordering::Greater)?,
-        DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Greater)?,
-        DataType::FixedSizeList(_, _) => {
-            min_max_batch_generic(values, Ordering::Greater)?
-        }
-        DataType::Dictionary(_, _) => {
-            let values = values.as_any_dictionary().values();
-            min_batch(values)?
-        }
+        DataType::Struct(_)
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Dictionary(_, _) => min_max_batch_generic(values, Ordering::Greater)?,
         _ => min_max_batch!(values, min),
     })
 }
@@ -843,14 +891,94 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
             let value = value.map(|e| e.to_vec());
             ScalarValue::FixedSizeBinary(*size, value)
         }
-        DataType::Struct(_) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::FixedSizeList(_, _) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::Dictionary(_, _) => {
-            let values = values.as_any_dictionary().values();
-            max_batch(values)?
-        }
+        DataType::Struct(_)
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Dictionary(_, _) => min_max_batch_generic(values, Ordering::Less)?,
         _ => min_max_batch!(values, max),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn min_max_dictionary_and_scalar_compare_by_inner_value() -> Result<()> {
+        let dictionary = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(1.0))),
+        );
+        let scalar = ScalarValue::Float32(Some(2.0));
+
+        let result = min_max_scalar(&dictionary, &scalar, Ordering::Less)?;
+
+        assert_eq!(result, ScalarValue::Float32(Some(2.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_dictionary_same_key_type_rewraps_result() -> Result<()> {
+        let lhs = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(1.0))),
+        );
+        let rhs = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(2.0))),
+        );
+
+        let result = min_max_scalar(&lhs, &rhs, Ordering::Less)?;
+
+        assert_eq!(
+            result,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Float32(Some(2.0))),
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_dictionary_different_key_types_error() -> Result<()> {
+        let lhs = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Float32(Some(1.0))),
+        );
+        let rhs = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(2.0))),
+        );
+
+        let error: DataFusionError =
+            min_max_scalar(&lhs, &rhs, Ordering::Less).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("dictionary scalars with different key types")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_dictionary_and_incompatible_scalar_error() -> Result<()> {
+        let dictionary = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Float32(Some(1.0))),
+        );
+        let scalar = ScalarValue::Int32(Some(2));
+
+        let error: DataFusionError =
+            min_max_scalar(&dictionary, &scalar, Ordering::Less).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("logically incompatible scalar values")
+        );
+        Ok(())
+    }
 }

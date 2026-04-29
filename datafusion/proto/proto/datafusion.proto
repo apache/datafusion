@@ -62,6 +62,7 @@ message LogicalPlanNode {
     RecursiveQueryNode recursive_query = 31;
     CteWorkTableScanNode cte_work_table_scan = 32;
     DmlNode dml = 33;
+    EmptyTableScanNode empty_table_scan = 34;
   }
 }
 
@@ -426,11 +427,22 @@ message LogicalExprNode {
 
     Unnest unnest = 35;
 
+    // Subquery expressions
+    ScalarSubqueryExprNode scalar_subquery_expr = 36;
   }
 }
 
 message Wildcard {
   TableReference qualifier = 1;
+}
+
+message SubqueryNode {
+  LogicalPlanNode subquery = 1;
+  repeated LogicalExprNode outer_ref_columns = 2;
+}
+
+message ScalarSubqueryExprNode {
+  SubqueryNode subquery = 1;
 }
 
 message PlaceholderNode {
@@ -775,6 +787,7 @@ message PhysicalPlanNode {
     AsyncFuncExecNode async_func = 36;
     BufferExecNode buffer = 37;
     ArrowScanExecNode arrow_scan = 38;
+    ScalarSubqueryExecNode scalar_subquery = 39;
   }
 }
 
@@ -920,6 +933,8 @@ message PhysicalExprNode {
     UnknownColumn unknown_column = 20;
 
     PhysicalHashExprNode hash_expr = 21;
+
+    PhysicalScalarSubqueryExprNode scalar_subquery = 22;
   }
 }
 
@@ -1412,6 +1427,13 @@ message CteWorkTableScanNode {
     datafusion_common.Schema schema = 2;
 }
 
+message EmptyTableScanNode {
+    TableReference table_name = 1;
+    datafusion_common.Schema schema = 2;
+    ProjectionColumns projection = 3;
+    repeated LogicalExprNode filters = 4;
+}
+
 enum GenerateSeriesName {
   GS_GENERATE_SERIES = 0;
   GS_RANGE = 1;
@@ -1477,4 +1499,15 @@ message AsyncFuncExecNode {
 message BufferExecNode {
   PhysicalPlanNode input = 1;
   uint64 capacity = 2;
+}
+
+message ScalarSubqueryExecNode {
+  PhysicalPlanNode input = 1;
+  repeated PhysicalPlanNode subqueries = 2;
+}
+
+message PhysicalScalarSubqueryExprNode {
+  datafusion_common.ArrowType data_type = 1;
+  bool nullable = 2;
+  uint32 index = 3;
 }
