@@ -156,3 +156,65 @@ Int64 Int64 Int64 Decimal128(4, 0)
 
 statement ok
 DROP TABLE floor_test;
+
+#####################
+## Additional cases ##
+#####################
+
+# Float scalar — floor rounds toward negative infinity for fractional values
+query II
+SELECT floor(1.9::DOUBLE), floor(-1.9::DOUBLE);
+----
+1 -2
+
+query II
+SELECT floor(1.9::FLOAT), floor(-1.9::FLOAT);
+----
+1 -2
+
+# Int8 boundary values pass through as Int64
+query III
+SELECT floor(127::TINYINT), floor(-128::TINYINT), floor(NULL::TINYINT);
+----
+127 -128 NULL
+
+# Int64 boundary values pass through unchanged
+query II
+SELECT floor(arrow_cast(9223372036854775807, 'Int64')), floor(arrow_cast(-9223372036854775808, 'Int64'));
+----
+9223372036854775807 -9223372036854775808
+
+# Decimal128 negative NULL scalar at given precision/scale
+query RT
+SELECT floor(NULL::DECIMAL(5,2)), arrow_typeof(floor(NULL::DECIMAL(5,2)));
+----
+NULL Decimal128(4, 0)
+
+# Decimal128 array with explicit precision (5,2) — values 123.45, 125.00, -129.99
+query R
+SELECT floor(a) FROM (VALUES (123.45::DECIMAL(5,2)), (125.00::DECIMAL(5,2)), (-129.99::DECIMAL(5,2)), (NULL::DECIMAL(5,2))) AS t(a);
+----
+123
+125
+-130
+NULL
+
+# Decimal128 array with scale 0 — passes through unchanged
+query RT
+SELECT floor(a), arrow_typeof(floor(a))
+FROM (VALUES (123::DECIMAL(10,0)), (-456::DECIMAL(10,0)), (NULL::DECIMAL(10,0))) AS t(a);
+----
+123 Decimal128(10, 0)
+-456 Decimal128(10, 0)
+NULL Decimal128(10, 0)
+
+# Decimal128 scale > 0 returns Decimal128(p-s+1, 0)
+query RT
+SELECT floor(56.7::DECIMAL(3,1)), arrow_typeof(floor(56.7::DECIMAL(3,1)));
+----
+56 Decimal128(3, 0)
+
+query RT
+SELECT floor(-56.7::DECIMAL(3,1)), arrow_typeof(floor(-56.7::DECIMAL(3,1)));
+----
+-57 Decimal128(3, 0)
