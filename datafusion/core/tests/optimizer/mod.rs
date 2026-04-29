@@ -30,8 +30,8 @@ use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{DFSchema, Result, ScalarValue, TableReference, plan_err};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
-    TableSource, WindowUDF, col, lit,
+    AggregateUDF, BinaryExpr, Expr, ExprSchemable, HigherOrderUDF, LogicalPlan, Operator,
+    ScalarUDF, TableSource, WindowUDF, col, lit,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;
@@ -216,6 +216,10 @@ impl ContextProvider for MyContextProvider {
         self.udfs.get(name).cloned()
     }
 
+    fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+        None
+    }
+
     fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
         None
     }
@@ -233,6 +237,10 @@ impl ContextProvider for MyContextProvider {
     }
 
     fn udf_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn higher_order_function_names(&self) -> Vec<String> {
         Vec::new()
     }
 

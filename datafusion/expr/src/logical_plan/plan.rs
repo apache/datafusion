@@ -3770,6 +3770,7 @@ impl PartialOrd for Aggregate {
 /// index among identical entries. For example, if the same set appears three
 /// times, the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
         let mut counts: HashMap<&[Expr], usize> = HashMap::new();
