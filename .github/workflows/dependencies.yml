@@ -25,13 +25,7 @@ on:
   push:
     branches-ignore:
       - 'gh-readonly-queue/**'
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
   pull_request:
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
   merge_group:
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
@@ -42,7 +36,7 @@ permissions:
 
 jobs:
   depcheck:
-    name: circular dependency check
+    name: Circular Dependency Check
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -61,6 +55,7 @@ jobs:
           cargo run
 
   detect-unused-dependencies:
+    name: Detect Unused Dependencies
     runs-on: ubuntu-latest
     container:
       image: amd64/rust

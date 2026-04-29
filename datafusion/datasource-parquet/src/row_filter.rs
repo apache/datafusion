@@ -768,7 +768,7 @@ fn resolve_struct_field_leaves(
             // e.g., prefix=["s", "value"] matches leaf path ["s", "value"]
             // prefix=["s", "outer"] matches ["s", "outer", "inner"]
 
-            // a leaf matches iff its path starts with our prefix
+            // a leaf matches if its path starts with our prefix
             // for example: prefix=["s", "value"] matches leaf path ["s", "value"]
             //              prefix=["s", "outer"] matches ["s", "outer", "inner"]
             let leaf_matches_path = col_path.len() >= prefix.len()
