@@ -45,20 +45,13 @@ use parquet::{bloom_filter::Sbbf, file::metadata::RowGroupMetaData};
 pub struct RowGroupAccessPlanFilter {
     /// which row groups should be accessed
     access_plan: ParquetAccessPlan,
-    /// Row groups where ALL rows are known to match the pruning predicate
-    /// (the predicate does not filter any rows)
-    is_fully_matched: Vec<bool>,
 }
 
 impl RowGroupAccessPlanFilter {
     /// Create a new `RowGroupPlanBuilder` for pruning out the groups to scan
     /// based on metadata and statistics
     pub fn new(access_plan: ParquetAccessPlan) -> Self {
-        let num_row_groups = access_plan.len();
-        Self {
-            access_plan,
-            is_fully_matched: vec![false; num_row_groups],
-        }
+        Self { access_plan }
     }
 
     /// Return true if there are no row groups
@@ -76,23 +69,9 @@ impl RowGroupAccessPlanFilter {
         self.access_plan.row_group_index_iter()
     }
 
-    /// Returns the inner access plan and the indices of fully matched row groups.
-    ///
-    /// Fully matched row groups are those where ALL rows are known to satisfy
-    /// the predicate based on row group statistics. The returned indices are
-    /// a subset of the row groups that will be scanned.
-    pub fn build(self) -> (ParquetAccessPlan, Vec<usize>) {
-        let fully_matched: Vec<usize> = self
-            .access_plan
-            .row_group_index_iter()
-            .filter(|&idx| self.is_fully_matched[idx])
-            .collect();
-        (self.access_plan, fully_matched)
-    }
-
-    /// Returns the is_fully_matched vector
-    pub fn is_fully_matched(&self) -> &Vec<bool> {
-        &self.is_fully_matched
+    /// Returns the inner access plan.
+    pub fn build(self) -> ParquetAccessPlan {
+        self.access_plan
     }
 
     /// Prunes the access plan based on the limit and fully contained row groups.
@@ -195,7 +174,7 @@ impl RowGroupAccessPlanFilter {
         // Iterate through the currently accessible row groups and try to
         // find a set of matching row groups that can satisfy the limit
         for &idx in self.access_plan.row_group_indexes().iter() {
-            if self.is_fully_matched[idx] {
+            if self.access_plan.is_fully_matched(idx) {
                 let row_group_row_count = rg_metadata[idx].num_rows() as usize;
                 fully_matched_row_group_indexes.push(idx);
                 fully_matched_rows_count += row_group_row_count;
@@ -218,6 +197,7 @@ impl RowGroupAccessPlanFilter {
             let mut new_access_plan = ParquetAccessPlan::new_none(rg_metadata.len());
             for &idx in &fully_matched_row_group_indexes {
                 new_access_plan.scan(idx);
+                new_access_plan.mark_fully_matched(idx);
             }
             self.access_plan = new_access_plan;
         }
@@ -430,7 +410,7 @@ impl RowGroupAccessPlanFilter {
                     })
                 });
                 if !has_nulls {
-                    self.is_fully_matched[original_row_group_idx] = true;
+                    self.access_plan.mark_fully_matched(original_row_group_idx);
                     metrics.row_groups_pruned_statistics.add_fully_matched(1);
                 }
             }
