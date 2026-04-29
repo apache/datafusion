@@ -28,5 +28,5 @@ workspace = true
 datafusion = { workspace = true }
 datafusion-ffi = { workspace = true }
 ffi_module_interface = { path = "../ffi_module_interface" }
-libloading = "0.8"
+libloading = "0.9"
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
