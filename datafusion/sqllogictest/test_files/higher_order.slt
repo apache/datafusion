@@ -321,6 +321,24 @@ true
 true
 true
 
+# predicate always returns null -> null
+query B
+SELECT array_any_match([1, 2, 3], x -> NULL::boolean);
+----
+NULL
+
+# all elements null, predicate always null -> null
+query B
+SELECT array_any_match(arrow_cast([NULL, NULL, NULL], 'List(Int32)'), x -> x > 5);
+----
+NULL
+
+# predicate returns true for null elements -> true
+query B
+SELECT array_any_match(arrow_cast([NULL, NULL], 'List(Int32)'), x -> x IS NULL);
+----
+true
+
 # alias any_match works
 query B
 SELECT any_match([1, 2, 3], x -> x > 2);
