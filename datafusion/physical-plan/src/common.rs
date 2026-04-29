@@ -72,7 +72,8 @@ pub fn normalize_batch_schema(
         return Ok(batch);
     }
 
-    let batch_schema = batch.schema();
+    // R-2: zero-cost borrow — avoids cloning the Arc<Schema>.
+    let batch_schema = batch.schema_ref();
 
     // Validate that a zero-copy rename is safe: column count must match and every
     // data type must be identical at the same position.
@@ -84,22 +85,22 @@ pub fn normalize_batch_schema(
         );
     }
 
-    for (i, (batch_field, expected_field)) in batch_schema
+    // R-1: declarative find instead of imperative loop with early return.
+    if let Some((i, (batch_field, expected_field))) = batch_schema
         .fields()
         .iter()
         .zip(expected_schema.fields().iter())
         .enumerate()
+        .find(|(_, (b, e))| b.data_type() != e.data_type())
     {
-        if batch_field.data_type() != expected_field.data_type() {
-            return internal_err!(
-                "normalize_batch_schema: data type mismatch at column {i} \
-                 ('{}' has type {}, expected '{}' with type {})",
-                batch_field.name(),
-                batch_field.data_type(),
-                expected_field.name(),
-                expected_field.data_type()
-            );
-        }
+        return internal_err!(
+            "normalize_batch_schema: data type mismatch at column {i} \
+             ('{}' has type {}, expected '{}' with type {})",
+            batch_field.name(),
+            batch_field.data_type(),
+            expected_field.name(),
+            expected_field.data_type()
+        );
     }
 
     // Zero-copy rebind: reuse the Arc<dyn Array> column buffers with the new schema.
@@ -421,7 +422,8 @@ mod tests {
         let expected_schema =
             Arc::new(Schema::new(vec![Field::new("val", DataType::Int32, false)]));
 
-        let result = normalize_batch_schema(batch.clone(), &expected_schema)?;
+        // R-4: batch is not used after this call — no clone needed.
+        let result = normalize_batch_schema(batch, &expected_schema)?;
 
         assert_eq!(result.schema(), expected_schema);
         assert_eq!(result.num_rows(), 3);
@@ -511,9 +513,9 @@ mod tests {
         ]));
 
         let result = normalize_batch_schema(batch, &dst_schema)?;
+        // R-3: schema equality already covers every field name and type — no
+        // need to re-assert individual field names.
         assert_eq!(result.schema(), dst_schema);
-        assert_eq!(result.schema().field(0).name(), "a");
-        assert_eq!(result.schema().field(1).name(), "b");
         Ok(())
     }
 }
