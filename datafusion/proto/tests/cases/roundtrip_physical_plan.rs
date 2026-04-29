@@ -3718,4 +3718,3 @@ fn roundtrip_filter_with_none_projection() -> Result<()> {
 
     Ok(())
 }
-
