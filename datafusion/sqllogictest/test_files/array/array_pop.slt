@@ -302,5 +302,25 @@ select array_pop_front(arrow_cast(make_array(make_array(1, 2, 3)), 'FixedSizeLis
 ----
 []
 
+query ?
+select array_pop_back(arrow_cast([1, 2], 'ListView(Int64)'));
+----
+[1]
+
+query ?
+select array_pop_front(arrow_cast([1, 2], 'ListView(Int64)'));
+----
+[2]
+
+query ?
+select array_pop_back(arrow_cast([1, 2], 'LargeListView(Int64)'));
+----
+[1]
+
+query ?
+select array_pop_front(arrow_cast([1, 2], 'LargeListView(Int64)'));
+----
+[2]
+
 
 include ./cleanup.slt.part
