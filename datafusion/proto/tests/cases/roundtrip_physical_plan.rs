@@ -3694,7 +3694,7 @@ fn roundtrip_filter_with_none_projection() -> Result<()> {
         Operator::Gt,
         lit(ScalarValue::Int32(Some(0))),
     ));
-    let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
     // Case 1: None projection (return all columns)
     roundtrip_test(Arc::new(FilterExec::try_new(
@@ -3718,3 +3718,4 @@ fn roundtrip_filter_with_none_projection() -> Result<()> {
 
     Ok(())
 }
+
