@@ -203,7 +203,7 @@ impl PhysicalExpr for HashExpr {
 
 /// Physical expression that checks join keys in a [`Map`] (hash table or array map).
 ///
-/// Returns a [`BooleanArray`](arrow::array::BooleanArray) indicating if join keys (from `on_columns`) exist in the map.
+/// Returns a [`BooleanArray`] indicating if join keys (from `on_columns`) exist in the map.
 // TODO: rename to MapLookupExpr
 pub struct HashTableLookupExpr {
     /// Columns in the ON clause used to compute the join key for lookups
