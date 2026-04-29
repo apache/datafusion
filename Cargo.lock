@@ -2414,6 +2414,7 @@ version = "53.1.0"
 dependencies = [
  "arrow",
  "arrow-data",
+ "arrow-ipc",
  "arrow-ord",
  "arrow-schema",
  "async-trait",

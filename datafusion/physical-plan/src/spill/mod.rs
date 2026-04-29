@@ -290,6 +290,16 @@ struct IPCStreamWriter {
 
 impl IPCStreamWriter {
     /// Create new writer
+    ///
+    /// # Codec contract
+    ///
+    /// `arrow-ipc` must be compiled with the `lz4` and `zstd` features
+    /// (declared explicitly in `datafusion-physical-plan/Cargo.toml`). If
+    /// those features are absent, `try_with_compression` will return an
+    /// error at runtime for [`SpillCompression::Lz4Frame`] and
+    /// [`SpillCompression::Zstd`] variants. The Cargo dependency keeps this
+    /// contract local and compiler-visible rather than relying solely on
+    /// workspace-level feature unification.
     pub fn new(
         path: &Path,
         schema: &Schema,
