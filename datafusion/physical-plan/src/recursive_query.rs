@@ -22,9 +22,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::work_table::{ReservedBatches, WorkTable};
-use crate::aggregates::group_values::{GroupValues, new_group_values};
+use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrdering;
-use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
+use crate::common::normalize_batch_schema;
+use crate::execution_plan::{reset_plan_states, Boundedness, EmissionType};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -38,13 +39,13 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
-use datafusion_execution::TaskContext;
+use datafusion_common::{internal_datafusion_err, not_impl_err, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
-use futures::{Stream, StreamExt, ready};
+use futures::{ready, Stream, StreamExt};
 
 /// Recursive query execution plan.
 ///
@@ -318,18 +319,9 @@ impl RecursiveQueryStream {
     ) -> Poll<Option<Result<RecordBatch>>> {
         let baseline_metrics = self.baseline_metrics.clone();
 
-        // Rebind to the declared output schema. The recursive term is planned
-        // independently from the static term and its projection may leave
-        // columns un-aliased (e.g. `upper(r.val)` vs the anchor's
-        // `upper(val) AS val`); downstream consumers that key on
-        // `batch.schema().field(i).name()` (TopK, CSV/JSON writers, custom
-        // collectors) would otherwise see the recursive branch's names leak
-        // through. Logical-plan coercion guarantees matching types, so this
-        // is a zero-copy field rebind.
-        if batch.schema() != self.schema {
-            batch =
-                RecordBatch::try_new(Arc::clone(&self.schema), batch.columns().to_vec())?;
-        }
+        // Rebind to the declared output schema via the shared helper.
+        // See `normalize_batch_schema` in `common` for full semantics.
+        batch = normalize_batch_schema(batch, &self.schema)?;
 
         if let Some(deduplicator) = &mut self.distinct_deduplicator {
             let _timer_guard = baseline_metrics.elapsed_compute().timer();

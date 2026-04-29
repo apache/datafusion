@@ -26,10 +26,10 @@ use crate::stream::RecordBatchReceiverStream;
 use crate::{ColumnStatistics, Statistics};
 
 use arrow::array::Array;
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{Result, plan_err};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use futures::{StreamExt, TryStreamExt};
@@ -37,6 +37,77 @@ use parking_lot::Mutex;
 
 /// [`MemoryReservation`] used across query execution streams
 pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
+
+/// Normalize a [`RecordBatch`] so that its embedded schema matches `expected_schema`.
+///
+/// Execution operators declare their output schema via [`ExecutionPlan::schema`], but
+/// child plans—particularly those planned independently such as the recursive term of
+/// a recursive CTE—may produce batches whose field *names* differ from the declared
+/// schema even though the data types are identical.  Downstream consumers that key on
+/// field names (TopK, CSV/JSON writers, custom collectors) will observe the child's
+/// names instead of the operator contract, causing subtle correctness bugs.
+///
+/// # Behaviour
+///
+/// | Case | Result |
+/// |---|---|
+/// | `batch.schema() == expected_schema` | Returns the batch unchanged (fast path, zero copies). |
+/// | Column count and data types match positionally | Returns a new `RecordBatch` that shares the original data buffers (zero-copy) but carries `expected_schema`. |
+/// | Column count or data types are incompatible | Returns `Err(internal_err!(...))`. |
+///
+/// # Why not `RecordBatch::with_schema`?
+///
+/// [`RecordBatch::with_schema`] validates data-type compatibility but does **not**
+/// rename fields.  It also allocates a new schema comparison on every call even when
+/// the schemas are identical.  `normalize_batch_schema` uses pointer equality first
+/// and only falls back to field-level inspection when truly necessary.
+pub fn normalize_batch_schema(
+    batch: RecordBatch,
+    expected_schema: &SchemaRef,
+) -> Result<RecordBatch> {
+    // Fast path: pointer-identical Arc or structurally equal schema — nothing to do.
+    if Arc::ptr_eq(batch.schema_ref(), expected_schema)
+        || batch.schema_ref().as_ref() == expected_schema.as_ref()
+    {
+        return Ok(batch);
+    }
+
+    let batch_schema = batch.schema();
+
+    // Validate that a zero-copy rename is safe: column count must match and every
+    // data type must be identical at the same position.
+    if batch_schema.fields().len() != expected_schema.fields().len() {
+        return internal_err!(
+            "normalize_batch_schema: column count mismatch — batch has {} column(s), expected schema has {} column(s)",
+            batch_schema.fields().len(),
+            expected_schema.fields().len()
+        );
+    }
+
+    for (i, (batch_field, expected_field)) in batch_schema
+        .fields()
+        .iter()
+        .zip(expected_schema.fields().iter())
+        .enumerate()
+    {
+        if batch_field.data_type() != expected_field.data_type() {
+            return internal_err!(
+                "normalize_batch_schema: data type mismatch at column {i} \
+                 ('{}' has type {}, expected '{}' with type {})",
+                batch_field.name(),
+                batch_field.data_type(),
+                expected_field.name(),
+                expected_field.data_type()
+            );
+        }
+    }
+
+    // Zero-copy rebind: reuse the Arc<dyn Array> column buffers with the new schema.
+    Ok(RecordBatch::try_new(
+        Arc::clone(expected_schema),
+        batch.columns().to_vec(),
+    )?)
+}
 
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
@@ -179,10 +250,7 @@ pub fn compute_record_batch_statistics(
 }
 
 /// Checks if the given projection is valid for the given schema.
-pub fn can_project(
-    schema: &arrow::datatypes::SchemaRef,
-    projection: Option<&[usize]>,
-) -> Result<()> {
+pub fn can_project(schema: &SchemaRef, projection: Option<&[usize]>) -> Result<()> {
     match projection {
         Some(columns) => {
             if columns
@@ -209,7 +277,7 @@ mod tests {
     use super::*;
 
     use arrow::{
-        array::{Float32Array, Float64Array, UInt64Array},
+        array::{Float32Array, Float64Array, Int32Array, UInt64Array},
         datatypes::{DataType, Field},
     };
 
@@ -309,6 +377,143 @@ mod tests {
         };
 
         assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    // --- normalize_batch_schema tests ---
+
+    /// Helper: build a single-column Int32 batch with the given field name.
+    fn int32_batch(field_name: &str, values: Vec<i32>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            field_name,
+            DataType::Int32,
+            false,
+        )]));
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(values))],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_normalize_batch_schema_noop_identical_schema() -> Result<()> {
+        // When batch schema == expected schema the same batch is returned unchanged.
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let result = normalize_batch_schema(batch.clone(), &schema)?;
+        // Same data pointer — no copy was made.
+        assert_eq!(result.num_rows(), batch.num_rows());
+        assert_eq!(result.schema(), schema);
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_batch_schema_renames_fields() -> Result<()> {
+        // Batch has field name "recursive_val"; expected schema uses "val".
+        // normalize_batch_schema should return a batch with field "val" while
+        // sharing the underlying column buffers (zero-copy).
+        let batch = int32_batch("recursive_val", vec![10, 20, 30]);
+        let expected_schema =
+            Arc::new(Schema::new(vec![Field::new("val", DataType::Int32, false)]));
+
+        let result = normalize_batch_schema(batch.clone(), &expected_schema)?;
+
+        assert_eq!(result.schema(), expected_schema);
+        assert_eq!(result.num_rows(), 3);
+        // Verify data is intact.
+        let col = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(col.values(), &[10, 20, 30]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_batch_schema_noop_arc_clone() -> Result<()> {
+        // Two separate Arc handles pointing to structurally equal schemas should
+        // also hit the fast path (no re-allocation).
+        let schema1 = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)]));
+        let schema2 = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)]));
+        // They are not the same Arc pointer ...
+        assert!(!Arc::ptr_eq(&schema1, &schema2));
+        // ... but structurally equal, so normalize should be a no-op.
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema1),
+            vec![Arc::new(Int32Array::from(vec![7]))],
+        )?;
+        let result = normalize_batch_schema(batch, &schema2)?;
+        assert_eq!(result.schema().field(0).name(), "x");
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_batch_schema_error_column_count_mismatch() -> Result<()> {
+        // Batch has 1 column; expected schema has 2 — must error.
+        let batch = int32_batch("a", vec![1]);
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let err = normalize_batch_schema(batch, &expected_schema).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("column count mismatch"),
+            "unexpected error message: {msg}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_batch_schema_error_type_mismatch() -> Result<()> {
+        // Batch column is Int32; expected schema declares Float32 — must error.
+        let batch = int32_batch("val", vec![1, 2]);
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "val",
+            DataType::Float32,
+            false,
+        )]));
+
+        let err = normalize_batch_schema(batch, &expected_schema).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("data type mismatch"),
+            "unexpected error message: {msg}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_batch_schema_multi_column_rename() -> Result<()> {
+        // Multi-column batch: field names differ but types match positionally.
+        let src_schema = Arc::new(Schema::new(vec![
+            Field::new("child_a", DataType::Int32, false),
+            Field::new("child_b", DataType::Float32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&src_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Float32Array::from(vec![1.0_f32, 2.0_f32])),
+            ],
+        )?;
+
+        let dst_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float32, false),
+        ]));
+
+        let result = normalize_batch_schema(batch, &dst_schema)?;
+        assert_eq!(result.schema(), dst_schema);
+        assert_eq!(result.schema().field(0).name(), "a");
+        assert_eq!(result.schema().field(1).name(), "b");
         Ok(())
     }
 }
