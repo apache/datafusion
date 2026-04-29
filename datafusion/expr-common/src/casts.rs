@@ -31,6 +31,8 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::ScalarValue;
 
+use crate::operator::Operator;
+
 /// Convert a literal [`ScalarValue`] to `target_type`, preserving the exact value.
 ///
 /// Returns `None` if the value cannot be represented in `target_type`
@@ -103,14 +105,82 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
         || (is_date_type(to_type) && from_type.is_temporal())
 }
 
-/// Returns true if casting from `from_type` to `to_type` is unsafe to unwrap in comparisons.
+/// Rewrite produced when a comparison against a cast expression can be safely
+/// unwrapped.
 ///
-/// Such casts can map multiple input values to the same output value (for example
-/// `Timestamp(Nanosecond)` to `Timestamp(Millisecond)`, `Float64` to `Float32`,
-/// `Decimal(10, 4)` to `Decimal(10, 2)`, or `Decimal(18, 2)` to
-/// `Decimal(10, 2)`). They are not safe to unwrap by
-/// simply casting the literal back to the input type.
-pub fn is_lossy_cast_for_comparison_unwrap(
+/// Currently only simple literal rewrites are supported. Future variants may
+/// represent guarded/preimage rewrites for source-domain narrowing casts, but
+/// they must preserve NULL and cast-error semantics in non-filter contexts.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CastComparisonRewrite {
+    /// Replace `CAST(expr AS to_type) <op> literal` with
+    /// `expr <op> literal_cast_to_expr_type`.
+    Literal(ScalarValue),
+}
+
+impl CastComparisonRewrite {
+    /// Returns the literal to compare with the inner expression.
+    pub fn into_literal(self) -> ScalarValue {
+        match self {
+            Self::Literal(value) => value,
+        }
+    }
+}
+
+/// Tries to rewrite a comparison literal so a cast can be removed from the
+/// expression side of the comparison.
+///
+/// This helper intentionally takes the comparison operator and literal value,
+/// not just the source and cast types. Literal-dependent cases such as
+/// `CAST(int_col AS Utf8) = '123'` require a round-trip check, while lossy or
+/// partial casts such as integer narrowing still cannot be represented by a
+/// simple literal rewrite.
+pub fn try_cast_literal_for_comparison_unwrap(
+    lit_value: &ScalarValue,
+    from_type: &DataType,
+    to_type: &DataType,
+    op: Operator,
+) -> Option<CastComparisonRewrite> {
+    if !is_supported_comparison_unwrap_operator(op)
+        || !is_supported_type(from_type)
+        || !is_supported_type(to_type)
+        || is_cast_unsafe_for_simple_comparison_unwrap(from_type, to_type)
+    {
+        return None;
+    }
+
+    try_cast_string_literal_for_comparison_unwrap(lit_value, from_type, to_type, op)
+        .or_else(|| try_cast_literal_to_type(lit_value, from_type))
+        .map(CastComparisonRewrite::Literal)
+}
+
+fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
+    matches!(
+        op,
+        Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq
+    )
+}
+
+/// Returns true when a cast is unsafe for a simple single-literal comparison
+/// unwrap based on the source and cast domains alone.
+///
+/// This is intentionally a type-level check. A literal may cast back into the
+/// source type while the cast still narrows the set of source values that have
+/// defined comparison semantics. For example, `10` can be cast to `Int64`, but
+/// `TRY_CAST(i64_col AS Int32) < 10` cannot be simplified to `i64_col < 10`:
+/// source values below `Int32::MIN` would become `NULL` before the comparison,
+/// while the unwrapped predicate would match them. Preserving that case would
+/// require a guarded or preimage rewrite, not the simple `Literal` rewrite this
+/// API currently returns.
+///
+/// Literal-dependent checks, such as exact numeric casts or string round-trips,
+/// are performed by `try_cast_literal_for_comparison_unwrap` after this guard.
+fn is_cast_unsafe_for_simple_comparison_unwrap(
     from_type: &DataType,
     to_type: &DataType,
 ) -> bool {
@@ -120,6 +190,31 @@ pub fn is_lossy_cast_for_comparison_unwrap(
         || is_decimal_to_integer_lossy_cast(from_type, to_type)
         || is_float_to_integer_cast(from_type, to_type)
         || is_float_precision_downcast(from_type, to_type)
+        || !is_source_domain_preserved_for_comparison_unwrap(from_type, to_type)
+}
+
+fn try_cast_string_literal_for_comparison_unwrap(
+    lit_value: &ScalarValue,
+    from_type: &DataType,
+    to_type: &DataType,
+    op: Operator,
+) -> Option<ScalarValue> {
+    if !matches!(op, Operator::Eq | Operator::NotEq)
+        || !is_supported_string_type(to_type)
+        || !is_integer_type(from_type)
+        || !matches!(
+            lit_value,
+            ScalarValue::Utf8(Some(_))
+                | ScalarValue::Utf8View(Some(_))
+                | ScalarValue::LargeUtf8(Some(_))
+        )
+    {
+        return None;
+    }
+
+    let casted = lit_value.cast_to(from_type).ok()?;
+    let round_tripped = casted.cast_to(&lit_value.data_type()).ok()?;
+    (lit_value == &round_tripped).then_some(casted)
 }
 
 fn is_temporal_precision_downcast(from_type: &DataType, to_type: &DataType) -> bool {
@@ -188,6 +283,118 @@ fn is_float_precision_downcast(from_type: &DataType, to_type: &DataType) -> bool
     ) {
         (Some(from_rank), Some(to_rank)) => from_rank > to_rank,
         _ => false,
+    }
+}
+
+fn is_source_domain_preserved_for_comparison_unwrap(
+    from_type: &DataType,
+    to_type: &DataType,
+) -> bool {
+    match (from_type, to_type) {
+        (from, to) if is_integer_type(from) && is_integer_type(to) => {
+            source_integer_domain_fits_integer_target(from, to)
+        }
+        (from, to)
+            if is_integer_type(from) && decimal_precision_and_scale(to).is_some() =>
+        {
+            source_integer_domain_fits_decimal_target(from, to)
+        }
+        (from, to)
+            if decimal_precision_and_scale(from).is_some() && is_integer_type(to) =>
+        {
+            source_decimal_domain_fits_integer_target(from, to)
+        }
+        _ => true,
+    }
+}
+
+fn source_integer_domain_fits_integer_target(
+    from_type: &DataType,
+    to_type: &DataType,
+) -> bool {
+    match (integer_bounds(from_type), integer_bounds(to_type)) {
+        (Some((from_min, from_max)), Some((to_min, to_max))) => {
+            from_min >= to_min && from_max <= to_max
+        }
+        _ => false,
+    }
+}
+
+fn source_integer_domain_fits_decimal_target(
+    from_type: &DataType,
+    to_type: &DataType,
+) -> bool {
+    let Some((_, scale)) = decimal_precision_and_scale(to_type) else {
+        return false;
+    };
+    let Some((from_min, from_max)) = integer_bounds(from_type) else {
+        return false;
+    };
+    let Some((to_min, to_max)) = decimal_bounds(to_type) else {
+        return false;
+    };
+    let Ok(scale) = u32::try_from(scale) else {
+        return false;
+    };
+
+    let multiplier = 10_i128.pow(scale);
+    match (
+        from_min.checked_mul(multiplier),
+        from_max.checked_mul(multiplier),
+    ) {
+        (Some(from_min), Some(from_max)) => from_min >= to_min && from_max <= to_max,
+        _ => false,
+    }
+}
+
+fn source_decimal_domain_fits_integer_target(
+    from_type: &DataType,
+    to_type: &DataType,
+) -> bool {
+    let Some((_, scale)) = decimal_precision_and_scale(from_type) else {
+        return false;
+    };
+    if scale != 0 {
+        return false;
+    }
+
+    match (decimal_bounds(from_type), integer_bounds(to_type)) {
+        (Some((from_min, from_max)), Some((to_min, to_max))) => {
+            from_min >= to_min && from_max <= to_max
+        }
+        _ => false,
+    }
+}
+
+fn integer_bounds(data_type: &DataType) -> Option<(i128, i128)> {
+    match data_type {
+        DataType::UInt8 => Some((u8::MIN as i128, u8::MAX as i128)),
+        DataType::UInt16 => Some((u16::MIN as i128, u16::MAX as i128)),
+        DataType::UInt32 => Some((u32::MIN as i128, u32::MAX as i128)),
+        DataType::UInt64 => Some((u64::MIN as i128, u64::MAX as i128)),
+        DataType::Int8 => Some((i8::MIN as i128, i8::MAX as i128)),
+        DataType::Int16 => Some((i16::MIN as i128, i16::MAX as i128)),
+        DataType::Int32 => Some((i32::MIN as i128, i32::MAX as i128)),
+        DataType::Int64 => Some((i64::MIN as i128, i64::MAX as i128)),
+        _ => None,
+    }
+}
+
+fn decimal_bounds(data_type: &DataType) -> Option<(i128, i128)> {
+    match data_type {
+        DataType::Decimal32(precision, _) => Some((
+            MIN_DECIMAL32_FOR_EACH_PRECISION[*precision as usize] as i128,
+            MAX_DECIMAL32_FOR_EACH_PRECISION[*precision as usize] as i128,
+        )),
+        DataType::Decimal64(precision, _) => Some((
+            MIN_DECIMAL64_FOR_EACH_PRECISION[*precision as usize] as i128,
+            MAX_DECIMAL64_FOR_EACH_PRECISION[*precision as usize] as i128,
+        )),
+        DataType::Decimal128(precision, _) => Some((
+            MIN_DECIMAL128_FOR_EACH_PRECISION[*precision as usize],
+            MAX_DECIMAL128_FOR_EACH_PRECISION[*precision as usize],
+        )),
+        _ => None,
     }
 }
 
@@ -632,98 +839,257 @@ mod tests {
     }
 
     #[test]
-    fn test_lossy_cast_for_comparison_unwrap_detection() {
+    fn test_comparison_unwrap_literal_cast_safety() {
         let ts_s = DataType::Timestamp(TimeUnit::Second, None);
         let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
         let ts_us = DataType::Timestamp(TimeUnit::Microsecond, None);
         let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
 
-        assert!(is_lossy_cast_for_comparison_unwrap(&ts_ns, &ts_ms));
-        assert!(is_lossy_cast_for_comparison_unwrap(&ts_ns, &ts_us));
-        assert!(is_lossy_cast_for_comparison_unwrap(&ts_us, &ts_ms));
-        assert!(is_lossy_cast_for_comparison_unwrap(&ts_ms, &ts_s));
+        expect_no_comparison_unwrap(
+            ScalarValue::TimestampMillisecond(Some(1000), None),
+            ts_ns.clone(),
+            ts_ms.clone(),
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::TimestampMicrosecond(Some(1000), None),
+            ts_ns.clone(),
+            ts_us,
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::TimestampMillisecond(Some(1000), None),
+            ts_ms,
+            ts_s,
+        );
+        expect_comparison_unwrap(
+            ScalarValue::TimestampNanosecond(Some(1_000_000_000), None),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            ts_ns.clone(),
+            ScalarValue::TimestampMillisecond(Some(1000), None),
+        );
+        expect_comparison_unwrap(
+            ScalarValue::TimestampNanosecond(Some(1000), None),
+            ts_ns.clone(),
+            ts_ns,
+            ScalarValue::TimestampNanosecond(Some(1000), None),
+        );
 
-        assert!(!is_lossy_cast_for_comparison_unwrap(&ts_s, &ts_ms));
-        assert!(!is_lossy_cast_for_comparison_unwrap(&ts_ms, &ts_ns));
-        assert!(!is_lossy_cast_for_comparison_unwrap(&ts_ns, &ts_ns));
-        assert!(!is_lossy_cast_for_comparison_unwrap(
-            &DataType::Int32,
-            &DataType::Int16
-        ));
-
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Timestamp(TimeUnit::Nanosecond, None),
-            &DataType::Date32
-        ));
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Timestamp(TimeUnit::Millisecond, None),
-            &DataType::Date64
-        ));
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Date32,
-            &DataType::Timestamp(TimeUnit::Nanosecond, None)
-        ));
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Date64,
-            &DataType::Timestamp(TimeUnit::Millisecond, None)
-        ));
+        expect_no_comparison_unwrap(
+            ScalarValue::Date32(Some(0)),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Date32,
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::TimestampNanosecond(Some(0), None),
+            DataType::Date32,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
 
         let utc = Some("+0:00".into());
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Timestamp(TimeUnit::Nanosecond, utc.clone()),
-            &DataType::Timestamp(TimeUnit::Millisecond, utc)
+        expect_no_comparison_unwrap(
+            ScalarValue::TimestampMillisecond(Some(1000), utc.clone()),
+            DataType::Timestamp(TimeUnit::Nanosecond, utc.clone()),
+            DataType::Timestamp(TimeUnit::Millisecond, utc),
+        );
+
+        expect_no_comparison_unwrap(
+            ScalarValue::Decimal128(Some(123), 18, 2),
+            DataType::Decimal128(18, 4),
+            DataType::Decimal128(18, 2),
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::Decimal128(Some(12345), 10, 2),
+            DataType::Decimal128(18, 2),
+            DataType::Decimal128(10, 2),
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::Decimal128(Some(1234500), 12, 4),
+            DataType::Decimal128(18, 2),
+            DataType::Decimal128(12, 4),
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::Int64(Some(123)),
+            DataType::Decimal128(18, 2),
+            DataType::Int64,
+        );
+        expect_comparison_unwrap(
+            ScalarValue::Int64(Some(123)),
+            DataType::Decimal128(18, 0),
+            DataType::Int64,
+            ScalarValue::Decimal128(Some(123), 18, 0),
+        );
+        expect_comparison_unwrap(
+            ScalarValue::Decimal128(Some(1230000), 20, 4),
+            DataType::Decimal64(10, 2),
+            DataType::Decimal128(20, 4),
+            ScalarValue::Decimal64(Some(12300), 10, 2),
+        );
+        expect_comparison_unwrap(
+            ScalarValue::Decimal128(Some(1230000), 12, 4),
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(12, 4),
+            ScalarValue::Decimal128(Some(12300), 10, 2),
+        );
+
+        expect_comparison_unwrap(
+            ScalarValue::Int64(Some(16)),
+            DataType::Int32,
+            DataType::Int64,
+            ScalarValue::Int32(Some(16)),
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::Int32(Some(16)),
+            DataType::Int64,
+            DataType::Int32,
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::UInt32(Some(16)),
+            DataType::Int32,
+            DataType::UInt32,
+        );
+        expect_comparison_unwrap(
+            ScalarValue::Int64(Some(16)),
+            DataType::UInt32,
+            DataType::Int64,
+            ScalarValue::UInt32(Some(16)),
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::Int64(Some(16)),
+            DataType::UInt64,
+            DataType::Int64,
+        );
+
+        expect_no_comparison_unwrap(
+            ScalarValue::Decimal128(Some(12300), 10, 2),
+            DataType::Int32,
+            DataType::Decimal128(10, 2),
+        );
+        expect_comparison_unwrap(
+            ScalarValue::Decimal128(Some(12300), 12, 2),
+            DataType::Int32,
+            DataType::Decimal128(12, 2),
+            ScalarValue::Int32(Some(123)),
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::Int64(Some(123)),
+            DataType::Decimal128(38, 0),
+            DataType::Int64,
+        );
+
+        expect_no_comparison_unwrap(
+            ScalarValue::Int32(Some(1)),
+            DataType::Float32,
+            DataType::Int32,
+        );
+        expect_no_comparison_unwrap(
+            ScalarValue::Float32(Some(1.25)),
+            DataType::Float64,
+            DataType::Float32,
+        );
+
+        expect_comparison_unwrap_with_op(
+            ScalarValue::Utf8(Some("123".to_string())),
+            DataType::Int32,
+            DataType::Utf8,
+            Operator::Eq,
+            ScalarValue::Int32(Some(123)),
+        );
+        expect_no_comparison_unwrap_with_op(
+            ScalarValue::Utf8(Some("0123".to_string())),
+            DataType::Int32,
+            DataType::Utf8,
+            Operator::Eq,
+        );
+        expect_no_comparison_unwrap_with_op(
+            ScalarValue::Utf8(Some("123".to_string())),
+            DataType::Int32,
+            DataType::Utf8,
+            Operator::Lt,
+        );
+    }
+
+    #[test]
+    fn test_temporal_precision_downcast_guard() {
+        // Duration and Time32/Time64 are not currently public unwrap-supported
+        // types, but this locks the shared precision guard behavior if future
+        // changes add support for them.
+        assert!(is_temporal_precision_downcast(
+            &DataType::Duration(TimeUnit::Nanosecond),
+            &DataType::Duration(TimeUnit::Millisecond)
+        ));
+        assert!(!is_temporal_precision_downcast(
+            &DataType::Duration(TimeUnit::Millisecond),
+            &DataType::Duration(TimeUnit::Nanosecond)
         ));
 
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Duration(TimeUnit::Nanosecond),
-            &DataType::Duration(TimeUnit::Microsecond)
+        assert!(is_temporal_precision_downcast(
+            &DataType::Time32(TimeUnit::Millisecond),
+            &DataType::Time32(TimeUnit::Second)
         ));
-        assert!(is_lossy_cast_for_comparison_unwrap(
+        assert!(!is_temporal_precision_downcast(
+            &DataType::Time32(TimeUnit::Second),
+            &DataType::Time64(TimeUnit::Microsecond)
+        ));
+
+        assert!(is_temporal_precision_downcast(
             &DataType::Time64(TimeUnit::Nanosecond),
             &DataType::Time32(TimeUnit::Millisecond)
         ));
+        assert!(is_temporal_precision_downcast(
+            &DataType::Time64(TimeUnit::Nanosecond),
+            &DataType::Time64(TimeUnit::Microsecond)
+        ));
+        assert!(!is_temporal_precision_downcast(
+            &DataType::Time64(TimeUnit::Microsecond),
+            &DataType::Time64(TimeUnit::Nanosecond)
+        ));
+    }
 
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Decimal128(18, 4),
-            &DataType::Decimal128(18, 2)
-        ));
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Decimal128(18, 2),
-            &DataType::Decimal128(10, 2)
-        ));
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Decimal128(18, 2),
-            &DataType::Decimal128(12, 4)
-        ));
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Decimal128(18, 2),
-            &DataType::Int64
-        ));
-        assert!(!is_lossy_cast_for_comparison_unwrap(
-            &DataType::Decimal128(18, 0),
-            &DataType::Int64
-        ));
-        assert!(!is_lossy_cast_for_comparison_unwrap(
-            &DataType::Decimal64(10, 2),
-            &DataType::Decimal128(20, 4)
-        ));
-        assert!(!is_lossy_cast_for_comparison_unwrap(
-            &DataType::Decimal128(10, 2),
-            &DataType::Decimal128(12, 4)
-        ));
+    fn expect_comparison_unwrap(
+        literal: ScalarValue,
+        from_type: DataType,
+        to_type: DataType,
+        expected: ScalarValue,
+    ) {
+        expect_comparison_unwrap_with_op(
+            literal,
+            from_type,
+            to_type,
+            Operator::Lt,
+            expected,
+        );
+    }
 
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Float32,
-            &DataType::Int32
-        ));
-        assert!(is_lossy_cast_for_comparison_unwrap(
-            &DataType::Float64,
-            &DataType::Float32
-        ));
-        assert!(!is_lossy_cast_for_comparison_unwrap(
-            &DataType::Float32,
-            &DataType::Float64
-        ));
+    fn expect_comparison_unwrap_with_op(
+        literal: ScalarValue,
+        from_type: DataType,
+        to_type: DataType,
+        op: Operator,
+        expected: ScalarValue,
+    ) {
+        let actual =
+            try_cast_literal_for_comparison_unwrap(&literal, &from_type, &to_type, op)
+                .map(CastComparisonRewrite::into_literal);
+        assert_eq!(actual, Some(expected));
+    }
+
+    fn expect_no_comparison_unwrap(
+        literal: ScalarValue,
+        from_type: DataType,
+        to_type: DataType,
+    ) {
+        expect_no_comparison_unwrap_with_op(literal, from_type, to_type, Operator::Lt);
+    }
+
+    fn expect_no_comparison_unwrap_with_op(
+        literal: ScalarValue,
+        from_type: DataType,
+        to_type: DataType,
+        op: Operator,
+    ) {
+        assert_eq!(
+            try_cast_literal_for_comparison_unwrap(&literal, &from_type, &to_type, op,),
+            None
+        );
     }
 
     #[test]

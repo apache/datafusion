@@ -37,7 +37,7 @@ use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::{
-    is_lossy_cast_for_comparison_unwrap, try_cast_literal_to_type,
+    CastComparisonRewrite, try_cast_literal_for_comparison_unwrap,
 };
 
 use crate::PhysicalExpr;
@@ -129,12 +129,10 @@ fn try_unwrap_cast_comparison(
     // Get the data type of the inner expression
     let inner_type = inner_expr.data_type(schema)?;
 
-    if is_lossy_cast_for_comparison_unwrap(&inner_type, cast_type) {
-        return Ok(None);
-    }
-
     // Try to cast the literal to the inner expression's type
-    if let Some(casted_literal) = try_cast_literal_to_type(literal_value, &inner_type) {
+    if let Some(CastComparisonRewrite::Literal(casted_literal)) =
+        try_cast_literal_for_comparison_unwrap(literal_value, &inner_type, cast_type, op)
+    {
         let literal_expr = lit(casted_literal);
         let binary_expr = BinaryExpr::new(inner_expr, op, literal_expr);
         return Ok(Some(Arc::new(binary_expr)));
@@ -645,6 +643,60 @@ mod tests {
     }
 
     #[test]
+    fn test_no_unwrap_source_domain_reducing_casts() {
+        let schema = Schema::new(vec![
+            Field::new("int32_col", DataType::Int32, true),
+            Field::new("int64_col", DataType::Int64, true),
+            Field::new("uint64_col", DataType::UInt64, true),
+        ]);
+
+        // Int64 -> Int32 is partial: values outside the Int32 range fail or
+        // become NULL before comparison, which a raw Int64 comparison would not
+        // preserve.
+        let column_expr = col("int64_col", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int32, None));
+        let literal_expr = lit(ScalarValue::Int32(Some(16)));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal_expr));
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        assert!(!result.transformed);
+
+        // Int32 -> UInt32 is partial because negative Int32 values cannot be
+        // represented by UInt32.
+        let column_expr = col("int32_col", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::UInt32, None));
+        let literal_expr = lit(ScalarValue::UInt32(Some(16)));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal_expr));
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        assert!(!result.transformed);
+
+        // UInt64 -> Int64 is partial because UInt64 contains values above
+        // Int64::MAX.
+        let column_expr = col("uint64_col", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let literal_expr = lit(ScalarValue::Int64(Some(16)));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Lt, literal_expr));
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        assert!(!result.transformed);
+
+        // Int64 -> Decimal(10, 2) is partial because scaling all Int64 values
+        // by 10^2 cannot fit into Decimal(10, 2).
+        let column_expr = col("int64_col", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Decimal128(10, 2),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::Decimal128(Some(12300), 10, 2));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Lt, literal_expr));
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        assert!(!result.transformed);
+    }
+
+    #[test]
     fn test_unwrap_cast_with_decimal_types() {
         // Test various decimal precision/scale combinations
         let test_cases = vec![
@@ -884,10 +936,12 @@ mod tests {
         let left_literal = left_binary.right().downcast_ref::<Literal>().unwrap();
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(10)));
 
-        // Right side should be: c2 = INT64(20) (c2 is already INT64, literal cast to match)
+        // Right side should keep the cast: Int64 -> Int32 is partial over the
+        // full source domain and cannot be represented by a simple literal
+        // rewrite.
         let right_binary = and_binary.right().downcast_ref::<BinaryExpr>().unwrap();
-        assert!(!is_cast_expr(right_binary.left()));
+        assert!(is_cast_expr(right_binary.left()));
         let right_literal = right_binary.right().downcast_ref::<Literal>().unwrap();
-        assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(20)));
+        assert_eq!(right_literal.value(), &ScalarValue::Int32(Some(20)));
     }
 }

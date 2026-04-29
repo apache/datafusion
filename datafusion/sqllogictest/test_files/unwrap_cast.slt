@@ -1,0 +1,177 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# End-to-end examples for comparison rewrites that remove casts from the
+# expression side. These check query semantics, not just the optimized plan.
+
+# Integer narrowing is partial: source values outside the cast target domain
+# become NULL with TRY_CAST and must not be matched by an unwrapped predicate.
+query I
+SELECT column1
+FROM (VALUES
+  (-2147483649),
+  (-1),
+  (0),
+  (9),
+  (10)
+) AS t(column1)
+WHERE TRY_CAST(column1 AS INT) < 10
+ORDER BY column1;
+----
+-1
+0
+9
+
+# The corresponding plan keeps the TRY_CAST. Rewriting this to `column1 < 10`
+# would incorrectly include the out-of-Int32-domain value above.
+query TT
+EXPLAIN SELECT column1
+FROM (VALUES
+  (-2147483649),
+  (-1),
+  (0),
+  (9),
+  (10)
+) AS t(column1)
+WHERE TRY_CAST(column1 AS INT) < 10
+ORDER BY column1;
+----
+logical_plan
+01)Sort: t.column1 ASC NULLS LAST
+02)--SubqueryAlias: t
+03)----Projection: column1 AS column1
+04)------Filter: TRY_CAST(column1 AS Int32) < Int32(10)
+05)--------Values: <slt:ignore>
+physical_plan
+01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--FilterExec: TRY_CAST(column1@0 AS Int32) < 10
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Timestamp-to-date is many-to-one: every timestamp during the date matches.
+# Unwrapping this to equality with midnight would drop non-midnight rows.
+query I
+SELECT COUNT(*)
+FROM (VALUES
+  ('2024-01-01 00:00:00'::timestamp),
+  ('2024-01-01 12:34:56'::timestamp),
+  ('2024-01-02 00:00:00'::timestamp)
+) AS t(ts)
+WHERE CAST(ts AS DATE) = DATE '2024-01-01';
+----
+2
+
+# Safe source-domain-preserving casts can still behave like direct comparisons.
+query I
+SELECT column1
+FROM (VALUES
+  (CAST(-1 AS INT)),
+  (CAST(0 AS INT)),
+  (CAST(9 AS INT)),
+  (CAST(10 AS INT))
+) AS t(column1)
+WHERE CAST(column1 AS BIGINT) < 10
+ORDER BY column1;
+----
+-1
+0
+9
+
+# The positive safe-widening case is still optimized by moving the cast to the
+# literal side of the comparison.
+query TT
+EXPLAIN SELECT column1
+FROM (VALUES
+  (CAST(-1 AS INT)),
+  (CAST(0 AS INT)),
+  (CAST(9 AS INT)),
+  (CAST(10 AS INT))
+) AS t(column1)
+WHERE CAST(column1 AS BIGINT) < 10
+ORDER BY column1;
+----
+logical_plan
+01)Sort: t.column1 ASC NULLS LAST
+02)--SubqueryAlias: t
+03)----Projection: column1 AS column1
+04)------Filter: column1 < Int32(10)
+05)--------Values: (Int32(-1) AS Int64(-1)), (Int32(0) AS Int64(0)), (Int32(9) AS Int64(9)), (Int32(10) AS Int64(10))
+physical_plan
+01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--FilterExec: column1@0 < 10
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# String equality rewrites must round-trip exactly. The padded string literal is
+# not equivalent to the integer value 123.
+query II
+SELECT
+  (SELECT COUNT(*) FROM (VALUES (123), (124)) AS t(column1)
+   WHERE CAST(column1 AS VARCHAR) = '123') AS exact_match,
+  (SELECT COUNT(*) FROM (VALUES (123), (124)) AS t(column1)
+   WHERE CAST(column1 AS VARCHAR) = '0123') AS padded_match;
+----
+1 0
+
+# Integer-to-decimal can be partial when the decimal target cannot represent the
+# full integer source domain. The out-of-range negative value must stay NULL
+# under TRY_CAST and must not match the simplified predicate.
+query I
+SELECT column1
+FROM (VALUES
+  (-1000000000000),
+  (1),
+  (200)
+) AS t(column1)
+WHERE TRY_CAST(column1 AS DECIMAL(10,2)) < DECIMAL(10,2) '123.00'
+ORDER BY column1;
+----
+1
+
+# Timestamp precision downcasts are many-to-one. Both nanosecond timestamps in
+# the same millisecond match after casting to timestamp(3).
+query I
+SELECT COUNT(*)
+FROM (VALUES
+  (arrow_cast(1704067200001000000, 'Timestamp(ns)')),
+  (arrow_cast(1704067200001234567, 'Timestamp(ns)')),
+  (arrow_cast(1704067200002000000, 'Timestamp(ns)'))
+) AS t(ts)
+WHERE CAST(ts AS timestamp(3)) = CAST('2024-01-01 00:00:00.001' AS timestamp(3));
+----
+2
+
+# The plan keeps the timestamp precision downcast. Rewriting this to nanosecond
+# equality would only match one timestamp within the millisecond bucket.
+query TT
+EXPLAIN SELECT ts
+FROM (VALUES
+  (arrow_cast(1704067200001000000, 'Timestamp(ns)')),
+  (arrow_cast(1704067200001234567, 'Timestamp(ns)')),
+  (arrow_cast(1704067200002000000, 'Timestamp(ns)'))
+) AS t(ts)
+WHERE CAST(ts AS timestamp(3)) = CAST('2024-01-01 00:00:00.001' AS timestamp(3))
+ORDER BY ts;
+----
+logical_plan
+01)Sort: t.ts ASC NULLS LAST
+02)--SubqueryAlias: t
+03)----Projection: column1 AS ts
+04)------Filter: CAST(column1 AS Timestamp(ms)) = TimestampMillisecond(1704067200001, None)
+05)--------Values: <slt:ignore>
+physical_plan
+01)ProjectionExec: expr=[column1@0 as ts]
+02)--FilterExec: CAST(column1@0 AS Timestamp(ms)) = 1704067200001
+03)----DataSourceExec: partitions=1, partition_sizes=[1]

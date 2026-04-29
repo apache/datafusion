@@ -60,13 +60,14 @@ use datafusion_common::{internal_err, tree_node::Transformed};
 use datafusion_expr::{BinaryExpr, lit};
 use datafusion_expr::{Cast, Expr, Operator, TryCast, simplify::SimplifyContext};
 use datafusion_expr_common::casts::{
-    is_lossy_cast_for_comparison_unwrap, is_supported_type, try_cast_literal_to_type,
+    CastComparisonRewrite, is_supported_type, try_cast_literal_for_comparison_unwrap,
+    try_cast_literal_to_type,
 };
 
 pub(super) fn unwrap_cast_in_comparison_for_binary(
     info: &SimplifyContext,
-    cast_expr: Expr,
-    literal: Expr,
+    cast_expr: &Expr,
+    literal: &Expr,
     op: Operator,
 ) -> Result<Transformed<Expr>> {
     let original = Expr::BinaryExpr(BinaryExpr {
@@ -75,7 +76,7 @@ pub(super) fn unwrap_cast_in_comparison_for_binary(
         right: Box::new(literal.clone()),
     });
 
-    match (&cast_expr, &literal) {
+    match (cast_expr, literal) {
         (
             Expr::TryCast(TryCast { expr, field }) | Expr::Cast(Cast { expr, field }),
             Expr::Literal(lit_value, _),
@@ -84,11 +85,9 @@ pub(super) fn unwrap_cast_in_comparison_for_binary(
                 return internal_err!("Can't get the data type of the expr {:?}", &expr);
             };
 
-            if is_lossy_cast_for_comparison_unwrap(&expr_type, field.data_type()) {
-                return Ok(Transformed::no(original));
-            }
-
-            if let Some(value) = cast_literal_to_type_with_op(lit_value, &expr_type, op) {
+            if let Some(value) =
+                comparison_unwrap_literal(lit_value, &expr_type, field.data_type(), op)
+            {
                 return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
                     left: expr.clone(),
                     op,
@@ -96,20 +95,7 @@ pub(super) fn unwrap_cast_in_comparison_for_binary(
                 })));
             };
 
-            // if the lit_value can be casted to the type of internal_left_expr
-            // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
-            let Some(value) = try_cast_literal_to_type(lit_value, &expr_type) else {
-                return internal_err!(
-                    "Can't cast the literal expr {:?} to type {}",
-                    &lit_value,
-                    &expr_type
-                );
-            };
-            Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
-                left: expr.clone(),
-                op,
-                right: Box::new(lit(value)),
-            })))
+            Ok(Transformed::no(original))
         }
         _ => internal_err!("Expect cast expr and literal"),
     }
@@ -141,15 +127,8 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
                 return false;
             };
 
-            if is_lossy_cast_for_comparison_unwrap(&expr_type, field.data_type()) {
-                return false;
-            }
-
-            if cast_literal_to_type_with_op(lit_val, &expr_type, op).is_some() {
-                return true;
-            }
-
-            try_cast_literal_to_type(lit_val, &expr_type).is_some()
+            comparison_unwrap_literal(lit_val, &expr_type, field.data_type(), op)
+                .is_some()
                 && is_supported_type(&expr_type)
                 && is_supported_type(&lit_type)
         }
@@ -182,10 +161,6 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
         return false;
     }
 
-    if is_lossy_cast_for_comparison_unwrap(&expr_type, field.data_type()) {
-        return false;
-    }
-
     for right in list {
         let Ok(right_type) = info.get_data_type(right) else {
             return false;
@@ -197,7 +172,14 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
 
         match right {
             Expr::Literal(lit_val, _)
-                if try_cast_literal_to_type(lit_val, &expr_type).is_some() => {}
+                if comparison_unwrap_literal(
+                    lit_val,
+                    &expr_type,
+                    field.data_type(),
+                    Operator::Eq,
+                )
+                .is_some()
+                    && try_cast_literal_to_type(lit_val, &expr_type).is_some() => {}
             _ => return false,
         }
     }
@@ -205,7 +187,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
     true
 }
 
-///// Tries to move a cast from an expression (such as column) to the literal other side of a comparison operator./
+/// Tries to move a cast from an expression (such as column) to the literal other side of a comparison operator.
 ///
 /// Specifically, rewrites
 /// ```sql
@@ -218,37 +200,14 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
 /// col <op> cast(<literal>)
 /// col <op> <casted_literal>
 /// ```
-fn cast_literal_to_type_with_op(
+fn comparison_unwrap_literal(
     lit_value: &ScalarValue,
-    target_type: &DataType,
+    from_type: &DataType,
+    to_type: &DataType,
     op: Operator,
 ) -> Option<ScalarValue> {
-    match (op, lit_value) {
-        (
-            Operator::Eq | Operator::NotEq,
-            ScalarValue::Utf8(Some(_))
-            | ScalarValue::Utf8View(Some(_))
-            | ScalarValue::LargeUtf8(Some(_)),
-        ) => {
-            // Only try for integer types (TODO can we do this for other types
-            // like timestamps)?
-            use DataType::*;
-            if matches!(
-                target_type,
-                Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
-            ) {
-                let casted = lit_value.cast_to(target_type).ok()?;
-                let round_tripped = casted.cast_to(&lit_value.data_type()).ok()?;
-                if lit_value != &round_tripped {
-                    return None;
-                }
-                Some(casted)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    try_cast_literal_for_comparison_unwrap(lit_value, from_type, to_type, op)
+        .map(CastComparisonRewrite::into_literal)
 }
 
 #[cfg(test)]
@@ -309,10 +268,21 @@ mod tests {
         let expected = col("c1").lt(lit(16i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
-        // cast(c2, INT32) = INT32(16) => INT64(c2) = INT64(16)
+        // cast(c2, INT32) = INT32(16) is not safe to unwrap because the
+        // Int64 source domain is wider than Int32. Out-of-range source values
+        // would fail or produce NULL before comparison rather than `false`.
         let c2_eq_lit = cast(col("c2"), DataType::Int32).eq(lit(16i32));
-        let expected = col("c2").eq(lit(16i64));
-        assert_eq!(optimize_test(c2_eq_lit, &schema), expected);
+        assert_eq!(optimize_test(c2_eq_lit.clone(), &schema), c2_eq_lit);
+
+        // cast(c1, UINT32) = UINT32(16) is not safe to unwrap because Int32
+        // contains negative values that are outside the UInt32 target domain.
+        let c1_eq_lit = cast(col("c1"), DataType::UInt32).eq(lit(16u32));
+        assert_eq!(optimize_test(c1_eq_lit.clone(), &schema), c1_eq_lit);
+
+        // cast(c8, INT64) < INT64(16) is not safe to unwrap because UInt64 has
+        // values above Int64::MAX.
+        let c8_lt_lit = cast(col("c8"), DataType::Int64).lt(lit(16i64));
+        assert_eq!(optimize_test(c8_lt_lit.clone(), &schema), c8_lt_lit);
 
         // cast(c1, INT64) < INT64(NULL) => NULL
         let c1_lt_lit_null = cast(col("c1"), DataType::Int64).lt(null_i64());
@@ -426,6 +396,12 @@ mod tests {
         let expr_eq =
             cast(col("c1"), DataType::Decimal128(10, 2)).eq(lit_decimal(1230, 10, 2));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
+
+        // Int64 to Decimal(10, 2) is partial because the decimal target cannot
+        // represent the full Int64 domain after scaling.
+        let expr_lt =
+            cast(col("c2"), DataType::Decimal128(10, 2)).lt(lit_decimal(12300, 10, 2));
+        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
     }
 
     #[test]
@@ -454,10 +430,17 @@ mod tests {
             cast(col("c3"), DataType::Decimal128(10, 3)).lt(lit_decimal(1230, 10, 3));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
-        // decimal to integer
-        // c1 < Decimal(12300, 10, 2) -> c1 < CAST(DECIMAL(12300,10,2) AS INT32) -> c1 < INT32(123)
+        // integer to decimal is only safe to unwrap when the decimal target can
+        // represent the full source integer domain. Decimal(10, 2) cannot hold
+        // every Int32 value after scaling, so keep the casted predicate intact.
         let expr_lt =
             cast(col("c1"), DataType::Decimal128(10, 2)).lt(lit_decimal(12300, 10, 2));
+        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+
+        // Decimal(12, 2) can represent the full Int32 domain, so the cast can
+        // be safely moved to the literal.
+        let expr_lt =
+            cast(col("c1"), DataType::Decimal128(12, 2)).lt(lit_decimal(12300, 12, 2));
         let expected = col("c1").lt(lit(123i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
@@ -507,18 +490,14 @@ mod tests {
             false,
         );
         assert_eq!(optimize_test(expr_lt, &schema), expected);
-        // INT32(C2) IN (INT64(NULL),INT64(24),INT64(34),INT64(56),INT64(78)) ->
-        // INT32(C2) IN (INT32(NULL),INT32(24),INT32(34),INT32(56),INT32(78))
+        // INT32(C2) IN (INT64(NULL),INT64(24),INT64(34),INT64(56),INT64(78))
+        // is not safe to unwrap because C2 is Int64 and the cast target Int32
+        // cannot represent the full source domain.
         let expr_lt = cast(col("c2"), DataType::Int32).in_list(
             vec![null_i32(), lit(24i32), lit(34i64), lit(56i64), lit(78i64)],
             false,
         );
-        let expected = col("c2").in_list(
-            vec![null_i64(), lit(24i64), lit(34i64), lit(56i64), lit(78i64)],
-            false,
-        );
-
-        assert_eq!(optimize_test(expr_lt, &schema), expected);
+        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // decimal test case
         // c3 is decimal(18,2)
@@ -825,6 +804,7 @@ mod tests {
                     Field::new("c5", DataType::Float32, false),
                     Field::new("c6", DataType::UInt32, false),
                     Field::new("c7", DataType::Float64, false),
+                    Field::new("c8", DataType::UInt64, false),
                     Field::new("date32", DataType::Date32, false),
                     Field::new("ts_nano_none", timestamp_nano_none_type(), false),
                     Field::new("ts_millis_none", timestamp_millis_none_type(), false),
