@@ -24,7 +24,7 @@ use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::ExprFunctionExt;
-use datafusion_expr::expr::NullTreatment;
+use datafusion_expr::expr::{NullTreatment, WindowFunction, WindowFunctionDefinition};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_aggregate::first_last::first_value_udaf;
@@ -261,6 +261,101 @@ async fn test_aggregate_ext_distinct() {
         ],
     )
     .await;
+}
+
+/// Test that `filter()` works as the first chained call on a window function.
+/// This verifies the fix for https://github.com/apache/datafusion/issues/21697
+#[tokio::test]
+async fn test_window_ext_filter_first() {
+    // Build a window function with filter as the FIRST chained method.
+    // Before the fix, this would fail because filter() on Expr only handled
+    // AggregateFunction, not WindowFunction.
+    let window_expr = Expr::from(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+        vec![col("i")],
+    ))
+    .filter(col("i").is_not_null())
+    .order_by(vec![col("id").sort(true, true)])
+    .build()
+    .unwrap()
+    .alias("sum_filtered");
+
+    let ctx = SessionContext::new();
+    let result = ctx
+        .read_batch(TEST_BATCH.clone())
+        .unwrap()
+        .select(vec![col("id"), col("i"), window_expr])
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let result = pretty_format_batches(&result).unwrap().to_string();
+    let actual_lines = result.lines().collect::<Vec<_>>();
+
+    // TEST_BATCH: id=["1","2","3"], i=[10, NULL, 5]
+    // Ordered by id ASC: row1(id=1,i=10), row2(id=2,i=NULL), row3(id=3,i=5)
+    // FILTER(i IS NOT NULL) excludes row2 from the sum
+    // Running sum: row1=10, row2=10 (NULL filtered out), row3=15
+    let expected_lines = vec![
+        "+----+----+--------------+",
+        "| id | i  | sum_filtered |",
+        "+----+----+--------------+",
+        "| 1  | 10 | 10           |",
+        "| 2  |    | 10           |",
+        "| 3  | 5  | 15           |",
+        "+----+----+--------------+",
+    ];
+
+    assert_eq!(
+        expected_lines, actual_lines,
+        "\n\nexpected:\n\n{expected_lines:#?}\nactual:\n\n{actual_lines:#?}\n\n"
+    );
+}
+
+/// Test that `distinct()` works as the first chained call on a window function.
+#[tokio::test]
+async fn test_window_ext_distinct_first() {
+    let window_expr = Expr::from(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+        vec![col("i")],
+    ))
+    .distinct()
+    .order_by(vec![col("id").sort(true, true)])
+    .build()
+    .unwrap()
+    .alias("sum_distinct");
+
+    let ctx = SessionContext::new();
+    let result = ctx
+        .read_batch(TEST_BATCH.clone())
+        .unwrap()
+        .select(vec![col("id"), col("i"), window_expr])
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let result = pretty_format_batches(&result).unwrap().to_string();
+    let actual_lines = result.lines().collect::<Vec<_>>();
+
+    // TEST_BATCH: id=["1","2","3"], i=[10, NULL, 5]
+    // Ordered by id ASC: row1(id=1,i=10), row2(id=2,i=NULL), row3(id=3,i=5)
+    // DISTINCT running sum: row1=10, row2=10 (NULL skipped), row3=15
+    let expected_lines = vec![
+        "+----+----+--------------+",
+        "| id | i  | sum_distinct |",
+        "+----+----+--------------+",
+        "| 1  | 10 | 10           |",
+        "| 2  |    | 10           |",
+        "| 3  | 5  | 15           |",
+        "+----+----+--------------+",
+    ];
+
+    assert_eq!(
+        expected_lines, actual_lines,
+        "\n\nexpected:\n\n{expected_lines:#?}\nactual:\n\n{actual_lines:#?}\n\n"
+    );
 }
 
 #[tokio::test]
