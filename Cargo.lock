@@ -2118,7 +2118,6 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
- "pin-project",
  "tempfile",
  "tokio",
 ]
@@ -2476,6 +2475,7 @@ dependencies = [
  "indexmap 2.14.0",
  "itertools 0.14.0",
  "parking_lot",
+ "pin-project",
  "rand 0.9.4",
 ]
 

@@ -19,13 +19,9 @@
 
 use std::cell::RefCell;
 use std::fmt::Debug;
-use std::future::Future;
 use std::ops::Range;
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::Duration;
 use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
@@ -43,7 +39,6 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::encryption::FileDecryptionProperties;
-use datafusion_common::instant::Instant;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, HashSet, Result,
@@ -60,7 +55,8 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::metrics::{
-    ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet, Time,
+    ElapsedComputeFutureExt, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    MetricsSet, Time,
 };
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
@@ -94,7 +90,6 @@ use parquet::file::properties::{
 };
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::types::SchemaDescriptor;
-use pin_project::{pin_project, pinned_drop};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
@@ -1177,70 +1172,6 @@ impl DisplayAs for ParquetSink {
                 // TODO: collect info
                 write!(f, "")
             }
-        }
-    }
-}
-
-/// Wraps any [`Future`] and accumulates the time spent actively executing
-/// inside `poll()` calls into `elapsed_compute`. Time between polls (when
-/// the future is suspended waiting for I/O or an upstream channel) is not
-/// measured, so only CPU time is captured.
-///
-/// Used by the sequential write path so that `elapsed_compute` reflects
-/// pure Arrow→Parquet encoding time, automatically excluding object-store
-/// I/O latency without requiring a separate subtraction step.
-///
-/// Note: uses `pin-project` rather than `pin-project-lite` in order to
-/// support `PinnedDrop`, which ensures accumulated time is flushed even
-/// if the future is cancelled (dropped before completion).
-#[pin_project(PinnedDrop)]
-struct ElapsedComputeFuture<T> {
-    #[pin]
-    inner: T,
-    curr: Duration,
-    elapsed_compute: Time,
-}
-
-#[pinned_drop]
-impl<T> PinnedDrop for ElapsedComputeFuture<T> {
-    fn drop(self: Pin<&mut Self>) {
-        if self.curr > Duration::default() {
-            let self_projected = self.project();
-            self_projected
-                .elapsed_compute
-                .add_duration(*self_projected.curr);
-        }
-    }
-}
-
-impl<O, F: Future<Output = O>> Future for ElapsedComputeFuture<F> {
-    type Output = O;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let self_projected = self.project();
-        let start = Instant::now();
-        let result = self_projected.inner.poll(cx);
-        *self_projected.curr += start.elapsed();
-        if result.is_ready() {
-            self_projected
-                .elapsed_compute
-                .add_duration(*self_projected.curr);
-            *self_projected.curr = Duration::default();
-        }
-        result
-    }
-}
-
-trait ElapsedComputeFutureExt: Future + Sized {
-    fn with_elapsed_compute(self, elapsed_compute: Time) -> ElapsedComputeFuture<Self>;
-}
-
-impl<O, F: Future<Output = O>> ElapsedComputeFutureExt for F {
-    fn with_elapsed_compute(self, elapsed_compute: Time) -> ElapsedComputeFuture<Self> {
-        ElapsedComputeFuture {
-            inner: self,
-            curr: Duration::default(),
-            elapsed_compute,
         }
     }
 }
