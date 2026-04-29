@@ -29,7 +29,7 @@ use arrow::array::Array;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use futures::{StreamExt, TryStreamExt};
@@ -72,7 +72,6 @@ pub fn normalize_batch_schema(
         return Ok(batch);
     }
 
-    // R-2: zero-cost borrow — avoids cloning the Arc<Schema>.
     let batch_schema = batch.schema_ref();
 
     // Validate that a zero-copy rename is safe: column count must match and every
@@ -85,7 +84,6 @@ pub fn normalize_batch_schema(
         );
     }
 
-    // R-1: declarative find instead of imperative loop with early return.
     if let Some((i, (batch_field, expected_field))) = batch_schema
         .fields()
         .iter()
@@ -422,7 +420,6 @@ mod tests {
         let expected_schema =
             Arc::new(Schema::new(vec![Field::new("val", DataType::Int32, false)]));
 
-        // R-4: batch is not used after this call — no clone needed.
         let result = normalize_batch_schema(batch, &expected_schema)?;
 
         assert_eq!(result.schema(), expected_schema);
@@ -513,7 +510,6 @@ mod tests {
         ]));
 
         let result = normalize_batch_schema(batch, &dst_schema)?;
-        // R-3: schema equality already covers every field name and type — no
         // need to re-assert individual field names.
         assert_eq!(result.schema(), dst_schema);
         Ok(())
