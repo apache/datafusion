@@ -77,6 +77,15 @@ jobs:
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           echo "Changed crates: $PACKAGES"
 
+      # `datafusion-substrait` (and crates that depend on it via sqllogictest)
+      # have a build script that calls protoc, which is not preinstalled on
+      # ubuntu-latest runners.
+      - name: Install Protobuf Compiler
+        if: steps.changed_crates.outputs.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
       - name: Install cargo-semver-checks
         if: steps.changed_crates.outputs.packages != ''
         uses: taiki-e/install-action@94cb46f8d6e437890146ffbd78a778b78e623fb2  # v2.74.0
