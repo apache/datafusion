@@ -51,7 +51,7 @@ pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 ///
 /// | Case | Result |
 /// |---|---|
-/// | `batch.schema() == expected_schema` | Returns the batch unchanged (fast path, zero copies). |
+/// | `batch` schema is structurally equal to `expected_schema` | Returns the batch unchanged (fast path, zero copies). |
 /// | Column count and data types match positionally | Returns a new `RecordBatch` that shares the original data buffers (zero-copy) but carries `expected_schema`. |
 /// | Column count or data types are incompatible | Returns `Err(internal_err!(...))`. |
 ///
@@ -420,6 +420,9 @@ mod tests {
         let expected_schema =
             Arc::new(Schema::new(vec![Field::new("val", DataType::Int32, false)]));
 
+        // Capture the column Arc before the batch is moved.
+        let batch_col_before = Arc::clone(batch.column(0));
+
         let result = normalize_batch_schema(batch, &expected_schema)?;
 
         assert_eq!(result.schema(), expected_schema);
@@ -431,6 +434,8 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(col.values(), &[10, 20, 30]);
+        // Verify the rename was truly zero-copy: same underlying column buffer.
+        assert!(Arc::ptr_eq(result.column(0), &batch_col_before));
         Ok(())
     }
 
@@ -449,6 +454,37 @@ mod tests {
         )?;
         let result = normalize_batch_schema(batch, &schema2)?;
         assert_eq!(result.schema().field(0).name(), "x");
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_batch_schema_strips_metadata() -> Result<()> {
+        // When the batch schema carries Arrow schema-level metadata but
+        // `expected_schema` does not, the helper must replace the schema
+        // (conforming to the operator contract) and therefore strip the extra
+        // metadata.  This test confirms the behaviour is intentional.
+        use std::collections::HashMap;
+        let meta: HashMap<String, String> =
+            [("key".to_string(), "value".to_string())].into_iter().collect();
+        let src_schema = Arc::new(
+            Schema::new(vec![Field::new("child_col", DataType::Int32, false)])
+                .with_metadata(meta),
+        );
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&src_schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let result = normalize_batch_schema(batch, &expected_schema)?;
+
+        // Schema metadata from the source batch is gone — replaced by expected_schema.
+        assert_eq!(result.schema(), expected_schema);
+        assert!(result.schema_ref().metadata().is_empty());
         Ok(())
     }
 

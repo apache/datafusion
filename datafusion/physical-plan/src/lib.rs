@@ -53,6 +53,7 @@ pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
 pub use crate::work_table::WorkTable;
+pub use crate::common::normalize_batch_schema;
 pub use spill::spill_manager::SpillManager;
 
 mod ordering;

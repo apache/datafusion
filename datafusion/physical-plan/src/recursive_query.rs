@@ -320,7 +320,7 @@ impl RecursiveQueryStream {
         let baseline_metrics = self.baseline_metrics.clone();
 
         // Rebind to the declared output schema via the shared helper.
-        // See `normalize_batch_schema` in `common` for full semantics.
+        // See [`crate::common::normalize_batch_schema`] for full semantics.
         batch = normalize_batch_schema(batch, &self.schema)?;
 
         if let Some(deduplicator) = &mut self.distinct_deduplicator {
