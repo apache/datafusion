@@ -894,7 +894,6 @@ pub mod variable {
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test;
 
-mod extension_types;
 mod schema_equivalence;
 pub mod test_util;
 

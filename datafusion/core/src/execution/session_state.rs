@@ -57,8 +57,8 @@ use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
 use datafusion_expr::registry::{
-    ExtensionTypeRegistrationRef, ExtensionTypeRegistry, ExtensionTypeRegistryRef,
-    FunctionRegistry, MemoryExtensionTypeRegistry, SerializerRegistry,
+    ExtensionTypeRegistry, ExtensionTypeRegistryRef, FunctionRegistry,
+    MemoryExtensionTypeRegistry, SerializerRegistry,
 };
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
@@ -2267,35 +2267,6 @@ impl FunctionRegistry for SessionState {
 impl datafusion_execution::TaskContextProvider for SessionState {
     fn task_ctx(&self) -> Arc<TaskContext> {
         SessionState::task_ctx(self)
-    }
-}
-
-impl ExtensionTypeRegistry for SessionState {
-    fn extension_type_registration(
-        &self,
-        name: &str,
-    ) -> datafusion_common::Result<ExtensionTypeRegistrationRef> {
-        self.extension_types.extension_type_registration(name)
-    }
-
-    fn extension_type_registrations(&self) -> Vec<ExtensionTypeRegistrationRef> {
-        self.extension_types.extension_type_registrations()
-    }
-
-    fn add_extension_type_registration(
-        &self,
-        extension_type: ExtensionTypeRegistrationRef,
-    ) -> datafusion_common::Result<Option<ExtensionTypeRegistrationRef>> {
-        self.extension_types
-            .add_extension_type_registration(extension_type)
-    }
-
-    fn remove_extension_type_registration(
-        &self,
-        name: &str,
-    ) -> datafusion_common::Result<Option<ExtensionTypeRegistrationRef>> {
-        self.extension_types
-            .remove_extension_type_registration(name)
     }
 }
 

@@ -95,8 +95,10 @@ async fn create_cast_uuid_to_char() -> Result<()> {
     )?;
 
     let state = SessionStateBuilder::default()
-        .with_canonical_extension_types()?
         .with_type_planner(Arc::new(CustomTypePlanner {}))
+        .with_extension_type_registry(Arc::new(
+            MemoryExtensionTypeRegistry::new_with_canonical_extension_types(),
+        ))
         .build();
     let ctx = SessionContext::new_with_state(state);
 
@@ -123,8 +125,10 @@ async fn create_cast_uuid_to_char() -> Result<()> {
 #[tokio::test]
 async fn create_cast_char_to_uuid() -> Result<()> {
     let state = SessionStateBuilder::default()
-        .with_canonical_extension_types()?
         .with_type_planner(Arc::new(CustomTypePlanner {}))
+        .with_extension_type_registry(Arc::new(
+            MemoryExtensionTypeRegistry::new_with_canonical_extension_types(),
+        ))
         .build();
     let ctx = SessionContext::new_with_state(state);
 
