@@ -19,6 +19,7 @@
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
 pub mod accumulate;
+pub mod block_store;
 pub mod blocks;
 pub mod bool_op;
 pub mod group_index_operations;
