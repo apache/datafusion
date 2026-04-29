@@ -15,12 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Companion to `breaking_changes_detector.yml` — posts the sticky PR comment.
+# Companion to `breaking_changes_detector.yml`. Posts the sticky PR comment.
 #
 # Why this workflow exists:
 #   "The GITHUB_TOKEN has read-only permissions in pull requests from forked
 #    repositories."
-#     — https://docs.github.com/en/actions/reference/events-that-trigger-workflows#pull_request
+#     https://docs.github.com/en/actions/reference/events-that-trigger-workflows#pull_request
 # That is why the upstream `pull_request` workflow cannot post the comment
 # itself when the PR comes from a fork.
 #
@@ -28,7 +28,7 @@
 #   "You MUST NOT use `pull_request_target` as a trigger on ANY action that
 #    exports ANY confidential credentials or tokens such as GITHUB_TOKEN or
 #    NPM_TOKEN."
-#     — https://infra.apache.org/github-actions-policy.html
+#     https://infra.apache.org/github-actions-policy.html
 # `workflow_run` is the supported alternative: it runs in the base
 # repository's context regardless of where the upstream run was triggered
 # from, so the GITHUB_TOKEN here can be granted `pull-requests: write`. See:

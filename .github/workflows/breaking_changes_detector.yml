@@ -28,7 +28,7 @@
 # Why split it?
 #   "The GITHUB_TOKEN has read-only permissions in pull requests from forked
 #    repositories."
-#     — https://docs.github.com/en/actions/reference/events-that-trigger-workflows#pull_request
+#     https://docs.github.com/en/actions/reference/events-that-trigger-workflows#pull_request
 # A read-only token cannot post comments, so on fork PRs the previous
 # single-workflow design failed with HTTP 403. We can't simply broaden the
 # trigger here either: cargo-semver-checks compiles PR code (build.rs, proc
