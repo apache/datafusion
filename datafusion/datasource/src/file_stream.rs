@@ -435,14 +435,6 @@ impl FileStreamMetrics {
             .with_category(MetricCategory::Rows)
             .counter("file_scan_errors", partition);
 
-        let files_opened = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Rows)
-            .counter("files_opened", partition);
-
-        let files_processed = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Rows)
-            .counter("files_processed", partition);
-
         Self {
             time_opening,
             time_scanning_until_data,
