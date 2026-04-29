@@ -303,14 +303,11 @@ pub(crate) struct SharedBuildAccumulator {
     on_right: Vec<PhysicalExprRef>,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
-    /// Cap on the cross-partition merged-InList distinct count. Reuses
-    /// `optimizer.hash_join_inlist_pushdown_max_distinct_values` (the same
-    /// option that gates per-partition InList pushdown). When the union of
-    /// every reported partition's deduplicated InList values stays at or
-    /// below this many distinct entries we collapse them into a single
-    /// `IN (SET)` predicate that can participate in parquet stats /
-    /// bloom-filter pruning at the scan; otherwise we use
-    /// `multi_hash_lookup` over every partition's hash table instead.
+    /// Maximum distinct entries the cross-partition merged InList may
+    /// contain before we fall back to `multi_hash_lookup`. Sourced from
+    /// `optimizer.hash_join_inlist_pushdown_max_distinct_values` so the
+    /// same threshold caps both per-partition and cross-partition InList
+    /// pushdown.
     inlist_max_distinct_values: usize,
 }
 
@@ -734,31 +731,26 @@ impl SharedBuildAccumulator {
         }))
     }
 
-    /// Build the dynamic filter for `PartitionMode::Partitioned`. The filter
-    /// is decoupled from the repartition strategy: regardless of whether
-    /// individual partitions chose Map or InList for their pushdown, we
-    /// always emit `(global_minmax AND ([merged_in_list AND] multi_hash_lookup))`.
-    /// This drops the legacy `CASE hash_repartition % N WHEN p THEN … END`
-    /// routing expression entirely.
+    /// Build the dynamic filter for `PartitionMode::Partitioned`. Emits
+    /// `global_minmax AND ([merged_in_list AND] multi_hash_lookup)` —
+    /// independent of how the build side was repartitioned.
     ///
     /// * `global_minmax` — envelope of every partition's per-column min/max.
     ///   Cheap short-circuit and the only piece visible to scan-level
     ///   `pruning_predicate` extraction.
-    /// * `merged_in_list` — concatenated build keys when every reported
-    ///   partition produced an `InList` array and the cross-partition
-    ///   *deduplicated* set has at most `inlist_max_distinct_values` distinct
-    ///   entries (the same option that gates the per-partition InList path,
-    ///   `optimizer.hash_join_inlist_pushdown_max_distinct_values`). Worth
-    ///   carrying because a small `IN (SET)` participates in parquet stats /
-    ///   bloom-filter pruning, which `multi_hash_lookup` cannot.
-    /// * `multi_hash_lookup` — runtime hash-table probe across every
-    ///   partition's `Map`, hashing the join keys once.
+    /// * `merged_in_list` — concatenated, deduplicated build keys when every
+    ///   reported partition contributed an `InList` array and the
+    ///   cross-partition union fits under
+    ///   `optimizer.hash_join_inlist_pushdown_max_distinct_values`. A small
+    ///   `IN (SET)` participates in parquet stats / bloom-filter pruning,
+    ///   which `multi_hash_lookup` does not. When present it fully replaces
+    ///   the lookup.
+    /// * `multi_hash_lookup` — hashes the join keys once and ORs
+    ///   `contain_hashes()` across every partition's hash table.
     ///
-    /// The `has_canceled_unknown` case is the only one that can't safely use
-    /// this shape (we'd be missing maps for the canceled partitions). We
-    /// could keep a CASE just for that case, but the query is in the middle
-    /// of being torn down — emit `lit(true)` and let the join do whatever
-    /// filtering it can on its own.
+    /// `has_canceled_unknown` partitions short-circuit to `lit(true)`: we
+    /// don't have their maps, so we cannot include them in the lookup, and
+    /// the query is being torn down anyway.
     fn build_partitioned_filter(
         &self,
         real_partitions: &[&PartitionData],
@@ -777,12 +769,10 @@ impl SharedBuildAccumulator {
             .as_ref()
             .and_then(|b| create_bounds_predicate(&self.on_right, b));
 
-        // Try to build a merged InList. Only fires when *every* reported
-        // partition contributed an InList array AND the cross-partition
-        // deduplicated union has at most `inlist_max_distinct_values`
-        // entries. The merged InList already covers the union of every
-        // partition's build-side keys, so when present it fully replaces
-        // `multi_hash_lookup` — no need to AND a redundant probe on top.
+        // The merged InList covers the union of every partition's
+        // build-side keys, so when it fires it stands alone — there is no
+        // need to also AND a `multi_hash_lookup` (which would just probe
+        // the same data via a different structure).
         let membership_expr =
             if let Some(merged) = self.try_build_merged_inlist(real_partitions)? {
                 Some(merged)
@@ -815,14 +805,13 @@ impl SharedBuildAccumulator {
     /// If every reported partition contributed an InList array, concatenate
     /// them, deduplicate by scalar value, and gate on the
     /// `inlist_max_distinct_values` cap. Returns the merged
-    /// `(struct(...))? IN (SET) ([…])` predicate built over the *deduplicated*
-    /// keys when the cap is satisfied; `None` otherwise.
+    /// `(struct(...))? IN (SET) ([…])` predicate built over the
+    /// deduplicated keys when the cap is satisfied; `None` otherwise.
     ///
-    /// Per-partition arrays carry duplicates (the build side never dedups
-    /// before shipping), so each partition's `arr.len()` is an upper bound on
-    /// its distinct count. We start with a cheap pre-check (sum of lengths ≤
-    /// some fast-reject limit) before the dedup walk to keep the cost
-    /// proportional to actual partition sizes.
+    /// Per-partition arrays carry duplicates — each partition ships its raw
+    /// build-side join keys, dedup happens here. The dedup walk early-aborts
+    /// the moment we cross the cap, so the cost stays bounded by
+    /// `O(rows-until-cap+1-distinct-found)` rather than total input size.
     fn try_build_merged_inlist(
         &self,
         real_partitions: &[&PartitionData],

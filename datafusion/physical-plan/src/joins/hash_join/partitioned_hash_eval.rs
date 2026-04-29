@@ -346,29 +346,24 @@ impl PhysicalExpr for HashTableLookupExpr {
 /// Physical expression that probes the same join keys against multiple [`Map`]s
 /// and returns `true` for any row whose join keys match at least one map.
 ///
-/// Equivalent to `OR`-ing several [`HashTableLookupExpr`]s but evaluates
-/// `create_hashes` exactly once for the whole batch — every [`Map::HashMap`]
-/// probe shares that hash buffer. Used for the global-first dynamic filter
-/// when every reported partition uses a hash-table pushdown strategy.
+/// Equivalent to `OR`-ing several [`HashTableLookupExpr`]s, but
+/// `create_hashes` runs exactly once for the whole batch and every
+/// [`Map::HashMap`] probe shares the same hash buffer. All `HashMap`
+/// entries must therefore have been built with the same `RandomState`;
+/// [`Map::ArrayMap`] entries are queried via `contain_keys` and do not
+/// consume hashes.
 pub struct MultiMapLookupExpr {
-    /// Columns in the ON clause used to compute the join key for lookups
+    /// Join-key expressions evaluated against each input batch.
     on_columns: Vec<PhysicalExprRef>,
-    /// Random state for hashing — every map must have been built with the
-    /// same `RandomState`, otherwise the shared hash buffer is meaningless.
+    /// Hashing seed shared by every entry in `maps`.
     random_state: SeededRandomState,
-    /// Maps to OR over (each is one partition's build-side data)
+    /// Build-side maps to OR over, one per partition.
     maps: Vec<Arc<Map>>,
-    /// Description for display
+    /// Display name used in `EXPLAIN` output (e.g. `"multi_hash_lookup"`).
     description: String,
 }
 
 impl MultiMapLookupExpr {
-    /// Create a new MultiMapLookupExpr.
-    ///
-    /// `maps` is the (per-partition) sequence of build-side maps to probe.
-    /// All `Map::HashMap` entries are expected to use the same `random_state`;
-    /// `Map::ArrayMap` entries do not consume hashes and are queried via
-    /// `contain_keys`.
     pub fn new(
         on_columns: Vec<PhysicalExprRef>,
         random_state: SeededRandomState,
@@ -466,8 +461,8 @@ impl PhysicalExpr for MultiMapLookupExpr {
         let join_keys = evaluate_columns(&self.on_columns, batch)?;
 
         if self.maps.is_empty() || num_rows == 0 {
-            // No maps to probe — this should not happen in practice but
-            // returning all-false matches the semantics of an empty `OR`.
+            // Empty `maps` would not be constructed by the dynamic-filter
+            // builder — guard anyway: an empty OR is `false` for every row.
             let buffer = BooleanBufferBuilder::new(num_rows);
             let mut buffer = buffer;
             buffer.append_n(num_rows, false);
@@ -477,14 +472,13 @@ impl PhysicalExpr for MultiMapLookupExpr {
             ))));
         }
 
-        // Whether any map needs hashes. We only compute hashes if at least
-        // one map is a HashMap.
+        // Hashes are only needed for `HashMap` probes; `ArrayMap` queries
+        // its keys directly via `contain_keys`.
         let needs_hashes = self
             .maps
             .iter()
             .any(|m| matches!(m.as_ref(), Map::HashMap(_)));
 
-        // Result buffer accumulates the OR of every map's `contain_*` result.
         let mut result = vec![false; num_rows];
 
         let process_one_map =
@@ -494,8 +488,8 @@ impl PhysicalExpr for MultiMapLookupExpr {
                         let hashes = hashes
                             .expect("hashes computed when at least one map is a HashMap");
                         let arr = hm.contain_hashes(hashes);
-                        // OR into the running result. `arr` has no nulls
-                        // (`contain_hashes` returns a non-nullable BooleanArray).
+                        // `contain_hashes` always returns a non-null
+                        // `BooleanArray`; OR its bits into `result`.
                         for (slot, hit) in result.iter_mut().zip(arr.values().iter()) {
                             *slot |= hit;
                         }
@@ -511,8 +505,8 @@ impl PhysicalExpr for MultiMapLookupExpr {
             };
 
         if needs_hashes {
-            // Compute the join-key hashes ONCE, then probe every HashMap
-            // against the same buffer. ArrayMap probes ignore the hashes.
+            // Hash the join keys once and reuse the buffer for every
+            // `HashMap` probe; `ArrayMap` probes pass `None` for hashes.
             with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
                 for map in &self.maps {
                     process_one_map(&mut result, map, Some(hashes))?;

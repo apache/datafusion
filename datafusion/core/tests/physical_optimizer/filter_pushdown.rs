@@ -1072,14 +1072,11 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         .await
         .unwrap();
 
-    // Now check what our filter looks like. When the cross-partition InList
-    // is small enough (≤ MERGED_INLIST_MAX_TOTAL_LEN) we collapse it into a
-    // single global `IN (SET)` regardless of how the data was repartitioned —
-    // this lets the merged set participate in parquet stats / bloom-filter
-    // pruning at the scan, which a per-partition `CASE` could not. Both the
-    // normal repartition and the `force_hash_collisions` path produce the
-    // same logical shape; they only differ in the partition-iteration order
-    // that controls the InList element order.
+    // The dynamic filter for a `Partitioned` hash join with a small enough
+    // cross-partition InList collapses to a single global `struct(...) IN
+    // (SET) ([...])`. The two `#[cfg]` arms differ only in the order of the
+    // InList elements, which is determined by partition-iteration order
+    // (normal repartition vs. the `force_hash_collisions` collapse).
     #[cfg(not(feature = "force_hash_collisions"))]
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),
@@ -2575,10 +2572,9 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         .await
         .unwrap();
 
-    // Verify the all-Map fast path collapses per-partition routing into a
-    // single shared `multi_hash_lookup` rather than a
-    // `CASE hash_repartition % N WHEN p THEN hash_lookup ELSE false END`
-    // expression.
+    // The dynamic filter for an all-Map Partitioned hash join uses a single
+    // shared `multi_hash_lookup` over every partition's hash table. There is
+    // no per-row `hash_repartition` routing.
     let plan_str = format_plan_for_test(&plan).to_string();
     assert!(
         plan_str.contains("multi_hash_lookup"),

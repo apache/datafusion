@@ -1316,8 +1316,7 @@ impl ExecutionPlan for HashJoinExec {
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
         // Initialize build_accumulator lazily with runtime partition counts
-        // (only if enabled). The dynamic filter no longer routes by repartition
-        // hash, so REPARTITION_RANDOM_STATE is not needed here.
+        // (only when dynamic filter pushdown is enabled).
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -2042,11 +2041,11 @@ async fn collect_left_input(
 
     let map = Arc::new(join_hash_map);
 
-    // The `Map` is always built (the join itself uses it). The optional
-    // `inlist` array is set when the build side fit under the per-partition
-    // InList caps — that's our signal that this partition's keys are small
-    // enough to participate in parquet stats / bloom-filter pruning when
-    // collapsed across partitions on the probe-side scan.
+    // The hash map is needed by the join itself, so it always travels in
+    // `PushdownStrategy::map`. The optional `inlist` array is attached when
+    // the build side fits under the per-partition InList caps; the
+    // `SharedBuildAccumulator` may then merge those arrays across partitions
+    // into a single `IN (SET)` for scan-side pruning.
     let membership = if num_rows == 0 {
         PushdownStrategy::empty()
     } else {
