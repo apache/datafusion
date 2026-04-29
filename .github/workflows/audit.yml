@@ -22,13 +22,6 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-
   pull_request:
     paths:
       - "**/Cargo.toml"
