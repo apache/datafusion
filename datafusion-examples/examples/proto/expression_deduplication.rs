@@ -17,8 +17,9 @@
 
 //! See `main.rs` for how to run it.
 //!
-//! This example demonstrates how to use the `PhysicalExtensionCodec` trait's
-//! interception methods to implement expression deduplication during deserialization.
+//! This example demonstrates how to use the
+//! `PhysicalProtoConverterExtension` trait's interception methods to
+//! implement expression deduplication during deserialization.
 //!
 //! This pattern is inspired by PR #18192, which introduces expression caching
 //! to reduce memory usage when deserializing plans with duplicate expressions.
@@ -29,8 +30,9 @@
 //! 2. Reduce memory allocation during deserialization
 //! 3. Enable downstream optimizations that rely on Arc pointer equality
 //!
-//! This demonstrates the decorator pattern enabled by the `PhysicalExtensionCodec` trait,
-//! where all expression serialization/deserialization routes through the codec methods.
+//! This demonstrates the decorator pattern enabled by
+//! `PhysicalProtoConverterExtension`, where physical-expression
+//! serialization and deserialization route through converter hooks.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -49,7 +51,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
-    DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+    DefaultPhysicalExtensionCodec, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
     PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
@@ -202,11 +204,10 @@ impl PhysicalExtensionCodec for CachingCodec {
 impl PhysicalProtoConverterExtension for CachingCodec {
     fn proto_to_execution_plan(
         &self,
-        ctx: &TaskContext,
-        extension_codec: &dyn PhysicalExtensionCodec,
         proto: &PhysicalPlanNode,
+        ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        proto.try_into_physical_plan_with_converter(ctx, extension_codec, self)
+        self.default_proto_to_execution_plan(proto, ctx)
     }
 
     fn execution_plan_to_proto(
@@ -225,9 +226,8 @@ impl PhysicalProtoConverterExtension for CachingCodec {
     fn proto_to_physical_expr(
         &self,
         proto: &PhysicalExprNode,
-        ctx: &TaskContext,
         input_schema: &Schema,
-        codec: &dyn PhysicalExtensionCodec,
+        ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         // Create cache key from protobuf bytes
         let mut key = Vec::new();
@@ -249,8 +249,7 @@ impl PhysicalProtoConverterExtension for CachingCodec {
         }
 
         // Cache miss - deserialize and store
-        let expr =
-            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)?;
+        let expr = parse_physical_expr_with_converter(proto, input_schema, ctx, self)?;
 
         // Store in cache
         {

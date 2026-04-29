@@ -3276,6 +3276,7 @@ _Alias of [current_date](#current_date)._
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
 - [array_to_string](#array_to_string)
+- [array_transform](#array_transform)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
 - [arrays_zip](#arrays_zip)
@@ -3325,6 +3326,7 @@ _Alias of [current_date](#current_date)._
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
+- [list_transform](#list_transform)
 - [list_union](#list_union)
 - [list_zip](#list_zip)
 - [make_array](#make_array)
@@ -4376,6 +4378,34 @@ array_to_string(array, delimiter[, null_string])
 - array_join
 - list_join
 
+### `array_transform`
+
+transforms the values of an array
+
+```sql
+array_transform(array, x -> x*2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda
+
+#### Example
+
+```sql
+> select array_transform([1, 2, 3, 4, 5], x -> x*2);
++-------------------------------------------+
+| array_transform([1, 2, 3, 4, 5], x -> x*2)       |
++-------------------------------------------+
+| [2, 4, 6, 8, 10]                          |
++-------------------------------------------+
+```
+
+#### Aliases
+
+- list_transform
+
 ### `array_union`
 
 Returns an array of elements that are present in both arrays (all elements from both arrays) without duplicates.
@@ -4740,6 +4770,10 @@ _Alias of [array_sort](#array_sort)._
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
+
+### `list_transform`
+
+_Alias of [array_transform](#array_transform)._
 
 ### `list_union`
 

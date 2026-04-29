@@ -18,8 +18,6 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RVec};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_physical_expr::EquivalenceProperties;
@@ -27,13 +25,16 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
+use stabby::vec::Vec as SVec;
+
 use crate::arrow_wrappers::WrappedSchema;
 use crate::physical_expr::partitioning::FFI_Partitioning;
 use crate::physical_expr::sort::FFI_PhysicalSortExpr;
+use crate::util::FFI_Option;
 
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_PlanProperties {
     /// The output partitioning of the plan.
     pub output_partitioning: unsafe extern "C" fn(plan: &Self) -> FFI_Partitioning,
@@ -46,7 +47,7 @@ pub struct FFI_PlanProperties {
 
     /// The output ordering of the plan.
     pub output_ordering:
-        unsafe extern "C" fn(plan: &Self) -> ROption<RVec<FFI_PhysicalSortExpr>>,
+        unsafe extern "C" fn(plan: &Self) -> FFI_Option<SVec<FFI_PhysicalSortExpr>>,
 
     /// Return the schema of the plan.
     pub schema: unsafe extern "C" fn(plan: &Self) -> WrappedSchema,
@@ -95,8 +96,8 @@ unsafe extern "C" fn boundedness_fn_wrapper(
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> ROption<RVec<FFI_PhysicalSortExpr>> {
-    let ordering: Option<RVec<FFI_PhysicalSortExpr>> =
+) -> FFI_Option<SVec<FFI_PhysicalSortExpr>> {
+    let ordering: Option<SVec<FFI_PhysicalSortExpr>> =
         properties.inner().output_ordering().map(|lex_ordering| {
             let vec_ordering: Vec<PhysicalSortExpr> = lex_ordering.clone().into();
             vec_ordering
@@ -159,7 +160,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let ffi_schema = unsafe { (ffi_props.schema)(&ffi_props) };
         let schema = (&ffi_schema.0).try_into()?;
 
-        let ffi_orderings: Option<RVec<FFI_PhysicalSortExpr>> =
+        let ffi_orderings: Option<SVec<FFI_PhysicalSortExpr>> =
             unsafe { (ffi_props.output_ordering)(&ffi_props) }.into();
         let sort_exprs = ffi_orderings
             .map(|ordering_vec| {
@@ -194,8 +195,8 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 }
 
 /// FFI safe version of [`Boundedness`].
-#[repr(C)]
-#[derive(Clone, StableAbi)]
+#[repr(C, u8)]
+#[derive(Clone)]
 pub enum FFI_Boundedness {
     Bounded,
     Unbounded { requires_infinite_memory: bool },
@@ -228,8 +229,9 @@ impl From<FFI_Boundedness> for Boundedness {
 }
 
 /// FFI safe version of [`EmissionType`].
-#[repr(C)]
-#[derive(Clone, StableAbi)]
+#[expect(non_camel_case_types)]
+#[repr(u8)]
+#[derive(Clone)]
 pub enum FFI_EmissionType {
     Incremental,
     Final,
