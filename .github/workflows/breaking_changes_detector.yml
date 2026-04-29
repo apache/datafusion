@@ -105,7 +105,6 @@ jobs:
         env:
           CHANGED_PACKAGES: ${{ steps.changed_crates.outputs.packages }}
           STEP_RESULT: ${{ steps.check_semver.outputs.result }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           SEMVER_LOGS: ${{ steps.check_semver.outputs.logs }}
         run: |
           if [ -n "$STEP_RESULT" ]; then
@@ -118,7 +117,6 @@ jobs:
 
           mkdir -p "$RUNNER_TEMP/semver-result"
           printf '%s\n' "$CHECK_RESULT" > "$RUNNER_TEMP/semver-result/result.txt"
-          printf '%s\n' "$PR_NUMBER" > "$RUNNER_TEMP/semver-result/pr_number.txt"
           printf '%s' "$SEMVER_LOGS" > "$RUNNER_TEMP/semver-result/logs.txt"
 
       - name: Upload semver result artifact

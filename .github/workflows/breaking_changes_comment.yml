@@ -52,9 +52,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
-          PR_NUMBER=$(cat "$RUNNER_TEMP/semver-result/pr_number.txt")
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No pull request associated with workflow_run; skipping comment update"
+            exit 0
+          fi
+
           CHECK_RESULT=$(cat "$RUNNER_TEMP/semver-result/result.txt")
+          case "$CHECK_RESULT" in
+            success|failure|error) ;;
+            *)
+              echo "Unexpected semver result '$CHECK_RESULT'"
+              exit 1
+              ;;
+          esac
+
           SEMVER_LOGS=$(cat "$RUNNER_TEMP/semver-result/logs.txt")
           ci/scripts/changed_crates.sh comment \
             "$REPO" "$PR_NUMBER" "$CHECK_RESULT" "$SEMVER_LOGS"
