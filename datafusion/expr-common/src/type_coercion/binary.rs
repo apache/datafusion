@@ -1594,12 +1594,31 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
     use arrow::datatypes::DataType::*;
     string_coercion(lhs_type, rhs_type).or_else(|| match (lhs_type, rhs_type) {
         // Allow pure binary + binary
-        (Binary | LargeBinary | BinaryView, Binary | LargeBinary | BinaryView) => {
+        (
+            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+        ) => {
+            // Coerce fixed-sized binary to variable-sized `Binary` to make uniform signature
+            // with the `Binary` result
+            let lhs_type = match lhs_type {
+                FixedSizeBinary(_) => &Binary,
+                val => val,
+            };
+            let rhs_type = match rhs_type {
+                FixedSizeBinary(_) => &Binary,
+                val => val,
+            };
             binary_coercion(lhs_type, rhs_type)
         }
         // Deny other mixed binary + string combinations
-        (Binary | LargeBinary | BinaryView, Utf8 | LargeUtf8 | Utf8View) => None,
-        (Utf8 | LargeUtf8 | Utf8View, Binary | LargeBinary | BinaryView) => None,
+        (
+            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+            Utf8 | LargeUtf8 | Utf8View,
+        ) => None,
+        (
+            Utf8 | LargeUtf8 | Utf8View,
+            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+        ) => None,
         // Predicate-based coercion rules are following
         (Utf8View, from_type) | (from_type, Utf8View) => {
             string_concat_internal_coercion(from_type, &Utf8View)

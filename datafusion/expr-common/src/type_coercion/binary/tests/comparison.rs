@@ -931,6 +931,24 @@ fn test_string_concat_coercion() -> Result<()> {
         Operator::StringConcat,
         DataType::BinaryView
     );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::FixedSizeBinary(16),
+        Operator::StringConcat,
+        DataType::Binary
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::BinaryView,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
 
     // String
     test_coercion_binary_rule!(
@@ -958,6 +976,7 @@ fn test_string_concat_coercion() -> Result<()> {
             DataType::Binary,
             DataType::LargeBinary,
             DataType::BinaryView,
+            DataType::FixedSizeBinary(8),
         ] {
             assert!(
                 BinaryTypeCoercer::new(&binary_dt, &Operator::StringConcat, &string_dt,)
