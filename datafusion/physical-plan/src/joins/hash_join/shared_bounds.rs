@@ -28,7 +28,7 @@ use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
-    HashExpr, HashTableLookupExpr, SeededRandomState,
+    HashExpr, HashTableLookupExpr, MultiMapLookupExpr, SeededRandomState,
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -200,6 +200,52 @@ fn combine_membership_and_bounds(
         (Some(membership), None) => Some(membership),
         (None, Some(bounds)) => Some(bounds),
         (None, None) => None,
+    }
+}
+
+/// Compute the global (envelope) min/max bounds across a set of partition bounds.
+///
+/// For each column index, returns the smallest min seen and the largest max seen.
+/// Columns where any partition is missing bounds, or where bounds are not totally
+/// ordered (e.g. mixed-type comparisons), are dropped from the global envelope.
+fn compute_global_bounds(per_partition: &[&PartitionBounds]) -> Option<PartitionBounds> {
+    let mut iter = per_partition.iter();
+    let first = iter.next()?;
+    let mut acc: Vec<Option<ColumnBounds>> = first
+        .column_bounds
+        .iter()
+        .map(|cb| Some(cb.clone()))
+        .collect();
+
+    for partition in iter {
+        if partition.column_bounds.len() != acc.len() {
+            return None;
+        }
+        for (slot, cb) in acc.iter_mut().zip(partition.column_bounds.iter()) {
+            let Some(existing) = slot.as_mut() else {
+                continue;
+            };
+            match cb.min.partial_cmp(&existing.min) {
+                Some(std::cmp::Ordering::Less) => existing.min = cb.min.clone(),
+                Some(_) => {}
+                None => {
+                    *slot = None;
+                    continue;
+                }
+            }
+            match cb.max.partial_cmp(&existing.max) {
+                Some(std::cmp::Ordering::Greater) => existing.max = cb.max.clone(),
+                Some(_) => {}
+                None => *slot = None,
+            }
+        }
+    }
+
+    let merged: Vec<ColumnBounds> = acc.into_iter().flatten().collect();
+    if merged.is_empty() {
+        None
+    } else {
+        Some(PartitionBounds::new(merged))
     }
 }
 
@@ -595,19 +641,8 @@ impl SharedBuildAccumulator {
             },
             FinalizeInput::Partitioned(partitions) => {
                 let num_partitions = partitions.len();
-                let routing_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    self.repartition_random_state.clone(),
-                    "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
 
-                let modulo_expr = Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let mut real_branches = Vec::new();
+                let mut real_partitions: Vec<(usize, &PartitionData)> = Vec::new();
                 let mut empty_partition_ids = Vec::new();
                 let mut has_canceled_unknown = false;
 
@@ -619,25 +654,7 @@ impl SharedBuildAccumulator {
                             empty_partition_ids.push(partition_id);
                         }
                         PartitionStatus::Reported(partition) => {
-                            let membership_expr = create_membership_predicate(
-                                &self.on_right,
-                                partition.pushdown.clone(),
-                                &HASH_JOIN_SEED,
-                                self.probe_schema.as_ref(),
-                            )?;
-                            let bounds_expr = create_bounds_predicate(
-                                &self.on_right,
-                                &partition.bounds,
-                            );
-                            let then_expr = combine_membership_and_bounds(
-                                membership_expr,
-                                bounds_expr,
-                            )
-                            .unwrap_or_else(|| lit(true));
-                            real_branches.push((
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                then_expr,
-                            ));
+                            real_partitions.push((partition_id, partition));
                         }
                         PartitionStatus::CanceledUnknown => {
                             has_canceled_unknown = true;
@@ -650,46 +667,141 @@ impl SharedBuildAccumulator {
                     }
                 }
 
-                let filter_expr = if has_canceled_unknown {
-                    let mut when_then_branches = empty_partition_ids
-                        .into_iter()
-                        .map(|partition_id| {
-                            (
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                lit(false),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    when_then_branches.extend(real_branches);
-
-                    if when_then_branches.is_empty() {
-                        lit(true)
-                    } else {
-                        Arc::new(CaseExpr::try_new(
-                            Some(modulo_expr),
-                            when_then_branches,
-                            Some(lit(true)),
-                        )?) as Arc<dyn PhysicalExpr>
+                // Fast path: when no partition is canceled and every reported
+                // partition uses a hash-table strategy, replace the routing
+                // CASE expression with `global_minmax AND multi_hash_lookup`.
+                // The shared `MultiMapLookupExpr` hashes the join keys once
+                // (with `HASH_JOIN_SEED`) and ORs `contain_hashes()` across
+                // every partition's hash table, eliminating both the routing
+                // hash and the per-branch re-hashing inside `CaseExpr`. Any
+                // canceled partition or any non-Map partition disqualifies the
+                // fast path and we use the legacy routing CASE.
+                if !has_canceled_unknown && !real_partitions.is_empty() {
+                    let mut maps: Vec<Arc<Map>> =
+                        Vec::with_capacity(real_partitions.len());
+                    let mut all_map = true;
+                    for (_, p) in &real_partitions {
+                        match &p.pushdown {
+                            PushdownStrategy::Map(m) => maps.push(Arc::clone(m)),
+                            PushdownStrategy::InList(_) | PushdownStrategy::Empty => {
+                                all_map = false;
+                                break;
+                            }
+                        }
                     }
-                } else if real_branches.is_empty() {
-                    lit(false)
-                } else if real_branches.len() == 1
-                    && empty_partition_ids.len() + 1 == num_partitions
-                {
-                    Arc::clone(&real_branches[0].1)
-                } else {
-                    Arc::new(CaseExpr::try_new(
-                        Some(modulo_expr),
-                        real_branches,
-                        Some(lit(false)),
-                    )?) as Arc<dyn PhysicalExpr>
-                };
+                    if all_map && !maps.is_empty() {
+                        let bounds_refs: Vec<&PartitionBounds> =
+                            real_partitions.iter().map(|(_, p)| &p.bounds).collect();
+                        let global_bounds_expr = compute_global_bounds(&bounds_refs)
+                            .as_ref()
+                            .and_then(|b| create_bounds_predicate(&self.on_right, b));
+                        let multi_lookup = Arc::new(MultiMapLookupExpr::new(
+                            self.on_right.clone(),
+                            HASH_JOIN_SEED.clone(),
+                            maps,
+                            "multi_hash_lookup".to_string(),
+                        ))
+                            as Arc<dyn PhysicalExpr>;
+                        let filter_expr = combine_membership_and_bounds(
+                            Some(multi_lookup),
+                            global_bounds_expr,
+                        )
+                        .unwrap_or_else(|| lit(true));
+                        self.dynamic_filter.update(filter_expr)?;
+                        return Ok(());
+                    }
+                }
+
+                let filter_expr = self.build_case_routing_filter(
+                    num_partitions,
+                    &real_partitions,
+                    &empty_partition_ids,
+                    has_canceled_unknown,
+                )?;
 
                 self.dynamic_filter.update(filter_expr)?;
             }
         }
 
         Ok(())
+    }
+
+    /// Build the per-partition `CASE (hash_repartition % N) WHEN p THEN
+    /// per_partition_filter ELSE … END` routing expression. Used as the fallback
+    /// when the all-Map fast path doesn't apply (any InList/Empty partition,
+    /// any canceled partition, or no real partitions).
+    fn build_case_routing_filter(
+        &self,
+        num_partitions: usize,
+        real_partitions: &[(usize, &PartitionData)],
+        empty_partition_ids: &[usize],
+        has_canceled_unknown: bool,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let routing_hash_expr = Arc::new(HashExpr::new(
+            self.on_right.clone(),
+            self.repartition_random_state.clone(),
+            "hash_repartition".to_string(),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let modulo_expr = Arc::new(BinaryExpr::new(
+            routing_hash_expr,
+            Operator::Modulo,
+            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let mut real_branches = Vec::with_capacity(real_partitions.len());
+        for (partition_id, partition) in real_partitions {
+            let membership_expr = create_membership_predicate(
+                &self.on_right,
+                partition.pushdown.clone(),
+                &HASH_JOIN_SEED,
+                self.probe_schema.as_ref(),
+            )?;
+            let bounds_expr = create_bounds_predicate(&self.on_right, &partition.bounds);
+            let then_expr = combine_membership_and_bounds(membership_expr, bounds_expr)
+                .unwrap_or_else(|| lit(true));
+            real_branches.push((
+                lit(ScalarValue::UInt64(Some(*partition_id as u64))),
+                then_expr,
+            ));
+        }
+
+        let filter_expr = if has_canceled_unknown {
+            let mut when_then_branches = empty_partition_ids
+                .iter()
+                .map(|partition_id| {
+                    (
+                        lit(ScalarValue::UInt64(Some(*partition_id as u64))),
+                        lit(false),
+                    )
+                })
+                .collect::<Vec<_>>();
+            when_then_branches.extend(real_branches);
+
+            if when_then_branches.is_empty() {
+                lit(true)
+            } else {
+                Arc::new(CaseExpr::try_new(
+                    Some(modulo_expr),
+                    when_then_branches,
+                    Some(lit(true)),
+                )?) as Arc<dyn PhysicalExpr>
+            }
+        } else if real_branches.is_empty() {
+            lit(false)
+        } else if real_branches.len() == 1
+            && empty_partition_ids.len() + 1 == num_partitions
+        {
+            Arc::clone(&real_branches[0].1)
+        } else {
+            Arc::new(CaseExpr::try_new(
+                Some(modulo_expr),
+                real_branches,
+                Some(lit(false)),
+            )?) as Arc<dyn PhysicalExpr>
+        };
+
+        Ok(filter_expr)
     }
 }
 
@@ -793,5 +905,25 @@ mod tests {
         let (partitions, completed) = partitioned_state(&acc);
         assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
         assert_eq!(completed, 1);
+    }
+
+    #[test]
+    fn compute_global_bounds_takes_envelope() {
+        let p1 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(5)),
+            ScalarValue::Int32(Some(10)),
+        )]);
+        let p2 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(3)),
+            ScalarValue::Int32(Some(7)),
+        )]);
+        let p3 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(8)),
+            ScalarValue::Int32(Some(20)),
+        )]);
+        let global = compute_global_bounds(&[&p1, &p2, &p3]).unwrap();
+        let cb = global.get_column_bounds(0).unwrap();
+        assert_eq!(cb.min, ScalarValue::Int32(Some(3)));
+        assert_eq!(cb.max, ScalarValue::Int32(Some(20)));
     }
 }

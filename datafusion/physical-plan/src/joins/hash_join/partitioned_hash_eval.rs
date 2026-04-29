@@ -20,7 +20,7 @@
 use std::{fmt::Display, hash::Hash, sync::Arc};
 
 use arrow::{
-    array::{ArrayRef, UInt64Array},
+    array::{ArrayRef, BooleanArray, BooleanBufferBuilder, UInt64Array},
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
@@ -336,6 +336,203 @@ impl PhysicalExpr for HashTableLookupExpr {
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
         }
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.description)
+    }
+}
+
+/// Physical expression that probes the same join keys against multiple [`Map`]s
+/// and returns `true` for any row whose join keys match at least one map.
+///
+/// Equivalent to `OR`-ing several [`HashTableLookupExpr`]s but evaluates
+/// `create_hashes` exactly once for the whole batch — every [`Map::HashMap`]
+/// probe shares that hash buffer. Used for the global-first dynamic filter
+/// when every reported partition uses a hash-table pushdown strategy.
+pub struct MultiMapLookupExpr {
+    /// Columns in the ON clause used to compute the join key for lookups
+    on_columns: Vec<PhysicalExprRef>,
+    /// Random state for hashing — every map must have been built with the
+    /// same `RandomState`, otherwise the shared hash buffer is meaningless.
+    random_state: SeededRandomState,
+    /// Maps to OR over (each is one partition's build-side data)
+    maps: Vec<Arc<Map>>,
+    /// Description for display
+    description: String,
+}
+
+impl MultiMapLookupExpr {
+    /// Create a new MultiMapLookupExpr.
+    ///
+    /// `maps` is the (per-partition) sequence of build-side maps to probe.
+    /// All `Map::HashMap` entries are expected to use the same `random_state`;
+    /// `Map::ArrayMap` entries do not consume hashes and are queried via
+    /// `contain_keys`.
+    pub fn new(
+        on_columns: Vec<PhysicalExprRef>,
+        random_state: SeededRandomState,
+        maps: Vec<Arc<Map>>,
+        description: String,
+    ) -> Self {
+        Self {
+            on_columns,
+            random_state,
+            maps,
+            description,
+        }
+    }
+}
+
+impl std::fmt::Debug for MultiMapLookupExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cols = self
+            .on_columns
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(
+            f,
+            "{}({cols}, [{}], maps={})",
+            self.description,
+            self.random_state.seed(),
+            self.maps.len()
+        )
+    }
+}
+
+impl Hash for MultiMapLookupExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.on_columns.dyn_hash(state);
+        self.description.hash(state);
+        self.random_state.seed().hash(state);
+        // See HashTableLookupExpr — pointer identity is what we use for Maps.
+        for map in &self.maps {
+            Arc::as_ptr(map).hash(state);
+        }
+    }
+}
+
+impl PartialEq for MultiMapLookupExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.on_columns == other.on_columns
+            && self.description == other.description
+            && self.random_state.seed() == other.random_state.seed()
+            && self.maps.len() == other.maps.len()
+            && self
+                .maps
+                .iter()
+                .zip(other.maps.iter())
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+    }
+}
+
+impl Eq for MultiMapLookupExpr {}
+
+impl Display for MultiMapLookupExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.description)
+    }
+}
+
+impl PhysicalExpr for MultiMapLookupExpr {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        self.on_columns.iter().collect()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(MultiMapLookupExpr::new(
+            children,
+            self.random_state.clone(),
+            self.maps.clone(),
+            self.description.clone(),
+        )))
+    }
+
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Boolean)
+    }
+
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let num_rows = batch.num_rows();
+        let join_keys = evaluate_columns(&self.on_columns, batch)?;
+
+        if self.maps.is_empty() || num_rows == 0 {
+            // No maps to probe — this should not happen in practice but
+            // returning all-false matches the semantics of an empty `OR`.
+            let buffer = BooleanBufferBuilder::new(num_rows);
+            let mut buffer = buffer;
+            buffer.append_n(num_rows, false);
+            return Ok(ColumnarValue::Array(Arc::new(BooleanArray::new(
+                buffer.finish(),
+                None,
+            ))));
+        }
+
+        // Whether any map needs hashes. We only compute hashes if at least
+        // one map is a HashMap.
+        let needs_hashes = self
+            .maps
+            .iter()
+            .any(|m| matches!(m.as_ref(), Map::HashMap(_)));
+
+        // Result buffer accumulates the OR of every map's `contain_*` result.
+        let mut result = vec![false; num_rows];
+
+        let process_one_map =
+            |result: &mut [bool], map: &Map, hashes: Option<&[u64]>| -> Result<()> {
+                match map {
+                    Map::HashMap(hm) => {
+                        let hashes = hashes
+                            .expect("hashes computed when at least one map is a HashMap");
+                        let arr = hm.contain_hashes(hashes);
+                        // OR into the running result. `arr` has no nulls
+                        // (`contain_hashes` returns a non-nullable BooleanArray).
+                        for (slot, hit) in result.iter_mut().zip(arr.values().iter()) {
+                            *slot |= hit;
+                        }
+                    }
+                    Map::ArrayMap(am) => {
+                        let arr = am.contain_keys(&join_keys)?;
+                        for (slot, hit) in result.iter_mut().zip(arr.values().iter()) {
+                            *slot |= hit;
+                        }
+                    }
+                }
+                Ok(())
+            };
+
+        if needs_hashes {
+            // Compute the join-key hashes ONCE, then probe every HashMap
+            // against the same buffer. ArrayMap probes ignore the hashes.
+            with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
+                for map in &self.maps {
+                    process_one_map(&mut result, map, Some(hashes))?;
+                }
+                Ok::<(), datafusion_common::DataFusionError>(())
+            })?;
+        } else {
+            for map in &self.maps {
+                process_one_map(&mut result, map, None)?;
+            }
+        }
+
+        let mut buffer = BooleanBufferBuilder::new(num_rows);
+        for hit in &result {
+            buffer.append(*hit);
+        }
+        Ok(ColumnarValue::Array(Arc::new(BooleanArray::new(
+            buffer.finish(),
+            None,
+        ))))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

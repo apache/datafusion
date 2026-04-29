@@ -2572,11 +2572,18 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         .await
         .unwrap();
 
-    // Verify that hash_lookup is used instead of IN (SET)
+    // Verify the all-Map fast path collapses per-partition routing into a
+    // single shared `multi_hash_lookup` rather than a
+    // `CASE hash_repartition % N WHEN p THEN hash_lookup ELSE false END`
+    // expression.
     let plan_str = format_plan_for_test(&plan).to_string();
     assert!(
-        plan_str.contains("hash_lookup"),
-        "Expected hash_lookup in plan but got: {plan_str}"
+        plan_str.contains("multi_hash_lookup"),
+        "Expected multi_hash_lookup in plan but got: {plan_str}"
+    );
+    assert!(
+        !plan_str.contains("hash_repartition"),
+        "Expected no routing hash_repartition in plan but got: {plan_str}"
     );
     assert!(
         !plan_str.contains("IN (SET)"),
