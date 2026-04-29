@@ -1,19 +1,16 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
+// Copyright 2023 Greptime Team
 //
-//   http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Utilities for casting scalar literals to different data types
 //!
@@ -103,7 +100,125 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
         || (is_date_type(to_type) && from_type.is_temporal())
 }
 
-/// Returns true if unwrap_cast_in_comparison supports this numeric type
+/// Returns true if casting from `from_type` to `to_type` is unsafe to unwrap in comparisons.
+///
+/// Such casts can map multiple input values to the same output value (for example
+/// `Timestamp(Nanosecond)` to `Timestamp(Millisecond)`, `Float64` to `Float32`,
+/// `Decimal(10, 4)` to `Decimal(10, 2)`, or `Decimal(18, 2)` to
+/// `Decimal(10, 2)`). They are not safe to unwrap by
+/// simply casting the literal back to the input type.
+pub fn is_lossy_cast_for_comparison_unwrap(
+    from_type: &DataType,
+    to_type: &DataType,
+) -> bool {
+    is_lossy_temporal_cast(from_type, to_type)
+        || is_temporal_precision_downcast(from_type, to_type)
+        || is_decimal_comparison_unwrap_lossy(from_type, to_type)
+        || is_decimal_to_integer_lossy_cast(from_type, to_type)
+        || is_float_to_integer_cast(from_type, to_type)
+        || is_float_precision_downcast(from_type, to_type)
+}
+
+fn is_temporal_precision_downcast(from_type: &DataType, to_type: &DataType) -> bool {
+    match (from_type, to_type) {
+        (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _))
+        | (DataType::Duration(from_unit), DataType::Duration(to_unit))
+        | (DataType::Time32(from_unit), DataType::Time32(to_unit))
+        | (DataType::Time32(from_unit), DataType::Time64(to_unit))
+        | (DataType::Time64(from_unit), DataType::Time32(to_unit))
+        | (DataType::Time64(from_unit), DataType::Time64(to_unit)) => {
+            timestamp_unit_scale(from_unit) > timestamp_unit_scale(to_unit)
+        }
+        _ => false,
+    }
+}
+
+fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
+    match unit {
+        TimeUnit::Second => 1,
+        TimeUnit::Millisecond => MILLISECONDS as i128,
+        TimeUnit::Microsecond => MICROSECONDS as i128,
+        TimeUnit::Nanosecond => NANOSECONDS as i128,
+    }
+}
+
+fn decimal_scale(data_type: &DataType) -> Option<i8> {
+    decimal_precision_and_scale(data_type).map(|(_, scale)| scale)
+}
+
+fn decimal_precision_and_scale(data_type: &DataType) -> Option<(u8, i8)> {
+    match data_type {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
+        _ => None,
+    }
+}
+
+fn is_decimal_comparison_unwrap_lossy(from_type: &DataType, to_type: &DataType) -> bool {
+    match (
+        decimal_precision_and_scale(from_type),
+        decimal_precision_and_scale(to_type),
+    ) {
+        (Some((from_precision, from_scale)), Some((to_precision, to_scale))) => {
+            let from_integer_digits = from_precision as i16 - from_scale as i16;
+            let to_integer_digits = to_precision as i16 - to_scale as i16;
+
+            from_scale > to_scale || from_integer_digits > to_integer_digits
+        }
+        _ => false,
+    }
+}
+
+fn is_decimal_to_integer_lossy_cast(from_type: &DataType, to_type: &DataType) -> bool {
+    decimal_scale(from_type).is_some_and(|scale| scale > 0) && is_integer_type(to_type)
+}
+
+fn is_float_to_integer_cast(from_type: &DataType, to_type: &DataType) -> bool {
+    is_floating_point_type(from_type) && is_integer_type(to_type)
+}
+
+fn is_float_precision_downcast(from_type: &DataType, to_type: &DataType) -> bool {
+    match (
+        float_precision_rank(from_type),
+        float_precision_rank(to_type),
+    ) {
+        (Some(from_rank), Some(to_rank)) => from_rank > to_rank,
+        _ => false,
+    }
+}
+
+fn is_integer_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+    )
+}
+
+fn is_floating_point_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    )
+}
+
+fn float_precision_rank(data_type: &DataType) -> Option<u8> {
+    match data_type {
+        DataType::Float16 => Some(1),
+        DataType::Float32 => Some(2),
+        DataType::Float64 => Some(3),
+        _ => None,
+    }
+}
+
+/// Returns true if unwrap_cast_in_comparison support this numeric type
 fn is_supported_numeric_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
@@ -511,6 +626,101 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_lossy_cast_for_comparison_unwrap_detection() {
+        let ts_s = DataType::Timestamp(TimeUnit::Second, None);
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+        let ts_us = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+
+        assert!(is_lossy_cast_for_comparison_unwrap(&ts_ns, &ts_ms));
+        assert!(is_lossy_cast_for_comparison_unwrap(&ts_ns, &ts_us));
+        assert!(is_lossy_cast_for_comparison_unwrap(&ts_us, &ts_ms));
+        assert!(is_lossy_cast_for_comparison_unwrap(&ts_ms, &ts_s));
+
+        assert!(!is_lossy_cast_for_comparison_unwrap(&ts_s, &ts_ms));
+        assert!(!is_lossy_cast_for_comparison_unwrap(&ts_ms, &ts_ns));
+        assert!(!is_lossy_cast_for_comparison_unwrap(&ts_ns, &ts_ns));
+        assert!(!is_lossy_cast_for_comparison_unwrap(
+            &DataType::Int32,
+            &DataType::Int16
+        ));
+
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &DataType::Date32
+        ));
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            &DataType::Date64
+        ));
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Date32,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None)
+        ));
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Date64,
+            &DataType::Timestamp(TimeUnit::Millisecond, None)
+        ));
+
+        let utc = Some("+0:00".into());
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Timestamp(TimeUnit::Nanosecond, utc.clone()),
+            &DataType::Timestamp(TimeUnit::Millisecond, utc)
+        ));
+
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Duration(TimeUnit::Nanosecond),
+            &DataType::Duration(TimeUnit::Microsecond)
+        ));
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Time64(TimeUnit::Nanosecond),
+            &DataType::Time32(TimeUnit::Millisecond)
+        ));
+
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Decimal128(18, 4),
+            &DataType::Decimal128(18, 2)
+        ));
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Decimal128(18, 2),
+            &DataType::Decimal128(10, 2)
+        ));
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Decimal128(18, 2),
+            &DataType::Decimal128(12, 4)
+        ));
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Decimal128(18, 2),
+            &DataType::Int64
+        ));
+        assert!(!is_lossy_cast_for_comparison_unwrap(
+            &DataType::Decimal128(18, 0),
+            &DataType::Int64
+        ));
+        assert!(!is_lossy_cast_for_comparison_unwrap(
+            &DataType::Decimal64(10, 2),
+            &DataType::Decimal128(20, 4)
+        ));
+        assert!(!is_lossy_cast_for_comparison_unwrap(
+            &DataType::Decimal128(10, 2),
+            &DataType::Decimal128(12, 4)
+        ));
+
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Float32,
+            &DataType::Int32
+        ));
+        assert!(is_lossy_cast_for_comparison_unwrap(
+            &DataType::Float64,
+            &DataType::Float32
+        ));
+        assert!(!is_lossy_cast_for_comparison_unwrap(
+            &DataType::Float32,
+            &DataType::Float64
+        ));
     }
 
     #[test]
