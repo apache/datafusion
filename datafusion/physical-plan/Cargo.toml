@@ -49,12 +49,13 @@ name = "datafusion_physical_plan"
 [dependencies]
 arrow = { workspace = true }
 arrow-data = { workspace = true }
-# Feature-only dep (arrow re-exports this crate as `arrow::ipc`): lz4 and zstd
-# codec support required by IPCStreamWriter in spill/mod.rs. These features must
-# stay in sync with the SpillCompression variants in datafusion-common. Declaring
-# the dependency here makes the contract explicit and local to the crate that owns
-# spill, preventing silent regressions if workspace-level arrow-ipc features are
-# narrowed (see commit 14c18ece4 for a prior regression caused by this coupling).
+# Feature-only dep used only via the `arrow::ipc` re-export (there is no direct
+# `use arrow_ipc` in this crate): lz4 and zstd codec support required by
+# IPCStreamWriter in spill/mod.rs. These features must stay in sync with the
+# SpillCompression variants in datafusion-common. Declaring the dependency here
+# makes the contract explicit and local to the crate that owns spill, preventing
+# silent regressions if workspace-level arrow-ipc features are narrowed (see
+# #21917 for the documented regression guard around this coupling).
 arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
@@ -94,7 +95,8 @@ tokio = { workspace = true, features = [
     "parking_lot",
 ] }
 
-# Required for spill compression codec support (see comment on arrow-ipc dependency above).
+# `arrow-ipc` is used only through the `arrow::ipc` re-export, so cargo-machete
+# reports it as unused even though this crate relies on its codec features.
 [package.metadata.cargo-machete]
 ignored = ["arrow-ipc"]
 
