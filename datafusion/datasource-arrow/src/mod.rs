@@ -21,6 +21,10 @@
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
 //! [`ArrowFormat`]: Apache Arrow file format abstractions
+//!
+//! Note: As of DataFusion 54.0.0, the `compression` feature of this crate
+//! is a no-op, only kept for backwards compatibility purposes, and it will
+//! be removed in a future release.
 
 pub mod file_format;
 pub mod source;

@@ -434,6 +434,13 @@ message JsonWriterOptions {
 }
 
 
+enum CsvQuoteStyle {
+  NECESSARY = 0;
+  ALWAYS = 1;
+  NON_NUMERIC = 2;
+  NEVER = 3;
+}
+
 message CsvWriterOptions {
   // Compression type
   CompressionTypeVariant compression = 1;
@@ -457,6 +464,12 @@ message CsvWriterOptions {
   string escape = 10;
   // Optional flag whether to double quotes, instead of escaping. Defaults to `true`
   bool double_quote = 11;
+  // Quote style for CSV writing
+  CsvQuoteStyle quote_style = 12;
+  // Whether to ignore leading whitespace in string values
+  bool ignore_leading_whitespace = 13;
+  // Whether to ignore trailing whitespace in string values
+  bool ignore_trailing_whitespace = 14;
 }
 
 // Options controlling CSV format
@@ -480,6 +493,12 @@ message CsvOptions {
   bytes terminator = 17; // Optional terminator character as a byte
   bytes truncated_rows = 18; // Indicates if truncated rows are allowed
   optional uint32 compression_level = 19; // Optional compression level
+  // Quote style for CSV writing
+  CsvQuoteStyle quote_style = 20;
+  // Whether to ignore leading whitespace in string values
+  bytes ignore_leading_whitespace = 21;
+  // Whether to ignore trailing whitespace in string values
+  bytes ignore_trailing_whitespace = 22;
 }
 
 // Options controlling CSV format

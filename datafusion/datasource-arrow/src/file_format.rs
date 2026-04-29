@@ -165,7 +165,7 @@ impl FileFormat for ArrowFormat {
                 }
                 GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
             };
-            schemas.push(schema.as_ref().clone());
+            schemas.push(Arc::unwrap_or_clone(schema));
         }
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))
@@ -545,7 +545,9 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::registry::ExtensionTypeRegistryRef;
-    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+    use datafusion_expr::{
+        AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
+    };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use object_store::{chunked::ChunkedStore, memory::InMemory};
 
@@ -589,6 +591,10 @@ mod tests {
         }
 
         fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+            unimplemented!()
+        }
+
+        fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
             unimplemented!()
         }
 

@@ -1867,6 +1867,15 @@ impl serde::Serialize for CsvOptions {
         if self.compression_level.is_some() {
             len += 1;
         }
+        if self.quote_style != 0 {
+            len += 1;
+        }
+        if !self.ignore_leading_whitespace.is_empty() {
+            len += 1;
+        }
+        if !self.ignore_trailing_whitespace.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1947,6 +1956,21 @@ impl serde::Serialize for CsvOptions {
         if let Some(v) = self.compression_level.as_ref() {
             struct_ser.serialize_field("compressionLevel", v)?;
         }
+        if self.quote_style != 0 {
+            let v = CsvQuoteStyle::try_from(self.quote_style)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.quote_style)))?;
+            struct_ser.serialize_field("quoteStyle", &v)?;
+        }
+        if !self.ignore_leading_whitespace.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("ignoreLeadingWhitespace", pbjson::private::base64::encode(&self.ignore_leading_whitespace).as_str())?;
+        }
+        if !self.ignore_trailing_whitespace.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("ignoreTrailingWhitespace", pbjson::private::base64::encode(&self.ignore_trailing_whitespace).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1989,6 +2013,12 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "truncatedRows",
             "compression_level",
             "compressionLevel",
+            "quote_style",
+            "quoteStyle",
+            "ignore_leading_whitespace",
+            "ignoreLeadingWhitespace",
+            "ignore_trailing_whitespace",
+            "ignoreTrailingWhitespace",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2012,6 +2042,9 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             Terminator,
             TruncatedRows,
             CompressionLevel,
+            QuoteStyle,
+            IgnoreLeadingWhitespace,
+            IgnoreTrailingWhitespace,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2052,6 +2085,9 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "terminator" => Ok(GeneratedField::Terminator),
                             "truncatedRows" | "truncated_rows" => Ok(GeneratedField::TruncatedRows),
                             "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
+                            "quoteStyle" | "quote_style" => Ok(GeneratedField::QuoteStyle),
+                            "ignoreLeadingWhitespace" | "ignore_leading_whitespace" => Ok(GeneratedField::IgnoreLeadingWhitespace),
+                            "ignoreTrailingWhitespace" | "ignore_trailing_whitespace" => Ok(GeneratedField::IgnoreTrailingWhitespace),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2090,6 +2126,9 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut terminator__ = None;
                 let mut truncated_rows__ = None;
                 let mut compression_level__ = None;
+                let mut quote_style__ = None;
+                let mut ignore_leading_whitespace__ = None;
+                let mut ignore_trailing_whitespace__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -2228,6 +2267,28 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::QuoteStyle => {
+                            if quote_style__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("quoteStyle"));
+                            }
+                            quote_style__ = Some(map_.next_value::<CsvQuoteStyle>()? as i32);
+                        }
+                        GeneratedField::IgnoreLeadingWhitespace => {
+                            if ignore_leading_whitespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreLeadingWhitespace"));
+                            }
+                            ignore_leading_whitespace__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::IgnoreTrailingWhitespace => {
+                            if ignore_trailing_whitespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreTrailingWhitespace"));
+                            }
+                            ignore_trailing_whitespace__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -2250,10 +2311,90 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     terminator: terminator__.unwrap_or_default(),
                     truncated_rows: truncated_rows__.unwrap_or_default(),
                     compression_level: compression_level__,
+                    quote_style: quote_style__.unwrap_or_default(),
+                    ignore_leading_whitespace: ignore_leading_whitespace__.unwrap_or_default(),
+                    ignore_trailing_whitespace: ignore_trailing_whitespace__.unwrap_or_default(),
                 })
             }
         }
         deserializer.deserialize_struct("datafusion_common.CsvOptions", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for CsvQuoteStyle {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Necessary => "NECESSARY",
+            Self::Always => "ALWAYS",
+            Self::NonNumeric => "NON_NUMERIC",
+            Self::Never => "NEVER",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for CsvQuoteStyle {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "NECESSARY",
+            "ALWAYS",
+            "NON_NUMERIC",
+            "NEVER",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = CsvQuoteStyle;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "NECESSARY" => Ok(CsvQuoteStyle::Necessary),
+                    "ALWAYS" => Ok(CsvQuoteStyle::Always),
+                    "NON_NUMERIC" => Ok(CsvQuoteStyle::NonNumeric),
+                    "NEVER" => Ok(CsvQuoteStyle::Never),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for CsvWriterOptions {
@@ -2297,6 +2438,15 @@ impl serde::Serialize for CsvWriterOptions {
         if self.double_quote {
             len += 1;
         }
+        if self.quote_style != 0 {
+            len += 1;
+        }
+        if self.ignore_leading_whitespace {
+            len += 1;
+        }
+        if self.ignore_trailing_whitespace {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvWriterOptions", len)?;
         if self.compression != 0 {
             let v = CompressionTypeVariant::try_from(self.compression)
@@ -2333,6 +2483,17 @@ impl serde::Serialize for CsvWriterOptions {
         if self.double_quote {
             struct_ser.serialize_field("doubleQuote", &self.double_quote)?;
         }
+        if self.quote_style != 0 {
+            let v = CsvQuoteStyle::try_from(self.quote_style)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.quote_style)))?;
+            struct_ser.serialize_field("quoteStyle", &v)?;
+        }
+        if self.ignore_leading_whitespace {
+            struct_ser.serialize_field("ignoreLeadingWhitespace", &self.ignore_leading_whitespace)?;
+        }
+        if self.ignore_trailing_whitespace {
+            struct_ser.serialize_field("ignoreTrailingWhitespace", &self.ignore_trailing_whitespace)?;
+        }
         struct_ser.end()
     }
 }
@@ -2361,6 +2522,12 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             "escape",
             "double_quote",
             "doubleQuote",
+            "quote_style",
+            "quoteStyle",
+            "ignore_leading_whitespace",
+            "ignoreLeadingWhitespace",
+            "ignore_trailing_whitespace",
+            "ignoreTrailingWhitespace",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2376,6 +2543,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             Quote,
             Escape,
             DoubleQuote,
+            QuoteStyle,
+            IgnoreLeadingWhitespace,
+            IgnoreTrailingWhitespace,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2408,6 +2578,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             "quote" => Ok(GeneratedField::Quote),
                             "escape" => Ok(GeneratedField::Escape),
                             "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
+                            "quoteStyle" | "quote_style" => Ok(GeneratedField::QuoteStyle),
+                            "ignoreLeadingWhitespace" | "ignore_leading_whitespace" => Ok(GeneratedField::IgnoreLeadingWhitespace),
+                            "ignoreTrailingWhitespace" | "ignore_trailing_whitespace" => Ok(GeneratedField::IgnoreTrailingWhitespace),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2438,6 +2611,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                 let mut quote__ = None;
                 let mut escape__ = None;
                 let mut double_quote__ = None;
+                let mut quote_style__ = None;
+                let mut ignore_leading_whitespace__ = None;
+                let mut ignore_trailing_whitespace__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Compression => {
@@ -2506,6 +2682,24 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             }
                             double_quote__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::QuoteStyle => {
+                            if quote_style__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("quoteStyle"));
+                            }
+                            quote_style__ = Some(map_.next_value::<CsvQuoteStyle>()? as i32);
+                        }
+                        GeneratedField::IgnoreLeadingWhitespace => {
+                            if ignore_leading_whitespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreLeadingWhitespace"));
+                            }
+                            ignore_leading_whitespace__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::IgnoreTrailingWhitespace => {
+                            if ignore_trailing_whitespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreTrailingWhitespace"));
+                            }
+                            ignore_trailing_whitespace__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(CsvWriterOptions {
@@ -2520,6 +2714,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                     quote: quote__.unwrap_or_default(),
                     escape: escape__.unwrap_or_default(),
                     double_quote: double_quote__.unwrap_or_default(),
+                    quote_style: quote_style__.unwrap_or_default(),
+                    ignore_leading_whitespace: ignore_leading_whitespace__.unwrap_or_default(),
+                    ignore_trailing_whitespace: ignore_trailing_whitespace__.unwrap_or_default(),
                 })
             }
         }
