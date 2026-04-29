@@ -1767,7 +1767,7 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     string_coercion(lhs_type, rhs_type)
         .or_else(|| binary_to_string_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false, string_coercion))
-        .or_else(|| ree_coercion(lhs_type, rhs_type, false, string_coercion))
+        .or_else(|| ree_coercion(lhs_type, rhs_type, false, like_coercion))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
@@ -1788,7 +1788,7 @@ fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false, string_coercion))
-        .or_else(|| ree_coercion(lhs_type, rhs_type, false, string_coercion))
+        .or_else(|| ree_coercion(lhs_type, rhs_type, false, regex_coercion))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
 }
 
