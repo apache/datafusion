@@ -31,6 +31,7 @@ use arrow::{
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
+use crate::aggregate::groups_accumulator::block_store::{BlockStore, FlatBlockStore};
 use crate::aggregate::groups_accumulator::blocks::{Block, Blocks};
 use crate::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
@@ -88,24 +89,39 @@ impl Block for BooleanBlock {
 /// had at least one value to accumulate so they do not need to track
 /// if they have seen values for a particular group.
 #[derive(Debug)]
-pub enum SeenValues {
+pub enum SeenValues<S> {
     /// All groups seen so far have seen at least one non-null value
     All {
         num_values: usize,
     },
     // Some groups have not yet seen a non-null value
     Some {
-        builder: Blocks<BooleanBlock>,
+        builder: S,
     },
 }
 
-impl Default for SeenValues {
+impl<S> Default for SeenValues<S> {
     fn default() -> Self {
         SeenValues::All { num_values: 0 }
     }
 }
 
-impl SeenValues {
+pub trait SeenValueStore: BlockStore<BooleanBlock> {
+    fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool) {
+        self[block_id as usize].set_bit(block_offset as usize, value);
+    }
+
+    fn size(&self) -> usize {
+        if self.is_empty() {
+            return 0;
+        }
+        self[0].capacity() / 8 * self.num_blocks()
+    }
+
+    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer;
+}
+
+impl<S: SeenValueStore> SeenValues<S> {
     /// Return a mutable reference to the `BooleanBufferBuilder` in `SeenValues::Some`.
     ///
     /// If `self` is `SeenValues::All`, it is transitioned to `SeenValues::Some`
@@ -117,7 +133,7 @@ impl SeenValues {
         &mut self,
         total_num_groups: usize,
         block_size: Option<usize>,
-    ) -> &mut Blocks<BooleanBlock> {
+    ) -> &mut S {
         // If `self` is `SeenValues::All`, transition it to `SeenValues::Some` with `num_values trues` firstly,
         // then return mutable reference to the builder.
         // If `self` is `SeenValues::Some`, just directly return mutable reference to the builder.
@@ -126,7 +142,7 @@ impl SeenValues {
 
         let builder = match self {
             SeenValues::All { num_values } => {
-                let mut builder = Blocks::new(block_size);
+                let mut builder = S::new(block_size);
                 builder.resize(*num_values, new_block, true);
                 *self = SeenValues::Some { builder };
                 match self {
@@ -169,7 +185,7 @@ impl SeenValues {
 ///
 /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 #[derive(Debug)]
-pub struct NullState<O: GroupIndexOperations> {
+pub struct NullState<O: GroupIndexOperations, S: SeenValueStore> {
     /// Have we seen any non-filtered input values for `group_index`?
     ///
     /// If `seen_values` is `SeenValues::Some(buffer)` and buffer\[i\] is true, have seen at least one non null
@@ -179,7 +195,7 @@ pub struct NullState<O: GroupIndexOperations> {
     /// pass the filter yet for group `i`
     ///
     /// If `seen_values` is `SeenValues::All`, all groups have seen at least one non null value
-    seen_values: SeenValues,
+    seen_values: SeenValues<S>,
 
     /// Size of one seen values block, can be None if only desire single block
     block_size: Option<usize>,
@@ -188,7 +204,11 @@ pub struct NullState<O: GroupIndexOperations> {
     _phantom: PhantomData<O>,
 }
 
-impl<O: GroupIndexOperations> NullState<O> {
+impl<O, S> NullState<O, S>
+where
+    O: GroupIndexOperations,
+    S: SeenValueStore + Send,
+{
     /// Create a new `NullState`
     pub fn new(block_size: Option<usize>) -> Self {
         Self {
@@ -411,7 +431,7 @@ impl<O: GroupIndexOperations> NullState<O> {
                     None
                 }
             },
-            SeenValues::Some { builder } => Some(builder.emit(emit_to)),
+            SeenValues::Some { builder } => Some(SeenValueStore::emit(builder, emit_to)),
         }
     }
 
@@ -424,148 +444,55 @@ impl<O: GroupIndexOperations> NullState<O> {
     }
 }
 
-/// Adapter for supporting dynamic dispatching of [`FlatNullState`] and [`BlockedNullState`].
-/// For performance, the cost of batch-level dynamic dispatching is acceptable.
-#[derive(Debug)]
-pub enum NullStateAdapter {
-    Flat(FlatNullState),
-    Blocked(BlockedNullState),
-}
-
-impl NullStateAdapter {
-    pub fn new(block_size: Option<usize>) -> Self {
-        if block_size.is_some() {
-            Self::Blocked(BlockedNullState::new(block_size))
-        } else {
-            Self::Flat(FlatNullState::new(block_size))
-        }
-    }
-
-    pub fn accumulate<T, F>(
-        &mut self,
-        group_indices: &[usize],
-        values: &PrimitiveArray<T>,
-        opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-        value_fn: F,
-    ) where
-        T: ArrowPrimitiveType + Send,
-        F: FnMut(u32, u64, T::Native) + Send,
-    {
-        match self {
-            NullStateAdapter::Flat(null_state) => null_state.accumulate(
-                group_indices,
-                values,
-                opt_filter,
-                total_num_groups,
-                value_fn,
-            ),
-            NullStateAdapter::Blocked(null_state) => null_state.accumulate(
-                group_indices,
-                values,
-                opt_filter,
-                total_num_groups,
-                value_fn,
-            ),
-        }
-    }
-
-    pub fn accumulate_boolean<F>(
-        &mut self,
-        group_indices: &[usize],
-        values: &BooleanArray,
-        opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-        value_fn: F,
-    ) where
-        F: FnMut(u32, u64, bool) + Send,
-    {
-        match self {
-            NullStateAdapter::Flat(null_state) => null_state.accumulate_boolean(
-                group_indices,
-                values,
-                opt_filter,
-                total_num_groups,
-                value_fn,
-            ),
-            NullStateAdapter::Blocked(null_state) => null_state.accumulate_boolean(
-                group_indices,
-                values,
-                opt_filter,
-                total_num_groups,
-                value_fn,
-            ),
-        }
-    }
-
-    pub fn build(&mut self, emit_to: EmitTo) -> Option<NullBuffer> {
-        match self {
-            NullStateAdapter::Flat(null_state) => null_state.build(emit_to),
-            NullStateAdapter::Blocked(null_state) => null_state.build(emit_to),
-        }
-    }
-
-    pub fn size(&self) -> usize {
-        match self {
-            NullStateAdapter::Flat(null_state) => null_state.size(),
-            NullStateAdapter::Blocked(null_state) => null_state.size(),
-        }
-    }
-
+#[cfg(test)]
+impl<O, S> NullState<O, S>
+where
+    O: GroupIndexOperations,
+    S: SeenValueStore + Send,
+{
     /// Clone and build a single [`BooleanBuffer`] from `seen_values`,
     /// only used for testing.
-    #[cfg(test)]
     fn build_cloned_seen_values(&self) -> TestSeenValuesResult {
-        match self {
-            NullStateAdapter::Flat(null_state) => match &null_state.seen_values {
-                SeenValues::All { num_values } => TestSeenValuesResult::All(*num_values),
-                SeenValues::Some { builder } => {
-                    let seen_values = builder[0].finish_cloned();
-                    TestSeenValuesResult::Some(seen_values)
-                }
-            },
-            NullStateAdapter::Blocked(null_state) => match &null_state.seen_values {
-                SeenValues::All { num_values } => TestSeenValuesResult::All(*num_values),
-                SeenValues::Some { builder } => {
-                    let mut return_builder = BooleanBufferBuilder::new(0);
-                    let num_blocks = builder.num_blocks();
-                    for blk_idx in 0..num_blocks {
-                        let bool_builder = &builder[blk_idx];
-                        for idx in 0..bool_builder.len() {
-                            return_builder.append(bool_builder.get_bit(idx));
-                        }
+        match &self.seen_values {
+            SeenValues::All { num_values } => TestSeenValuesResult::All(*num_values),
+            SeenValues::Some { builder } => {
+                let mut return_builder = BooleanBufferBuilder::new(0);
+                let num_blocks = builder.num_blocks();
+                for blk_idx in 0..num_blocks {
+                    let bool_builder = &builder[blk_idx];
+                    for idx in 0..bool_builder.len() {
+                        return_builder.append(bool_builder.get_bit(idx));
                     }
-                    let seen_values = return_builder.finish();
-                    TestSeenValuesResult::Some(seen_values)
                 }
-            },
+                let seen_values = return_builder.finish();
+                TestSeenValuesResult::Some(seen_values)
+            }
         }
     }
 
     #[cfg(test)]
     fn build_single_null_buffer(&mut self) -> Option<NullBuffer> {
-        match self {
-            NullStateAdapter::Flat(null_state) => null_state.build(EmitTo::All),
-            NullStateAdapter::Blocked(null_state) => {
-                let mut return_builder = BooleanBufferBuilder::new(0);
-                let num_blocks = null_state.num_blocks();
-                let mut has_some_nulls = false;
-                for _ in 0..num_blocks {
-                    let blocked_nulls = null_state.build(EmitTo::NextBlock);
-                    if let Some(nulls) = blocked_nulls {
-                        has_some_nulls = true;
-                        for bit in nulls.inner().iter() {
-                            return_builder.append(bit);
-                        }
-                    }
-                }
+        if self.block_size.is_none() {
+            return self.build(EmitTo::All);
+        }
 
-                if has_some_nulls {
-                    Some(NullBuffer::new(return_builder.finish()))
-                } else {
-                    None
+        let mut return_builder = BooleanBufferBuilder::new(0);
+        let num_blocks = self.num_blocks();
+        let mut has_some_nulls = false;
+        for _ in 0..num_blocks {
+            let blocked_nulls = self.build(EmitTo::NextBlock);
+            if let Some(nulls) = blocked_nulls {
+                has_some_nulls = true;
+                for bit in nulls.inner().iter() {
+                    return_builder.append(bit);
                 }
             }
+        }
+
+        if has_some_nulls {
+            Some(NullBuffer::new(return_builder.finish()))
+        } else {
+            None
         }
     }
 }
@@ -599,7 +526,8 @@ enum TestSeenValuesResult {
 ///
 /// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
 ///
-pub type FlatNullState = NullState<FlatGroupIndexOperations>;
+pub type FlatNullState =
+    NullState<FlatGroupIndexOperations, FlatBlockStore<BooleanBlock>>;
 
 /// [`NullState`] for `blocked groups input`
 ///
@@ -622,20 +550,9 @@ pub type FlatNullState = NullState<FlatGroupIndexOperations>;
 ///
 /// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
 ///
-pub type BlockedNullState = NullState<BlockedGroupIndexOperations>;
+pub type BlockedNullState = NullState<BlockedGroupIndexOperations, Blocks<BooleanBlock>>;
 
-impl Blocks<BooleanBlock> {
-    fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool) {
-        self[block_id as usize].set_bit(block_offset as usize, value);
-    }
-
-    fn size(&self) -> usize {
-        if self.is_empty() {
-            return 0;
-        }
-        self[0].capacity() / 8 * self.num_blocks()
-    }
-
+impl SeenValueStore for Blocks<BooleanBlock> {
     fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
         let nulls = match emit_to {
             EmitTo::All | EmitTo::First(_) => self[0].finish(),
@@ -654,6 +571,29 @@ impl Blocks<BooleanBlock> {
             // copies and bitwise manipulation
             let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
             // reset the existing seen buffer
+            for seen in nulls.iter().skip(n) {
+                self[0].append(seen);
+            }
+            first_n_null
+        } else {
+            nulls
+        };
+
+        NullBuffer::new(nulls)
+    }
+}
+
+impl SeenValueStore for FlatBlockStore<BooleanBlock> {
+    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
+        let nulls = match emit_to {
+            EmitTo::All | EmitTo::First(_) => self[0].finish(),
+            EmitTo::NextBlock => {
+                unreachable!("flat seen values do not support emitting next block")
+            }
+        };
+
+        let nulls = if let EmitTo::First(n) = emit_to {
+            let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
             for seen in nulls.iter().skip(n) {
                 self[0].append(seen);
             }
@@ -1024,6 +964,84 @@ mod test {
     };
     use rand::{Rng, rngs::ThreadRng};
     use std::{cmp, collections::HashMap, collections::HashSet};
+
+    enum TestNullState {
+        Flat(FlatNullState),
+        Blocked(BlockedNullState),
+    }
+
+    impl TestNullState {
+        fn accumulate<T, F>(
+            &mut self,
+            group_indices: &[usize],
+            values: &PrimitiveArray<T>,
+            opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+            value_fn: F,
+        ) where
+            T: ArrowPrimitiveType + Send,
+            F: FnMut(u32, u64, T::Native) + Send,
+        {
+            match self {
+                Self::Flat(null_state) => null_state.accumulate(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    total_num_groups,
+                    value_fn,
+                ),
+                Self::Blocked(null_state) => null_state.accumulate(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    total_num_groups,
+                    value_fn,
+                ),
+            }
+        }
+
+        fn accumulate_boolean<F>(
+            &mut self,
+            group_indices: &[usize],
+            values: &BooleanArray,
+            opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+            value_fn: F,
+        ) where
+            F: FnMut(u32, u64, bool) + Send,
+        {
+            match self {
+                Self::Flat(null_state) => null_state.accumulate_boolean(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    total_num_groups,
+                    value_fn,
+                ),
+                Self::Blocked(null_state) => null_state.accumulate_boolean(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    total_num_groups,
+                    value_fn,
+                ),
+            }
+        }
+
+        fn build_cloned_seen_values(&self) -> TestSeenValuesResult {
+            match self {
+                Self::Flat(null_state) => null_state.build_cloned_seen_values(),
+                Self::Blocked(null_state) => null_state.build_cloned_seen_values(),
+            }
+        }
+
+        fn build_single_null_buffer(&mut self) -> Option<NullBuffer> {
+            match self {
+                Self::Flat(null_state) => null_state.build_single_null_buffer(),
+                Self::Blocked(null_state) => null_state.build_single_null_buffer(),
+            }
+        }
+    }
 
     /// Tests NullState accumulation with a deterministic fixture: 100 dense
     /// group indices (0..100), fixed null/filter patterns, block_size=3,
@@ -1411,12 +1429,16 @@ mod test {
                     }
 
                     (
-                        NullStateAdapter::new(Some(blk_size)),
+                        TestNullState::Blocked(BlockedNullState::new(Some(blk_size))),
                         blk_size,
                         acc_group_indices_chunks,
                     )
                 } else {
-                    (NullStateAdapter::new(None), 0, group_indices_chunks)
+                    (
+                        TestNullState::Flat(FlatNullState::new(None)),
+                        0,
+                        group_indices_chunks,
+                    )
                 };
 
             // Start the test
@@ -1625,12 +1647,16 @@ mod test {
                     }
 
                     (
-                        NullStateAdapter::new(Some(blk_size)),
+                        TestNullState::Blocked(BlockedNullState::new(Some(blk_size))),
                         blk_size,
                         acc_group_indices_chunks,
                     )
                 } else {
-                    (NullStateAdapter::new(None), 0, group_indices_chunks)
+                    (
+                        TestNullState::Flat(FlatNullState::new(None)),
+                        0,
+                        group_indices_chunks,
+                    )
                 };
 
             // Start the test
