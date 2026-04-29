@@ -303,6 +303,15 @@ pub(crate) struct SharedBuildAccumulator {
     on_right: Vec<PhysicalExprRef>,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
+    /// Cap on the cross-partition merged-InList distinct count. Reuses
+    /// `optimizer.hash_join_inlist_pushdown_max_distinct_values` (the same
+    /// option that gates per-partition InList pushdown). When the union of
+    /// every reported partition's deduplicated InList values stays at or
+    /// below this many distinct entries we collapse them into a single
+    /// `IN (SET)` predicate that can participate in parquet stats /
+    /// bloom-filter pruning at the scan; otherwise we use
+    /// `multi_hash_lookup` over every partition's hash table instead.
+    inlist_max_distinct_values: usize,
 }
 
 /// Build-side data needed to construct a dynamic filter for one partition.
@@ -439,6 +448,7 @@ impl SharedBuildAccumulator {
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
+        inlist_max_distinct_values: usize,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -484,6 +494,7 @@ impl SharedBuildAccumulator {
             dynamic_filter,
             on_right,
             probe_schema: right_child.schema(),
+            inlist_max_distinct_values,
         }
     }
 
@@ -734,9 +745,11 @@ impl SharedBuildAccumulator {
     ///   Cheap short-circuit and the only piece visible to scan-level
     ///   `pruning_predicate` extraction.
     /// * `merged_in_list` — concatenated build keys when every reported
-    ///   partition produced an `InList` array and the cross-partition union
-    ///   is small enough (≤ `MERGED_INLIST_MAX_TOTAL_LEN`). Worth carrying
-    ///   because a small `IN (SET)` participates in parquet stats /
+    ///   partition produced an `InList` array and the cross-partition
+    ///   *deduplicated* set has at most `inlist_max_distinct_values` distinct
+    ///   entries (the same option that gates the per-partition InList path,
+    ///   `optimizer.hash_join_inlist_pushdown_max_distinct_values`). Worth
+    ///   carrying because a small `IN (SET)` participates in parquet stats /
     ///   bloom-filter pruning, which `multi_hash_lookup` cannot.
     /// * `multi_hash_lookup` — runtime hash-table probe across every
     ///   partition's `Map`, hashing the join keys once.
@@ -764,44 +777,34 @@ impl SharedBuildAccumulator {
             .as_ref()
             .and_then(|b| create_bounds_predicate(&self.on_right, b));
 
-        // Threshold on the cross-partition merged InList. Two reasons for
-        // keeping it small:
-        //   1. Below this many values the merged `IN (SET)` can participate
-        //      in parquet stats / bloom-filter pruning at the scan; a
-        //      `multi_hash_lookup` cannot.
-        //   2. Past this size the larger static_filter hash set blows out
-        //      of L1 and runtime regresses. A TPC-H SF=1 cap sweep from 20
-        //      to 2000 picked 20–50 as the sweet spot.
-        const MERGED_INLIST_MAX_TOTAL_LEN: usize = 20;
-
         // Try to build a merged InList. Only fires when *every* reported
         // partition contributed an InList array AND the cross-partition
-        // union is small. The merged InList is already the union of every
+        // deduplicated union has at most `inlist_max_distinct_values`
+        // entries. The merged InList already covers the union of every
         // partition's build-side keys, so when present it fully replaces
         // `multi_hash_lookup` — no need to AND a redundant probe on top.
-        let membership_expr = if let Some(merged) =
-            self.try_build_merged_inlist(real_partitions, MERGED_INLIST_MAX_TOTAL_LEN)?
-        {
-            Some(merged)
-        } else {
-            let maps: Vec<Arc<Map>> = real_partitions
-                .iter()
-                .filter_map(|p| p.pushdown.map.clone())
-                .collect();
-            if maps.is_empty() {
-                // Defensive: every reported (non-empty) partition is
-                // supposed to carry a Map. Falling through to None means
-                // we degrade to bounds-only filtering.
-                None
+        let membership_expr =
+            if let Some(merged) = self.try_build_merged_inlist(real_partitions)? {
+                Some(merged)
             } else {
-                Some(Arc::new(MultiMapLookupExpr::new(
-                    self.on_right.clone(),
-                    HASH_JOIN_SEED.clone(),
-                    maps,
-                    "multi_hash_lookup".to_string(),
-                )) as Arc<dyn PhysicalExpr>)
-            }
-        };
+                let maps: Vec<Arc<Map>> = real_partitions
+                    .iter()
+                    .filter_map(|p| p.pushdown.map.clone())
+                    .collect();
+                if maps.is_empty() {
+                    // Defensive: every reported (non-empty) partition is
+                    // supposed to carry a Map. Falling through to None means
+                    // we degrade to bounds-only filtering.
+                    None
+                } else {
+                    Some(Arc::new(MultiMapLookupExpr::new(
+                        self.on_right.clone(),
+                        HASH_JOIN_SEED.clone(),
+                        maps,
+                        "multi_hash_lookup".to_string(),
+                    )) as Arc<dyn PhysicalExpr>)
+                }
+            };
 
         Ok(
             combine_membership_and_bounds(membership_expr, global_bounds_expr)
@@ -809,32 +812,54 @@ impl SharedBuildAccumulator {
         )
     }
 
-    /// If every reported partition contributed an InList array and their
-    /// concatenated length stays within `cap`, return the merged
-    /// `(struct(...))? IN (SET) ([…])` expression — otherwise `None`.
+    /// If every reported partition contributed an InList array, concatenate
+    /// them, deduplicate by scalar value, and gate on the
+    /// `inlist_max_distinct_values` cap. Returns the merged
+    /// `(struct(...))? IN (SET) ([…])` predicate built over the *deduplicated*
+    /// keys when the cap is satisfied; `None` otherwise.
+    ///
+    /// Per-partition arrays carry duplicates (the build side never dedups
+    /// before shipping), so each partition's `arr.len()` is an upper bound on
+    /// its distinct count. We start with a cheap pre-check (sum of lengths ≤
+    /// some fast-reject limit) before the dedup walk to keep the cost
+    /// proportional to actual partition sizes.
     fn try_build_merged_inlist(
         &self,
         real_partitions: &[&PartitionData],
-        cap: usize,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        let mut total = 0usize;
+        let cap = self.inlist_max_distinct_values;
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(real_partitions.len());
         for p in real_partitions {
             let Some(arr) = &p.pushdown.inlist else {
                 return Ok(None);
             };
-            total += arr.len();
-            if total > cap {
-                return Ok(None);
-            }
             arrays.push(Arc::clone(arr));
         }
         let Some(merged) = merge_inlist_arrays(&arrays) else {
             return Ok(None);
         };
+        // Walk the merged array once, recording the first index of each
+        // distinct ScalarValue. If we cross the cap we abort early without
+        // materialising a longer index list. `arrow::compute::take` then
+        // produces the deduplicated array (in first-seen order, matching the
+        // shape `InListExpr::try_new_from_array` expects).
+        let mut seen = std::collections::HashSet::with_capacity(cap.saturating_add(1));
+        let mut indices: Vec<u32> = Vec::with_capacity(cap.min(merged.len()));
+        for i in 0..merged.len() {
+            let scalar = ScalarValue::try_from_array(merged.as_ref(), i)?;
+            if seen.insert(scalar) {
+                if indices.len() >= cap {
+                    // One more distinct value would exceed the cap.
+                    return Ok(None);
+                }
+                indices.push(i as u32);
+            }
+        }
+        let idx_array = arrow::array::UInt32Array::from(indices);
+        let deduped = arrow::compute::take(merged.as_ref(), &idx_array, None)?;
         Ok(Some(create_inlist_predicate(
             &self.on_right,
-            merged,
+            deduped,
             self.probe_schema.as_ref(),
         )?))
     }
@@ -869,6 +894,7 @@ mod tests {
             dynamic_filter,
             on_right: vec![],
             probe_schema,
+            inlist_max_distinct_values: 20,
         }
     }
 

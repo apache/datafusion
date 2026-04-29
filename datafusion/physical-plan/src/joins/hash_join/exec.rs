@@ -1327,6 +1327,11 @@ impl ExecutionPlan for HashJoinExec {
                         .iter()
                         .map(|(_, right_expr)| Arc::clone(right_expr))
                         .collect::<Vec<_>>();
+                    let inlist_max_distinct_values = context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_distinct_values;
                     Some(Arc::clone(df.build_accumulator.get_or_init(|| {
                         Arc::new(SharedBuildAccumulator::new_from_partition_mode(
                             self.mode,
@@ -1334,6 +1339,7 @@ impl ExecutionPlan for HashJoinExec {
                             self.right.as_ref(),
                             filter,
                             on_right,
+                            inlist_max_distinct_values,
                         ))
                     })))
                 })
