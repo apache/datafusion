@@ -241,8 +241,24 @@ These queries test the performance of the `FIRST_VALUE` aggregation function wit
 | Q12   | `WatchID`            | `Int64`     | `OS`            | `Int16`       | 91               |
 
 
+### Q13: Filter-only URL prefix match
 
+**Question**: "Which counters have the most page views with URLs that look like HTTP URLs?"
 
+**Important Query Properties**: Filter-only string prefix match. The `URL`
+column is used only by the pushed-down filter and is not projected or
+aggregated. This makes the query useful for measuring optimizations that can
+skip RowFilter evaluation when Parquet row group statistics prove that all rows
+in a row group satisfy the prefix predicate.
+
+```sql
+SELECT "CounterID", COUNT(*) AS page_views
+FROM hits
+WHERE "URL" LIKE 'http%'
+GROUP BY "CounterID"
+ORDER BY page_views DESC
+LIMIT 10;
+```
 
 ## Data Notes
 
