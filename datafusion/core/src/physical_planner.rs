@@ -42,7 +42,8 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, JoinAcceleratorBuilder, JoinAcceleratorSpec,
+    NestedLoopJoinExecBuilder, PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -69,8 +70,8 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::{
-    DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
-    not_impl_err, plan_err,
+    DFSchema, DFSchemaRef, JoinSide, ScalarValue, exec_err, internal_datafusion_err,
+    internal_err, not_impl_err, plan_err,
 };
 use datafusion_common::{
     TableReference, assert_eq_or_internal_err, assert_or_internal_err,
@@ -1590,13 +1591,12 @@ impl DefaultPhysicalPlanner {
                         let left_side = side_of(lhs_logical)?;
                         let right_side = side_of(rhs_logical)?;
                         if left_side == Side::Both || right_side == Side::Both {
-                            return Ok(Arc::new(NestedLoopJoinExec::try_new(
+                            return build_nested_loop_join(
                                 physical_left,
                                 physical_right,
                                 join_filter,
-                                join_type,
-                                None,
-                            )?));
+                                *join_type,
+                            );
                         }
 
                         if left_side == Side::Right && right_side == Side::Left {
@@ -1631,13 +1631,12 @@ impl DefaultPhysicalPlanner {
                         )?)
                     } else {
                         // there is no equal join condition, use the nested loop join
-                        Arc::new(NestedLoopJoinExec::try_new(
+                        build_nested_loop_join(
                             physical_left,
                             physical_right,
                             join_filter,
-                            join_type,
-                            None,
-                        )?)
+                            *join_type,
+                        )?
                     }
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
@@ -2280,6 +2279,30 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
     }
 
     Ok(assignments)
+}
+
+fn build_nested_loop_join(
+    physical_left: Arc<dyn ExecutionPlan>,
+    physical_right: Arc<dyn ExecutionPlan>,
+    join_filter: Option<join_utils::JoinFilter>,
+    join_type: JoinType,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let left_schema = physical_left.schema();
+    let right_schema = physical_right.schema();
+    let accelerator = JoinAcceleratorBuilder::try_new(JoinAcceleratorSpec::new(
+        join_type,
+        JoinSide::Left,
+        Arc::clone(&left_schema),
+        Arc::clone(&right_schema),
+        join_filter.clone(),
+    ))?;
+
+    Ok(Arc::new(
+        NestedLoopJoinExecBuilder::new(physical_left, physical_right, join_type)
+            .with_filter(join_filter)
+            .with_accelerator(accelerator)
+            .build()?,
+    ))
 }
 
 /// Check if an assignment is an identity assignment (column = column)

@@ -24,8 +24,8 @@ pub use hash_join::{
     HashExpr, HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr, SeededRandomState,
 };
 pub use join_accelerator::{
-    JoinAccelerator, JoinAcceleratorFactory, JoinAcceleratorFactoryRef,
-    JoinAcceleratorProber, JoinProbeBatch, NaiveJoinAcceleratorFactory,
+    JoinAccelerator, JoinAcceleratorBuilder, JoinAcceleratorProber, JoinAcceleratorRef,
+    JoinAcceleratorSpec, JoinProbeCandidates,
 };
 pub use nested_loop_join::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use parking_lot::Mutex;

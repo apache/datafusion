@@ -3773,6 +3773,8 @@ impl PartialOrd for Aggregate {
 /// Returns 0 when no grouping set is duplicated.
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+        // Expr contains Arc with interior mutability but is intentionally used as a hash key.
         let mut counts: HashMap<&[Expr], usize> = HashMap::new();
         for set in sets {
             *counts.entry(set).or_insert(0) += 1;
