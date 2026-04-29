@@ -22,10 +22,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::work_table::{ReservedBatches, WorkTable};
-use crate::aggregates::group_values::{new_group_values, GroupValues};
+use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
 use crate::common::normalize_batch_schema;
-use crate::execution_plan::{reset_plan_states, Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -39,13 +39,13 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_datafusion_err, not_impl_err, Result};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
-use futures::{ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready};
 
 /// Recursive query execution plan.
 ///

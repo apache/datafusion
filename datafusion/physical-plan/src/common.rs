@@ -464,17 +464,15 @@ mod tests {
         // (conforming to the operator contract) and therefore strip the extra
         // metadata.  This test confirms the behaviour is intentional.
         use std::collections::HashMap;
-        let meta: HashMap<String, String> =
-            [("key".to_string(), "value".to_string())].into_iter().collect();
+        let meta: HashMap<String, String> = [("key".to_string(), "value".to_string())]
+            .into_iter()
+            .collect();
         let src_schema = Arc::new(
             Schema::new(vec![Field::new("child_col", DataType::Int32, false)])
                 .with_metadata(meta),
         );
-        let expected_schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::Int32,
-            false,
-        )]));
+        let expected_schema =
+            Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
         let batch = RecordBatch::try_new(
             Arc::clone(&src_schema),
             vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
