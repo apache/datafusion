@@ -1072,7 +1072,14 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         .await
         .unwrap();
 
-    // Now check what our filter looks like
+    // Now check what our filter looks like. When the cross-partition InList
+    // is small enough (≤ MERGED_INLIST_MAX_TOTAL_LEN) we collapse it into a
+    // single global `IN (SET)` regardless of how the data was repartitioned —
+    // this lets the merged set participate in parquet stats / bloom-filter
+    // pruning at the scan, which a per-partition `CASE` could not. Both the
+    // normal repartition and the `force_hash_collisions` path produce the
+    // same logical shape; they only differ in the partition-iteration order
+    // that controls the InList element order.
     #[cfg(not(feature = "force_hash_collisions"))]
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),
@@ -1083,14 +1090,10 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}, {c0:aa,c1:ba}]) ]
     "
     );
 
-    // When hash collisions force all data into a single partition, we optimize away the CASE expression.
-    // This avoids calling create_hashes() for every row on the probe side, since hash % 1 == 0 always,
-    // meaning the WHEN 0 branch would always match. This optimization is also important for primary key
-    // joins or any scenario where all build-side data naturally lands in one partition.
     #[cfg(feature = "force_hash_collisions")]
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),

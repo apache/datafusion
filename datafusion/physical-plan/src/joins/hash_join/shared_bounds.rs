@@ -30,7 +30,8 @@ use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, MultiMapLookupExpr, SeededRandomState,
 };
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
@@ -247,6 +248,18 @@ fn compute_global_bounds(per_partition: &[&PartitionBounds]) -> Option<Partition
     } else {
         Some(PartitionBounds::new(merged))
     }
+}
+
+/// Concatenate per-partition InList arrays into a single array. Returns `None`
+/// if data types disagree across partitions or if `arrow::compute::concat`
+/// fails (e.g. unsupported types).
+fn merge_inlist_arrays(arrays: &[ArrayRef]) -> Option<ArrayRef> {
+    let first = arrays.first()?;
+    if arrays.iter().any(|a| a.data_type() != first.data_type()) {
+        return None;
+    }
+    let array_refs: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+    concat(&array_refs).ok()
 }
 
 /// Coordinates build-side information collection across multiple partitions
@@ -667,34 +680,83 @@ impl SharedBuildAccumulator {
                     }
                 }
 
-                // Fast path: when no partition is canceled and every reported
-                // partition uses a hash-table strategy, replace the routing
-                // CASE expression with `global_minmax AND multi_hash_lookup`.
-                // The shared `MultiMapLookupExpr` hashes the join keys once
-                // (with `HASH_JOIN_SEED`) and ORs `contain_hashes()` across
-                // every partition's hash table, eliminating both the routing
-                // hash and the per-branch re-hashing inside `CaseExpr`. Any
-                // canceled partition or any non-Map partition disqualifies the
-                // fast path and we use the legacy routing CASE.
+                // Fast paths: when no partition is canceled, classify the
+                // reported partitions and route to a shape that drops the
+                // routing CASE. Two shapes today:
+                //   1. All-Map → `global_minmax AND multi_hash_lookup`. Hashes
+                //      the join keys once and ORs contain_hashes across every
+                //      partition's hash table.
+                //   2. All-InList with a small enough cross-partition union
+                //      → `global_minmax AND merged_in_list`. Worth taking
+                //      because a small global InList can participate in
+                //      parquet stats / bloom-filter pruning at the scan,
+                //      which a `multi_hash_lookup` can't.
+                // Anything else (canceled, mixed, or merged InList over the
+                // cap) falls through to the legacy routing CASE.
                 if !has_canceled_unknown && !real_partitions.is_empty() {
                     let mut maps: Vec<Arc<Map>> =
                         Vec::with_capacity(real_partitions.len());
+                    let mut inlist_arrays: Vec<ArrayRef> =
+                        Vec::with_capacity(real_partitions.len());
                     let mut all_map = true;
+                    let mut all_inlist = true;
+                    let mut total_inlist_len: usize = 0;
                     for (_, p) in &real_partitions {
                         match &p.pushdown {
-                            PushdownStrategy::Map(m) => maps.push(Arc::clone(m)),
-                            PushdownStrategy::InList(_) | PushdownStrategy::Empty => {
+                            PushdownStrategy::Map(m) => {
+                                maps.push(Arc::clone(m));
+                                all_inlist = false;
+                            }
+                            PushdownStrategy::InList(arr) => {
+                                total_inlist_len += arr.len();
+                                inlist_arrays.push(Arc::clone(arr));
                                 all_map = false;
-                                break;
+                            }
+                            PushdownStrategy::Empty => {
+                                all_map = false;
+                                all_inlist = false;
                             }
                         }
                     }
+
+                    let bounds_refs: Vec<&PartitionBounds> =
+                        real_partitions.iter().map(|(_, p)| &p.bounds).collect();
+                    let global_bounds_expr = compute_global_bounds(&bounds_refs)
+                        .as_ref()
+                        .and_then(|b| create_bounds_predicate(&self.on_right, b));
+
+                    // Threshold on the cross-partition merged InList. Two
+                    // reasons for keeping it small:
+                    //   1. Below ~this many values the merged `IN (SET)` can
+                    //      participate in parquet stats / bloom-filter
+                    //      pruning at the scan, which a `multi_hash_lookup`
+                    //      cannot — that's the headline win.
+                    //   2. Past this size, runtime regresses vs. the routing
+                    //      CASE (the larger static_filter hash set blows out
+                    //      of L1 and the win flips). On TPC-H SF=1 a sweep
+                    //      from 20 to 2000 picked 20–50 as the sweet spot.
+                    const MERGED_INLIST_MAX_TOTAL_LEN: usize = 20;
+
+                    if all_inlist
+                        && total_inlist_len <= MERGED_INLIST_MAX_TOTAL_LEN
+                        && let Some(merged) = merge_inlist_arrays(&inlist_arrays)
+                        && let Some(membership) = create_membership_predicate(
+                            &self.on_right,
+                            PushdownStrategy::InList(merged),
+                            &HASH_JOIN_SEED,
+                            self.probe_schema.as_ref(),
+                        )?
+                    {
+                        let filter_expr = combine_membership_and_bounds(
+                            Some(membership),
+                            global_bounds_expr,
+                        )
+                        .unwrap_or_else(|| lit(true));
+                        self.dynamic_filter.update(filter_expr)?;
+                        return Ok(());
+                    }
+
                     if all_map && !maps.is_empty() {
-                        let bounds_refs: Vec<&PartitionBounds> =
-                            real_partitions.iter().map(|(_, p)| &p.bounds).collect();
-                        let global_bounds_expr = compute_global_bounds(&bounds_refs)
-                            .as_ref()
-                            .and_then(|b| create_bounds_predicate(&self.on_right, b));
                         let multi_lookup = Arc::new(MultiMapLookupExpr::new(
                             self.on_right.clone(),
                             HASH_JOIN_SEED.clone(),
