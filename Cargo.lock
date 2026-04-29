@@ -1740,6 +1740,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "clap",
+ "criterion",
  "datafusion",
  "datafusion-common",
  "datafusion-proto",
@@ -1755,6 +1756,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snmalloc-rs",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]
@@ -4866,7 +4868,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
