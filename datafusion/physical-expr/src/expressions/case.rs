@@ -19,7 +19,7 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::PhysicalExpr;
-use crate::expressions::{lit, try_cast};
+use crate::expressions::{LambdaExpr, LambdaVariable, lit, try_cast};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -133,6 +133,13 @@ impl CaseBody {
             expr.apply(|expr| {
                 if let Some(column) = expr.downcast_ref::<Column>() {
                     used_column_indices.insert(column.index());
+                } else if let Some(lambda_variable) =
+                    expr.downcast_ref::<LambdaVariable>()
+                {
+                    used_column_indices.insert(lambda_variable.index());
+                } else if expr.is::<LambdaExpr>() {
+                    //todo: remove this branch when lambda supports column capture
+                    return Ok(TreeNodeRecursion::Jump);
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
@@ -171,6 +178,20 @@ impl CaseBody {
                                 projected,
                             ))));
                         }
+                    } else if let Some(lambda_variable) =
+                        e.downcast_ref::<LambdaVariable>()
+                    {
+                        let original = lambda_variable.index();
+                        let projected = *column_index_map.get(&original).unwrap();
+                        if projected != original {
+                            return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
+                                projected,
+                                Arc::clone(lambda_variable.field()),
+                            ))));
+                        }
+                    } else if e.is::<LambdaExpr>() {
+                        //todo: remove this branch when lambda supports column capture
+                        return Ok(Transformed::new(e, false, TreeNodeRecursion::Jump));
                     }
                     Ok(Transformed::no(e))
                 })
