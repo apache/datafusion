@@ -16,6 +16,7 @@
 // under the License.
 
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -28,10 +29,10 @@ use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::{
-    BlockedNullState, FlatNullState, NullState, SeenValueStore,
+    BlockedNullState, BooleanBlock, FlatNullState, NullState, SeenValueStore,
 };
 use crate::aggregate::groups_accumulator::block_store::{
-    BlockStore, FlatBlockStore, VecValues, VecValuesBlockStore,
+    FlatBlockStore, VecValues, VecValuesBlockStore,
 };
 use crate::aggregate::groups_accumulator::blocks::Blocks;
 use crate::aggregate::groups_accumulator::group_index_operations::{
@@ -51,10 +52,11 @@ use crate::aggregate::groups_accumulator::group_index_operations::{
 pub struct PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
+    T::Native: Debug + Send,
     F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     /// Values and null state per group, stored according to the current group mode.
-    state: PrimitiveGroupsState<T::Native>,
+    state: PrimitiveGroupsStateAdapter<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -66,29 +68,15 @@ where
     prim_fn: F,
 }
 
-#[derive(Debug)]
-enum PrimitiveGroupsState<V: Clone + Debug> {
-    Flat {
-        values: FlatBlockStore<VecValues<V>>,
-        null_state: FlatNullState,
-    },
-    Blocked {
-        values: Blocks<VecValues<V>>,
-        null_state: BlockedNullState,
-    },
-}
-
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
+    T::Native: Debug + Send,
     F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            state: PrimitiveGroupsState::Flat {
-                values: FlatBlockStore::new(),
-                null_state: FlatNullState::new(None),
-            },
+            state: PrimitiveGroupsStateAdapter::new_flat(),
             data_type: data_type.clone(),
             starting_value: T::default_value(),
             prim_fn,
@@ -110,59 +98,155 @@ struct UpdateBatchInput<'a, T: ArrowPrimitiveType> {
     total_num_groups: usize,
 }
 
-fn update_batch_for<T, F, O, V, N>(
-    values_store: &mut V,
-    null_state: &mut NullState<O, N>,
-    input: &UpdateBatchInput<'_, T>,
-    starting_value: T::Native,
-    prim_fn: &F,
-) where
-    T: ArrowPrimitiveType + Send,
-    T::Native: Debug,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
+#[derive(Debug)]
+struct PrimitiveGroupsState<V, VB, O, S>
+where
+    V: Clone + Debug,
+    VB: VecValuesBlockStore<V> + Send,
     O: GroupIndexOperations,
-    V: BlockStore<VecValues<T::Native>> + Send,
-    N: SeenValueStore + Send,
+    S: SeenValueStore + Send,
 {
-    // Expand to ensure values are large enough
-    let new_block = |block_size: Option<usize>| {
-        // In blocked mode, pre-allocate the full block capacity.
-        // In flat mode (block_size=None), start with an empty Vec
-        // and let `resize` grow it to exactly `total_num_groups`,
-        // matching the standard Vec growth behavior.
-        match block_size {
-            Some(cap) => VecValues::with_capacity(cap),
-            None => VecValues::default(),
-        }
-    };
-    values_store.resize(input.total_num_groups, new_block, starting_value);
-
-    null_state.accumulate(
-        input.group_indices,
-        input.values,
-        input.opt_filter,
-        input.total_num_groups,
-        |block_id, block_offset, new_value| {
-            // SAFETY: `block_id` and `block_offset` are guaranteed to be in bounds
-            let value = unsafe {
-                values_store[block_id as usize].get_unchecked_mut(block_offset as usize)
-            };
-            prim_fn(value, new_value);
-        },
-    );
+    values: VB,
+    null_state: NullState<O, S>,
+    _phantom: PhantomData<V>,
 }
 
-fn values_size<T: Clone + Debug, V: BlockStore<VecValues<T>>>(values: &V) -> usize {
-    if values.is_empty() {
-        return 0;
+impl<V, VB, O, S> PrimitiveGroupsState<V, VB, O, S>
+where
+    V: Clone + Debug,
+    VB: VecValuesBlockStore<V> + Send,
+    O: GroupIndexOperations,
+    S: SeenValueStore + Send,
+{
+    fn new(values: VB, null_state: NullState<O, S>) -> Self {
+        Self {
+            values,
+            null_state,
+            _phantom: PhantomData,
+        }
     }
-    values.num_blocks() * values[0].capacity() * size_of::<T>()
+
+    fn update_batch<T, F>(
+        &mut self,
+        input: &UpdateBatchInput<'_, T>,
+        starting_value: V,
+        prim_fn: &F,
+    ) where
+        T: ArrowPrimitiveType<Native = V> + Send,
+        F: Fn(&mut V, V) + Send + Sync + 'static,
+    {
+        // Expand to ensure values are large enough
+        let new_block = |block_size: Option<usize>| {
+            // In blocked mode, pre-allocate the full block capacity.
+            // In flat mode (block_size=None), start with an empty Vec
+            // and let `resize` grow it to exactly `total_num_groups`,
+            // matching the standard Vec growth behavior.
+            match block_size {
+                Some(cap) => VecValues::with_capacity(cap),
+                None => VecValues::default(),
+            }
+        };
+        self.values
+            .resize(input.total_num_groups, new_block, starting_value);
+
+        self.null_state.accumulate(
+            input.group_indices,
+            input.values,
+            input.opt_filter,
+            input.total_num_groups,
+            |block_id, block_offset, new_value| {
+                // SAFETY: `block_id` and `block_offset` are guaranteed to be in bounds
+                let value = unsafe {
+                    self.values[block_id as usize]
+                        .get_unchecked_mut(block_offset as usize)
+                };
+                prim_fn(value, new_value);
+            },
+        );
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<(Vec<V>, Option<NullBuffer>)> {
+        Ok((self.values.emit(emit_to)?, self.null_state.build(emit_to)))
+    }
+
+    fn size(&self) -> usize {
+        if self.values.is_empty() {
+            return 0;
+        }
+        self.values.num_blocks() * self.values[0].capacity() * size_of::<V>()
+            + self.null_state.size()
+    }
+}
+
+type FlatPrimitiveGroupsState<V> = PrimitiveGroupsState<
+    V,
+    FlatBlockStore<VecValues<V>>,
+    FlatGroupIndexOperations,
+    FlatBlockStore<BooleanBlock>,
+>;
+
+type BlockedPrimitiveGroupsState<V> = PrimitiveGroupsState<
+    V,
+    Blocks<VecValues<V>>,
+    BlockedGroupIndexOperations,
+    Blocks<BooleanBlock>,
+>;
+
+#[derive(Debug)]
+enum PrimitiveGroupsStateAdapter<V: Clone + Debug + Send> {
+    Flat(FlatPrimitiveGroupsState<V>),
+    Blocked(BlockedPrimitiveGroupsState<V>),
+}
+
+impl<V: Clone + Debug + Send> PrimitiveGroupsStateAdapter<V> {
+    fn new_flat() -> Self {
+        Self::Flat(PrimitiveGroupsState::new(
+            FlatBlockStore::new(),
+            FlatNullState::new(None),
+        ))
+    }
+
+    fn new_blocked(block_size: usize) -> Self {
+        Self::Blocked(PrimitiveGroupsState::new(
+            Blocks::new(Some(block_size)),
+            BlockedNullState::new(Some(block_size)),
+        ))
+    }
+
+    fn update_batch<T, F>(
+        &mut self,
+        input: &UpdateBatchInput<'_, T>,
+        starting_value: V,
+        prim_fn: &F,
+    ) where
+        T: ArrowPrimitiveType<Native = V> + Send,
+        F: Fn(&mut V, V) + Send + Sync + 'static,
+    {
+        match self {
+            Self::Flat(state) => state.update_batch(input, starting_value, prim_fn),
+            Self::Blocked(state) => state.update_batch(input, starting_value, prim_fn),
+        }
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<(Vec<V>, Option<NullBuffer>)> {
+        match self {
+            Self::Flat(state) => state.evaluate(emit_to),
+            Self::Blocked(state) => state.evaluate(emit_to),
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self {
+            Self::Flat(state) => state.size(),
+            Self::Blocked(state) => state.size(),
+        }
+    }
 }
 
 impl<T, F> GroupsAccumulator for PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    T::Native: Debug,
+    T::Native: Debug + Send,
     F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     fn update_batch(
@@ -174,52 +258,22 @@ where
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let input_values = values[0].as_primitive::<T>();
-
-        match &mut self.state {
-            PrimitiveGroupsState::Flat { values, null_state } => {
-                update_batch_for::<T, F, FlatGroupIndexOperations, _, _>(
-                    values,
-                    null_state,
-                    &UpdateBatchInput {
-                        values: input_values,
-                        group_indices,
-                        opt_filter,
-                        total_num_groups,
-                    },
-                    self.starting_value,
-                    &self.prim_fn,
-                );
-            }
-            PrimitiveGroupsState::Blocked { values, null_state } => {
-                update_batch_for::<T, F, BlockedGroupIndexOperations, _, _>(
-                    values,
-                    null_state,
-                    &UpdateBatchInput {
-                        values: input_values,
-                        group_indices,
-                        opt_filter,
-                        total_num_groups,
-                    },
-                    self.starting_value,
-                    &self.prim_fn,
-                );
-            }
-        }
+        self.state.update_batch(
+            &UpdateBatchInput {
+                values: input_values,
+                group_indices,
+                opt_filter,
+                total_num_groups,
+            },
+            self.starting_value,
+            &self.prim_fn,
+        );
 
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let (values, nulls): (Vec<T::Native>, _) = match &mut self.state {
-            PrimitiveGroupsState::Flat { values, null_state } => (
-                VecValuesBlockStore::emit(values, emit_to)?,
-                null_state.build(emit_to),
-            ),
-            PrimitiveGroupsState::Blocked { values, null_state } => (
-                VecValuesBlockStore::emit(values, emit_to)?,
-                null_state.build(emit_to),
-            ),
-        };
+        let (values, nulls) = self.state.evaluate(emit_to)?;
         let values = PrimitiveArray::<T>::new(values.into(), nulls) // no copy
             .with_data_type(self.data_type.clone());
         Ok(Arc::new(values))
@@ -298,20 +352,7 @@ where
     }
 
     fn size(&self) -> usize {
-        match &self.state {
-            PrimitiveGroupsState::Flat { values, null_state } => {
-                if values.is_empty() {
-                    return 0;
-                }
-                values_size::<T::Native, _>(values) + null_state.size()
-            }
-            PrimitiveGroupsState::Blocked { values, null_state } => {
-                if values.is_empty() {
-                    return 0;
-                }
-                values_size::<T::Native, _>(values) + null_state.size()
-            }
-        }
+        self.state.size()
     }
 
     fn supports_blocked_groups(&self) -> bool {
@@ -320,15 +361,9 @@ where
 
     fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         self.state = if let Some(block_size) = block_size {
-            PrimitiveGroupsState::Blocked {
-                values: Blocks::new(Some(block_size)),
-                null_state: BlockedNullState::new(Some(block_size)),
-            }
+            PrimitiveGroupsStateAdapter::new_blocked(block_size)
         } else {
-            PrimitiveGroupsState::Flat {
-                values: FlatBlockStore::new(),
-                null_state: FlatNullState::new(None),
-            }
+            PrimitiveGroupsStateAdapter::new_flat()
         };
 
         Ok(())
