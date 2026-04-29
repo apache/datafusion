@@ -304,8 +304,6 @@ pub fn create_physical_expr(
                 format_options: DEFAULT_FORMAT_OPTIONS,
             };
 
-            // Need to figure out what happened here
-
             if !field.metadata().is_empty() {
                 if let Some(registry) = &execution_props.extension_types
                     && let Some(extension_type) =

@@ -167,7 +167,14 @@ impl CastExpr {
     }
 
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        // When using a cast_extension, return the explicit target_field to avoid
+        // propagating source metadata (e.g., extension type metadata) to the output.
+        if self.cast_extension.is_some() {
+            return Ok(Arc::clone(&self.target_field));
+        }
+
         if is_default_target_field(&self.target_field) {
+            // TODO: not correct, metadata should not be propagated here
             self.expr.return_field(input_schema).map(|field| {
                 Arc::new(
                     field
