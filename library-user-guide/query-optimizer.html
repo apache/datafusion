@@ -433,6 +433,8 @@ format.</p>
 <p>This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
 contains an extensive set of <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code></a>s and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule</span></code></a>s that may rewrite the plan and/or its expressions so
 they execute more quickly while still computing the same result.</p>
+<p>For a reference list of the built-in analyzer, logical optimizer, and physical optimizer rules,
+see <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html#built-in-optimizer-rules">Optimizer Rule Reference</a>.</p>
 <p>For a deeper background on optimizer architecture and rule types and predicates, see
 <a class="reference external" href="https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one">Optimizing SQL (and DataFrames) in DataFusion, Part 1</a>, <a class="reference external" href="https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two">Part 2</a>,
 <a class="reference external" href="https://datafusion.apache.org/blog/2025/03/11/ordering-analysis">Using Ordering for Better Plans in Apache DataFusion</a>, and
