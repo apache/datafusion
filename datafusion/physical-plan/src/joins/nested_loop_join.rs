@@ -2243,6 +2243,10 @@ impl NestedLoopJoinStream {
 
 // ==== Utilities ====
 
+/// Apply the filter to `build_batch x probe_batch[probe_row_idx]`
+///
+/// The returned mask does not have null mask for its inner physical represnetation,
+/// it's already combined with boolean array to make later processing easier.
 fn apply_filter_to_probe_row_join_batch(
     build_batch: &RecordBatch,
     probe_batch: &RecordBatch,
@@ -2282,6 +2286,7 @@ fn apply_filter_to_probe_row_join_batch(
     Ok(boolean_mask_from_filter(filter_arr))
 }
 
+/// Fold `filter_arr`'s null array into boolean array, and empty the null array.
 #[inline]
 fn boolean_mask_from_filter(filter_arr: &BooleanArray) -> BooleanArray {
     let (values, nulls) = filter_arr.clone().into_parts();
