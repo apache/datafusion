@@ -17,9 +17,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 
+use crate::strings::GenericStringArrayBuilder;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
@@ -160,25 +162,44 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_string_view_array(&args[1])?;
     let to_array = as_string_view_array(&args[2])?;
 
-    let mut builder = GenericStringBuilder::<i32>::new();
+    let len = string_array.len();
+    let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(len, 0);
     let mut buffer = String::new();
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_array.nulls(), from_array.nulls()).as_ref(),
+        to_array.nulls(),
+    );
 
-    for ((string, from), to) in string_array
-        .iter()
-        .zip(from_array.iter())
-        .zip(to_array.iter())
-    {
-        match (string, from, to) {
-            (Some(string), Some(from), Some(to)) => {
-                buffer.clear();
-                replace_into_string(&mut buffer, string, from, to);
-                builder.append_value(&buffer);
+    // Hoist the nulls.is_some() check out of the loop. LLVM does not always
+    // unswitch this loop on its own (the Utf8View body is large enough to
+    // exceed its cost-benefit threshold).
+    if let Some(nulls_ref) = nulls.as_ref() {
+        for i in 0..len {
+            if nulls_ref.is_null(i) {
+                builder.append_placeholder();
+                continue;
             }
-            _ => builder.append_null(),
+            // SAFETY: union of input nulls is non-null at i, so each input is too.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            buffer.clear();
+            replace_into_string(&mut buffer, string, from, to);
+            builder.append_value(&buffer);
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: i < len, and no input has a null buffer.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            buffer.clear();
+            replace_into_string(&mut buffer, string, from, to);
+            builder.append_value(&buffer);
         }
     }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
 /// Replaces all occurrences in string of substring from with substring to.
@@ -188,25 +209,44 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_generic_string_array::<T>(&args[1])?;
     let to_array = as_generic_string_array::<T>(&args[2])?;
 
-    let mut builder = GenericStringBuilder::<T>::new();
+    let len = string_array.len();
+    let mut builder = GenericStringArrayBuilder::<T>::with_capacity(len, 0);
     let mut buffer = String::new();
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_array.nulls(), from_array.nulls()).as_ref(),
+        to_array.nulls(),
+    );
 
-    for ((string, from), to) in string_array
-        .iter()
-        .zip(from_array.iter())
-        .zip(to_array.iter())
-    {
-        match (string, from, to) {
-            (Some(string), Some(from), Some(to)) => {
-                buffer.clear();
-                replace_into_string(&mut buffer, string, from, to);
-                builder.append_value(&buffer);
+    // Hoist the nulls.is_some() check out of the loop. LLVM unswitches this
+    // automatically today, but kept explicit so the no-nulls fast path is not
+    // contingent on the optimizer's cost heuristic.
+    if let Some(nulls_ref) = nulls.as_ref() {
+        for i in 0..len {
+            if nulls_ref.is_null(i) {
+                builder.append_placeholder();
+                continue;
             }
-            _ => builder.append_null(),
+            // SAFETY: union of input nulls is non-null at i, so each input is too.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            buffer.clear();
+            replace_into_string(&mut buffer, string, from, to);
+            builder.append_value(&buffer);
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: i < len, and no input has a null buffer.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            buffer.clear();
+            replace_into_string(&mut buffer, string, from, to);
+            builder.append_value(&buffer);
         }
     }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
 /// Helper function to perform string replacement into a reusable String buffer

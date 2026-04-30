@@ -300,13 +300,9 @@ pub(crate) fn take_need(
         EmitTo::First(n) => {
             // split off the first N values in seen_values
             //
-            // TODO make this more efficient rather than two
-            // copies and bitwise manipulation
-            let first_n: BooleanBuffer = bool_buf.iter().take(n).collect();
+            let first_n: BooleanBuffer = bool_buf.slice(0, n);
             // reset the existing buffer
-            for b in bool_buf.iter().skip(n) {
-                bool_buf_builder.append(b);
-            }
+            bool_buf_builder.append_buffer(&bool_buf.slice(n, bool_buf.len() - n));
             first_n
         }
     }

@@ -18,12 +18,13 @@
 use datafusion::execution::SessionStateDefaults;
 use datafusion_common::{HashSet, Result, not_impl_err};
 use datafusion_expr::{
-    AggregateUDF, DocSection, Documentation, ScalarUDF, WindowUDF,
+    AggregateUDF, DocSection, Documentation, HigherOrderUDF, ScalarUDF, WindowUDF,
     aggregate_doc_sections, scalar_doc_sections, window_doc_sections,
 };
 use itertools::Itertools;
 use std::env::args;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 /// Print documentation for all functions of a given type to stdout
 ///
@@ -69,6 +70,10 @@ fn print_scalar_docs() -> Result<String> {
 
     for f in SessionStateDefaults::default_scalar_functions() {
         providers.push(Box::new(f.as_ref().clone()));
+    }
+
+    for f in SessionStateDefaults::default_higher_order_functions() {
+        providers.push(Box::new(f));
     }
 
     print_docs(providers, scalar_doc_sections::doc_sections())
@@ -271,6 +276,18 @@ impl DocProvider for ScalarUDF {
 }
 
 impl DocProvider for WindowUDF {
+    fn get_name(&self) -> String {
+        self.name().to_string()
+    }
+    fn get_aliases(&self) -> Vec<String> {
+        self.aliases().iter().map(|a| a.to_string()).collect()
+    }
+    fn get_documentation(&self) -> Option<&Documentation> {
+        self.documentation()
+    }
+}
+
+impl DocProvider for Arc<dyn HigherOrderUDF> {
     fn get_name(&self) -> String {
         self.name().to_string()
     }
