@@ -258,9 +258,8 @@ impl TopK {
             // nothing to filter, so no need to update
             return Ok(());
         }
-        let true_count = filter.true_count();
         // only update the keys / rows if the filter does not match all rows
-        if true_count < num_rows {
+        if filter.null_count() > 0 || filter.has_false() {
             // Indices in `set_indices` should be correct if filter contains nulls
             // So we prepare the filter here. Note this is also done in the `FilterBuilder`
             // so there is no overhead to do this here.
