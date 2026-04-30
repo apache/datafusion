@@ -339,6 +339,8 @@ fn get_excluded_columns(
         idents.push(&excepts.first_element);
         idents.extend(&excepts.additional_elements);
     }
+    // Declared outside the `if let` so `idents.extend(exclude_owned.iter())`
+    // below can borrow references that outlive the inner scope.
     #[cfg(feature = "sql")]
     let exclude_owned: Vec<sqlparser::ast::Ident>;
     if let Some(exclude) = opt_exclude {

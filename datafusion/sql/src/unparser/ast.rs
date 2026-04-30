@@ -477,6 +477,8 @@ pub struct RelationBuilder {
 }
 
 #[derive(Clone)]
+// Boxing variants would penalize the common builder path; this enum is
+// constructed-then-consumed locally rather than stored at scale.
 #[expect(clippy::large_enum_variant)]
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
