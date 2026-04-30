@@ -31,7 +31,7 @@ use arrow::array::Array;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, plan_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use futures::{StreamExt, TryStreamExt};
@@ -113,7 +113,7 @@ pub fn project_plan_to_schema(
     }
 
     if input_schema.fields().len() != expected_schema.fields().len() {
-        return internal_err!(
+        return plan_err!(
             "Cannot project plan to expected schema: expected {} column(s), got {}",
             expected_schema.fields().len(),
             input_schema.fields().len()
@@ -121,7 +121,7 @@ pub fn project_plan_to_schema(
     }
 
     if input_schema.metadata() != expected_schema.metadata() {
-        return internal_err!(
+        return plan_err!(
             "Cannot project plan to expected schema: schema metadata differ"
         );
     }
@@ -137,7 +137,7 @@ pub fn project_plan_to_schema(
                 || input_field.metadata() != expected_field.metadata()
         })
     {
-        return internal_err!(
+        return plan_err!(
             "Cannot project plan column {i} ('{}') to expected output field '{}': \
              fields differ beyond name (input field: {:?}, expected field: {:?})",
             input_field.name(),
