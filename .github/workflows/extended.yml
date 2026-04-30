@@ -44,15 +44,10 @@ on:
       - 'datafusion/physical*/**/*.rs'
       - 'datafusion/expr*/**/*.rs'
       - 'datafusion/optimizer/**/*.rs'
+      - 'datafusion/sql/**/*.rs'
       - 'datafusion-testing'
   workflow_dispatch:
     inputs:
-      pr_number:
-        description: 'Pull request number'
-        type: string
-      check_run_id:
-        description: 'Check run ID for status updates'
-        type: string
       pr_head_sha:
         description: 'PR head SHA'
         type: string
@@ -66,9 +61,10 @@ jobs:
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -80,7 +76,9 @@ jobs:
           source $HOME/.cargo/env
           rustup toolchain install
       - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
       - name: Prepare cargo build
         run: |
           cargo check --profile ci --all-targets
@@ -90,9 +88,10 @@ jobs:
   linux-test-extended:
     name: cargo test 'extended_tests' (amd64)
     needs: [linux-build-lib]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -106,7 +105,9 @@ jobs:
           source $HOME/.cargo/env
           rustup toolchain install
       - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
@@ -133,10 +134,11 @@ jobs:
   # Check answers are correct when hash values collide
   hash-collisions:
     name: cargo test hash collisions (amd64)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -154,24 +156,20 @@ jobs:
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
           fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+      # Don't use setup-builder to avoid configuring RUST_BACKTRACE which is expensive
+      - name: Install protobuf compiler
+        run: |
+          apt-get update && apt-get install -y protobuf-compiler
       - name: Run sqllogictest
         run: |
-          cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
-          cargo clean
-
-
-
-
+          cargo test --features backtrace,parquet_encryption --profile ci-optimized --test sqllogictests -- --include-sqlite

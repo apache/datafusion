@@ -281,3 +281,24 @@ SELECT true FROM t0 WHERE (REGEXP_MATCH(t0.v1, t0.v1)) NOT ILIKE [];
 
 statement ok
 DROP TABLE t0;
+
+#############################################################
+## Test validation for functions with empty argument lists ##
+#############################################################
+
+# https://github.com/apache/datafusion/issues/20201
+
+query error does not support zero arguments
+SELECT * FROM (SELECT 1) WHERE (STARTS_WITH() IS NULL);
+
+query error does not support zero arguments
+SELECT * FROM (SELECT 1) WHERE (STARTS_WITH() IS NOT NULL);
+
+query error does not support zero arguments
+SELECT * FROM (SELECT 'a') WHERE (STARTS_WITH() SIMILAR TO 'abc%');
+
+query error does not support zero arguments
+SELECT * FROM (SELECT 1) WHERE CAST(STARTS_WITH() AS STRING) = 'x';
+
+query error does not support zero arguments
+SELECT * FROM (SELECT 1) WHERE TRY_CAST(STARTS_WITH() AS INT) = 1;

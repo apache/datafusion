@@ -127,3 +127,130 @@ from (values ('a'), ('b')) as tbl(col);
 ----
 NULL NULL NULL
 NULL NULL NULL
+
+# Stripping trailing .*$ must not change match semantics for inputs with
+# newlines when the original pattern does not use the 's' flag.
+query B
+SELECT regexp_replace(concat('http://x/', chr(10), 'rest'), '^https?://([^/]+)/.*$', '\1')
+       = concat('http://x/', chr(10), 'rest');
+----
+true
+
+# Inline multiline mode still allows only the matched prefix to be replaced.
+# The remainder of the string must be preserved.
+query B
+SELECT regexp_replace(
+           concat('http://x/path', chr(10), 'rest'),
+           '^(?m)https?://([^/]+)/.*$',
+           '\1'
+       ) = concat('x', chr(10), 'rest');
+----
+true
+
+
+# Fixture for testing optimizations in regexp_replace
+statement ok
+CREATE TABLE regexp_replace_optimized_cases (
+    value string,
+    regexp string,
+    replacement string,
+    expected string
+);
+
+# Extract domain from URL using anchored pattern with trailing .*
+# This tests that the full URL suffix is replaced, not just the matched prefix.
+statement ok
+INSERT INTO regexp_replace_optimized_cases VALUES
+    ('https://www.example.com/path/to/page?q=1', '^https?://(?:www\.)?([^/]+)/.*$', '\1', 'example.com'),
+    ('http://test.org/foo/bar', '^https?://(?:www\.)?([^/]+)/.*$', '\1', 'test.org'),
+    ('https://example.com/', '^https?://(?:www\.)?([^/]+)/.*$', '\1', 'example.com'),
+    ('not-a-url', '^https?://(?:www\.)?([^/]+)/.*$', '\1', 'not-a-url');
+
+# More than one capture group should disable the short-regex fast path.
+# This still uses replacement \1, but captures_len() will be > 2, so the
+# implementation must fall back to the normal regexp_replace path.
+statement ok
+INSERT INTO regexp_replace_optimized_cases VALUES
+    ('https://www.example.com/path/to/page?q=1', '^https?://((www\.)?([^/]+))/.*$', '\1', 'www.example.com'),
+    ('http://test.org/foo/bar', '^https?://((www\.)?([^/]+))/.*$', '\1', 'test.org'),
+    ('not-a-url', '^https?://((www\.)?([^/]+))/.*$', '\1', 'not-a-url');
+
+# If the overall pattern matches but capture group 1 does not participate,
+# regexp_replace(..., '\1') should substitute the empty string, not keep
+# the original input.
+statement ok
+INSERT INTO regexp_replace_optimized_cases VALUES
+    ('bzzz', '^(a)?b.*$', '\1', '');
+
+
+query TB
+SELECT value, regexp_replace(value, regexp, replacement) = expected
+FROM regexp_replace_optimized_cases
+ORDER BY regexp, value, replacement, expected;
+----
+bzzz true
+http://test.org/foo/bar true
+https://www.example.com/path/to/page?q=1 true
+not-a-url true
+http://test.org/foo/bar true
+https://example.com/ true
+https://www.example.com/path/to/page?q=1 true
+not-a-url true
+
+query TB
+SELECT value, regexp_replace(
+           arrow_cast(value, 'LargeUtf8'),
+           arrow_cast(regexp, 'LargeUtf8'),
+           arrow_cast(replacement, 'LargeUtf8')
+       ) = arrow_cast(expected, 'LargeUtf8')
+FROM regexp_replace_optimized_cases
+ORDER BY regexp, value, replacement, expected;
+----
+bzzz true
+http://test.org/foo/bar true
+https://www.example.com/path/to/page?q=1 true
+not-a-url true
+http://test.org/foo/bar true
+https://example.com/ true
+https://www.example.com/path/to/page?q=1 true
+not-a-url true
+
+query TB
+SELECT value, regexp_replace(
+           arrow_cast(value, 'Utf8View'),
+           arrow_cast(regexp, 'Utf8View'),
+           arrow_cast(replacement, 'Utf8View')
+       ) = arrow_cast(expected, 'Utf8View')
+FROM regexp_replace_optimized_cases
+ORDER BY regexp, value, replacement, expected;
+----
+bzzz true
+http://test.org/foo/bar true
+https://www.example.com/path/to/page?q=1 true
+not-a-url true
+http://test.org/foo/bar true
+https://example.com/ true
+https://www.example.com/path/to/page?q=1 true
+not-a-url true
+
+query TB
+SELECT value, regexp_replace(
+           arrow_cast(value, 'Dictionary(Int32, Utf8)'),
+           arrow_cast(regexp, 'Dictionary(Int32, Utf8)'),
+           arrow_cast(replacement, 'Dictionary(Int32, Utf8)')
+       ) = arrow_cast(expected, 'Dictionary(Int32, Utf8)')
+FROM regexp_replace_optimized_cases
+ORDER BY regexp, value, replacement, expected;
+----
+bzzz true
+http://test.org/foo/bar true
+https://www.example.com/path/to/page?q=1 true
+not-a-url true
+http://test.org/foo/bar true
+https://example.com/ true
+https://www.example.com/path/to/page?q=1 true
+not-a-url true
+
+# cleanup
+statement ok
+DROP TABLE regexp_replace_optimized_cases;

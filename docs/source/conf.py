@@ -134,4 +134,5 @@ suppress_warnings = ["misc.highlighting_failure"]
 redirects = {
     "library-user-guide/adding-udfs": "functions/index.html",
     "user-guide/runtime_configs": "configs.html",
+    "library-user-guide/upgrading": "/library-user-guide/upgrading/index.html",
 }

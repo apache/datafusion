@@ -19,9 +19,11 @@
 
 pub use exec::SortMergeJoinExec;
 
+pub(crate) mod bitwise_stream;
 mod exec;
+mod filter;
+pub(crate) mod materializing_stream;
 mod metrics;
-mod stream;
 
 #[cfg(test)]
 mod tests;

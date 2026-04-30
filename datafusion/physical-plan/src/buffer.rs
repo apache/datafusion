@@ -27,21 +27,22 @@ use crate::projection::ProjectionExec;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SortOrderPushdownResult,
+    check_if_same_properties,
 };
 use arrow::array::RecordBatch;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::{
-    ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+    ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
-use std::any::Any;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -92,7 +93,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 #[derive(Debug, Clone)]
 pub struct BufferExec {
     input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     capacity: usize,
     metrics: ExecutionPlanMetricsSet,
 }
@@ -100,14 +101,12 @@ pub struct BufferExec {
 impl BufferExec {
     /// Builds a new [BufferExec] with the provided capacity in bytes.
     pub fn new(input: Arc<dyn ExecutionPlan>, capacity: usize) -> Self {
-        let properties = input
-            .properties()
-            .clone()
+        let properties = PlanProperties::clone(input.properties())
             .with_scheduling_type(SchedulingType::Cooperative);
 
         Self {
             input,
-            properties,
+            properties: Arc::new(properties),
             capacity,
             metrics: ExecutionPlanMetricsSet::new(),
         }
@@ -121,6 +120,17 @@ impl BufferExec {
     /// Returns the per-partition capacity in bytes for this [BufferExec].
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -142,11 +152,7 @@ impl ExecutionPlan for BufferExec {
         "BufferExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -162,10 +168,18 @@ impl ExecutionPlan for BufferExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         if children.len() != 1 {
             return plan_err!("BufferExec can only have one child");
         }
@@ -185,12 +199,16 @@ impl ExecutionPlan for BufferExec {
         let curr_mem_in = Arc::new(AtomicUsize::new(0));
         let curr_mem_out = Arc::clone(&curr_mem_in);
         let mut max_mem_in = 0;
-        let max_mem = MetricBuilder::new(&self.metrics).gauge("max_mem_used", partition);
+        let max_mem = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Bytes)
+            .gauge("max_mem_used", partition);
 
         let curr_queued_in = Arc::new(AtomicUsize::new(0));
         let curr_queued_out = Arc::clone(&curr_queued_in);
         let mut max_queued_in = 0;
-        let max_queued = MetricBuilder::new(&self.metrics).gauge("max_queued", partition);
+        let max_queued = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
+            .gauge("max_queued", partition);
 
         // Capture metrics when an element is queued on the stream.
         let in_stream = in_stream.inspect_ok(move |v| {
@@ -226,7 +244,7 @@ impl ExecutionPlan for BufferExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 
@@ -413,7 +431,6 @@ mod tests {
     };
     use std::error::Error;
     use std::fmt::Debug;
-    use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::timeout;
 

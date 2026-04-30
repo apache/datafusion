@@ -34,9 +34,9 @@ use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
 
-const ROW_GROUP_SIZE: usize = 10_000;
+const ROW_GROUP_ROW_COUNT: usize = 10_000;
 const TOTAL_ROW_GROUPS: usize = 10;
-const TOTAL_ROWS: usize = ROW_GROUP_SIZE * TOTAL_ROW_GROUPS;
+const TOTAL_ROWS: usize = ROW_GROUP_ROW_COUNT * TOTAL_ROW_GROUPS;
 const TARGET_VALUE: &str = "target_value";
 const COLUMN_NAME: &str = "list_col";
 const PAYLOAD_COLUMN_NAME: &str = "payload";
@@ -69,7 +69,7 @@ fn parquet_nested_filter_pushdown(c: &mut Criterion) {
         b.iter(|| {
             let matched = scan_with_predicate(&dataset_path, &predicate, false)
                 .expect("baseline parquet scan with filter succeeded");
-            assert_eq!(matched, ROW_GROUP_SIZE);
+            assert_eq!(matched, ROW_GROUP_ROW_COUNT);
         });
     });
 
@@ -79,7 +79,7 @@ fn parquet_nested_filter_pushdown(c: &mut Criterion) {
         b.iter(|| {
             let matched = scan_with_predicate(&dataset_path, &predicate, true)
                 .expect("pushdown parquet scan with filter succeeded");
-            assert_eq!(matched, ROW_GROUP_SIZE);
+            assert_eq!(matched, ROW_GROUP_ROW_COUNT);
         });
     });
 
@@ -170,7 +170,7 @@ fn create_dataset() -> datafusion_common::Result<BenchmarkDataset> {
     ]));
 
     let writer_props = WriterProperties::builder()
-        .set_max_row_group_size(ROW_GROUP_SIZE)
+        .set_max_row_group_row_count(Some(ROW_GROUP_ROW_COUNT))
         .build();
 
     let mut writer = ArrowWriter::try_new(
@@ -195,7 +195,7 @@ fn create_dataset() -> datafusion_common::Result<BenchmarkDataset> {
     ];
 
     for value in sorted_values {
-        let batch = build_list_batch(&schema, value, ROW_GROUP_SIZE)?;
+        let batch = build_list_batch(&schema, value, ROW_GROUP_ROW_COUNT)?;
         writer.write(&batch)?;
     }
 

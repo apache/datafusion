@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -242,10 +241,6 @@ impl GetFieldFunc {
 
 // get_field(struct_array, field_name)
 impl ScalarUDFImpl for GetFieldFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "get_field"
     }
@@ -444,11 +439,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 func,
                 args: inner_args,
             }) = current_expr
-                && func
-                    .inner()
-                    .as_any()
-                    .downcast_ref::<GetFieldFunc>()
-                    .is_some()
+                && func.inner().is::<GetFieldFunc>()
             {
                 // Store this level's path arguments (all except the first, which is base/nested call)
                 path_args_stack.push(&inner_args[1..]);
@@ -517,7 +508,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         let all_keys_are_literals = args
             .iter()
             .skip(1)
-            .all(|p| matches!(p, ExpressionPlacement::Literal));
+            .all(|p| *p == ExpressionPlacement::Literal);
 
         if base_is_pushable && all_keys_are_literals {
             ExpressionPlacement::MoveTowardsLeafNodes

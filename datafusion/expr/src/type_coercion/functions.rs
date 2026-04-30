@@ -16,12 +16,16 @@
 // under the License.
 
 use super::binary::binary_numeric_coercion;
-use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
+use crate::{
+    AggregateUDF, HigherOrderTypeSignature, HigherOrderUDF, ScalarUDF, Signature,
+    TypeSignature, ValueOrLambda, WindowUDF,
+};
 use arrow::datatypes::{Field, FieldRef};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
+use datafusion_common::internal_datafusion_err;
 use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{
     ListCoercion, base_type, coerced_fixed_size_list_to_list,
@@ -33,7 +37,7 @@ use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
-    type_coercion::binary::comparison_coercion_numeric,
+    type_coercion::binary::comparison_coercion,
     type_coercion::binary::string_coercion,
 };
 use itertools::Itertools as _;
@@ -148,6 +152,150 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
         .collect())
 }
 
+/// Performs type coercion for higher order function arguments.
+///
+/// For value arguments, returns the field to which each
+/// argument must be coerced to match `signature`.
+/// For lambda arguments, returns a clone of the associated data
+///
+/// Note this does not invokes [HigherOrderUDF::coerce_values_for_lambdas]
+/// if requested by the function signature. If that's required, use
+/// [value_fields_with_higher_order_udf_and_lambdas] instead
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+pub fn value_fields_with_higher_order_udf<L: Clone>(
+    current_fields: &[ValueOrLambda<FieldRef, L>],
+    func: &dyn HigherOrderUDF,
+) -> Result<Vec<ValueOrLambda<FieldRef, L>>> {
+    match func.signature().type_signature {
+        HigherOrderTypeSignature::UserDefined => {
+            let arg_types = current_fields
+                .iter()
+                .filter_map(|p| match p {
+                    ValueOrLambda::Value(field) => Some(field.data_type().clone()),
+                    ValueOrLambda::Lambda(_) => None,
+                })
+                .collect::<Vec<_>>();
+
+            let coerced_types = func.coerce_value_types(&arg_types)?;
+
+            if coerced_types.len() != arg_types.len() {
+                return plan_err!(
+                    "{} coerce_value_types should have returned {} items but returned {}",
+                    func.name(),
+                    arg_types.len(),
+                    coerced_types.len()
+                );
+            }
+
+            // coerced_types has been partitioned from current_fields
+            // and refers only to values and not to lambdas, so instead
+            // of zipping them, we iterate over current_fields and only
+            // consume from coerced_types when a given argument is a value
+            // to reconstruct the arguments list with the correct order
+            // this supports any value and lambda positioning including
+            // multiple lambdas interleaved with values
+            let mut coerced_types = coerced_types.into_iter();
+
+            current_fields
+                .iter()
+                .map(|current_field| match current_field {
+                    ValueOrLambda::Value(field) => {
+                        let data_type = coerced_types.next().ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "coerced_types len should have been checked above"
+                            )
+                        })?;
+
+                        Ok(ValueOrLambda::Value(Arc::new(
+                            field.as_ref().clone().with_data_type(data_type),
+                        )))
+                    }
+                    ValueOrLambda::Lambda(lambda) => {
+                        Ok(ValueOrLambda::Lambda(lambda.clone()))
+                    }
+                })
+                .collect()
+        }
+        HigherOrderTypeSignature::VariadicAny => Ok(current_fields.to_vec()),
+        HigherOrderTypeSignature::Any(number) => {
+            if current_fields.len() != number {
+                return plan_err!(
+                    "The function '{}' expected {number} arguments but received {}",
+                    func.name(),
+                    current_fields.len()
+                );
+            }
+
+            Ok(current_fields.to_vec())
+        }
+    }
+}
+
+/// Performs type coercion for higher order function arguments,
+/// including those defined by [HigherOrderUDF::coerce_values_for_lambdas],
+/// if defined by the signature. Note that compared to
+/// [value_fields_with_higher_order_udf], this function requires
+/// the [ValueOrLambda::Lambda] variant to contain the output field of the lambda.
+///
+/// For value arguments, returns the field to which each
+/// argument must be coerced to match `signature`.
+/// For lambda arguments, returns a clone of the output field
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+pub fn value_fields_with_higher_order_udf_and_lambdas(
+    current_fields: &[ValueOrLambda<FieldRef, FieldRef>],
+    func: &dyn HigherOrderUDF,
+) -> Result<Vec<ValueOrLambda<FieldRef, FieldRef>>> {
+    let mut new_fields = value_fields_with_higher_order_udf(current_fields, func)?;
+
+    if func.signature().coerce_values_for_lambdas {
+        let new_types = new_fields
+            .iter()
+            .map(|f| match f {
+                ValueOrLambda::Value(f) => ValueOrLambda::Value(f.data_type().clone()),
+                ValueOrLambda::Lambda(f) => ValueOrLambda::Lambda(f.data_type().clone()),
+            })
+            .collect::<Vec<_>>();
+
+        let mut new_value_types = func.coerce_values_for_lambdas(&new_types)?.into_iter();
+
+        let value_types_count = new_types
+            .iter()
+            .filter(|e| matches!(e, ValueOrLambda::Value(_)))
+            .count();
+
+        if new_value_types.len() != value_types_count {
+            return plan_err!(
+                "{} coerce_values_for_lambdas returned {} values but {value_types_count} expected",
+                func.name(),
+                new_value_types.len()
+            );
+        }
+
+        for new_field in &mut new_fields {
+            match new_field {
+                ValueOrLambda::Value(value) => {
+                    let coerce_to = new_value_types.next().ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "new_value_types len should have been checked above"
+                        )
+                    })?;
+
+                    if value.data_type() != &coerce_to {
+                        Arc::make_mut(value).set_data_type(coerce_to);
+                    }
+                }
+                ValueOrLambda::Lambda(_) => {}
+            }
+        }
+    };
+
+    Ok(new_fields)
+}
+
 /// Performs type coercion for scalar function arguments.
 ///
 /// Returns the data types to which each argument must be coerced to
@@ -221,12 +369,12 @@ pub fn data_types(
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
             return plan_err!(
-                "function '{}' has signature {type_signature:?} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
+                "function '{}' has signature {type_signature} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
                 function_name.as_ref()
             );
         } else {
             return plan_err!(
-                "Function '{}' has signature {type_signature:?} which does not support zero arguments",
+                "Function '{}' has signature {type_signature} which does not support zero arguments",
                 function_name.as_ref()
             );
         }
@@ -302,7 +450,7 @@ fn try_coerce_types(
 
     // none possible -> Error
     plan_err!(
-        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {} to the signature {type_signature:?} failed",
+        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {} to the signature {type_signature} failed",
         current_types.iter().join(", ")
     )
 }
@@ -317,7 +465,7 @@ fn get_valid_types_with_udf<F: UDFCoercionExt>(
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
                 return exec_err!(
-                    "Function '{}' user-defined coercion failed with {:?}",
+                    "Function '{}' user-defined coercion failed with: {}",
                     func.name(),
                     e.strip_backtrace()
                 );
@@ -389,12 +537,12 @@ fn get_valid_types(
                         element_types.push(DataType::Null);
                         nested_item_nullability.push(None);
                     }
-                    DataType::List(field) => {
+                    DataType::List(field) | DataType::ListView(field) => {
                         element_types.push(field.data_type().clone());
                         nested_item_nullability.push(Some(field.is_nullable()));
                         fixed_size = false;
                     }
-                    DataType::LargeList(field) => {
+                    DataType::LargeList(field) | DataType::LargeListView(field) => {
                         element_types.push(field.data_type().clone());
                         nested_item_nullability.push(Some(field.is_nullable()));
                         large_list = true;
@@ -432,6 +580,8 @@ fn get_valid_types(
                     ArrayFunctionArgument::Index => DataType::Int64,
                     ArrayFunctionArgument::String => DataType::Utf8,
                     ArrayFunctionArgument::Element => element_type.clone(),
+                    // TODO: support maintaining ListView types here
+                    // https://github.com/apache/datafusion/issues/21777
                     ArrayFunctionArgument::Array => {
                         if current_type.is_null() {
                             DataType::Null
@@ -463,6 +613,8 @@ fn get_valid_types(
         match array_type {
             DataType::List(_)
             | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
             | DataType::FixedSizeList(_, _) => {
                 let array_type = coerced_fixed_size_list_to_list(array_type);
                 Some(array_type)
@@ -502,7 +654,7 @@ fn get_valid_types(
                     new_types.push(DataType::Utf8);
                 } else {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::String but NativeType::received NativeType::{logical_data_type}"
+                        "Function '{function_name}' expects String but received {logical_data_type}"
                     );
                 }
             }
@@ -562,7 +714,7 @@ fn get_valid_types(
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
+                        "Function '{function_name}' expects Numeric but received {logical_data_type}"
                     );
                 }
 
@@ -583,7 +735,7 @@ fn get_valid_types(
                 valid_type = DataType::Float64;
             } else if !logical_data_type.is_numeric() {
                 return plan_err!(
-                    "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
+                    "Function '{function_name}' expects Numeric but received {logical_data_type}"
                 );
             }
 
@@ -593,7 +745,7 @@ fn get_valid_types(
             function_length_check(function_name, current_types.len(), *num)?;
             let mut target_type = current_types[0].to_owned();
             for data_type in current_types.iter().skip(1) {
-                if let Some(dt) = comparison_coercion_numeric(&target_type, data_type) {
+                if let Some(dt) = comparison_coercion(&target_type, data_type) {
                     target_type = dt;
                 } else {
                     return plan_err!(
@@ -883,18 +1035,20 @@ fn coerced_from<'a>(
             Timestamp(TimeUnit::Nanosecond, None),
             Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
         ) => Some(type_into.clone()),
-        (Interval(_), Utf8 | LargeUtf8) => Some(type_into.clone()),
+        (Interval(_), Null | Utf8 | LargeUtf8) => Some(type_into.clone()),
         // We can go into a Utf8View from a Utf8 or LargeUtf8
         (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
+        // We can go into a BinaryView from a Binary or LargeBinary
+        (BinaryView, Binary | LargeBinary | Null) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
         (List(_), FixedSizeList(_, _)) => Some(type_into.clone()),
 
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
-        (List(_) | LargeList(_), _)
+        (List(_) | LargeList(_) | ListView(_) | LargeListView(_), _)
             if base_type(type_from).is_null()
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {
@@ -928,32 +1082,89 @@ fn coerced_from<'a>(
         (Timestamp(_, Some(_)), Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8) => {
             Some(type_into.clone())
         }
+        // Null can be coerced to any target type, provided the cast is valid.
+        // This mirrors null_coercion() in binary comparison coercion
+        // (expr-common/src/type_coercion/binary.rs) and is the symmetric
+        // counterpart of the (Null, _) arm above. Without this, untyped
+        // placeholders ($1, $foo) inside function calls fail signature matching
+        // because their Null type doesn't match any Exact(...) variant.
+        (_, Null) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::Volatility;
+    use crate::{
+        HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+        Volatility,
+    };
 
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::IntervalUnit;
     use datafusion_common::{
         assert_contains,
         types::{logical_binary, logical_int64},
     };
-    use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+    use datafusion_expr_common::{
+        columnar_value::ColumnarValue,
+        signature::{Coercion, TypeSignatureClass},
+    };
 
     #[test]
     fn test_string_conversion() {
         let cases = vec![
             (DataType::Utf8View, DataType::Utf8),
             (DataType::Utf8View, DataType::LargeUtf8),
+            (DataType::Utf8View, DataType::Null),
         ];
 
         for case in cases {
             assert_eq!(coerced_from(&case.0, &case.1), Some(case.0));
         }
+    }
+
+    #[test]
+    fn test_binary_conversion() {
+        let cases = vec![
+            (DataType::BinaryView, DataType::Binary),
+            (DataType::BinaryView, DataType::LargeBinary),
+            (DataType::BinaryView, DataType::Null),
+        ];
+
+        for case in cases {
+            assert_eq!(coerced_from(&case.0, &case.1), Some(case.0));
+        }
+    }
+
+    #[test]
+    fn test_coerced_from_null() {
+        // Null should coerce to Interval (the motivating case)
+        assert_eq!(
+            coerced_from(
+                &DataType::Interval(IntervalUnit::MonthDayNano),
+                &DataType::Null
+            ),
+            Some(DataType::Interval(IntervalUnit::MonthDayNano))
+        );
+
+        // Null should coerce to Date32
+        assert_eq!(
+            coerced_from(&DataType::Date32, &DataType::Null),
+            Some(DataType::Date32)
+        );
+
+        // Null should coerce to Timestamp with timezone
+        assert_eq!(
+            coerced_from(
+                &DataType::Timestamp(TimeUnit::Microsecond, Some("+00".into())),
+                &DataType::Null
+            ),
+            Some(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some("+00".into())
+            ))
+        );
     }
 
     #[test]
@@ -1056,7 +1267,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             got.to_string(),
-            "Function 'test' expects NativeType::Numeric but received NativeType::String"
+            "Function 'test' expects Numeric but received String"
         );
 
         // Fallbacks to float64 if the arg is of type null.
@@ -1076,7 +1287,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             got.to_string(),
-            "Function 'test' expects NativeType::Numeric but received NativeType::Timestamp(s)"
+            "Function 'test' expects Numeric but received Timestamp(s)"
         );
 
         Ok(())
@@ -1285,6 +1496,54 @@ mod tests {
             vec![vec![
                 DataType::new_large_list(DataType::Utf8, true),
                 DataType::new_large_list(DataType::Utf8, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::ListView(Field::new_list_field(DataType::Int32, true).into()),
+            DataType::new_list(DataType::Int32, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Int32, true),
+                DataType::new_list(DataType::Int32, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::LargeListView(Field::new_list_field(DataType::Int32, true).into()),
+            DataType::new_list(DataType::Int32, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Int32, true),
+                DataType::new_large_list(DataType::Int32, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::ListView(Field::new_list_field(DataType::Int32, true).into()),
+            DataType::ListView(Field::new_list_field(DataType::Int32, true).into()),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Int32, true),
+                DataType::new_list(DataType::Int32, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::LargeListView(Field::new_list_field(DataType::Int32, true).into()),
+            DataType::LargeListView(Field::new_list_field(DataType::Int32, true).into()),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Int32, true),
+                DataType::new_large_list(DataType::Int32, true),
             ]]
         );
 
@@ -1562,5 +1821,209 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MockHigherOrderUDF {
+        signature: HigherOrderSignature,
+        coerced_value_types: Vec<DataType>,
+    }
+
+    impl HigherOrderUDF for MockHigherOrderUDF {
+        fn name(&self) -> &str {
+            "mock_higher_order_function"
+        }
+
+        fn signature(&self) -> &HigherOrderSignature {
+            &self.signature
+        }
+
+        fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            if arg_types.len() != 1 {
+                return plan_err!(
+                    "mock_higher_order_function expects 1 value arguments, got {}",
+                    arg_types.len()
+                );
+            }
+            Ok(self.coerced_value_types.clone())
+        }
+
+        fn coerce_values_for_lambdas(
+            &self,
+            fields: &[ValueOrLambda<DataType, DataType>],
+        ) -> Result<Vec<DataType>> {
+            // thoerical impl of array_reduce without finish
+            let [
+                ValueOrLambda::Value(list),
+                ValueOrLambda::Value(_initial),
+                ValueOrLambda::Lambda(merge),
+            ] = fields
+            else {
+                unreachable!()
+            };
+
+            Ok(vec![list.clone(), merge.clone()])
+        }
+
+        fn lambda_parameters(
+            &self,
+            _step: usize,
+            _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<crate::LambdaParametersProgress> {
+            unimplemented!("mock_higher_order_function")
+        }
+
+        fn return_field_from_args(
+            &self,
+            _args: HigherOrderReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            unimplemented!("mock_higher_order_function")
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unimplemented!("mock_higher_order_function")
+        }
+    }
+
+    #[test]
+    fn test_higher_order_function_user_defined_type_coercion() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+            coerced_value_types: vec![DataType::new_large_list(DataType::Int32, false)],
+        };
+
+        let new_fields = value_fields_with_higher_order_udf(
+            &[
+                ValueOrLambda::Value(Arc::new(Field::new_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false,
+                ))),
+                ValueOrLambda::Lambda(()),
+            ],
+            &fun,
+        )
+        .unwrap();
+
+        // from List(Int32) to LargeList(Int32)
+        assert_eq!(
+            new_fields,
+            vec![
+                ValueOrLambda::Value(Arc::new(Field::new_large_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false
+                ))),
+                ValueOrLambda::Lambda(()),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_higher_order_function_coerce_values_for_lambdas() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable)
+                .with_coerce_values_for_lambdas(),
+            coerced_value_types: vec![],
+        };
+
+        let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+            &[
+                ValueOrLambda::Value(Arc::new(Field::new_list(
+                    "",
+                    Field::new_list_field(DataType::Float32, true),
+                    true,
+                ))),
+                ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, true))),
+                ValueOrLambda::Lambda(Arc::new(Field::new("", DataType::Float32, true))),
+            ],
+            &fun,
+        )
+        .unwrap();
+
+        // second parameter from Int32 to Float32
+        assert_eq!(
+            new_fields,
+            vec![
+                ValueOrLambda::Value(Arc::new(Field::new_list(
+                    "",
+                    Field::new_list_field(DataType::Float32, true),
+                    true,
+                ))),
+                ValueOrLambda::Value(Arc::new(Field::new("", DataType::Float32, true))),
+                ValueOrLambda::Lambda(Arc::new(Field::new("", DataType::Float32, true))),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_higher_order_function_user_defined_type_coercion_bad_args() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+            coerced_value_types: vec![DataType::Int32],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(&[], &fun).unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "mock_higher_order_function expects 1 value arguments, got 0"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_faulty_user_defined_type_coercion() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+            coerced_value_types: vec![DataType::Int32, DataType::Int32],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(
+            &[ValueOrLambda::Value(Arc::new(Field::new(
+                "",
+                DataType::Int32,
+                false,
+            )))],
+            &fun,
+        )
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "mock_higher_order_function coerce_value_types should have returned 1 items but returned 2"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_any_signature() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::any(1, Volatility::Immutable),
+            coerced_value_types: vec![],
+        };
+
+        let new_fields =
+            value_fields_with_higher_order_udf(&[ValueOrLambda::Lambda(())], &fun)
+                .unwrap();
+
+        // no coercion, just number of args checked
+        assert_eq!(new_fields, vec![ValueOrLambda::Lambda(())])
+    }
+
+    #[test]
+    fn test_higher_order_function_any_signature_bad_args() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::any(1, Volatility::Immutable),
+            coerced_value_types: vec![],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(&[], &fun).unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "The function 'mock_higher_order_function' expected 1 arguments but received 0"
+        );
     }
 }

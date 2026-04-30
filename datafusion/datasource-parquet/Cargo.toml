@@ -39,6 +39,7 @@ datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
@@ -57,6 +58,7 @@ tokio = { workspace = true }
 [dev-dependencies]
 chrono = { workspace = true }
 criterion = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 tempfile = { workspace = true }
 
@@ -79,4 +81,8 @@ parquet_encryption = [
 
 [[bench]]
 name = "parquet_nested_filter_pushdown"
+harness = false
+
+[[bench]]
+name = "parquet_struct_filter_pushdown"
 harness = false

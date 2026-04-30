@@ -887,5 +887,25 @@ WHERE b = 2;
 ----
 2
 
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.runtime.list_files_cache_limit;
+
+statement ok
+reset datafusion.execution.listing_table_ignore_subdirectory;
+
+statement ok
+reset datafusion.execution.parquet.coerce_int96;
+
+# Config reset
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema;
+
 statement ok
 DROP TABLE t;

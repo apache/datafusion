@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::SubstraitConsumer;
-use crate::logical_plan::consumer::types::from_substrait_type_without_names;
+use crate::logical_plan::consumer::{
+    SubstraitConsumer, field_from_substrait_type_without_names,
+};
 use datafusion::common::{DFSchema, substrait_err};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
 use substrait::proto::expression as substrait_expression;
@@ -37,11 +38,11 @@ pub async fn from_cast(
                     )
                     .await?,
             );
-            let data_type = from_substrait_type_without_names(consumer, output_type)?;
+            let field = field_from_substrait_type_without_names(consumer, output_type)?;
             if cast.failure_behavior() == ReturnNull {
-                Ok(Expr::TryCast(TryCast::new(input_expr, data_type)))
+                Ok(Expr::TryCast(TryCast::new_from_field(input_expr, field)))
             } else {
-                Ok(Expr::Cast(Cast::new(input_expr, data_type)))
+                Ok(Expr::Cast(Cast::new_from_field(input_expr, field)))
             }
         }
         None => substrait_err!("Cast expression without output type is not allowed"),

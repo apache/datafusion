@@ -82,7 +82,7 @@ impl Display for WindowUDF {
 
 impl PartialEq for WindowUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(other.inner.as_any())
+        self.inner.dyn_eq(other.inner.as_ref() as &dyn Any)
     }
 }
 
@@ -157,7 +157,7 @@ impl WindowUDF {
         self.inner.signature()
     }
 
-    /// Do the function rewrite
+    /// Returns this window function's simplification hook, if any.
     ///
     /// See [`WindowUDFImpl::simplify`] for more details.
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
@@ -240,7 +240,6 @@ where
 /// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 /// # Basic Example
 /// ```
-/// # use std::any::Any;
 /// # use std::sync::LazyLock;
 /// # use arrow::datatypes::{DataType, Field, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
@@ -277,7 +276,6 @@ where
 ///
 /// /// Implement the WindowUDFImpl trait for SmoothIt
 /// impl WindowUDFImpl for SmoothIt {
-///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "smooth_it" }
 ///    fn signature(&self) -> &Signature { &self.signature }
 ///    // The actual implementation would smooth the window
@@ -314,10 +312,7 @@ where
 ///     .build()
 ///     .unwrap();
 /// ```
-pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
-    /// Returns this object as an [`Any`] trait object
-    fn as_any(&self) -> &dyn Any;
-
+pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns this function's name
     fn name(&self) -> &str;
 
@@ -344,25 +339,28 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>>;
 
-    /// Optionally apply per-UDWF simplification / rewrite rules.
+    /// Returns an optional hook for simplifying this user-defined window
+    /// function.
     ///
-    /// This can be used to apply function specific simplification rules during
-    /// optimization. The default implementation does nothing.
+    /// Use this hook to apply function-specific rewrites during optimization.
+    /// The default implementation returns `None`.
     ///
-    /// Note that DataFusion handles simplifying arguments and  "constant
-    /// folding" (replacing a function call with constant arguments such as
-    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
-    /// optimizations manually for specific UDFs.
+    /// DataFusion already simplifies arguments and performs constant folding
+    /// (for example, `my_add(1, 2) -> 3`), so there is usually no need to
+    /// implement those optimizations manually for specific UDFs.
     ///
     /// Example:
     /// `advanced_udwf.rs`: <https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs>
     ///
     /// # Returns
-    /// [None] if simplify is not defined or,
+    /// `None` if simplify is not defined.
     ///
-    /// Or, a closure with two arguments:
-    /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
-    /// * 'info': [crate::simplify::SimplifyContext]
+    /// Or, a closure ([`WindowFunctionSimplification`]) invoked with:
+    /// * `window_function`: [WindowFunction] with already simplified
+    ///   arguments
+    /// * `info`: [crate::simplify::SimplifyContext]
+    ///
+    /// The closure returns a simplified [Expr] or an error.
     ///
     /// # Notes
     /// The returned expression must have the same schema as the original
@@ -433,6 +431,25 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     }
 }
 
+impl dyn WindowUDFImpl {
+    /// Returns `true` if the implementation is of type `T`.
+    ///
+    /// Works correctly when called on `Arc<dyn WindowUDFImpl>` via auto-deref.
+    pub fn is<T: WindowUDFImpl>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast to a concrete type `T`, returning `None` if the
+    /// implementation is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn WindowUDFImpl>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: WindowUDFImpl>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// the effect this function will have on the limit pushdown
 pub enum LimitEffect {
     /// Does not affect the limit (i.e. this is causal)
@@ -459,7 +476,7 @@ pub enum ReversedUDWF {
 
 impl PartialEq for dyn WindowUDFImpl {
     fn eq(&self, other: &Self) -> bool {
-        self.dyn_eq(other.as_any())
+        self.dyn_eq(other as &dyn Any)
     }
 }
 
@@ -499,10 +516,6 @@ impl AliasedWindowUDFImpl {
 
 #[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl WindowUDFImpl for AliasedWindowUDFImpl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -567,7 +580,6 @@ mod test {
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use std::any::Any;
     use std::cmp::Ordering;
     use std::hash::{DefaultHasher, Hash, Hasher};
     use std::sync::Arc;
@@ -591,9 +603,6 @@ mod test {
 
     /// Implement the WindowUDFImpl trait for AddOne
     impl WindowUDFImpl for AWindowUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "a"
         }
@@ -634,9 +643,6 @@ mod test {
 
     /// Implement the WindowUDFImpl trait for AddOne
     impl WindowUDFImpl for BWindowUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "b"
         }

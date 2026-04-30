@@ -23,7 +23,6 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::string::concat::ConcatFunc;
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::function::null_utils::{
@@ -59,10 +58,6 @@ impl SparkConcat {
 }
 
 impl ScalarUDFImpl for SparkConcat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "concat"
     }
@@ -167,10 +162,6 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, StringArray};
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::Result;
-    use datafusion_expr::ReturnFieldArgs;
-    use std::sync::Arc;
 
     #[test]
     fn test_concat_basic() -> Result<()> {

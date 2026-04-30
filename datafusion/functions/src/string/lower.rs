@@ -16,10 +16,8 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use std::any::Any;
 
 use crate::string::common::to_lower;
-use crate::utils::utf8_to_str_type;
 use datafusion_common::Result;
 use datafusion_common::types::logical_string;
 use datafusion_expr::{
@@ -69,10 +67,6 @@ impl LowerFunc {
 }
 
 impl ScalarUDFImpl for LowerFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "lower"
     }
@@ -82,7 +76,7 @@ impl ScalarUDFImpl for LowerFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "lower")
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -97,28 +91,29 @@ impl ScalarUDFImpl for LowerFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::array::{Array, ArrayRef, StringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
 
-    fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
+    fn invoke_lower(input: ArrayRef) -> Result<ArrayRef> {
         let func = LowerFunc::new();
-        let arg_fields = vec![Field::new("a", input.data_type().clone(), true).into()];
-
+        let data_type = input.data_type().clone();
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
-            arg_fields,
-            return_field: Field::new("f", Utf8, true).into(),
+            arg_fields: vec![Field::new("a", data_type.clone(), true).into()],
+            return_field: Field::new("f", data_type, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
-
-        let result = match func.invoke_with_args(args)? {
-            ColumnarValue::Array(result) => result,
+        match func.invoke_with_args(args)? {
+            ColumnarValue::Array(r) => Ok(r),
             _ => unreachable!("lower"),
-        };
+        }
+    }
+
+    fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
+        let result = invoke_lower(input)?;
         assert_eq!(&expected, &result);
         Ok(())
     }
@@ -196,5 +191,43 @@ mod tests {
         ])) as ArrayRef;
 
         to_lower(input, expected)
+    }
+
+    #[test]
+    fn lower_utf8view() -> Result<()> {
+        let input = Arc::new(StringViewArray::from(vec![
+            Some("ARROW"),
+            None,
+            Some("TSCHÜSS"),
+        ])) as ArrayRef;
+
+        let expected = Arc::new(StringViewArray::from(vec![
+            Some("arrow"),
+            None,
+            Some("tschüss"),
+        ])) as ArrayRef;
+
+        to_lower(input, expected)
+    }
+
+    #[test]
+    fn lower_sliced_utf8() -> Result<()> {
+        let parent = Arc::new(StringArray::from(vec![
+            Some("AAAAAAAA"),
+            Some("HELLO"),
+            Some("WORLD"),
+            Some(""),
+            Some("ZZZZZZZZ"),
+        ])) as ArrayRef;
+        let sliced = parent.slice(1, 3);
+        let result = invoke_lower(sliced)?;
+        let result_sa = result.as_any().downcast_ref::<StringArray>().unwrap();
+
+        let expected = StringArray::from(vec![Some("hello"), Some("world"), Some("")]);
+        assert_eq!(result_sa, &expected);
+        // The slice's addressed bytes are "HELLO" + "WORLD" = 10; the ASCII
+        // fast path must produce a tight output buffer (not the parent's).
+        assert_eq!(result_sa.value_data().len(), 10);
+        Ok(())
     }
 }

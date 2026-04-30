@@ -617,8 +617,8 @@ mod tests {
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | alltypes_plain.parquet            | 1851            | 8882                | 2    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 269266              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1347                | 2    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 269074              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1339                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -648,8 +648,8 @@ mod tests {
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | alltypes_plain.parquet            | 1851            | 8882                | 5    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 269266              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1347                | 3    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 269074              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1339                | 3    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -841,8 +841,8 @@ mod tests {
         +---------------------+-----------+-----------------+------+
         | metadata_size_bytes | filename  | file_size_bytes | etag |
         +---------------------+-----------+-----------------+------+
-        | 212                 | 0.parquet | 3645            | 0    |
-        | 212                 | 1.parquet | 3645            | 1    |
+        | 212                 | 0.parquet | 3642            | 0    |
+        | 212                 | 1.parquet | 3642            | 1    |
         +---------------------+-----------+-----------------+------+
         ");
 

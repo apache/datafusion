@@ -23,7 +23,7 @@ use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{any::Any, vec};
+use std::vec;
 
 use super::common::SharedMemoryReservation;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -39,13 +39,17 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
+use crate::{
+    DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
+    check_if_same_properties,
+};
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err,
@@ -318,11 +322,11 @@ impl RepartitionExecState {
 
         let mut channels = HashMap::with_capacity(txs.len());
         for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
-            let reservation = Arc::new(Mutex::new(
+            let reservation = Arc::new(
                 MemoryConsumer::new(format!("{name}[{partition}]"))
                     .with_can_spill(true)
                     .register(context.memory_pool()),
-            ));
+            );
 
             // Create spill channels based on mode:
             // - preserve_order: one spill channel per (input, output) pair for proper FIFO ordering
@@ -432,8 +436,7 @@ enum BatchPartitionerState {
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
 /// executions and runs.
-pub const REPARTITION_RANDOM_STATE: SeededRandomState =
-    SeededRandomState::with_seeds(0, 0, 0, 0);
+pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
@@ -542,12 +545,21 @@ impl BatchPartitioner {
         })
     }
 
-    /// Actual implementation of [`partition`](Self::partition).
+    /// Returns an iterator of `(partition_index, RecordBatch)` pairs for the given batch.
     ///
-    /// The reason this was pulled out is that we need to have a variant of `partition` that works w/ sync functions,
-    /// and one that works w/ async. Using an iterator as an intermediate representation was the best way to achieve
-    /// this (so we don't need to clone the entire implementation).
-    fn partition_iter(
+    /// This is useful for async consumers that want to separate CPU-bound partitioning
+    /// from I/O. For example, you can iterate results on the async side and send them
+    /// through a channel, while performing file I/O on a blocking task:
+    ///
+    /// ```ignore
+    /// for result in partitioner.partition_iter(batch)? {
+    ///     let (partition, batch) = result?;
+    ///     tx.send((partition, batch)).await?;
+    /// }
+    /// ```
+    ///
+    /// The sync [`partition`](Self::partition) method is implemented on top of this.
+    pub fn partition_iter(
         &mut self,
         batch: RecordBatch,
     ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
@@ -763,7 +775,7 @@ pub struct RepartitionExec {
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 #[derive(Debug, Clone)]
@@ -832,6 +844,18 @@ impl RepartitionExec {
     pub fn name(&self) -> &str {
         "RepartitionExec"
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            state: Default::default(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for RepartitionExec {
@@ -887,11 +911,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -899,10 +919,26 @@ impl ExecutionPlan for RepartitionExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to hash partition expressions if this is a hash repartition
+        if let Partitioning::Hash(exprs, _) = self.partitioning() {
+            let mut tnr = TreeNodeRecursion::Continue;
+            for expr in exprs {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+            return Ok(tnr);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         let mut repartition = RepartitionExec::try_new(
             children.swap_remove(0),
             self.partitioning().clone(),
@@ -1070,11 +1106,11 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             let partition_count = self.partitioning().partition_count();
             if partition_count == 0 {
-                return Ok(Statistics::new_unknown(&self.schema()));
+                return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
             }
 
             assert_or_internal_err!(
@@ -1084,7 +1120,7 @@ impl ExecutionPlan for RepartitionExec {
                 partition_count
             );
 
-            let mut stats = self.input.partition_statistics(None)?;
+            let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
 
             // Distribute statistics across partitions
             stats.num_rows = stats
@@ -1105,7 +1141,7 @@ impl ExecutionPlan for RepartitionExec {
                 .map(|_| ColumnStatistics::new_unknown())
                 .collect();
 
-            Ok(stats)
+            Ok(Arc::new(stats))
         } else {
             self.input.partition_statistics(None)
         }
@@ -1200,7 +1236,7 @@ impl ExecutionPlan for RepartitionExec {
         _config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         use Partitioning::*;
-        let mut new_properties = self.cache.clone();
+        let mut new_properties = PlanProperties::clone(&self.cache);
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
@@ -1211,7 +1247,7 @@ impl ExecutionPlan for RepartitionExec {
             state: Arc::clone(&self.state),
             metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
-            cache: new_properties,
+            cache: new_properties.into(),
         })))
     }
 }
@@ -1231,7 +1267,7 @@ impl RepartitionExec {
             state: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -1292,7 +1328,7 @@ impl RepartitionExec {
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
         let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
-        self.cache = self.cache.with_eq_properties(eq_properties);
+        Arc::make_mut(&mut self.cache).set_eq_properties(eq_properties);
         self
     }
 
@@ -1365,7 +1401,7 @@ impl RepartitionExec {
                 // if there is still a receiver, send to it
                 if let Some(channel) = output_channels.get_mut(&partition) {
                     let (batch_to_send, is_memory_batch) =
-                        match channel.reservation.lock().try_grow(size) {
+                        match channel.reservation.try_grow(size) {
                             Ok(_) => {
                                 // Memory available - send in-memory batch
                                 (RepartitionBatch::Memory(batch), true)
@@ -1383,7 +1419,7 @@ impl RepartitionExec {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         // Only shrink memory if it was a memory batch
                         if is_memory_batch {
-                            channel.reservation.lock().shrink(size);
+                            channel.reservation.shrink(size);
                         }
                         output_channels.remove(&partition);
                     }
@@ -1602,9 +1638,7 @@ impl PerPartitionStream {
                         Some(Some(v)) => match v {
                             Ok(RepartitionBatch::Memory(batch)) => {
                                 // Release memory and return batch
-                                self.reservation
-                                    .lock()
-                                    .shrink(batch.get_array_memory_size());
+                                self.reservation.shrink(batch.get_array_memory_size());
                                 return Poll::Ready(Some(Ok(batch)));
                             }
                             Ok(RepartitionBatch::Spilled) => {
@@ -2483,7 +2517,7 @@ mod tests {
     /// Create vector batches
     fn create_vec_batches(n: usize) -> Vec<RecordBatch> {
         let batch = create_batch();
-        (0..n).map(|_| batch.clone()).collect()
+        std::iter::repeat_n(batch, n).collect()
     }
 
     /// Create batch
@@ -2600,7 +2634,6 @@ mod test {
     use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     /// Asserts that the plan is as expected
     ///
@@ -2678,7 +2711,6 @@ mod test {
 
     #[tokio::test]
     async fn test_preserve_order_with_spilling() -> Result<()> {
-        use datafusion_execution::TaskContext;
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
         // Create sorted input data across multiple partitions
@@ -2805,7 +2837,6 @@ mod test {
 
     #[tokio::test]
     async fn test_hash_partitioning_with_spilling() -> Result<()> {
-        use datafusion_execution::TaskContext;
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
         // Create input data similar to the round-robin test

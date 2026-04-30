@@ -19,17 +19,19 @@ use arrow::array::OffsetSizeTrait;
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
-use datafusion_common::DataFusionError;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode;
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-fn create_args<O: OffsetSizeTrait>(size: usize, str_len: usize) -> Vec<ColumnarValue> {
+fn create_args_array_from_to<O: OffsetSizeTrait>(
+    size: usize,
+    str_len: usize,
+) -> Vec<ColumnarValue> {
     let string_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len));
-    // Create simple from/to strings for translation
     let from_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, 3));
     let to_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, 2));
 
@@ -37,6 +39,19 @@ fn create_args<O: OffsetSizeTrait>(size: usize, str_len: usize) -> Vec<ColumnarV
         ColumnarValue::Array(string_array),
         ColumnarValue::Array(from_array),
         ColumnarValue::Array(to_array),
+    ]
+}
+
+fn create_args_scalar_from_to<O: OffsetSizeTrait>(
+    size: usize,
+    str_len: usize,
+) -> Vec<ColumnarValue> {
+    let string_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len));
+
+    vec![
+        ColumnarValue::Array(string_array),
+        ColumnarValue::Scalar(ScalarValue::from("aeiou")),
+        ColumnarValue::Scalar(ScalarValue::from("AEIOU")),
     ]
 }
 
@@ -67,17 +82,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
 
-        for str_len in [8, 32] {
-            let args = create_args::<i32>(size, str_len);
-            group.bench_function(
-                format!("translate_string [size={size}, str_len={str_len}]"),
-                |b| {
-                    b.iter(|| {
-                        let args_cloned = args.clone();
-                        black_box(invoke_translate_with_args(args_cloned, size))
-                    })
-                },
-            );
+        for str_len in [8, 32, 128, 1024] {
+            let args = create_args_array_from_to::<i32>(size, str_len);
+            group.bench_function(format!("array_from_to [str_len={str_len}]"), |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(invoke_translate_with_args(args_cloned, size))
+                })
+            });
+
+            let args = create_args_scalar_from_to::<i32>(size, str_len);
+            group.bench_function(format!("scalar_from_to [str_len={str_len}]"), |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(invoke_translate_with_args(args_cloned, size))
+                })
+            });
         }
 
         group.finish();

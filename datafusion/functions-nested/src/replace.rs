@@ -29,14 +29,13 @@ use datafusion_common::utils::ListCoercion;
 use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
 use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
-use std::any::Any;
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
@@ -113,10 +112,6 @@ impl ArrayReplace {
 }
 
 impl ScalarUDFImpl for ArrayReplace {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_replace"
     }
@@ -129,10 +124,7 @@ impl ScalarUDFImpl for ArrayReplace {
         Ok(args[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_inner)(&args.args)
     }
 
@@ -195,10 +187,6 @@ impl ArrayReplaceN {
 }
 
 impl ScalarUDFImpl for ArrayReplaceN {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_replace_n"
     }
@@ -211,10 +199,7 @@ impl ScalarUDFImpl for ArrayReplaceN {
         Ok(args[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_n_inner)(&args.args)
     }
 
@@ -275,10 +260,6 @@ impl ArrayReplaceAll {
 }
 
 impl ScalarUDFImpl for ArrayReplaceAll {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_replace_all"
     }
@@ -291,10 +272,7 @@ impl ScalarUDFImpl for ArrayReplaceAll {
         Ok(args[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_all_inner)(&args.args)
     }
 

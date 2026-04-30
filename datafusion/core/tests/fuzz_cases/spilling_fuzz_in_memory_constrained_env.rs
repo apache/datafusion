@@ -278,9 +278,11 @@ async fn run_sort_test_with_limited_memory(
 
                     let string_item_size =
                         record_batch_memory_size / record_batch_size as usize;
-                    let string_array = Arc::new(StringArray::from_iter_values(
-                        (0..record_batch_size).map(|_| "a".repeat(string_item_size)),
-                    ));
+                    let string_array =
+                        Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+                            "a".repeat(string_item_size),
+                            record_batch_size as usize,
+                        )));
 
                     RecordBatch::try_new(
                         Arc::clone(&schema),
@@ -536,9 +538,11 @@ async fn run_test_aggregate_with_high_cardinality(
 
                     let string_item_size =
                         record_batch_memory_size / record_batch_size as usize;
-                    let string_array = Arc::new(StringArray::from_iter_values(
-                        (0..record_batch_size).map(|_| "a".repeat(string_item_size)),
-                    ));
+                    let string_array =
+                        Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+                            "a".repeat(string_item_size),
+                            record_batch_size as usize,
+                        )));
 
                     RecordBatch::try_new(
                         Arc::clone(&schema),

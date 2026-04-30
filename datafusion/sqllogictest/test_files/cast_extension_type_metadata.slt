@@ -1,0 +1,49 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Regression tests for logical CAST targets that carry explicit field metadata.
+
+query ?T
+SELECT
+    CAST(
+        arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
+        AS UUID
+    ),
+    arrow_metadata(
+        CAST(
+            arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
+            AS UUID
+        ),
+        'ARROW:extension:name'
+    );
+----
+00010203040506070809000102030506 arrow.uuid
+
+query ?T
+SELECT
+    CAST(raw AS UUID),
+    arrow_metadata(CAST(raw AS UUID), 'ARROW:extension:name')
+FROM (
+    VALUES (
+        arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
+    )
+) AS uuids(raw);
+----
+00010203040506070809000102030506 arrow.uuid
+
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*TryCast from FixedSizeBinary\(16\) to FixedSizeBinary\(16\)<\{"ARROW:extension:name": "arrow\.uuid"\}> is not supported
+SELECT TRY_CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID);

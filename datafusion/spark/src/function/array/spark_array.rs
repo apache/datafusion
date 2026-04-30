@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, new_null_array};
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -51,10 +51,6 @@ impl SparkArray {
 }
 
 impl ScalarUDFImpl for SparkArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array"
     }

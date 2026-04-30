@@ -17,6 +17,48 @@
 
 //! [`LimitPushdown`] pushes `LIMIT` down through `ExecutionPlan`s to reduce
 //! data transfer as much as possible.
+//!
+//! # Plan Limit Absorption
+//! In addition to pushing down `GlobalLimitExec` and `LocalLimitExec` nodes in
+//! the plan, some operators can "absorb" a limit and stop early during
+//! execution.
+//!
+//! ## Background: vectorized volcano execution model
+//! DataFusion uses a batched volcano model. For most operators, output is
+//! produced in batches of `datafusion.execution.batch_size` (default 8192), so
+//! the batch sizes typically look like:
+//! ```text
+//! 8192, 8192, ..., 8192, 100 (the final batch may be partial)
+//! ```
+//!
+//! ## Example
+//! For a join with an expensive, selective predicate:
+//! ```text
+//! GlobalLimitExec: skip=0, fetch=10
+//! -- NestedLoopJoinExec(on=expr_expensive_and_selective)
+//! --- DataSourceExec()
+//! --- DataSourceExec()
+//! ```
+//!
+//! Under this model, `NestedLoopJoinExec` would keep working until it can emit
+//! a full batch (8192 rows), even though the query only needs 10. If the limit
+//! cannot be pushed below the join, we can still embed it inside the join so it
+//! stops once the limit is satisfied. The transformed plan looks like:
+//!
+//! ```text
+//! NestedLoopJoinExec(on=expr_expensive_and_selective, fetch=10)
+//! --- DataSourceExec()
+//! --- DataSourceExec()
+//! ```
+//!
+//! ## Implementation
+//! The current optimizer rule optionally pushes `fetch` requirements into
+//! operators via [`ExecutionPlan::with_fetch`].
+//!
+//! To support early termination in operators, [`LimitedBatchCoalescer`](https://docs.rs/datafusion/latest/datafusion/physical_plan/coalesce/struct.LimitedBatchCoalescer.html)
+//! can help manage the output buffer.
+//!
+//! Reference implementation in Hash Join: <https://github.com/apache/datafusion/pull/20228>
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -37,14 +79,13 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 pub struct LimitPushdown {}
 
 /// This is a "data class" we use within the [`LimitPushdown`] rule to push
-/// down [`LimitExec`] in the plan. GlobalRequirements are hold as a rule-wide state
+/// down limits in the plan. GlobalRequirements are hold as a rule-wide state
 /// and holds the fetch and skip information. The struct also has a field named
 /// satisfied which means if the "current" plan is valid in terms of limits or not.
 ///
 /// For example: If the plan is satisfied with current fetch info, we decide to not add a LocalLimit
 ///
 /// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
-/// [`LimitExec`]: crate::limit_pushdown::LimitExec
 #[derive(Default, Clone, Debug)]
 pub struct GlobalRequirements {
     fetch: Option<usize>,
@@ -84,51 +125,11 @@ impl PhysicalOptimizerRule for LimitPushdown {
     }
 }
 
-/// This enumeration makes `skip` and `fetch` calculations easier by providing
-/// a single API for both local and global limit operators.
-#[derive(Debug)]
-pub enum LimitExec {
-    Global(GlobalLimitExec),
-    Local(LocalLimitExec),
-}
-
-impl LimitExec {
-    fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        match self {
-            Self::Global(global) => global.input(),
-            Self::Local(local) => local.input(),
-        }
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        match self {
-            Self::Global(global) => global.fetch(),
-            Self::Local(local) => Some(local.fetch()),
-        }
-    }
-
-    fn skip(&self) -> usize {
-        match self {
-            Self::Global(global) => global.skip(),
-            Self::Local(_) => 0,
-        }
-    }
-
-    fn preserve_order(&self) -> bool {
-        match self {
-            Self::Global(global) => global.required_ordering().is_some(),
-            Self::Local(local) => local.required_ordering().is_some(),
-        }
-    }
-}
-
-impl From<LimitExec> for Arc<dyn ExecutionPlan> {
-    fn from(limit_exec: LimitExec) -> Self {
-        match limit_exec {
-            LimitExec::Global(global) => Arc::new(global),
-            LimitExec::Local(local) => Arc::new(local),
-        }
-    }
+struct LimitInfo {
+    input: Arc<dyn ExecutionPlan>,
+    fetch: Option<usize>,
+    skip: usize,
+    preserve_order: bool,
 }
 
 /// This function is the main helper function of the `LimitPushDown` rule.
@@ -143,26 +144,26 @@ pub fn pushdown_limit_helper(
     mut global_state: GlobalRequirements,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
     // Extract limit, if exist, and return child inputs.
-    if let Some(limit_exec) = extract_limit(&pushdown_plan) {
+    if let Some(limit_info) = extract_limit(&pushdown_plan) {
         // If we have fetch/skip info in the global state already, we need to
         // decide which one to continue with:
         let (skip, fetch) = combine_limit(
             global_state.skip,
             global_state.fetch,
-            limit_exec.skip(),
-            limit_exec.fetch(),
+            limit_info.skip,
+            limit_info.fetch,
         );
         global_state.skip = skip;
         global_state.fetch = fetch;
-        global_state.preserve_order = limit_exec.preserve_order();
+        global_state.preserve_order = limit_info.preserve_order;
         global_state.satisfied = false;
 
         // Now the global state has the most recent information, we can remove
-        // the `LimitExec` plan. We will decide later if we should add it again
-        // or not.
+        // the limit node. We will decide later if we should add it again or
+        // not.
         return Ok((
             Transformed {
-                data: Arc::clone(limit_exec.input()),
+                data: limit_info.input,
                 transformed: true,
                 tnr: TreeNodeRecursion::Stop,
             },
@@ -212,7 +213,7 @@ pub fn pushdown_limit_helper(
             Ok((Transformed::no(pushdown_plan), global_state))
         } else if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
             // This plan is combining input partitions, so we need to add the
-            // fetch info to plan if possible. If not, we must add a `LimitExec`
+            // fetch info to plan if possible. If not, we must add a limit node
             // with the information from the global state.
             let mut new_plan = plan_with_fetch;
             // Execution plans can't (yet) handle skip, so if we have one,
@@ -300,39 +301,50 @@ pub(crate) fn pushdown_limits(
 
     // Apply pushdown limits in children
     let children = new_node.data.children();
+    let mut changed = false;
     let new_children = children
         .into_iter()
-        .map(|child| {
-            pushdown_limits(Arc::<dyn ExecutionPlan>::clone(child), global_state.clone())
+        .map(|child: &Arc<dyn ExecutionPlan>| {
+            let new_child = pushdown_limits(
+                Arc::<dyn ExecutionPlan>::clone(child),
+                global_state.clone(),
+            )?;
+            // Tracking if any of the children changed
+            changed |= !Arc::ptr_eq(child, &new_child);
+            Ok(new_child)
         })
         .collect::<Result<_>>()?;
-    new_node.data.with_new_children(new_children)
+
+    if changed {
+        new_node.data.with_new_children(new_children)
+    } else {
+        Ok(new_node.data)
+    }
 }
 
-/// Transforms the [`ExecutionPlan`] into a [`LimitExec`] if it is a
+/// Extracts limit information from the [`ExecutionPlan`] if it is a
 /// [`GlobalLimitExec`] or a [`LocalLimitExec`].
-fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
-    if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
-        Some(LimitExec::Global(GlobalLimitExec::new(
-            Arc::clone(global_limit.input()),
-            global_limit.skip(),
-            global_limit.fetch(),
-        )))
+fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
+    if let Some(global_limit) = plan.downcast_ref::<GlobalLimitExec>() {
+        Some(LimitInfo {
+            input: Arc::clone(global_limit.input()),
+            fetch: global_limit.fetch(),
+            skip: global_limit.skip(),
+            preserve_order: global_limit.required_ordering().is_some(),
+        })
     } else {
-        plan.as_any()
-            .downcast_ref::<LocalLimitExec>()
-            .map(|local_limit| {
-                LimitExec::Local(LocalLimitExec::new(
-                    Arc::clone(local_limit.input()),
-                    local_limit.fetch(),
-                ))
+        plan.downcast_ref::<LocalLimitExec>()
+            .map(|local_limit| LimitInfo {
+                input: Arc::clone(local_limit.input()),
+                fetch: Some(local_limit.fetch()),
+                skip: 0,
+                preserve_order: local_limit.required_ordering().is_some(),
             })
     }
 }
 
 /// Checks if the given plan combines input partitions.
 fn combines_input_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let plan = plan.as_any();
     plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
 }
 

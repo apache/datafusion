@@ -140,6 +140,10 @@ pub enum Operator {
     ///
     /// Not implemented in DataFusion yet.
     QuestionPipe,
+    /// Colon operator, like `:`
+    ///
+    /// Not implemented in DataFusion yet.
+    Colon,
 }
 
 impl Operator {
@@ -188,7 +192,8 @@ impl Operator {
             | Operator::AtQuestion
             | Operator::Question
             | Operator::QuestionAnd
-            | Operator::QuestionPipe => None,
+            | Operator::QuestionPipe
+            | Operator::Colon => None,
         }
     }
 
@@ -283,7 +288,8 @@ impl Operator {
             | Operator::AtQuestion
             | Operator::Question
             | Operator::QuestionAnd
-            | Operator::QuestionPipe => None,
+            | Operator::QuestionPipe
+            | Operator::Colon => None,
         }
     }
 
@@ -323,7 +329,8 @@ impl Operator {
             | Operator::AtQuestion
             | Operator::Question
             | Operator::QuestionAnd
-            | Operator::QuestionPipe => 30,
+            | Operator::QuestionPipe
+            | Operator::Colon => 30,
             Operator::Plus | Operator::Minus => 40,
             Operator::Multiply | Operator::Divide | Operator::Modulo => 45,
         }
@@ -369,7 +376,8 @@ impl Operator {
             | Operator::AtQuestion
             | Operator::Question
             | Operator::QuestionAnd
-            | Operator::QuestionPipe => true,
+            | Operator::QuestionPipe
+            | Operator::Colon => true,
 
             // E.g. `TRUE OR NULL` is `TRUE`
             Operator::Or
@@ -429,6 +437,7 @@ impl fmt::Display for Operator {
             Operator::Question => "?",
             Operator::QuestionAnd => "?&",
             Operator::QuestionPipe => "?|",
+            Operator::Colon => ":",
         };
         write!(f, "{display}")
     }

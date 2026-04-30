@@ -20,7 +20,6 @@
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 
 pub mod dynamic_file;
-pub mod empty;
 pub mod file_format;
 pub mod listing;
 pub mod listing_table_factory;
@@ -39,9 +38,11 @@ pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
 pub use datafusion_catalog::cte_worktable;
 pub use datafusion_catalog::default_table_source;
+pub use datafusion_catalog::empty;
 pub use datafusion_catalog::memory;
 pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
+pub use datafusion_datasource::projection;
 pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::sink;
 pub use datafusion_datasource::source;
@@ -76,6 +77,7 @@ mod tests {
     use datafusion_physical_plan::collect;
     use std::{fs, sync::Arc};
     use tempfile::TempDir;
+    use url::Url;
 
     #[tokio::test]
     async fn can_override_physical_expr_adapter() {
@@ -103,7 +105,8 @@ mod tests {
         writer.write(&rec_batch).unwrap();
         writer.close().unwrap();
 
-        let location = Path::parse(path.to_str().unwrap()).unwrap();
+        let url = Url::from_file_path(path.canonicalize().unwrap()).unwrap();
+        let location = Path::from_url_path(url.path()).unwrap();
         let metadata = fs::metadata(path.as_path()).expect("Local file metadata");
         let meta = ObjectMeta {
             location,
@@ -164,7 +167,7 @@ mod tests {
     impl PhysicalExprAdapter for TestPhysicalExprAdapter {
         fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
             expr.transform(|e| {
-                if let Some(column) = e.as_any().downcast_ref::<Column>() {
+                if let Some(column) = e.downcast_ref::<Column>() {
                     // If column is "extra_column" and missing from physical schema, inject "foo"
                     if column.name() == "extra_column"
                         && self.physical_file_schema.index_of("extra_column").is_err()

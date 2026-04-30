@@ -38,7 +38,8 @@ pub struct SyntaxHighlighter {
 
 impl SyntaxHighlighter {
     pub fn new(dialect: &config::Dialect) -> Self {
-        let dialect = dialect_from_str(dialect).unwrap_or(Box::new(GenericDialect {}));
+        let dialect =
+            dialect_from_str(dialect).unwrap_or_else(|| Box::new(GenericDialect {}));
         Self { dialect }
     }
 }

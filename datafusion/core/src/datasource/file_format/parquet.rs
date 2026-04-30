@@ -156,8 +156,8 @@ mod tests {
     use futures::StreamExt;
     use futures::stream::BoxStream;
     use insta::assert_snapshot;
-    use object_store::ObjectMeta;
     use object_store::local::LocalFileSystem;
+    use object_store::{CopyOptions, ObjectMeta};
     use object_store::{
         GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
         PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
@@ -165,7 +165,8 @@ mod tests {
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::file::metadata::{
-        KeyValue, ParquetColumnIndex, ParquetMetaData, ParquetOffsetIndex,
+        KeyValue, PageIndexPolicy, ParquetColumnIndex, ParquetMetaData,
+        ParquetOffsetIndex,
     };
     use parquet::file::page_index::column_index::ColumnIndexMetaData;
     use tokio::fs::File;
@@ -310,7 +311,7 @@ mod tests {
             _payload: PutPayload,
             _opts: PutOptions,
         ) -> object_store::Result<PutResult> {
-            Err(object_store::Error::NotImplemented)
+            unimplemented!()
         }
 
         async fn put_multipart_opts(
@@ -318,7 +319,7 @@ mod tests {
             _location: &Path,
             _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            Err(object_store::Error::NotImplemented)
+            unimplemented!()
         }
 
         async fn get_opts(
@@ -330,40 +331,34 @@ mod tests {
             self.inner.get_opts(location, options).await
         }
 
-        async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn delete(&self, _location: &Path) -> object_store::Result<()> {
-            Err(object_store::Error::NotImplemented)
+        fn delete_stream(
+            &self,
+            _locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            unimplemented!()
         }
 
         fn list(
             &self,
             _prefix: Option<&Path>,
         ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            Box::pin(futures::stream::once(async {
-                Err(object_store::Error::NotImplemented)
-            }))
+            unimplemented!()
         }
 
         async fn list_with_delimiter(
             &self,
             _prefix: Option<&Path>,
         ) -> object_store::Result<ListResult> {
-            Err(object_store::Error::NotImplemented)
+            unimplemented!()
         }
 
-        async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn copy_if_not_exists(
+        async fn copy_opts(
             &self,
             _from: &Path,
             _to: &Path,
+            _options: CopyOptions,
         ) -> object_store::Result<()> {
-            Err(object_store::Error::NotImplemented)
+            unimplemented!()
         }
     }
 
@@ -1105,7 +1100,8 @@ mod tests {
         let testdata = datafusion_common::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages.parquet");
         let file = File::open(path).await?;
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options =
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder =
             ParquetRecordBatchStreamBuilder::new_with_options(file, options.clone())
                 .await?

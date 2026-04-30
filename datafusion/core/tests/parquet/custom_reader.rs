@@ -43,7 +43,7 @@ use futures::{FutureExt, TryFutureExt};
 use insta::assert_snapshot;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;

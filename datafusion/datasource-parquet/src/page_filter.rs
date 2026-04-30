@@ -509,7 +509,7 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
         }
     }
 
-    fn row_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         match self.converter.data_page_row_counts(
             self.offset_index,
             self.row_group_metadatas,

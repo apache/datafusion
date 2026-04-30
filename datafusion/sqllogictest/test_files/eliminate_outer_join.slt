@@ -1,0 +1,492 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test EliminateOuterJoin rule: outer joins with null-rejecting
+# predicates (IN list, BETWEEN) should be converted to inner joins.
+
+statement ok
+create table t1(a int, b int, c varchar);
+
+statement ok
+create table t2(x int, y int, z varchar);
+
+statement ok
+insert into t1 values (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c'), (null, 40, 'd');
+
+statement ok
+insert into t2 values (1, 100, 'p'), (2, 200, 'q'), (null, 300, 'r');
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+###
+### IN list tests
+###
+
+# LEFT JOIN + WHERE t2.x IN (...) -> INNER JOIN
+# IN is null-rejecting: if t2.x is NULL, IN returns NULL (filtered out).
+# After conversion to INNER, PushDownFilter infers the predicate to both sides.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2, 3);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2) OR t1.a = Int32(3)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2) OR t2.x = Int32(3)
+05)----TableScan: t2 projection=[x, y, z]
+
+# Verify result correctness
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2, 3);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# RIGHT JOIN + WHERE t1.a IN (...) -> INNER JOIN
+query TT
+explain select * from t1 right join t2 on t1.a = t2.x where t1.a in (1, 2);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 right join t2 on t1.a = t2.x where t1.a in (1, 2);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# FULL JOIN + WHERE on both sides -> INNER JOIN
+query TT
+explain select * from t1 full join t2 on t1.a = t2.x where t1.a in (1, 2) and t2.x in (1, 2);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 full join t2 on t1.a = t2.x where t1.a in (1, 2) and t2.x in (1, 2);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# IN list with NULL in the list — still null-rejecting on input column
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2, null);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2) OR Boolean(NULL)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2) OR Boolean(NULL)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2, null);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# NOT IN — also null-rejecting
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x not in (99);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a != Int32(99)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x != Int32(99)
+05)----TableScan: t2 projection=[x, y, z]
+
+###
+### BETWEEN tests
+###
+
+# LEFT JOIN + WHERE t2.x BETWEEN ... -> INNER JOIN
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x between 1 and 3;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a >= Int32(1) AND t1.a <= Int32(3)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x >= Int32(1) AND t2.x <= Int32(3)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.x between 1 and 3;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# RIGHT JOIN + WHERE t1.a BETWEEN ... -> INNER JOIN
+query TT
+explain select * from t1 right join t2 on t1.a = t2.x where t1.a between 1 and 2;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a >= Int32(1) AND t1.a <= Int32(2)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x >= Int32(1) AND t2.x <= Int32(2)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 right join t2 on t1.a = t2.x where t1.a between 1 and 2;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+###
+### Negative tests: join should NOT be converted
+###
+
+# IN on preserved side of LEFT JOIN — doesn't help eliminate.
+# Filter is still pushed down to the right side via join key inference.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t1.a in (1, 2, 3);
+----
+logical_plan
+01)Left Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2) OR t1.a = Int32(3)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2) OR t2.x = Int32(3)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t1.a in (1, 2, 3);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+3 30 c NULL NULL NULL
+
+# IN(...) OR IS NULL — not null-rejecting, join preserved
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2) or t2.x is null;
+----
+logical_plan
+01)Filter: t2.x = Int32(1) OR t2.x = Int32(2) OR t2.x IS NULL
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b, c]
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2) or t2.x is null;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+3 30 c NULL NULL NULL
+NULL 40 d NULL NULL NULL
+
+###
+### LIKE tests
+###
+
+# LEFT JOIN + WHERE t2.z LIKE ... -> INNER JOIN
+# LIKE is null-rejecting: if t2.z is NULL, LIKE returns NULL (filtered out).
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.z like 'p%';
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.z LIKE Utf8View("p%")
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.z like 'p%';
+----
+1 10 a 1 100 p
+
+# RIGHT JOIN + WHERE t1.c LIKE ... -> INNER JOIN
+query TT
+explain select * from t1 right join t2 on t1.a = t2.x where t1.c like '%b%';
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.c LIKE Utf8View("%b%")
+03)----TableScan: t1 projection=[a, b, c]
+04)--TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 right join t2 on t1.a = t2.x where t1.c like '%b%';
+----
+2 20 b 2 200 q
+
+# LEFT JOIN + nullable column on pattern side: 'x' LIKE t2.z -> INNER JOIN
+# LIKE returns NULL when the pattern is NULL, so this is null-rejecting.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where 'x' like t2.z;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: Utf8View("x") LIKE t2.z
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where 'x' like t2.z;
+----
+
+# FULL JOIN + LIKE with columns from both sides: t1.c LIKE t2.z -> INNER JOIN
+# Either side being NULL makes LIKE return NULL, so both sides are non-nullable.
+query TT
+explain select * from t1 full join t2 on t1.a = t2.x where t1.c like t2.z;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x Filter: t1.c LIKE t2.z
+02)--TableScan: t1 projection=[a, b, c]
+03)--TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 full join t2 on t1.a = t2.x where t1.c like t2.z;
+----
+
+# LEFT JOIN + LIKE on preserved side pattern — should NOT eliminate
+# t1.c is from the preserved (left) side, never NULL from the join.
+# This does not reject null t2 rows, so LEFT JOIN must stay.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where 'hello' like t1.c;
+----
+logical_plan
+01)Left Join: t1.a = t2.x
+02)--Filter: Utf8View("hello") LIKE t1.c
+03)----TableScan: t1 projection=[a, b, c]
+04)--TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where 'hello' like t1.c;
+----
+
+###
+### IS TRUE / IS FALSE / IS NOT UNKNOWN tests
+###
+
+# LEFT JOIN + WHERE (t2.y > 150) IS TRUE -> INNER JOIN
+# IS TRUE is null-rejecting: if the expression is NULL, IS TRUE returns false.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is true;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.y > Int32(150) IS TRUE
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is true;
+----
+2 20 b 2 200 q
+
+# LEFT JOIN + WHERE (t2.y > 150) IS FALSE -> INNER JOIN
+# IS FALSE is null-rejecting: if the expression is NULL, IS FALSE returns false.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is false;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.y > Int32(150) IS FALSE
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is false;
+----
+1 10 a 1 100 p
+
+# LEFT JOIN + WHERE (t2.y > 150) IS NOT UNKNOWN -> INNER JOIN
+# IS NOT UNKNOWN is null-rejecting: if the expression is NULL, IS NOT UNKNOWN returns false.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is not unknown;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.y > Int32(150) IS NOT UNKNOWN
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is not unknown;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+###
+### Negative: IS NOT TRUE / IS UNKNOWN should NOT eliminate
+###
+
+# LEFT JOIN + WHERE (t2.y > 150) IS NOT TRUE -> stays LEFT JOIN
+# IS NOT TRUE returns true for NULL, so it is NOT null-rejecting.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is not true;
+----
+logical_plan
+01)Filter: t2.y > Int32(150) IS NOT TRUE
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b, c]
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is not true;
+----
+1 10 a 1 100 p
+3 30 c NULL NULL NULL
+NULL 40 d NULL NULL NULL
+
+# LEFT JOIN + WHERE (t2.y > 150) IS UNKNOWN -> stays LEFT JOIN
+# IS UNKNOWN returns true for NULL, so it is NOT null-rejecting.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is unknown;
+----
+logical_plan
+01)Filter: t2.y > Int32(150) IS UNKNOWN
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b, c]
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is unknown;
+----
+3 30 c NULL NULL NULL
+NULL 40 d NULL NULL NULL
+
+###
+### FULL JOIN → LEFT / RIGHT conversion tests
+###
+
+# FULL JOIN + filter on left side only → LEFT JOIN
+# Left side becomes non-nullable, right side stays nullable.
+query TT
+explain select * from t1 full join t2 on t1.a = t2.x where t1.a > 0;
+----
+logical_plan
+01)Left Join: t1.a = t2.x
+02)--Filter: t1.a > Int32(0)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x > Int32(0)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 full join t2 on t1.a = t2.x where t1.a > 0;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+3 30 c NULL NULL NULL
+
+# FULL JOIN + filter on right side only → RIGHT JOIN
+query TT
+explain select * from t1 full join t2 on t1.a = t2.x where t2.x in (1, 2);
+----
+logical_plan
+01)Right Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 full join t2 on t1.a = t2.x where t2.x in (1, 2);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# FULL JOIN + LIKE on left, BETWEEN on right → INNER JOIN (mixed predicates)
+query TT
+explain select * from t1 full join t2 on t1.a = t2.x where t1.c like '%a%' and t2.y between 50 and 250;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.c LIKE Utf8View("%a%")
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.y >= Int32(50) AND t2.y <= Int32(250)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 full join t2 on t1.a = t2.x where t1.c like '%a%' and t2.y between 50 and 250;
+----
+1 10 a 1 100 p
+
+# FULL JOIN + IS TRUE on right only → RIGHT JOIN
+query TT
+explain select * from t1 full join t2 on t1.a = t2.x where (t2.y > 150) is true;
+----
+logical_plan
+01)Right Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.y > Int32(150) IS TRUE
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 full join t2 on t1.a = t2.x where (t2.y > 150) is true;
+----
+2 20 b 2 200 q
+NULL NULL NULL NULL 300 r
+
+###
+### Nested AND / OR tests
+###
+
+# AND of multiple null-rejecting predicates on nullable side → INNER JOIN
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2) and t2.y between 50 and 250;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: (t2.x = Int32(1) OR t2.x = Int32(2)) AND t2.y >= Int32(50) AND t2.y <= Int32(250)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2) and t2.y between 50 and 250;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# IS TRUE AND IN on nullable side → INNER JOIN (mixed null-rejecting types)
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is true and t2.z like 'q%';
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.y > Int32(150) IS TRUE AND t2.z LIKE Utf8View("q%")
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is true and t2.z like 'q%';
+----
+2 20 b 2 200 q
+
+###
+### Cleanup
+###
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;

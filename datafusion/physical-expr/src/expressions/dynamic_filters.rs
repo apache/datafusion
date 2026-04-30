@@ -16,7 +16,7 @@
 // under the License.
 
 use parking_lot::RwLock;
-use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
+use std::{fmt::Display, hash::Hash, sync::Arc};
 use tokio::sync::watch;
 
 use crate::PhysicalExpr;
@@ -349,10 +349,6 @@ impl DynamicFilterPhysicalExpr {
 }
 
 impl PhysicalExpr for DynamicFilterPhysicalExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         self.remapped_children
             .as_ref()
@@ -743,7 +739,6 @@ mod test {
         // with_new_children() is called which creates a new outer Arc but clones the inner Arc.
         let consumer1_expr = Arc::clone(&filter).with_new_children(vec![]).unwrap();
         let _consumer1 = consumer1_expr
-            .as_any()
             .downcast_ref::<DynamicFilterPhysicalExpr>()
             .expect("Should be DynamicFilterPhysicalExpr");
 
@@ -756,7 +751,6 @@ mod test {
         // Create another transformed consumer
         let consumer2_expr = Arc::clone(&filter).with_new_children(vec![]).unwrap();
         let _consumer2 = consumer2_expr
-            .as_any()
             .downcast_ref::<DynamicFilterPhysicalExpr>()
             .expect("Should be DynamicFilterPhysicalExpr");
 

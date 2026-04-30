@@ -19,12 +19,12 @@
 
 use std::sync::Arc;
 
-use crate::strings::make_and_append_view;
+use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder, append_view};
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, GenericStringBuilder, NullBufferBuilder,
-    OffsetSizeTrait, StringBuilder, StringViewArray, new_null_array,
+    Array, ArrayRef, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
+    StringViewArray, new_null_array,
 };
-use arrow::buffer::{Buffer, ScalarBuffer};
+use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -38,6 +38,22 @@ use datafusion_expr::ColumnarValue;
 /// from the beginning of the input string where the trimmed result starts.
 pub(crate) trait Trimmer {
     fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32);
+
+    /// Optimized trim for a single ASCII byte.
+    /// Uses byte-level scanning instead of char-level iteration.
+    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32);
+}
+
+/// Returns the number of leading bytes matching `byte`
+#[inline]
+fn leading_bytes(bytes: &[u8], byte: u8) -> usize {
+    bytes.iter().take_while(|&&b| b == byte).count()
+}
+
+/// Returns the number of trailing bytes matching `byte`
+#[inline]
+fn trailing_bytes(bytes: &[u8], byte: u8) -> usize {
+    bytes.iter().rev().take_while(|&&b| b == byte).count()
 }
 
 /// Left trim - removes leading characters
@@ -46,9 +62,18 @@ pub(crate) struct TrimLeft;
 impl Trimmer for TrimLeft {
     #[inline]
     fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32) {
+        if pattern.len() == 1 && pattern[0].is_ascii() {
+            return Self::trim_ascii_char(input, pattern[0] as u8);
+        }
         let trimmed = input.trim_start_matches(pattern);
         let offset = (input.len() - trimmed.len()) as u32;
         (trimmed, offset)
+    }
+
+    #[inline]
+    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32) {
+        let start = leading_bytes(input.as_bytes(), byte);
+        (&input[start..], start as u32)
     }
 }
 
@@ -58,8 +83,18 @@ pub(crate) struct TrimRight;
 impl Trimmer for TrimRight {
     #[inline]
     fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32) {
+        if pattern.len() == 1 && pattern[0].is_ascii() {
+            return Self::trim_ascii_char(input, pattern[0] as u8);
+        }
         let trimmed = input.trim_end_matches(pattern);
         (trimmed, 0)
+    }
+
+    #[inline]
+    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32) {
+        let bytes = input.as_bytes();
+        let end = bytes.len() - trailing_bytes(bytes, byte);
+        (&input[..end], 0)
     }
 }
 
@@ -69,10 +104,21 @@ pub(crate) struct TrimBoth;
 impl Trimmer for TrimBoth {
     #[inline]
     fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32) {
+        if pattern.len() == 1 && pattern[0].is_ascii() {
+            return Self::trim_ascii_char(input, pattern[0] as u8);
+        }
         let left_trimmed = input.trim_start_matches(pattern);
         let offset = (input.len() - left_trimmed.len()) as u32;
         let trimmed = left_trimmed.trim_end_matches(pattern);
         (trimmed, offset)
+    }
+
+    #[inline]
+    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32) {
+        let bytes = input.as_bytes();
+        let start = leading_bytes(bytes, byte);
+        let end = bytes.len() - trailing_bytes(&bytes[start..], byte);
+        (&input[start..end], start as u32)
     }
 }
 
@@ -99,19 +145,19 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     match args.len() {
         1 => {
-            // Default whitespace trim - pattern is just space
-            let pattern = [' '];
+            // Trim spaces by default
             for (src_str_opt, raw_view) in string_view_array
                 .iter()
                 .zip(string_view_array.views().iter())
             {
-                trim_and_append_view::<Tr>(
-                    src_str_opt,
-                    &pattern,
-                    &mut views_buf,
-                    &mut null_builder,
-                    raw_view,
-                );
+                if let Some(src_str) = src_str_opt {
+                    let (trimmed, offset) = Tr::trim_ascii_char(src_str, b' ');
+                    append_view(&mut views_buf, raw_view, trimmed, offset);
+                    null_builder.append_non_null();
+                } else {
+                    null_builder.append_null();
+                    views_buf.push(0);
+                }
             }
         }
         2 => {
@@ -141,6 +187,7 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
             } else {
                 // Per-row pattern - must compute pattern chars for each row
+                let mut pattern: Vec<char> = Vec::new();
                 for ((src_str_opt, raw_view), characters_opt) in string_view_array
                     .iter()
                     .zip(string_view_array.views().iter())
@@ -149,15 +196,11 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     if let (Some(src_str), Some(characters)) =
                         (src_str_opt, characters_opt)
                     {
-                        let pattern: Vec<char> = characters.chars().collect();
+                        pattern.clear();
+                        pattern.extend(characters.chars());
                         let (trimmed, offset) = Tr::trim(src_str, &pattern);
-                        make_and_append_view(
-                            &mut views_buf,
-                            &mut null_builder,
-                            raw_view,
-                            trimmed,
-                            offset,
-                        );
+                        append_view(&mut views_buf, raw_view, trimmed, offset);
+                        null_builder.append_non_null();
                     } else {
                         null_builder.append_null();
                         views_buf.push(0);
@@ -208,7 +251,8 @@ fn trim_and_append_view<Tr: Trimmer>(
 ) {
     if let Some(src_str) = src_str_opt {
         let (trimmed, offset) = Tr::trim(src_str, pattern);
-        make_and_append_view(views_buf, null_builder, original_view, trimmed, offset);
+        append_view(views_buf, original_view, trimmed, offset);
+        null_builder.append_non_null();
     } else {
         null_builder.append_null();
         views_buf.push(0);
@@ -225,11 +269,10 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
 
     match args.len() {
         1 => {
-            // Default whitespace trim - pattern is just space
-            let pattern = [' '];
+            // Trim spaces by default
             let result = string_array
                 .iter()
-                .map(|string| string.map(|s| Tr::trim(s, &pattern).0))
+                .map(|string| string.map(|s| Tr::trim_ascii_char(s, b' ').0))
                 .collect::<GenericStringArray<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
@@ -255,12 +298,14 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
             }
 
             // Per-row pattern - must compute pattern chars for each row
+            let mut pattern: Vec<char> = Vec::new();
             let result = string_array
                 .iter()
                 .zip(characters_array.iter())
                 .map(|(string, characters)| match (string, characters) {
                     (Some(s), Some(c)) => {
-                        let pattern: Vec<char> = c.chars().collect();
+                        pattern.clear();
+                        pattern.extend(c.chars());
                         Some(Tr::trim(s, &pattern).0)
                     }
                     _ => None,
@@ -304,20 +349,30 @@ where
             >(array, op)?)),
             DataType::Utf8View => {
                 let string_array = as_string_view_array(array)?;
-                let mut string_builder = StringBuilder::with_capacity(
-                    string_array.len(),
-                    string_array.get_array_memory_size(),
-                );
+                let item_len = string_array.len();
+                // Null-preserving: reuse the input null buffer as the output null buffer.
+                let nulls = string_array.nulls().cloned();
+                let mut builder = StringViewArrayBuilder::with_capacity(item_len);
 
-                for str in string_array.iter() {
-                    if let Some(str) = str {
-                        string_builder.append_value(op(str));
-                    } else {
-                        string_builder.append_null();
+                if let Some(ref n) = nulls {
+                    for i in 0..item_len {
+                        if n.is_null(i) {
+                            builder.append_placeholder();
+                        } else {
+                            // SAFETY: `n.is_null(i)` was false in the branch above.
+                            let s = unsafe { string_array.value_unchecked(i) };
+                            builder.append_value(&op(s));
+                        }
+                    }
+                } else {
+                    for i in 0..item_len {
+                        // SAFETY: no null buffer means every index is valid.
+                        let s = unsafe { string_array.value_unchecked(i) };
+                        builder.append_value(&op(s));
                     }
                 }
 
-                Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(nulls)?)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
@@ -332,7 +387,7 @@ where
             }
             ScalarValue::Utf8View(a) => {
                 let result = a.as_ref().map(|x| op(x));
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
@@ -347,32 +402,44 @@ where
     const PRE_ALLOC_BYTES: usize = 8;
 
     let string_array = as_generic_string_array::<O>(array)?;
-    let value_data = string_array.value_data();
-
-    // All values are ASCII.
-    if value_data.is_ascii() {
+    if string_array.is_ascii() {
         return case_conversion_ascii_array::<O, _>(string_array, op);
     }
 
     // Values contain non-ASCII.
     let item_len = string_array.len();
-    let capacity = string_array.value_data().len() + PRE_ALLOC_BYTES;
-    let mut builder = GenericStringBuilder::<O>::with_capacity(item_len, capacity);
+    let offsets = string_array.value_offsets();
+    let start = offsets.first().unwrap().as_usize();
+    let end = offsets.last().unwrap().as_usize();
+    let capacity = (end - start) + PRE_ALLOC_BYTES;
+    // Null-preserving: reuse the input null buffer as the output null buffer.
+    let nulls = string_array.nulls().cloned();
+    let mut builder = GenericStringArrayBuilder::<O>::with_capacity(item_len, capacity);
 
-    if string_array.null_count() == 0 {
-        let iter =
-            (0..item_len).map(|i| Some(op(unsafe { string_array.value_unchecked(i) })));
-        builder.extend(iter);
+    if let Some(ref n) = nulls {
+        for i in 0..item_len {
+            if n.is_null(i) {
+                builder.append_placeholder();
+            } else {
+                // SAFETY: `n.is_null(i)` was false in the branch above.
+                let s = unsafe { string_array.value_unchecked(i) };
+                builder.append_value(&op(s));
+            }
+        }
     } else {
-        let iter = string_array.iter().map(|string| string.map(&op));
-        builder.extend(iter);
+        for i in 0..item_len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_array.value_unchecked(i) };
+            builder.append_value(&op(s));
+        }
     }
-    Ok(Arc::new(builder.finish()))
+    Ok(Arc::new(builder.finish(nulls)?))
 }
 
-/// All values of string_array are ASCII, and when converting case, there is no changes in the byte
-/// array length. Therefore, the StringArray can be treated as a complete ASCII string for
-/// case conversion, and we can reuse the offsets buffer and the nulls buffer.
+/// Fast path for case conversion on an all-ASCII string array. ASCII case
+/// conversion is byte-length-preserving, so we can convert the entire addressed
+/// range in one call and reuse the offsets and nulls buffers — rebasing the
+/// offsets when the input is a sliced array.
 fn case_conversion_ascii_array<'a, O, F>(
     string_array: &'a GenericStringArray<O>,
     op: F,
@@ -381,21 +448,33 @@ where
     O: OffsetSizeTrait,
     F: Fn(&'a str) -> String,
 {
-    let value_data = string_array.value_data();
-    // SAFETY: all items stored in value_data satisfy UTF8.
-    // ref: impl ByteArrayNativeType for str {...}
-    let str_values = unsafe { std::str::from_utf8_unchecked(value_data) };
+    let value_offsets = string_array.value_offsets();
+    let start = value_offsets.first().unwrap().as_usize();
+    let end = value_offsets.last().unwrap().as_usize();
+    let relevant = &string_array.value_data()[start..end];
 
-    // conversion
+    // SAFETY: `relevant` is a subslice of the string array's value buffer,
+    // which is valid UTF-8.
+    let str_values = unsafe { std::str::from_utf8_unchecked(relevant) };
+
     let converted_values = op(str_values);
-    assert_eq!(converted_values.len(), str_values.len());
-    let bytes = converted_values.into_bytes();
+    debug_assert_eq!(converted_values.len(), str_values.len());
+    let values = Buffer::from_vec(converted_values.into_bytes());
 
-    // build result
-    let values = Buffer::from_vec(bytes);
-    let offsets = string_array.offsets().clone();
+    // Shift offsets from `start`-based to 0-based so they index into `values`.
+    let offsets = if start == 0 {
+        string_array.offsets().clone()
+    } else {
+        let s = O::usize_as(start);
+        let rebased: Vec<O> = value_offsets.iter().map(|&o| o - s).collect();
+        // SAFETY: subtracting a constant from monotonic offsets preserves
+        // monotonicity, and `start` is the minimum offset so no underflow.
+        unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(rebased)) }
+    };
+
     let nulls = string_array.nulls().cloned();
-    // SAFETY: offsets and nulls are consistent with the input array.
+    // SAFETY: offsets are monotonic and in-bounds for `values`; nulls
+    // (if any) match the slice length.
     Ok(Arc::new(unsafe {
         GenericStringArray::<O>::new_unchecked(offsets, values, nulls)
     }))

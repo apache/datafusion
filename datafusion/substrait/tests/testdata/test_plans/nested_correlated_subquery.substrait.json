@@ -1,0 +1,265 @@
+{
+  "extensionUris": [{
+    "extensionUriAnchor": 1,
+    "uri": "/functions_boolean.yaml"
+  }, {
+    "extensionUriAnchor": 2,
+    "uri": "/functions_comparison.yaml"
+  }],
+  "extensions": [{
+    "extensionFunction": {
+      "extensionUriReference": 1,
+      "name": "and:bool"
+    }
+  }, {
+    "extensionFunction": {
+      "extensionUriReference": 2,
+      "functionAnchor": 1,
+      "name": "equal:any_any"
+    }
+  }],
+  "relations": [{
+    "root": {
+      "input": {
+        "filter": {
+          "common": {
+            "direct": {}
+          },
+          "input": {
+            "read": {
+              "common": {
+                "direct": {}
+              },
+              "baseSchema": {
+                "names": ["a1", "a2"],
+                "struct": {
+                  "types": [{
+                    "i64": {
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  }, {
+                    "i64": {
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  }],
+                  "nullability": "NULLABILITY_REQUIRED"
+                }
+              },
+              "namedTable": {
+                "names": ["A"]
+              }
+            }
+          },
+          "condition": {
+            "subquery": {
+              "setPredicate": {
+                "predicateOp": "PREDICATE_OP_EXISTS",
+                "tuples": {
+                  "filter": {
+                    "common": {
+                      "direct": {}
+                    },
+                    "input": {
+                      "read": {
+                        "common": {
+                          "direct": {}
+                        },
+                        "baseSchema": {
+                          "names": ["b1", "b2"],
+                          "struct": {
+                            "types": [{
+                              "i64": {
+                                "nullability": "NULLABILITY_REQUIRED"
+                              }
+                            }, {
+                              "i64": {
+                                "nullability": "NULLABILITY_REQUIRED"
+                              }
+                            }],
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        "namedTable": {
+                          "names": ["B"]
+                        }
+                      }
+                    },
+                    "condition": {
+                      "scalarFunction": {
+                        "outputType": {
+                          "bool": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        "arguments": [{
+                          "value": {
+                            "scalarFunction": {
+                              "functionReference": 1,
+                              "outputType": {
+                                "bool": {
+                                  "nullability": "NULLABILITY_REQUIRED"
+                                }
+                              },
+                              "arguments": [{
+                                "value": {
+                                  "selection": {
+                                    "directReference": {
+                                      "structField": {
+                                        "field": 0
+                                      }
+                                    },
+                                    "rootReference": {}
+                                  }
+                                }
+                              }, {
+                                "value": {
+                                  "selection": {
+                                    "directReference": {
+                                      "structField": {
+                                        "field": 0
+                                      }
+                                    },
+                                    "outerReference": {
+                                      "stepsOut": 1
+                                    }
+                                  }
+                                }
+                              }]
+                            }
+                          }
+                        }, {
+                          "value": {
+                            "subquery": {
+                              "setPredicate": {
+                                "predicateOp": "PREDICATE_OP_EXISTS",
+                                "tuples": {
+                                  "filter": {
+                                    "common": {
+                                      "direct": {}
+                                    },
+                                    "input": {
+                                      "read": {
+                                        "common": {
+                                          "direct": {}
+                                        },
+                                        "baseSchema": {
+                                          "names": ["c1", "c2"],
+                                          "struct": {
+                                            "types": [{
+                                              "i64": {
+                                                "nullability": "NULLABILITY_REQUIRED"
+                                              }
+                                            }, {
+                                              "i64": {
+                                                "nullability": "NULLABILITY_REQUIRED"
+                                              }
+                                            }],
+                                            "nullability": "NULLABILITY_REQUIRED"
+                                          }
+                                        },
+                                        "namedTable": {
+                                          "names": ["C"]
+                                        }
+                                      }
+                                    },
+                                    "condition": {
+                                      "scalarFunction": {
+                                        "outputType": {
+                                          "bool": {
+                                            "nullability": "NULLABILITY_REQUIRED"
+                                          }
+                                        },
+                                        "arguments": [{
+                                          "value": {
+                                            "scalarFunction": {
+                                              "functionReference": 1,
+                                              "outputType": {
+                                                "bool": {
+                                                  "nullability": "NULLABILITY_REQUIRED"
+                                                }
+                                              },
+                                              "arguments": [{
+                                                "value": {
+                                                  "selection": {
+                                                    "directReference": {
+                                                      "structField": {
+                                                        "field": 0
+                                                      }
+                                                    },
+                                                    "rootReference": {}
+                                                  }
+                                                }
+                                              }, {
+                                                "value": {
+                                                  "selection": {
+                                                    "directReference": {
+                                                      "structField": {
+                                                        "field": 0
+                                                      }
+                                                    },
+                                                    "outerReference": {
+                                                      "stepsOut": 2
+                                                    }
+                                                  }
+                                                }
+                                              }]
+                                            }
+                                          }
+                                        }, {
+                                          "value": {
+                                            "scalarFunction": {
+                                              "functionReference": 1,
+                                              "outputType": {
+                                                "bool": {
+                                                  "nullability": "NULLABILITY_REQUIRED"
+                                                }
+                                              },
+                                              "arguments": [{
+                                                "value": {
+                                                  "selection": {
+                                                    "directReference": {
+                                                      "structField": {
+                                                        "field": 1
+                                                      }
+                                                    },
+                                                    "rootReference": {}
+                                                  }
+                                                }
+                                              }, {
+                                                "value": {
+                                                  "selection": {
+                                                    "directReference": {
+                                                      "structField": {
+                                                        "field": 1
+                                                      }
+                                                    },
+                                                    "outerReference": {
+                                                      "stepsOut": 1
+                                                    }
+                                                  }
+                                                }
+                                              }]
+                                            }
+                                          }
+                                        }]
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "names": ["a1", "a2"]
+    }
+  }]
+}

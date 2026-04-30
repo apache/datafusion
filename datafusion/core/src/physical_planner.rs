@@ -18,7 +18,7 @@
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -63,14 +63,15 @@ use arrow::datatypes::Schema;
 use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::Column;
+use datafusion_common::HashMap as DFHashMap;
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::format::ExplainAnalyzeLevel;
+use datafusion_common::format::ExplainAnalyzeCategories;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::{
-    DFSchema, ScalarValue, exec_err, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
+    DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err,
 };
 use datafusion_common::{
     TableReference, assert_eq_or_internal_err, assert_or_internal_err,
@@ -78,13 +79,15 @@ use datafusion_common::{
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
+use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, GroupingSet, NullTreatment,
     WindowFunction, WindowFunctionParams, physical_name,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::utils::split_conjunction;
+use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
     FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
@@ -99,14 +102,15 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
-use datafusion_physical_plan::metrics::MetricType;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
+use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion_physical_plan::unnest::ListUnnest;
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
+use indexmap::IndexSet;
 use itertools::{Itertools, multiunzip};
 use log::debug;
 use tokio::sync::Mutex;
@@ -157,6 +161,80 @@ pub trait ExtensionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
+
+    /// Create a physical plan for a [`LogicalPlan::TableScan`].
+    ///
+    /// This is useful for planning valid [`TableSource`]s that are not [`TableProvider`]s.
+    ///
+    /// Returns:
+    /// * `Ok(Some(plan))` if the planner knows how to plan the `scan`
+    /// * `Ok(None)` if the planner does not know how to plan the `scan` and wants to delegate the planning to another [`ExtensionPlanner`]
+    /// * `Err` if the planner knows how to plan the `scan` but errors while doing so
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use datafusion::physical_plan::ExecutionPlan;
+    /// use datafusion::logical_expr::TableScan;
+    /// use datafusion::execution::context::SessionState;
+    /// use datafusion::error::Result;
+    /// use datafusion_physical_planner::{ExtensionPlanner, PhysicalPlanner};
+    /// use async_trait::async_trait;
+    ///
+    /// // Your custom table source type
+    /// struct MyCustomTableSource { /* ... */ }
+    ///
+    /// // Your custom execution plan
+    /// struct MyCustomExec { /* ... */ }
+    ///
+    /// struct MyExtensionPlanner;
+    ///
+    /// #[async_trait]
+    /// impl ExtensionPlanner for MyExtensionPlanner {
+    ///     async fn plan_extension(
+    ///         &self,
+    ///         _planner: &dyn PhysicalPlanner,
+    ///         _node: &dyn UserDefinedLogicalNode,
+    ///         _logical_inputs: &[&LogicalPlan],
+    ///         _physical_inputs: &[Arc<dyn ExecutionPlan>],
+    ///         _session_state: &SessionState,
+    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ///         Ok(None)
+    ///     }
+    ///
+    ///     async fn plan_table_scan(
+    ///         &self,
+    ///         _planner: &dyn PhysicalPlanner,
+    ///         scan: &TableScan,
+    ///         _session_state: &SessionState,
+    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ///         // Check if this is your custom table source
+    ///         if scan.source.is::<MyCustomTableSource>() {
+    ///             // Create a custom execution plan for your table source
+    ///             let exec = MyCustomExec::new(
+    ///                 scan.table_name.clone(),
+    ///                 Arc::clone(scan.projected_schema.inner()),
+    ///             );
+    ///             Ok(Some(Arc::new(exec)))
+    ///         } else {
+    ///             // Return None to let other extension planners handle it
+    ///             Ok(None)
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// [`TableSource`]: datafusion_expr::TableSource
+    /// [`TableProvider`]: datafusion_catalog::TableProvider
+    async fn plan_table_scan(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        _scan: &TableScan,
+        _session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
 }
 
 /// Default single node physical query planner that converts a
@@ -278,7 +356,8 @@ struct LogicalNode<'a> {
 
 impl DefaultPhysicalPlanner {
     /// Create a physical planner that uses `extension_planners` to
-    /// plan user-defined logical nodes [`LogicalPlan::Extension`].
+    /// plan user-defined logical nodes [`LogicalPlan::Extension`]
+    /// or user-defined table sources in [`LogicalPlan::TableScan`].
     /// The planner uses the first [`ExtensionPlanner`] to return a non-`None`
     /// plan.
     pub fn with_extension_planners(
@@ -287,8 +366,111 @@ impl DefaultPhysicalPlanner {
         Self { extension_planners }
     }
 
-    /// Create a physical plan from a logical plan
-    async fn create_initial_plan(
+    fn ensure_schema_matches(
+        &self,
+        logical_schema: &DFSchemaRef,
+        physical_plan: &Arc<dyn ExecutionPlan>,
+        context: &str,
+    ) -> Result<()> {
+        if !logical_schema.matches_arrow_schema(&physical_plan.schema()) {
+            return plan_err!(
+                "{} created an ExecutionPlan with mismatched schema. \
+                    LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
+                context,
+                logical_schema,
+                physical_plan.schema()
+            );
+        }
+        Ok(())
+    }
+
+    /// Collect uncorrelated scalar subqueries. We don't descend into nested
+    /// subqueries here: each call to `create_initial_plan` handles subqueries
+    /// at its level and then recurses in order to handle nested subqueries.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Subquery contains Arc with interior mutability but is intentionally used as hash key
+    fn collect_scalar_subqueries(plan: &LogicalPlan) -> Vec<Subquery> {
+        let mut subqueries = IndexSet::new();
+        plan.apply(|node| {
+            for expr in node.expressions() {
+                expr.apply(|e| {
+                    if let Expr::ScalarSubquery(sq) = e
+                        && sq.outer_ref_columns.is_empty()
+                    {
+                        subqueries.insert(sq.clone());
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+                .expect("infallible");
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("infallible");
+        subqueries.into_iter().collect()
+    }
+
+    /// Create a physical plan from a logical plan.
+    ///
+    /// Uncorrelated scalar subqueries in the plan's own expressions are
+    /// collected, planned as separate physical plans, and each assigned an
+    /// index in a shared [`ScalarSubqueryResults`] container that will hold its
+    /// result at execution time. The index map and shared results container are
+    /// registered in [`ExecutionProps`] so that [`create_physical_expr`] can
+    /// convert `Expr::ScalarSubquery` into [`ScalarSubqueryExpr`] nodes that
+    /// read from that container.
+    ///
+    /// The resulting physical plan is wrapped in a [`ScalarSubqueryExec`] node
+    /// that executes those subquery plans before any data flows through the
+    /// main plan. If a subquery itself contains nested uncorrelated subqueries,
+    /// the recursive call produces its own [`ScalarSubqueryExec`] inside the
+    /// subquery plan — each level manages only its own subqueries.
+    ///
+    /// Returns a [`BoxFuture`] rather than using `async fn` because of
+    /// this recursion.
+    ///
+    /// [`ScalarSubqueryExpr`]: datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr
+    /// [`BoxFuture`]: futures::future::BoxFuture
+    fn create_initial_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a SessionState,
+    ) -> futures::future::BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let all_subqueries = Self::collect_scalar_subqueries(logical_plan);
+            let (links, index_map) = self
+                .plan_scalar_subqueries(all_subqueries, session_state)
+                .await?;
+
+            if links.is_empty() {
+                return self
+                    .create_initial_plan_inner(logical_plan, session_state)
+                    .await;
+            }
+
+            // Create the shared `ScalarSubqueryResults` container and register
+            // it in `ExecutionProps` so that `create_physical_expr` can resolve
+            // `Expr::ScalarSubquery` into `ScalarSubqueryExpr` nodes. We clone
+            // the `SessionState` so these are available throughout physical
+            // planning without mutating the caller's state.
+            //
+            // Ideally, the subquery state would live in a dedicated planning
+            // context rather than in `ExecutionProps`. It's here because
+            // `create_physical_expr` only receives `&ExecutionProps`.
+            let results = ScalarSubqueryResults::new(links.len());
+            let mut owned = session_state.clone();
+            owned.execution_props_mut().subquery_indexes = index_map;
+            owned.execution_props_mut().subquery_results = results.clone();
+            let session_state = Cow::Owned(owned);
+
+            let plan = self
+                .create_initial_plan_inner(logical_plan, &session_state)
+                .await?;
+            Ok(Arc::new(ScalarSubqueryExec::new(plan, links, results)))
+        })
+    }
+
+    /// Inner physical planning that converts a logical plan tree into an
+    /// execution plan tree without collecting scalar subqueries.
+    async fn create_initial_plan_inner(
         &self,
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
@@ -453,27 +635,56 @@ impl DefaultPhysicalPlanner {
         session_state: &SessionState,
         children: ChildrenContainer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let execution_props = session_state.execution_props();
         let exec_node: Arc<dyn ExecutionPlan> = match node {
             // Leaves (no children)
-            LogicalPlan::TableScan(TableScan {
-                source,
-                projection,
-                filters,
-                fetch,
-                ..
-            }) => {
-                let source = source_as_provider(source)?;
-                // Remove all qualifiers from the scan as the provider
-                // doesn't know (nor should care) how the relation was
-                // referred to in the query
-                let filters = unnormalize_cols(filters.iter().cloned());
-                let filters_vec = filters.into_iter().collect::<Vec<_>>();
-                let opts = ScanArgs::default()
-                    .with_projection(projection.as_deref())
-                    .with_filters(Some(&filters_vec))
-                    .with_limit(*fetch);
-                let res = source.scan_with_args(session_state, opts).await?;
-                Arc::clone(res.plan())
+            LogicalPlan::TableScan(scan) => {
+                let TableScan {
+                    source,
+                    projection,
+                    filters,
+                    fetch,
+                    projected_schema,
+                    ..
+                } = scan;
+
+                if let Ok(source) = source_as_provider(source) {
+                    // Remove all qualifiers from the scan as the provider
+                    // doesn't know (nor should care) how the relation was
+                    // referred to in the query
+                    let filters = unnormalize_cols(filters.iter().cloned());
+                    let filters_vec = filters.into_iter().collect::<Vec<_>>();
+                    let opts = ScanArgs::default()
+                        .with_projection(projection.as_deref())
+                        .with_filters(Some(&filters_vec))
+                        .with_limit(*fetch);
+                    let res = source.scan_with_args(session_state, opts).await?;
+                    Arc::clone(res.plan())
+                } else {
+                    let mut maybe_plan = None;
+                    for planner in &self.extension_planners {
+                        if maybe_plan.is_some() {
+                            break;
+                        }
+
+                        maybe_plan =
+                            planner.plan_table_scan(self, scan, session_state).await?;
+                    }
+
+                    let plan = match maybe_plan {
+                        Some(plan) => plan,
+                        None => {
+                            return plan_err!(
+                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                                scan.table_name
+                            );
+                        }
+                    };
+                    let context =
+                        format!("Extension planner for table scan {}", scan.table_name);
+                    self.ensure_schema_matches(projected_schema, &plan, &context)?;
+                    plan
+                }
             }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exprs = values
@@ -481,7 +692,7 @@ impl DefaultPhysicalPlanner {
                     .map(|row| {
                         row.iter()
                             .map(|expr| {
-                                self.create_physical_expr(expr, schema, session_state)
+                                create_physical_expr(expr, schema, execution_props)
                             })
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
@@ -612,9 +823,7 @@ impl DefaultPhysicalPlanner {
                 op: WriteOp::Insert(insert_op),
                 ..
             }) => {
-                if let Some(provider) =
-                    target.as_any().downcast_ref::<DefaultTableSource>()
-                {
+                if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
                     let input_exec = children.one()?;
                     provider
                         .table_provider
@@ -633,10 +842,8 @@ impl DefaultPhysicalPlanner {
                 input,
                 ..
             }) => {
-                if let Some(provider) =
-                    target.as_any().downcast_ref::<DefaultTableSource>()
-                {
-                    let filters = extract_dml_filters(input)?;
+                if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
+                    let filters = extract_dml_filters(input, table_name)?;
                     provider
                         .table_provider
                         .delete_from(session_state, filters)
@@ -657,12 +864,10 @@ impl DefaultPhysicalPlanner {
                 input,
                 ..
             }) => {
-                if let Some(provider) =
-                    target.as_any().downcast_ref::<DefaultTableSource>()
-                {
+                if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input)?;
+                    let filters = extract_dml_filters(input, table_name)?;
                     // Extract assignments from the projection in input plan
                     let assignments = extract_update_assignments(input)?;
                     provider
@@ -684,9 +889,7 @@ impl DefaultPhysicalPlanner {
                 op: WriteOp::Truncate,
                 ..
             }) => {
-                if let Some(provider) =
-                    target.as_any().downcast_ref::<DefaultTableSource>()
-                {
+                if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
                     provider
                         .table_provider
                         .truncate(session_state)
@@ -748,13 +951,7 @@ impl DefaultPhysicalPlanner {
                 let logical_schema = node.schema();
                 let window_expr = window_expr
                     .iter()
-                    .map(|e| {
-                        create_window_expr(
-                            e,
-                            logical_schema,
-                            session_state.execution_props(),
-                        )
-                    })
+                    .map(|e| create_window_expr(e, logical_schema, execution_props))
                     .collect::<Result<Vec<_>>>()?;
 
                 let can_repartition = session_state.config().target_partitions() > 1
@@ -859,7 +1056,7 @@ impl DefaultPhysicalPlanner {
                     group_expr,
                     logical_input_schema,
                     &physical_input_schema,
-                    session_state,
+                    execution_props,
                 )?;
 
                 let agg_filter = aggr_expr
@@ -869,7 +1066,7 @@ impl DefaultPhysicalPlanner {
                             e,
                             logical_input_schema,
                             &physical_input_schema,
-                            session_state.execution_props(),
+                            execution_props,
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -963,8 +1160,8 @@ impl DefaultPhysicalPlanner {
                 )?)
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
-                .create_project_physical_exec(
-                    session_state,
+                .create_project_physical_exec_with_props(
+                    execution_props,
                     children.one()?,
                     input,
                     expr,
@@ -974,9 +1171,8 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.schema();
-
                 let runtime_expr =
-                    self.create_physical_expr(predicate, input_dfschema, session_state)?;
+                    create_physical_expr(predicate, input_dfschema, execution_props)?;
 
                 let input_schema = input.schema();
                 let filter = match self.try_plan_async_exprs(
@@ -1024,7 +1220,9 @@ impl DefaultPhysicalPlanner {
                     .options()
                     .optimizer
                     .default_filter_selectivity;
-                Arc::new(filter.with_default_selectivity(selectivity)?)
+                let filter_exec: Arc<dyn ExecutionPlan> =
+                    Arc::new(filter.with_default_selectivity(selectivity)?);
+                filter_exec
             }
             LogicalPlan::Repartition(Repartition {
                 input,
@@ -1040,11 +1238,7 @@ impl DefaultPhysicalPlanner {
                         let runtime_expr = expr
                             .iter()
                             .map(|e| {
-                                self.create_physical_expr(
-                                    e,
-                                    input_dfschema,
-                                    session_state,
-                                )
+                                create_physical_expr(e, input_dfschema, execution_props)
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Partitioning::Hash(runtime_expr, *n)
@@ -1065,11 +1259,8 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
-                let sort_exprs = create_physical_sort_exprs(
-                    expr,
-                    input_dfschema,
-                    session_state.execution_props(),
-                )?;
+                let sort_exprs =
+                    create_physical_sort_exprs(expr, input_dfschema, execution_props)?;
                 let Some(ordering) = LexOrdering::new(sort_exprs) else {
                     return internal_err!(
                         "SortExec requires at least one sort expression"
@@ -1078,7 +1269,14 @@ impl DefaultPhysicalPlanner {
                 let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
             }
-            LogicalPlan::Subquery(_) => todo!(),
+            // The optimizer's decorrelation passes remove Subquery nodes
+            // for supported patterns. This error is hit for correlated
+            // patterns that the optimizer cannot (yet) decorrelate.
+            LogicalPlan::Subquery(_) => {
+                return not_impl_err!(
+                    "Physical plan does not support undecorrelated Subquery"
+                );
+            }
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
@@ -1189,8 +1387,8 @@ impl DefaultPhysicalPlanner {
                         (
                             true,
                             LogicalPlan::Projection(Projection { input, expr, .. }),
-                        ) => self.create_project_physical_exec(
-                            session_state,
+                        ) => self.create_project_physical_exec_with_props(
+                            execution_props,
                             physical_left,
                             input,
                             expr,
@@ -1202,8 +1400,8 @@ impl DefaultPhysicalPlanner {
                         (
                             true,
                             LogicalPlan::Projection(Projection { input, expr, .. }),
-                        ) => self.create_project_physical_exec(
-                            session_state,
+                        ) => self.create_project_physical_exec_with_props(
+                            execution_props,
                             physical_right,
                             input,
                             expr,
@@ -1268,7 +1466,6 @@ impl DefaultPhysicalPlanner {
                 // All equi-join keys are columns now, create physical join plan
                 let left_df_schema = left.schema();
                 let right_df_schema = right.schema();
-                let execution_props = session_state.execution_props();
                 let join_on = keys
                     .iter()
                     .map(|(l, r)| {
@@ -1374,7 +1571,7 @@ impl DefaultPhysicalPlanner {
                         let filter_expr = create_physical_expr(
                             expr,
                             &filter_df_schema,
-                            session_state.execution_props(),
+                            execution_props,
                         )?;
                         let column_indices = join_utils::JoinFilter::build_column_indices(
                             left_field_indices,
@@ -1395,7 +1592,7 @@ impl DefaultPhysicalPlanner {
 
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
+                    if join_filter.is_none() && *join_type == JoinType::Inner {
                         // cross join if there is no join conditions and no join filter set
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
@@ -1470,9 +1667,7 @@ impl DefaultPhysicalPlanner {
 
                         let left_side = side_of(lhs_logical)?;
                         let right_side = side_of(rhs_logical)?;
-                        if matches!(left_side, Side::Both)
-                            || matches!(right_side, Side::Both)
-                        {
+                        if left_side == Side::Both || right_side == Side::Both {
                             return Ok(Arc::new(NestedLoopJoinExec::try_new(
                                 physical_left,
                                 physical_right,
@@ -1496,12 +1691,12 @@ impl DefaultPhysicalPlanner {
                         let on_left = create_physical_expr(
                             lhs_logical,
                             left_df_schema,
-                            session_state.execution_props(),
+                            execution_props,
                         )?;
                         let on_right = create_physical_expr(
                             rhs_logical,
                             right_df_schema,
-                            session_state.execution_props(),
+                            execution_props,
                         )?;
 
                         Arc::new(PiecewiseMergeJoinExec::try_new(
@@ -1571,7 +1766,12 @@ impl DefaultPhysicalPlanner {
                 // If plan was mutated previously then need to create the ExecutionPlan
                 // for the new Projection that was applied on top.
                 if let Some((input, expr)) = new_project {
-                    self.create_project_physical_exec(session_state, join, input, expr)?
+                    self.create_project_physical_exec_with_props(
+                        execution_props,
+                        join,
+                        input,
+                        expr,
+                    )?
                 } else {
                     join
                 }
@@ -1618,20 +1818,9 @@ impl DefaultPhysicalPlanner {
                     ),
                 }?;
 
-                // Ensure the ExecutionPlan's schema matches the
-                // declared logical schema to catch and warn about
-                // logic errors when creating user defined plans.
-                if !node.schema().matches_arrow_schema(&plan.schema()) {
-                    return plan_err!(
-                        "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
-                            LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
-                        node,
-                        node.schema(),
-                        plan.schema()
-                    );
-                } else {
-                    plan
-                }
+                let context = format!("Extension planner for {node:?}");
+                self.ensure_schema_matches(node.schema(), &plan, &context)?;
+                plan
             }
 
             // Other
@@ -1676,7 +1865,7 @@ impl DefaultPhysicalPlanner {
         group_expr: &[Expr],
         input_dfschema: &DFSchema,
         input_schema: &Schema,
-        session_state: &SessionState,
+        execution_props: &ExecutionProps,
     ) -> Result<PhysicalGroupBy> {
         if group_expr.len() == 1 {
             match &group_expr[0] {
@@ -1685,25 +1874,25 @@ impl DefaultPhysicalPlanner {
                         grouping_sets,
                         input_dfschema,
                         input_schema,
-                        session_state,
+                        execution_props,
                     )
                 }
                 Expr::GroupingSet(GroupingSet::Cube(exprs)) => create_cube_physical_expr(
                     exprs,
                     input_dfschema,
                     input_schema,
-                    session_state,
+                    execution_props,
                 ),
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                     create_rollup_physical_expr(
                         exprs,
                         input_dfschema,
                         input_schema,
-                        session_state,
+                        execution_props,
                     )
                 }
                 expr => Ok(PhysicalGroupBy::new_single(vec![tuple_err((
-                    self.create_physical_expr(expr, input_dfschema, session_state),
+                    create_physical_expr(expr, input_dfschema, execution_props),
                     physical_name(expr),
                 ))?])),
             }
@@ -1717,7 +1906,7 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|e| {
                         tuple_err((
-                            self.create_physical_expr(e, input_dfschema, session_state),
+                            create_physical_expr(e, input_dfschema, execution_props),
                             physical_name(e),
                         ))
                     })
@@ -1741,7 +1930,7 @@ fn merge_grouping_set_physical_expr(
     grouping_sets: &[Vec<Expr>],
     input_dfschema: &DFSchema,
     input_schema: &Schema,
-    session_state: &SessionState,
+    execution_props: &ExecutionProps,
 ) -> Result<PhysicalGroupBy> {
     let num_groups = grouping_sets.len();
     let mut all_exprs: Vec<Expr> = vec![];
@@ -1755,14 +1944,14 @@ fn merge_grouping_set_physical_expr(
             grouping_set_expr.push(get_physical_expr_pair(
                 expr,
                 input_dfschema,
-                session_state,
+                execution_props,
             )?);
 
             null_exprs.push(get_null_physical_expr_pair(
                 expr,
                 input_dfschema,
                 input_schema,
-                session_state,
+                execution_props,
             )?);
         }
     }
@@ -1792,7 +1981,7 @@ fn create_cube_physical_expr(
     exprs: &[Expr],
     input_dfschema: &DFSchema,
     input_schema: &Schema,
-    session_state: &SessionState,
+    execution_props: &ExecutionProps,
 ) -> Result<PhysicalGroupBy> {
     let num_of_exprs = exprs.len();
     let num_groups = num_of_exprs * num_of_exprs;
@@ -1807,10 +1996,14 @@ fn create_cube_physical_expr(
             expr,
             input_dfschema,
             input_schema,
-            session_state,
+            execution_props,
         )?);
 
-        all_exprs.push(get_physical_expr_pair(expr, input_dfschema, session_state)?)
+        all_exprs.push(get_physical_expr_pair(
+            expr,
+            input_dfschema,
+            execution_props,
+        )?)
     }
 
     let mut groups: Vec<Vec<bool>> = Vec::with_capacity(num_groups);
@@ -1834,7 +2027,7 @@ fn create_rollup_physical_expr(
     exprs: &[Expr],
     input_dfschema: &DFSchema,
     input_schema: &Schema,
-    session_state: &SessionState,
+    execution_props: &ExecutionProps,
 ) -> Result<PhysicalGroupBy> {
     let num_of_exprs = exprs.len();
 
@@ -1850,10 +2043,14 @@ fn create_rollup_physical_expr(
             expr,
             input_dfschema,
             input_schema,
-            session_state,
+            execution_props,
         )?);
 
-        all_exprs.push(get_physical_expr_pair(expr, input_dfschema, session_state)?)
+        all_exprs.push(get_physical_expr_pair(
+            expr,
+            input_dfschema,
+            execution_props,
+        )?)
     }
 
     for total in 0..=num_of_exprs {
@@ -1878,10 +2075,9 @@ fn get_null_physical_expr_pair(
     expr: &Expr,
     input_dfschema: &DFSchema,
     input_schema: &Schema,
-    session_state: &SessionState,
+    execution_props: &ExecutionProps,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let physical_expr =
-        create_physical_expr(expr, input_dfschema, session_state.execution_props())?;
+    let physical_expr = create_physical_expr(expr, input_dfschema, execution_props)?;
     let physical_name = physical_name(&expr.clone())?;
 
     let data_type = physical_expr.data_type(input_schema)?;
@@ -1950,33 +2146,158 @@ fn qualify_join_schema_sides(
 fn get_physical_expr_pair(
     expr: &Expr,
     input_dfschema: &DFSchema,
-    session_state: &SessionState,
+    execution_props: &ExecutionProps,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let physical_expr =
-        create_physical_expr(expr, input_dfschema, session_state.execution_props())?;
+    let physical_expr = create_physical_expr(expr, input_dfschema, execution_props)?;
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
 }
 
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
-/// Walks the logical plan tree and collects Filter predicates,
-/// splitting AND conjunctions into individual expressions.
-/// Column qualifiers are stripped so expressions can be evaluated against
-/// the TableProvider's schema.
 ///
-fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
+/// Walks the logical plan tree and collects Filter predicates and any filters
+/// pushed down into TableScan nodes, splitting AND conjunctions into individual expressions.
+///
+/// For UPDATE...FROM queries involving multiple tables, this function only extracts predicates
+/// that reference the target table. Filters from source table scans are excluded to prevent
+/// incorrect filter semantics.
+///
+/// Column qualifiers are stripped so expressions can be evaluated against the TableProvider's
+/// schema. Deduplication is performed because filters may appear in both Filter nodes and
+/// TableScan.filters when the optimizer performs partial (Inexact) filter pushdown.
+///
+/// # Parameters
+/// - `input`: The logical plan tree to extract filters from (typically a DELETE or UPDATE plan)
+/// - `target`: The target table reference to scope filter extraction (prevents multi-table filter leakage)
+///
+/// # Returns
+/// A vector of unqualified filter expressions that can be passed to the TableProvider for execution.
+/// Returns an empty vector if no applicable filters are found.
+///
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
+fn extract_dml_filters(
+    input: &Arc<LogicalPlan>,
+    target: &TableReference,
+) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
+    let mut allowed_refs = vec![target.clone()];
 
+    // First pass: collect any alias references to the target table
     input.apply(|node| {
-        if let LogicalPlan::Filter(filter) = node {
-            // Split AND predicates into individual expressions
-            filters.extend(split_conjunction(&filter.predicate).into_iter().cloned());
+        if let LogicalPlan::SubqueryAlias(alias) = node
+            // Check if this alias points to the target table
+            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
+            && scan.table_name.resolved_eq(target)
+        {
+            allowed_refs.push(TableReference::bare(alias.alias.to_string()));
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
 
-    // Strip table qualifiers from column references
-    filters.into_iter().map(strip_column_qualifiers).collect()
+    input.apply(|node| {
+        match node {
+            LogicalPlan::Filter(filter) => {
+                // Split AND predicates into individual expressions
+                for predicate in split_conjunction(&filter.predicate) {
+                    if predicate_is_on_target_multi(predicate, &allowed_refs)? {
+                        filters.push(predicate.clone());
+                    }
+                }
+            }
+            LogicalPlan::TableScan(TableScan {
+                table_name,
+                filters: scan_filters,
+                ..
+            }) => {
+                // Only extract filters from the target table scan.
+                // This prevents incorrect filter extraction in UPDATE...FROM scenarios
+                // where multiple table scans may have filters.
+                if table_name.resolved_eq(target) {
+                    for filter in scan_filters {
+                        filters.extend(split_conjunction(filter).into_iter().cloned());
+                    }
+                }
+            }
+            // Plans without filter information
+            LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::RecursiveQuery(_) => {
+                // No filters to extract from leaf/meta plans
+            }
+            // Plans with inputs (may contain filters in children)
+            LogicalPlan::Projection(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Union(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::Window(_)
+            | LogicalPlan::Subquery(_) => {
+                // Filter information may appear in child nodes; continue traversal
+                // to extract filters from Filter/TableScan nodes deeper in the plan
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    // Strip qualifiers and deduplicate. This ensures:
+    // 1. Only target-table predicates are retained from Filter nodes
+    // 2. Qualifiers stripped for TableProvider compatibility
+    // 3. Duplicates removed (from Filter nodes + TableScan.filters)
+    //
+    // Deduplication is necessary because filters may appear in both Filter nodes
+    // and TableScan.filters when the optimizer performs partial (Inexact) pushdown.
+    let mut seen_filters = HashSet::new();
+    filters
+        .into_iter()
+        .try_fold(Vec::new(), |mut deduped, filter| {
+            let unqualified = strip_column_qualifiers(filter).map_err(|e| {
+                e.context(format!(
+                    "Failed to strip column qualifiers for DML filter on table '{target}'"
+                ))
+            })?;
+            if seen_filters.insert(unqualified.clone()) {
+                deduped.push(unqualified);
+            }
+            Ok(deduped)
+        })
+}
+
+/// Determine whether a predicate references only columns from the target table
+/// or its aliases.
+///
+/// Columns may be qualified with the target table name or any of its aliases.
+/// Unqualified columns are also accepted as they implicitly belong to the target table.
+fn predicate_is_on_target_multi(
+    expr: &Expr,
+    allowed_refs: &[TableReference],
+) -> Result<bool> {
+    let mut columns = HashSet::new();
+    expr_to_columns(expr, &mut columns)?;
+
+    // Short-circuit on first mismatch: returns false if any column references a table not in allowed_refs.
+    // Columns are accepted if:
+    // 1. They are unqualified (no relation specified), OR
+    // 2. Their relation matches one of the allowed table references using resolved equality
+    Ok(!columns.iter().any(|column| {
+        column.relation.as_ref().is_some_and(|relation| {
+            !allowed_refs
+                .iter()
+                .any(|allowed| relation.resolved_eq(allowed))
+        })
+    }))
 }
 
 /// Strip table qualifiers from column references in an expression.
@@ -2483,14 +2804,21 @@ impl DefaultPhysicalPlanner {
         let schema = Arc::clone(a.schema.inner());
         let show_statistics = session_state.config_options().explain.show_statistics;
         let analyze_level = session_state.config_options().explain.analyze_level;
-        let metric_types = match analyze_level {
-            ExplainAnalyzeLevel::Summary => vec![MetricType::SUMMARY],
-            ExplainAnalyzeLevel::Dev => vec![MetricType::SUMMARY, MetricType::DEV],
+        let metric_types = analyze_level.included_types();
+        let analyze_categories = session_state
+            .config_options()
+            .explain
+            .analyze_categories
+            .clone();
+        let metric_categories = match analyze_categories {
+            ExplainAnalyzeCategories::All => None,
+            ExplainAnalyzeCategories::Only(cats) => Some(cats),
         };
         Ok(Arc::new(AnalyzeExec::new(
             a.verbose,
             show_statistics,
             metric_types,
+            metric_categories,
             input,
             schema,
         )))
@@ -2526,7 +2854,7 @@ impl DefaultPhysicalPlanner {
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
-                .optimize(new_plan, session_state.config_options())
+                .optimize_with_context(new_plan, session_state)
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
@@ -2600,9 +2928,37 @@ impl DefaultPhysicalPlanner {
         Ok(mem_exec)
     }
 
-    fn create_project_physical_exec(
+    /// Build physical plans for scalar subqueries and assign each an ordinal
+    /// `SubqueryIndex`. Returns the links (plan + index) and a map from logical
+    /// `Subquery` to its index.
+    async fn plan_scalar_subqueries(
         &self,
+        subqueries: Vec<Subquery>,
         session_state: &SessionState,
+    ) -> Result<(Vec<ScalarSubqueryLink>, DFHashMap<Subquery, SubqueryIndex>)> {
+        let mut links = Vec::with_capacity(subqueries.len());
+        let mut index_map = DFHashMap::with_capacity(subqueries.len());
+        for sq in subqueries {
+            // Callers deduplicate, but guard against accidental double-planning.
+            if index_map.contains_key(&sq) {
+                continue;
+            }
+            let physical_plan = self
+                .create_initial_plan(&sq.subquery, session_state)
+                .await?;
+            let index = SubqueryIndex::new(links.len());
+            links.push(ScalarSubqueryLink {
+                plan: physical_plan,
+                index,
+            });
+            index_map.insert(sq, index);
+        }
+        Ok((links, index_map))
+    }
+
+    fn create_project_physical_exec_with_props(
+        &self,
+        execution_props: &ExecutionProps,
         input_exec: Arc<dyn ExecutionPlan>,
         input: &Arc<LogicalPlan>,
         expr: &[Expr],
@@ -2641,7 +2997,7 @@ impl DefaultPhysicalPlanner {
                 };
 
                 let physical_expr =
-                    self.create_physical_expr(e, input_logical_schema, session_state);
+                    create_physical_expr(e, input_logical_schema, execution_props);
 
                 tuple_err((physical_expr, physical_name))
             })
@@ -2865,7 +3221,6 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::cmp::Ordering;
     use std::fmt::{self, Debug};
     use std::ops::{BitAnd, Not};
@@ -2886,12 +3241,14 @@ mod tests {
     use arrow_schema::SchemaRef;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
-        DFSchemaRef, TableReference, ToDFSchema as _, assert_contains,
+        DFSchemaRef, TableReference, ToDFSchema as _, assert_batches_eq, assert_contains,
     };
     use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::builder::subquery_alias;
-    use datafusion_expr::{LogicalPlanBuilder, UserDefinedLogicalNodeCore, col, lit};
+    use datafusion_expr::{
+        LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore, col, lit,
+    };
     use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
@@ -2918,6 +3275,16 @@ mod tests {
             .await
     }
 
+    async fn plan_sql(query: &str) -> Result<Arc<dyn ExecutionPlan>> {
+        let ctx = SessionContext::new();
+        ctx.sql(query).await?.create_physical_plan().await
+    }
+
+    async fn collect_sql(query: &str) -> Result<Vec<RecordBatch>> {
+        let ctx = SessionContext::new();
+        ctx.sql(query).await?.collect().await
+    }
+
     #[tokio::test]
     async fn test_all_operators() -> Result<()> {
         let logical_plan = test_csv_scan()
@@ -2942,6 +3309,132 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scalar_subquery_in_sort_expr_plans() -> Result<()> {
+        let plan = plan_sql(
+            "SELECT x \
+             FROM (VALUES (2), (1)) AS t(x) \
+             ORDER BY x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y))",
+        )
+        .await?;
+
+        assert_contains!(format!("{plan:?}"), "ScalarSubqueryExec");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subquery_in_sort_expr_executes() -> Result<()> {
+        let batches = collect_sql(
+            "SELECT x \
+             FROM (VALUES (2), (1), (3)) AS t(x) \
+             ORDER BY x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y)) DESC",
+        )
+        .await?;
+
+        assert_batches_eq!(
+            &[
+                "+---+", "| x |", "+---+", "| 3 |", "| 2 |", "| 1 |", "+---+",
+            ],
+            &batches
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subquery_in_aggregate_arg_plans() -> Result<()> {
+        let plan = plan_sql(
+            "SELECT sum(x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y))) \
+             FROM (VALUES (2), (1)) AS t(x)",
+        )
+        .await?;
+
+        assert_contains!(format!("{plan:?}"), "ScalarSubqueryExec");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subquery_in_aggregate_arg_executes() -> Result<()> {
+        let batches = collect_sql(
+            "SELECT sum(x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y))) AS s \
+             FROM (VALUES (2), (1)) AS t(x)",
+        )
+        .await?;
+
+        assert_batches_eq!(
+            &["+----+", "| s  |", "+----+", "| 43 |", "+----+",],
+            &batches
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subquery_in_join_on_plans() -> Result<()> {
+        let plan = plan_sql(
+            "SELECT l.x, r.y \
+             FROM (VALUES (1), (2)) AS l(x) \
+             JOIN (VALUES (11), (12)) AS r(y) \
+             ON l.x + (SELECT 10) = r.y",
+        )
+        .await?;
+
+        let formatted = format!("{plan:?}");
+        assert_contains!(&formatted, "ScalarSubqueryExec");
+        assert!(
+            formatted.contains("HashJoinExec")
+                || formatted.contains("SortMergeJoinExec")
+                || formatted.contains("NestedLoopJoinExec")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subquery_mixed_correlated_and_uncorrelated_executes() -> Result<()> {
+        let query = "SELECT t.x, \
+                     (SELECT max(y) FROM (VALUES (10), (20)) AS u(y)) + \
+                     (SELECT count(*) FROM (VALUES (1), (1), (2)) AS v(z) WHERE v.z = t.x) AS total \
+                     FROM (VALUES (1), (2), (3)) AS t(x) \
+                     ORDER BY x";
+        let plan = plan_sql(query).await?;
+
+        let formatted = format!("{plan:?}");
+        assert_eq!(formatted.matches("ScalarSubqueryExec").count(), 1);
+        assert!(
+            formatted.contains("HashJoinExec")
+                || formatted.contains("SortMergeJoinExec")
+                || formatted.contains("NestedLoopJoinExec")
+        );
+
+        let batches = collect_sql(query).await?;
+        assert_batches_eq!(
+            &[
+                "+---+-------+",
+                "| x | total |",
+                "+---+-------+",
+                "| 1 | 22    |",
+                "| 2 | 21    |",
+                "| 3 | 20    |",
+                "+---+-------+",
+            ],
+            &batches
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subquery_in_projection_and_filter_plans() -> Result<()> {
+        let plan = plan_sql(
+            "SELECT x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y)) \
+             FROM (VALUES (2), (1)) AS t(x) \
+             WHERE x > (SELECT min(y) FROM (VALUES (0), (1)) AS v(y))",
+        )
+        .await?;
+
+        let formatted = format!("{plan:?}");
+        // All uncorrelated scalar subqueries are hoisted to a single root node.
+        assert_eq!(formatted.matches("ScalarSubqueryExec").count(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_create_cube_expr() -> Result<()> {
         let logical_plan = test_csv_scan().await?.build()?;
 
@@ -2958,7 +3451,7 @@ mod tests {
             &exprs,
             logical_input_schema,
             physical_input_schema,
-            &session_state,
+            session_state.execution_props(),
         );
 
         insta::assert_debug_snapshot!(cube, @r#"
@@ -3089,7 +3582,7 @@ mod tests {
             &exprs,
             logical_input_schema,
             physical_input_schema,
-            &session_state,
+            session_state.execution_props(),
         );
 
         insta::assert_debug_snapshot!(rollup, @r#"
@@ -3325,21 +3818,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_list_types() -> Result<()> {
-        // expression: "a in ('a', 1)"
+    async fn in_list_types_mixed_string_int_error() -> Result<()> {
+        // expression: "c1 in ('a', 1)" where c1 is Utf8
         let list = vec![lit("a"), lit(1i64)];
         let logical_plan = test_csv_scan()
             .await?
-            // filter clause needs the type coercion rule applied
             .filter(col("c12").lt(lit(0.05)))?
             .project(vec![col("c1").in_list(list, false)])?
             .build()?;
-        let execution_plan = plan(&logical_plan).await?;
-        // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
+        let e = plan(&logical_plan).await.unwrap_err().to_string();
 
-        let expected = r#"expr: BinaryExpr { left: BinaryExpr { left: Column { name: "c1", index: 0 }, op: Eq, right: Literal { value: Utf8("a"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }"#;
-
-        assert_contains!(format!("{execution_plan:?}"), expected);
+        assert_contains!(&e, "Cannot cast string 'a' to value of Int64 type");
 
         Ok(())
     }
@@ -3384,7 +3873,6 @@ mod tests {
 
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
-            .as_any()
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
@@ -3412,7 +3900,6 @@ mod tests {
 
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
-            .as_any()
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
@@ -3547,18 +4034,18 @@ mod tests {
             .unwrap();
 
         let plan = plan(&logical_plan).await.unwrap();
-        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+        if let Some(plan) = plan.downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert!(stringified_plans.len() >= 4);
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::FinalLogicalPlan))
+                    .any(|p| p.plan_type == PlanType::FinalLogicalPlan)
             );
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::InitialPhysicalPlan))
+                    .any(|p| p.plan_type == PlanType::InitialPhysicalPlan)
             );
             assert!(
                 stringified_plans.iter().any(|p| matches!(
@@ -3569,7 +4056,7 @@ mod tests {
             assert!(
                 stringified_plans
                     .iter()
-                    .any(|p| matches!(p.plan_type, PlanType::FinalPhysicalPlan))
+                    .any(|p| p.plan_type == PlanType::FinalPhysicalPlan)
             );
         } else {
             panic!(
@@ -3615,7 +4102,7 @@ mod tests {
             .handle_explain(&explain, &ctx.state())
             .await
             .unwrap();
-        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+        if let Some(plan) = plan.downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert_eq!(stringified_plans.len(), 1);
             assert_eq!(stringified_plans[0].plan.as_str(), "Test Err");
@@ -3713,13 +4200,15 @@ mod tests {
 
     #[derive(Debug)]
     struct NoOpExecutionPlan {
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
     }
 
     impl NoOpExecutionPlan {
         fn new(schema: SchemaRef) -> Self {
             let cache = Self::compute_properties(schema);
-            Self { cache }
+            Self {
+                cache: Arc::new(cache),
+            }
         }
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -3753,11 +4242,7 @@ mod tests {
         }
 
         /// Return a reference to Any that can be used for downcasting
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
 
@@ -3778,6 +4263,20 @@ mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
+        }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            // Visit expressions in the output ordering from equivalence properties
+            let mut tnr = TreeNodeRecursion::Continue;
+            if let Some(ordering) = self.cache.output_ordering() {
+                for sort_expr in ordering {
+                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+                }
+            }
+            Ok(tnr)
         }
     }
 
@@ -3905,13 +4404,10 @@ digraph {
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::empty())
         }
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!()
-        }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             self.0.iter().collect::<Vec<_>>()
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -3920,6 +4416,12 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for OkExtensionNode {
@@ -3954,13 +4456,10 @@ digraph {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!()
-        }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -3969,6 +4468,12 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for InvariantFailsExtensionNode {
@@ -4075,13 +4580,10 @@ digraph {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!()
-        }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
         fn execute(
@@ -4090,6 +4592,12 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for ExecutableInvariantFails {
@@ -4205,10 +4713,6 @@ digraph {
 
     #[async_trait]
     impl TableProvider for MockSchemaTableProvider {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn schema(&self) -> SchemaRef {
             Arc::clone(&self.logical_schema)
         }
@@ -4412,5 +4916,73 @@ digraph {
         assert_contains!(&err_str, "field data type at index");
         assert_contains!(&err_str, "field nullability at index");
         assert_contains!(&err_str, "field metadata at index");
+    }
+
+    #[derive(Debug)]
+    struct MockTableSource {
+        schema: SchemaRef,
+    }
+
+    impl TableSource for MockTableSource {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+    }
+
+    struct MockTableScanExtensionPlanner;
+
+    #[async_trait]
+    impl ExtensionPlanner for MockTableScanExtensionPlanner {
+        async fn plan_extension(
+            &self,
+            _planner: &dyn PhysicalPlanner,
+            _node: &dyn UserDefinedLogicalNode,
+            _logical_inputs: &[&LogicalPlan],
+            _physical_inputs: &[Arc<dyn ExecutionPlan>],
+            _session_state: &SessionState,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            Ok(None)
+        }
+
+        async fn plan_table_scan(
+            &self,
+            _planner: &dyn PhysicalPlanner,
+            scan: &TableScan,
+            _session_state: &SessionState,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            if scan.source.is::<MockTableSource>() {
+                Ok(Some(Arc::new(EmptyExec::new(Arc::clone(
+                    scan.projected_schema.inner(),
+                )))))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_table_scan_extension_planner() {
+        let session_state = make_session_state();
+        let planner = Arc::new(MockTableScanExtensionPlanner);
+        let physical_planner =
+            DefaultPhysicalPlanner::with_extension_planners(vec![planner]);
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let table_source = Arc::new(MockTableSource {
+            schema: Arc::clone(&schema),
+        });
+        let logical_plan = LogicalPlanBuilder::scan("test", table_source, None)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = physical_planner
+            .create_physical_plan(&logical_plan, &session_state)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.schema(), schema);
+        assert!(plan.is::<EmptyExec>());
     }
 }
