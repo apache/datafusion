@@ -58,6 +58,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 
 use futures::{Stream, StreamExt};
+use itertools::join;
 
 /// State of SMJ stream
 #[derive(Debug, PartialEq, Eq)]
@@ -235,6 +236,14 @@ pub(super) struct BufferedBatch {
     pub null_joined: Vec<usize>,
     /// Size estimation used for reserving / releasing memory
     pub size_estimation: usize,
+    /// Actual amount tracked in the memory reservation for this batch.
+    ///
+    /// - `InMemory`: equals `size_estimation` (full batch + join_arrays + metadata)
+    /// - `Spilled`: equals join_arrays memory if `try_grow` succeeded after spill, else 0
+    ///
+    /// Invariant: `free_reservation()` shrinks by exactly this amount, so we never
+    /// shrink by more than we grew.
+    pub reserved_amount: usize,
     /// Tracks filter outcomes for buffered rows in full outer joins.
     /// Indexed by absolute row position within the batch. See [`FilterState`].
     pub join_filter_status: Vec<FilterState>,
@@ -274,9 +283,19 @@ impl BufferedBatch {
             join_arrays,
             null_joined: vec![],
             size_estimation,
+            reserved_amount: 0, // set by allocate_reservation()
             join_filter_status: vec![FilterState::Unvisited; num_rows],
             num_rows,
         }
+    }
+
+    /// Memory footprint of join key arrays that remain in memory even after
+    /// the main batch is spilled to disk
+    fn join_arrays_mem(&self) -> usize {
+        self.join_arrays
+            .iter()
+            .map(|arr| arr.get_array_memory_size())
+            .sum()
     }
 }
 
@@ -948,10 +967,9 @@ impl MaterializingSortMergeJoinStream {
     }
 
     fn free_reservation(&mut self, buffered_batch: &BufferedBatch) -> Result<()> {
-        // Shrink memory usage for in-memory batches only
-        if let BufferedBatchState::InMemory(_) = buffered_batch.batch {
+        if buffered_batch.reserved_amount > 0 {
             self.reservation
-                .try_shrink(buffered_batch.size_estimation)?;
+                .try_shrink(buffered_batch.reserved_amount)?;
         }
         Ok(())
     }
@@ -959,6 +977,7 @@ impl MaterializingSortMergeJoinStream {
     fn allocate_reservation(&mut self, mut buffered_batch: BufferedBatch) -> Result<()> {
         match self.reservation.try_grow(buffered_batch.size_estimation) {
             Ok(_) => {
+                buffered_batch.reserved_amount = buffered_batch.size_estimation;
                 self.join_metrics
                     .peak_mem_used()
                     .set_max(self.reservation.size());
@@ -978,6 +997,17 @@ impl MaterializingSortMergeJoinStream {
                             .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
 
                         buffered_batch.batch = BufferedBatchState::Spilled(spill_file);
+
+                        // Track remaining in-memory data (join key arrays) that
+                        // stay in memory even after the batch is spilled. This is
+                        // much smaller than the full batch, so try_grow should
+                        // usually succeed. If it fails, reserved_amount stays 0 -
+                        // best-effort tracking, free_reservation will safely be a no-op.
+                        let join_arrays_mem = buffered_batch.join_arrays_mem();
+                        if self.reservation.try_grow(join_arrays_mem).is_ok() {
+                            buffered_batch.reserved_amount = join_arrays_mem;
+                        }
+                        
                         Ok(())
                     }
                     _ => internal_err!("Buffered batch has empty body"),

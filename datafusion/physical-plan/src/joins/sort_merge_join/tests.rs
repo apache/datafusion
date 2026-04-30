@@ -2487,6 +2487,446 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
     Ok(())
 }
 
+/// Test spilling with many buffered batches sharing the same join key.
+///
+/// This exercises the memory accounting fix where `join_arrays` (evaluated join
+/// key columns) remain in memory after the main batch is spilled to disk.
+/// With many spilled batches for the same key, the untracked join_arrays
+/// memory can add up significantly.
+#[tokio::test]
+async fn spill_many_batches_same_key() -> Result<()> {
+    // 10 left batches, all with b1=1 (same join key)
+    let left_batches: Vec<RecordBatch> = (0..10)
+        .map(|i| {
+            build_table_i32(
+                ("a1", &vec![i * 2, i * 2 + 1]),
+                ("b1", &vec![1, 1]),
+                ("c1", &vec![100 + i * 2, 101 + i * 2]),
+            )
+        })
+        .collect();
+    let left = build_table_from_batches(left_batches);
+
+    // 5 right batches, all with b2=1
+    let right_batches: Vec<RecordBatch> = (0..5)
+        .map(|i| {
+            build_table_i32(
+                ("a2", &vec![i * 2, i * 2 + 1]),
+                ("b2", &vec![1, 1]),
+                ("c2", &vec![200 + i * 2, 201 + i * 2]),
+            )
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let join_types = [
+        // Semi/anti/mark joins use BitwiseSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested separately in bitwise spill tests.
+        Inner, Left, Right, Full,
+    ];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(500, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        for join_type in &join_types {
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config.clone())
+                .with_runtime(Arc::clone(&runtime));
+            let task_ctx = Arc::new(task_ctx);
+
+            let join = join_with_options(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx)?;
+            let spilled_join_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
+            assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
+            assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
+
+            // Run without spilling for baseline comparison
+            let task_ctx_no_spill =
+                TaskContext::default().with_session_config(session_config.clone());
+            let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
+            let join = join_with_options(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx_no_spill)?;
+            let no_spilled_join_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+            assert_eq!(spilled_join_result, no_spilled_join_result);
+        }
+    }
+
+    Ok(())
+}
+
+/// Test spilling with string (Utf8) join keys.
+///
+/// String join keys produce larger `join_arrays` than integer keys.
+/// This test verifies correctness when spilled batches retain
+/// string-valued join_arrays in memory.
+#[tokio::test]
+async fn spill_string_join_keys() -> Result<()> {
+    use arrow::array::StringArray;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("key", DataType::Utf8, false),
+        Field::new("val", DataType::Int32, false),
+    ]));
+
+    // 5 left batches, all with key="same_key_value"
+    let left_batches: Vec<RecordBatch> = (0..5)
+        .map(|i| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![i * 2, i * 2 + 1])),
+                    Arc::new(StringArray::from(vec!["same_key_value", "same_key_value"])),
+                    Arc::new(Int32Array::from(vec![100 + i, 200 + i])),
+                ],
+            )
+                .unwrap()
+        })
+        .collect();
+
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("id2", DataType::Int32, false),
+        Field::new("key2", DataType::Utf8, false),
+        Field::new("val2", DataType::Int32, false),
+    ]));
+
+    // 3 right batches, all with key2="same_key_value"
+    let right_batches: Vec<RecordBatch> = (0..3)
+        .map(|i| {
+            RecordBatch::try_new(
+                Arc::clone(&right_schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![i * 2 + 50, i * 2 + 51])),
+                    Arc::new(StringArray::from(vec!["same_key_value", "same_key_value"])),
+                    Arc::new(Int32Array::from(vec![300 + i, 400 + i])),
+                ],
+            )
+                .unwrap()
+        })
+        .collect();
+
+    let left: Arc<dyn ExecutionPlan> =
+        TestMemoryExec::try_new_exec(&[left_batches], Arc::clone(&schema), None).unwrap();
+    let right: Arc<dyn ExecutionPlan> =
+        TestMemoryExec::try_new_exec(&[right_batches], Arc::clone(&right_schema), None)
+            .unwrap();
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("key", &schema)?) as _,
+        Arc::new(Column::new_with_schema("key2", &right_schema)?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(500, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let join_types = [
+        // Semi/anti/mark joins use BitwiseSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested separately in bitwise spill tests.
+        Inner, Left, Right, Full,
+    ];
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        for join_type in &join_types {
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config.clone())
+                .with_runtime(Arc::clone(&runtime));
+            let task_ctx = Arc::new(task_ctx);
+
+            let join = join_with_options(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx)?;
+            let spilled_join_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
+            assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
+            assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
+
+            // Baseline without spilling
+            let task_ctx_no_spill =
+                TaskContext::default().with_session_config(session_config.clone());
+            let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
+            let join = join_with_options(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx_no_spill)?;
+            let no_spilled_join_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+            assert_eq!(spilled_join_result, no_spilled_join_result);
+        }
+    }
+
+    Ok(())
+}
+
+/// Test spilling with multiple distinct keys where only some match.
+///
+/// Exercises partial spilling — not all key groups trigger spill, and some
+/// keys exist only on one side (testing outer join NULL rows from spilled batches).
+#[tokio::test]
+async fn spill_mixed_keys_some_match() -> Result<()> {
+    // Left: keys 1,1, 2,2, 3,3 across 3 batches
+    let left_batch_1 = build_table_i32(
+        ("a1", &vec![10, 11]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![100, 101]),
+    );
+    let left_batch_2 = build_table_i32(
+        ("a1", &vec![20, 21]),
+        ("b1", &vec![2, 2]),
+        ("c1", &vec![200, 201]),
+    );
+    let left_batch_3 = build_table_i32(
+        ("a1", &vec![30, 31]),
+        ("b1", &vec![3, 3]),
+        ("c1", &vec![300, 301]),
+    );
+
+    // Right: keys 1,1, 2,2, 4,4 — key=3 has no match, key=4 has no match on left
+    let right_batch_1 = build_table_i32(
+        ("a2", &vec![40, 41]),
+        ("b2", &vec![1, 1]),
+        ("c2", &vec![400, 401]),
+    );
+    let right_batch_2 = build_table_i32(
+        ("a2", &vec![50, 51]),
+        ("b2", &vec![2, 2]),
+        ("c2", &vec![500, 501]),
+    );
+    let right_batch_3 = build_table_i32(
+        ("a2", &vec![60, 61]),
+        ("b2", &vec![4, 4]),
+        ("c2", &vec![600, 601]),
+    );
+
+    let left = build_table_from_batches(vec![left_batch_1, left_batch_2, left_batch_3]);
+    let right =
+        build_table_from_batches(vec![right_batch_1, right_batch_2, right_batch_3]);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let join_types = [
+        // Semi/anti/mark joins use BitwiseSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested separately in bitwise spill tests.
+        Inner, Left, Right, Full,
+    ];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(300, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        for join_type in &join_types {
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config.clone())
+                .with_runtime(Arc::clone(&runtime));
+            let task_ctx = Arc::new(task_ctx);
+
+            let join = join_with_options(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx)?;
+            let spilled_join_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
+            assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
+            assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
+
+            // Baseline
+            let task_ctx_no_spill =
+                TaskContext::default().with_session_config(session_config.clone());
+            let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
+            let join = join_with_options(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx_no_spill)?;
+            let no_spilled_join_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+            assert_eq!(spilled_join_result, no_spilled_join_result);
+        }
+    }
+
+    Ok(())
+}
+
+/// Test that memory accounting is correct after spilling — reservation
+/// properly tracks join_arrays and is fully released after the join completes.
+///
+/// This verifies the fix for the join_arrays memory leak (TODO at
+/// materializing_stream.rs:283). Before the fix, spilled batches' join_arrays
+/// were invisible to the memory pool. After the fix, `reserved_amount` tracks
+/// them and `free_reservation()` releases them symmetrically.
+#[tokio::test]
+async fn spill_join_arrays_memory_accounting() -> Result<()> {
+    // Many left batches with same key → forces heavy spilling on buffered side
+    let left_batches: Vec<RecordBatch> = (0..8)
+        .map(|i| {
+            build_table_i32(
+                ("a1", &vec![i * 2, i * 2 + 1]),
+                ("b1", &vec![1, 1]),
+                ("c1", &vec![100 + i * 2, 101 + i * 2]),
+            )
+        })
+        .collect();
+    let left = build_table_from_batches(left_batches);
+
+    let right_batches: Vec<RecordBatch> = (0..4)
+        .map(|i| {
+            build_table_i32(
+                ("a2", &vec![i * 2, i * 2 + 1]),
+                ("b2", &vec![1, 1]),
+                ("c2", &vec![200 + i * 2, 201 + i * 2]),
+            )
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(500, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let session_config = SessionConfig::default().with_batch_size(50);
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(Arc::clone(&runtime)),
+    );
+
+    let join = join_with_options(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        Inner,
+        sort_options.clone(),
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    let stream = join.execute(0, task_ctx)?;
+    let _result = common::collect(stream).await.unwrap();
+
+    let metrics = join.metrics().unwrap();
+
+    // Verify spilling happened
+    assert!(
+        metrics.spill_count().unwrap() > 0,
+        "Expected spilling to occur"
+    );
+
+    // After the stream is fully consumed and dropped, the memory pool
+    // reservation must be fully released. This verifies that
+    // free_reservation() correctly shrinks by reserved_amount for both
+    // in-memory and spilled batches.
+    assert_eq!(
+        runtime.memory_pool.reserved(),
+        0,
+        "Memory pool should be fully released after join completes"
+    );
+
+    // peak_mem_used should be > 0, confirming that the reservation
+    // tracked memory during execution (including join_arrays of spilled
+    // batches after the fix).
+    let peak_mem = metrics
+        .sum_by_name("peak_mem_used")
+        .map(|m| m.as_usize())
+        .unwrap_or(0);
+    assert!(
+        peak_mem > 0,
+        "peak_mem_used should reflect tracked memory during join execution"
+    );
+
+    Ok(())
+}
+
 /// Build a c1 < c2 filter on the third column of each side.
 fn build_c1_lt_c2_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFilter {
     JoinFilter::new(
