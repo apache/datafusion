@@ -58,7 +58,6 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 
 use futures::{Stream, StreamExt};
-use itertools::join;
 
 /// State of SMJ stream
 #[derive(Debug, PartialEq, Eq)]
@@ -1007,7 +1006,7 @@ impl MaterializingSortMergeJoinStream {
                         if self.reservation.try_grow(join_arrays_mem).is_ok() {
                             buffered_batch.reserved_amount = join_arrays_mem;
                         }
-                        
+
                         Ok(())
                     }
                     _ => internal_err!("Buffered batch has empty body"),
