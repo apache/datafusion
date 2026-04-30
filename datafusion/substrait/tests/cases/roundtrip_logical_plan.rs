@@ -1953,7 +1953,7 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
 
     // there's no support for lambda capturing columns or variables of outer lambdas yet so assert the plans instead of round tripping
     // also, since substrait doesn't encode lambda parameters names, they got generated, non-conflicting names during consumption
-    // this also requires to assert against the generated plan and check the correct parameter usage instead of round tripping
+    // testing name shadowing requires to assert against the generated plan and check the correct parameter usage instead of round tripping
 
     // nested with multiple parameters without variable shadowing
     let plan = generate_plan_from_sql_with_ctx(
@@ -2105,6 +2105,8 @@ impl HigherOrderUDF for ArrayTransform {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+        // this function is only tested with roundtrip_with_ctx, which only prints the output
+        // and generate_plan_from_sql_with_ctx which doesn't execute nothing, so the output doesn't matter
         Ok(ColumnarValue::Scalar(ScalarValue::new_default(
             args.return_type(),
         )?))
