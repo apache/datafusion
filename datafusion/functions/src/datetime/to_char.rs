@@ -248,6 +248,11 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         StringBuilder::with_capacity(data_array.len(), data_array.len() * fmt_len);
     let mut buffer = String::with_capacity(fmt_len);
 
+    // Lazily computed Date64 cast of the entire array, used when a Date32
+    // format string contains time specifiers that the Date32 formatter
+    // cannot handle. Cast once and reuse for all subsequent rows
+    let mut date64_array: Option<ArrayRef> = None;
+
     for idx in 0..data_array.len() {
         if format_array.is_null(idx) || data_array.is_null(idx) {
             builder.append_null();
@@ -260,19 +265,20 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
         buffer.clear();
 
-        // We'd prefer to write directly to the StringBuilder's internal buffer,
-        // but the write might fail, and there's no easy way to ensure a partial
-        // write is removed from the buffer. So instead we write to a temporary
-        // buffer and `append_value` on success.
         match formatter.value(idx).write(&mut buffer) {
             Ok(()) => builder.append_value(&buffer),
-            // Retry with Date64 (see comment in to_char_scalar).
             Err(_) if data_type == &Date32 => {
                 buffer.clear();
-                let date64_value = cast(&data_array.slice(idx, 1), &Date64)?;
-                let retry_fmt =
-                    ArrayFormatter::try_new(date64_value.as_ref(), &format_options)?;
-                retry_fmt.value(0).write(&mut buffer)?;
+                let date64_ref = match &date64_array {
+                    Some(arr) => arr.as_ref(),
+                    None => {
+                        date64_array = Some(cast(data_array.as_ref(), &Date64)?);
+                        date64_array.as_ref().unwrap().as_ref()
+                    }
+                };
+                let retry_options = build_format_options(&Date64, format)?;
+                let retry_fmt = ArrayFormatter::try_new(date64_ref, &retry_options)?;
+                retry_fmt.value(idx).write(&mut buffer)?;
                 builder.append_value(&buffer);
             }
             Err(e) => return Err(e.into()),
