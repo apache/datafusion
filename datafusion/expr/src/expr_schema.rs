@@ -16,18 +16,22 @@
 // under the License.
 
 use super::{Between, Expr, Like, predicate_bounds};
+use crate::ValueOrLambda;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
-    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
+use crate::expr::{FieldMetadata, LambdaVariable};
+use crate::higher_order_function::HigherOrderReturnFieldArgs;
+use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::FieldRef;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
@@ -217,6 +221,16 @@ impl ExprSchemable for Expr {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
+            Expr::HigherOrderFunction(_func) => {
+                Ok(self.to_field(schema)?.1.data_type().clone())
+            }
+            Expr::Lambda(_lambda) => Ok(DataType::Null),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => match field {
+                Some(f) => Ok(f.data_type().clone()),
+                // If the lambda variable's field hasn't been specified, treat it as
+                // null (unspecified lambda variables generate an error during planning)
+                None => Ok(DataType::Null),
+            },
         }
     }
 
@@ -370,6 +384,16 @@ impl ExprSchemable for Expr {
                 // in projections
                 Ok(true)
             }
+            Expr::HigherOrderFunction(_func) => {
+                Ok(self.to_field(input_schema)?.1.is_nullable())
+            }
+            Expr::Lambda(_lambda) => Ok(true),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => match field {
+                Some(f) => Ok(f.is_nullable()),
+                // If the lambda variable's field hasn't been specified, treat it as
+                // null (unspecified lambda variables generate an error during planning)
+                None => Ok(true),
+            },
         }
     }
 
@@ -585,6 +609,9 @@ impl ExprSchemable for Expr {
                     cast_output_field(&src, field.data_type(), true)
                 })
             }
+            Expr::LambdaVariable(LambdaVariable {
+                field: Some(field), ..
+            }) => Ok(Arc::clone(field).renamed(&schema_name)),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -596,11 +623,51 @@ impl ExprSchemable for Expr {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_) => Ok(Arc::new(Field::new(
+            | Expr::Unnest(_)
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => Ok(Arc::new(Field::new(
                 &schema_name,
                 self.get_type(schema)?,
                 self.nullable(schema)?,
             ))),
+            Expr::HigherOrderFunction(func) => {
+                let arg_fields = func
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lambda(Lambda { params: _, body }) => {
+                            // use the name of the lambda instead of just the body to help with debugging
+                            Ok(ValueOrLambda::Lambda(Arc::new(Field::new(
+                                arg.qualified_name().1,
+                                body.get_type(schema)?,
+                                body.nullable(schema)?,
+                            ))))
+                        }
+                        _ => Ok(ValueOrLambda::Value(arg.to_field(schema)?.1)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+                    &arg_fields,
+                    func.func.as_ref(),
+                )?;
+
+                let arguments = func
+                    .args
+                    .iter()
+                    .map(|e| match e {
+                        Expr::Literal(sv, _) => Some(sv),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+
+                let args = HigherOrderReturnFieldArgs {
+                    arg_fields: &new_fields,
+                    scalar_arguments: &arguments,
+                };
+
+                func.func.return_field_from_args(args)
+            }
         }?;
 
         Ok((

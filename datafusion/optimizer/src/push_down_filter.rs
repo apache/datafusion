@@ -262,7 +262,10 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Cast(_)
         | Expr::TryCast(_)
         | Expr::InList { .. }
-        | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::ScalarFunction(_)
+        | Expr::HigherOrderFunction(_)
+        | Expr::Lambda(_)
+        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction(_)

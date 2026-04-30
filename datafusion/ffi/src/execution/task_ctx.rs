@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -234,6 +235,7 @@ impl From<FFI_TaskContext> for Arc<TaskContext> {
                 session_id,
                 session_config,
                 scalar_functions,
+                HashMap::new(),
                 aggregate_functions,
                 window_functions,
                 runtime,
