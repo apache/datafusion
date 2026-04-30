@@ -193,10 +193,9 @@ impl PagePruningAccessPlanFilter {
         let mut total_pages_skip = 0;
         // track the total number of pages that should not be skipped
         let mut total_pages_select = 0;
-        // track rows and pages that were already proven fully matched at row
-        // group level and therefore did not need page-index predicate evaluation
+        // track rows that were already proven fully matched at row group
+        // level and therefore did not need page-index predicate evaluation
         let mut total_rows_fully_matched = 0;
-        let mut total_pages_fully_matched = 0;
 
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
@@ -204,23 +203,12 @@ impl PagePruningAccessPlanFilter {
             // Skip page pruning for fully matched row groups: all rows are
             // known to satisfy the predicate, so page-level pruning is wasted work.
             if access_plan.is_fully_matched(row_group_index) {
+                // Page metrics count evaluated page-index pruning work; this
+                // branch only records rows already proven fully matched.
                 let row_count = groups[row_group_index].num_rows() as usize;
                 total_select += row_count;
                 total_rows_fully_matched += row_count;
 
-                for predicate in page_index_predicates {
-                    let Some(page_count) = count_pages_in_one_row_group(
-                        row_group_index,
-                        predicate,
-                        arrow_schema,
-                        parquet_schema,
-                        parquet_metadata,
-                    ) else {
-                        continue;
-                    };
-                    total_pages_select += page_count;
-                    total_pages_fully_matched += page_count;
-                }
                 continue;
             }
             // The selection for this particular row group
@@ -343,9 +331,6 @@ impl PagePruningAccessPlanFilter {
         file_metrics
             .page_index_pages_pruned
             .add_matched(total_pages_select);
-        file_metrics
-            .page_index_pages_pruned
-            .add_fully_matched(total_pages_fully_matched);
         access_plan
     }
 
@@ -353,35 +338,6 @@ impl PagePruningAccessPlanFilter {
     pub fn filter_number(&self) -> usize {
         self.predicates.len()
     }
-}
-
-fn count_pages_in_one_row_group(
-    row_group_index: usize,
-    pruning_predicate: &PruningPredicate,
-    arrow_schema: &Schema,
-    parquet_schema: &SchemaDescriptor,
-    parquet_metadata: &ParquetMetaData,
-) -> Option<usize> {
-    let column = pruning_predicate
-        .required_columns()
-        .single_column()
-        .expect("Page pruning requires single column predicates");
-
-    let converter =
-        match StatisticsConverter::try_new(column.name(), arrow_schema, parquet_schema) {
-            Ok(converter) => converter,
-            Err(e) => {
-                debug!(
-                    "Could not create statistics converter for column {}: {e}",
-                    column.name()
-                );
-                return None;
-            }
-        };
-
-    let pruning_stats =
-        PagesPruningStatistics::try_new(row_group_index, converter, parquet_metadata)?;
-    Some(pruning_stats.num_containers())
 }
 
 fn update_selection(
