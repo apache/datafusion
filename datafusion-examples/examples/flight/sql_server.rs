@@ -176,12 +176,26 @@ impl FlightSqlServiceImpl {
         let mut names = vec![];
         let mut types = vec![];
         for catalog in ctx.catalog_names() {
-            let catalog_provider = ctx.catalog(&catalog).unwrap();
-            for schema in catalog_provider.schema_names().unwrap() {
-                let schema_provider = catalog_provider.schema(&schema).unwrap().unwrap();
-                for table in schema_provider.table_names().unwrap() {
-                    let table_provider =
-                        schema_provider.table(&table).await.unwrap().unwrap();
+            let catalog_provider = ctx
+                .catalog(&catalog)
+                .expect("catalog listed by context should be retrievable");
+            for schema in catalog_provider
+                .schema_names()
+                .expect("schema names lookup should succeed")
+            {
+                let schema_provider = catalog_provider
+                    .schema(&schema)
+                    .expect("schema lookup should succeed")
+                    .expect("listed schema should be retrievable");
+                for table in schema_provider
+                    .table_names()
+                    .expect("table names lookup should succeed")
+                {
+                    let table_provider = schema_provider
+                        .table(&table)
+                        .await
+                        .expect("table lookup should succeed")
+                        .expect("listed table should be retrievable");
                     catalogs.push(catalog.clone());
                     schemas.push(schema.clone());
                     names.push(table.clone());
@@ -197,7 +211,7 @@ impl FlightSqlServiceImpl {
                 .map(|i| Arc::new(StringArray::from(i)) as ArrayRef)
                 .collect::<Vec<_>>(),
         )
-        .unwrap()
+        .expect("record batch construction should succeed")
     }
 
     fn remove_plan(&self, handle: &str) -> Result<(), Status> {

@@ -113,7 +113,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             let table_names = schema.table_names()?;
             match (table_names.is_empty(), cascade) {
                 (true, _) | (false, true) => {
-                    let (_, removed) = self.schemas.remove(name).unwrap();
+                    let (_, removed) = self
+                        .schemas
+                        .remove(name)
+                        .expect("schema should exist after successful lookup");
                     Ok(Some(removed))
                 }
                 (false, false) => exec_err!(

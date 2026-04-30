@@ -29,10 +29,12 @@ async fn create_custom_table() -> Result<()> {
     let ctx = SessionContext::new_with_state(state);
 
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
-    ctx.sql(sql).await.unwrap();
+    ctx.sql(sql).await?;
 
-    let cat = ctx.catalog("datafusion").unwrap();
-    let schema = cat.schema("public")?.unwrap();
+    let cat = ctx
+        .catalog("datafusion")
+        .expect("default catalog should exist");
+    let schema = cat.schema("public")?.expect("default schema should exist");
     let exists = schema.table_exist("dt")?;
     assert!(exists, "Table should have been created!");
 
@@ -48,15 +50,21 @@ async fn create_external_table_with_ddl() -> Result<()> {
     let ctx = SessionContext::new_with_state(state);
 
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS MOCKTABLE LOCATION 'mockprotocol://path/to/table';";
-    ctx.sql(sql).await.unwrap();
+    ctx.sql(sql).await?;
 
-    let cat = ctx.catalog("datafusion").unwrap();
-    let schema = cat.schema("public")?.unwrap();
+    let cat = ctx
+        .catalog("datafusion")
+        .expect("default catalog should exist");
+    let schema = cat.schema("public")?.expect("default schema should exist");
 
     let exists = schema.table_exist("dt")?;
     assert!(exists, "Table should have been created!");
 
-    let table_schema = schema.table("dt").await.unwrap().unwrap().schema();
+    let table_schema = schema
+        .table("dt")
+        .await?
+        .expect("created table should be retrievable")
+        .schema();
 
     assert_eq!(3, table_schema.fields().len());
 
@@ -72,17 +80,19 @@ async fn create_drop_table() -> Result<()> {
     let ctx = SessionContext::new();
 
     let sql = "CREATE TABLE dt (a_id integer, a_str string, a_bool boolean);";
-    ctx.sql(sql).await.unwrap();
+    ctx.sql(sql).await?;
 
-    let cat = ctx.catalog("datafusion").unwrap();
-    let schema = cat.schema("public")?.unwrap();
+    let cat = ctx
+        .catalog("datafusion")
+        .expect("default catalog should exist");
+    let schema = cat.schema("public")?.expect("default schema should exist");
 
     let exists = schema.table_exist("dt")?;
     assert!(exists, "Table should have been created!");
 
     // Drop the table
     let sql = "DROP TABLE dt;";
-    ctx.sql(sql).await.unwrap();
+    ctx.sql(sql).await?;
 
     let exists = schema.table_exist("dt")?;
     assert!(!exists, "Table should have been dropped!");
