@@ -265,6 +265,10 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
         buffer.clear();
 
+        // We'd prefer to write directly to the StringBuilder's internal buffer,
+        // but the write might fail, and there's no easy way to ensure a partial
+        // write is removed from the buffer. So instead we write to a temporary
+        // buffer and `append_value` on success.
         match formatter.value(idx).write(&mut buffer) {
             Ok(()) => builder.append_value(&buffer),
             Err(_) if data_type == &Date32 => {
@@ -313,11 +317,21 @@ mod tests {
 
     #[test]
     fn test_array_array() {
-        let array_array_data = vec![(
-            Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
-            StringArray::from(vec!["%Y::%m::%d", "%Y::%m::%d %S::%M::%H %f"]),
-            StringArray::from(vec!["2020::09::01", "2020::09::02 00::00::00 000000000"]),
-        )];
+        let array_array_data = vec![
+            (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                StringArray::from(vec!["%Y::%m::%d", "%Y::%m::%d %S::%M::%H %f"]),
+                StringArray::from(vec![
+                    "2020::09::01",
+                    "2020::09::02 00::00::00 000000000",
+                ]),
+            ),
+            (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                StringArray::from(vec!["%Y::%m::%d %H:%M:%S", "%d-%m-%Y %H:%M"]),
+                StringArray::from(vec!["2020::09::01 00:00:00", "02-09-2020 00:00"]),
+            ),
+        ];
 
         for (value, format, expected) in array_array_data {
             let batch_len = value.len();

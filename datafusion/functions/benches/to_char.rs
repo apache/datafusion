@@ -279,11 +279,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    // These two benchmarks use Date32 data with format strings that contain
+    // These bellow 02 benchmarks use Date32 data with format strings that contain
     // time specifiers (%H, %M, %S, ...). Arrow's Date32 formatter cannot
-    // handle time specifiers, so every row falls back to a Date64 cast.
-    // They specifically target the optimization in commit 7a58a0311 (cast the
-    // whole array once on first failure instead of slicing per row).
+    // handle time specifiers and falls back to a Date64 cast.
+
+    // Covers full fallback (every row triggers the cast)
     c.bench_function("to_char_array_date32_datetime_patterns_1000", |b| {
         let mut rng = rand::rng();
         let data_arr = generate_date32_array(&mut rng);
@@ -311,6 +311,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    // Covers partial fallback (roughly half the rows trigger it)
     c.bench_function("to_char_array_date32_mixed_patterns_1000", |b| {
         let mut rng = rand::rng();
         let data_arr = generate_date32_array(&mut rng);
