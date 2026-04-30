@@ -166,8 +166,7 @@ fn spark_start_to_datafusion_start(start: i64, len: usize) -> i64 {
         start.max(1)
     } else {
         let len_i64 = i64::try_from(len).unwrap_or(i64::MAX);
-        let start = start.saturating_add(len_i64).saturating_add(1);
-        start.max(1)
+        start + len_i64 + 1
     }
 }
 
