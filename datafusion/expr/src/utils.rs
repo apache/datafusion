@@ -339,7 +339,37 @@ fn get_excluded_columns(
         idents.push(&excepts.first_element);
         idents.extend(&excepts.additional_elements);
     }
+    #[cfg(feature = "sql")]
+    let exclude_owned: Vec<sqlparser::ast::Ident>;
     if let Some(exclude) = opt_exclude {
+        #[cfg(feature = "sql")]
+        {
+            let object_name_to_ident =
+                |name: &sqlparser::ast::ObjectName| -> Result<sqlparser::ast::Ident> {
+                    if name.0.len() != 1 {
+                        return plan_err!(
+                            "EXCLUDE with multi-part identifiers is not supported: {name}"
+                        );
+                    }
+                    match &name.0[0] {
+                        sqlparser::ast::ObjectNamePart::Identifier(ident) => {
+                            Ok(ident.clone())
+                        }
+                        other => plan_err!(
+                            "EXCLUDE with non-identifier name part is not supported: {other}"
+                        ),
+                    }
+                };
+            exclude_owned = match exclude {
+                ExcludeSelectItem::Single(name) => vec![object_name_to_ident(name)?],
+                ExcludeSelectItem::Multiple(names) => names
+                    .iter()
+                    .map(object_name_to_ident)
+                    .collect::<Result<Vec<_>>>()?,
+            };
+            idents.extend(exclude_owned.iter());
+        }
+        #[cfg(not(feature = "sql"))]
         match exclude {
             ExcludeSelectItem::Single(ident) => idents.push(ident),
             ExcludeSelectItem::Multiple(idents_inner) => idents.extend(idents_inner),
