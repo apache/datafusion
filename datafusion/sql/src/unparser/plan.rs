@@ -45,11 +45,12 @@ use datafusion_common::{
     Column, DataFusionError, Result, ScalarValue, TableReference, assert_or_internal_err,
     internal_datafusion_err, internal_err, not_impl_err,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
+    utils::combine_limit,
 };
 use datafusion_expr::expr::{OUTER_REFERENCE_COLUMN_PREFIX, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
-    LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
+    BinaryExpr, Distinct, Expr, FetchType, JoinConstraint, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Operator, Projection, SkipType, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
@@ -618,48 +619,124 @@ impl Unparser<'_> {
                 // and wrap everything in a spurious derived subquery, emitting
                 // the aggregate twice.
                 //
-                // Handles arbitrary stacks of Limit/Sort (e.g. Projection →
-                // Limit → Sort → Aggregate) by peeling nodes in a loop until
-                // we reach something other than a Limit or Sort. Each clause
-                // is folded at most once; if a second Limit or Sort is
-                // encountered, the loop stops and normal recursion resumes.
+                // Repeated modifiers of the same kind are merged (rather than
+                // breaking out of the loop) so the chain still folds into a
+                // single SQL SELECT regardless of how the inputs were stacked:
+                //   * stacked Limits combine via `combine_limit` semantics —
+                //     the same merge `PushDownLimit` applies in the optimizer
+                //     when both skip/fetch are integer literals;
+                //   * stacked Sorts keep the outermost (top) one, since an
+                //     inner Sort is reordered by the outer one.
+                // If we cannot combine literally (e.g. expression skip/fetch
+                // for the inner Limit), we stop and let recursion handle the
+                // remainder via a derived subquery.
                 if found_agg {
+                    // Walk top-down through Limit / Sort nodes between the
+                    // Projection and the Aggregate, folding each clause into
+                    // the current SQL SELECT. We track combined_* for any
+                    // literal Limits and apply once at the end so repeated
+                    // Limits merge via `combine_limit` (the same rule used by
+                    // the optimizer's `PushDownLimit`). A non-literal Limit
+                    // is set on the query directly; if one is followed by
+                    // another Limit we have no safe way to merge, so the
+                    // loop terminates and recursion handles the remainder.
                     let mut cur = p.input.as_ref();
-                    let mut have_limit = false;
+                    let mut combined_skip: usize = 0;
+                    let mut combined_fetch: Option<usize> = None;
+                    let mut have_combined_limit = false;
+                    let mut have_direct_limit = false;
                     let mut have_order_by = false;
                     loop {
                         match cur {
-                            LogicalPlan::Limit(limit) if !have_limit => {
-                                let Some(query_ref) = query.as_mut() else {
-                                    return internal_err!(
-                                        "Limit operator only valid in a statement context."
-                                    );
-                                };
-                                if let Some(fetch) = &limit.fetch {
-                                    query_ref.limit(Some(self.expr_to_sql(fetch)?));
+                            LogicalPlan::Limit(limit) => {
+                                let skip_lit = limit.get_skip_type()?;
+                                let fetch_lit = limit.get_fetch_type()?;
+                                match (skip_lit, fetch_lit) {
+                                    (SkipType::Literal(s), FetchType::Literal(f)) => {
+                                        if have_direct_limit {
+                                            break;
+                                        }
+                                        if have_combined_limit {
+                                            // outer = already-accumulated;
+                                            // inner = this Limit. Same merge
+                                            // rule as the optimizer.
+                                            let (cs, cf) = combine_limit(
+                                                combined_skip,
+                                                combined_fetch,
+                                                s,
+                                                f,
+                                            );
+                                            combined_skip = cs;
+                                            combined_fetch = cf;
+                                        } else {
+                                            combined_skip = s;
+                                            combined_fetch = f;
+                                            have_combined_limit = true;
+                                        }
+                                    }
+                                    _ => {
+                                        if have_combined_limit || have_direct_limit {
+                                            // Cannot safely merge a
+                                            // non-literal Limit with a prior
+                                            // one; let recursion handle it.
+                                            break;
+                                        }
+                                        let Some(query_ref) = query.as_mut() else {
+                                            return internal_err!(
+                                                "Limit operator only valid in a statement context."
+                                            );
+                                        };
+                                        if let Some(fetch) = &limit.fetch {
+                                            query_ref
+                                                .limit(Some(self.expr_to_sql(fetch)?));
+                                        }
+                                        if let Some(skip) = &limit.skip {
+                                            query_ref.offset(Some(ast::Offset {
+                                                rows: ast::OffsetRows::None,
+                                                value: self.expr_to_sql(skip)?,
+                                            }));
+                                        }
+                                        have_direct_limit = true;
+                                    }
                                 }
-                                if let Some(skip) = &limit.skip {
-                                    query_ref.offset(Some(ast::Offset {
-                                        rows: ast::OffsetRows::None,
-                                        value: self.expr_to_sql(skip)?,
-                                    }));
-                                }
-                                have_limit = true;
                                 cur = limit.input.as_ref();
                             }
-                            LogicalPlan::Sort(sort) if !have_order_by => {
+                            LogicalPlan::Sort(sort) => {
+                                if have_order_by {
+                                    // Outer Sort already claimed; an inner
+                                    // Sort is reordered by it, so drop it.
+                                    // (Matches the optimizer treating a
+                                    // sort-over-sort's inner Sort as
+                                    // redundant.)
+                                    cur = sort.input.as_ref();
+                                    continue;
+                                }
                                 let Some(query_ref) = query.as_mut() else {
                                     return internal_err!(
                                         "Sort operator only valid in a statement context."
                                     );
                                 };
+                                // A Sort with `fetch` set acts as Sort + Limit.
+                                // Treat it as a child Limit(0, Some(fetch))
+                                // so that combining matches an enclosing
+                                // literal Limit cleanly.
                                 if let Some(fetch) = sort.fetch
-                                    && !have_limit
+                                    && !have_direct_limit
                                 {
-                                    query_ref.limit(Some(ast::Expr::value(
-                                        ast::Value::Number(fetch.to_string(), false),
-                                    )));
-                                    have_limit = true;
+                                    if have_combined_limit {
+                                        let (cs, cf) = combine_limit(
+                                            combined_skip,
+                                            combined_fetch,
+                                            0,
+                                            Some(fetch),
+                                        );
+                                        combined_skip = cs;
+                                        combined_fetch = cf;
+                                    } else {
+                                        combined_skip = 0;
+                                        combined_fetch = Some(fetch);
+                                        have_combined_limit = true;
+                                    }
                                 }
                                 let agg = find_agg_node_within_select(
                                     plan,
@@ -681,6 +758,28 @@ impl Unparser<'_> {
                                 cur = sort.input.as_ref();
                             }
                             _ => break,
+                        }
+                    }
+                    if have_combined_limit {
+                        let Some(query_ref) = query.as_mut() else {
+                            return internal_err!(
+                                "Limit operator only valid in a statement context."
+                            );
+                        };
+                        if let Some(fetch) = combined_fetch {
+                            query_ref.limit(Some(ast::Expr::value(ast::Value::Number(
+                                fetch.to_string(),
+                                false,
+                            ))));
+                        }
+                        if combined_skip > 0 {
+                            query_ref.offset(Some(ast::Offset {
+                                rows: ast::OffsetRows::None,
+                                value: ast::Expr::value(ast::Value::Number(
+                                    combined_skip.to_string(),
+                                    false,
+                                )),
+                            }));
                         }
                     }
                     return self.select_to_sql_recursively(cur, query, select, relation);
