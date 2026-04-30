@@ -57,6 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     # Scoped to the minimum needed to upsert/delete the sticky comment.
     permissions:
+      actions: read
       pull-requests: write
     steps:
       - name: Download semver-check artifact
