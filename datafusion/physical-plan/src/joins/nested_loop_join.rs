@@ -990,8 +990,6 @@ pub(crate) struct NestedLoopJoinStream {
     pub(crate) right_data: Option<SendableRecordBatchStream>,
     /// the build-side table data of the nested loop join
     pub(crate) left_data: OnceFut<JoinLeftData>,
-    /// Candidate generation strategy used for each buffered build-side chunk.
-    accelerator: JoinAcceleratorRef,
     /// Projection to construct the output schema from the left and right tables.
     /// Example:
     /// - output_schema: ['a', 'c']
@@ -1028,6 +1026,12 @@ pub(crate) struct NestedLoopJoinStream {
 
     // Buffer(left) side
     // -----------------
+    /// Candidate pair generator for each buffered build-side chunk.
+    ///
+    /// This owns only pair generation and access to the buffered build side.
+    /// Join semantics, including left/right match bitmaps for outer, semi, anti,
+    /// and mark joins, are handled by the surrounding nested-loop join state.
+    accelerator: JoinAcceleratorRef,
     /// The current buffered left data to join
     buffered_left_data: Option<Arc<JoinLeftData>>,
     /// Index into the left buffered batch. Used in `EmitLeftUnmatched` state
