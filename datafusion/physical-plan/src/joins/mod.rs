@@ -23,7 +23,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 pub use hash_join::{
     HashExpr, HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr, SeededRandomState,
 };
-pub use join_accelerator::{
+use join_accelerator::{
     JoinAccelerator, JoinAcceleratorBuilder, JoinAcceleratorProber, JoinAcceleratorRef,
     JoinAcceleratorSpec, JoinProbeCandidates,
 };

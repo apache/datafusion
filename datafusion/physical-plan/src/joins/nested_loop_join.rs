@@ -32,8 +32,8 @@ use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
-    apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, estimate_join_statistics, need_produce_right_in_final,
+    build_join_schema, check_join_is_valid, estimate_join_statistics,
+    need_produce_right_in_final,
 };
 use crate::joins::{
     JoinAccelerator, JoinAcceleratorBuilder, JoinAcceleratorProber, JoinAcceleratorRef,
@@ -53,8 +53,8 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, BooleanArray, BooleanBufferBuilder, RecordBatchOptions, UInt32Array,
-    UInt64Array, new_null_array,
+    Array, BooleanArray, BooleanBufferBuilder, RecordBatchOptions, UInt64Array,
+    new_null_array,
 };
 use arrow::compute::{BatchCoalescer, filter, filter_record_batch, not, take};
 use arrow::datatypes::{Schema, SchemaRef};
@@ -236,7 +236,7 @@ pub struct NestedLoopJoinExecBuilder {
     join_type: JoinType,
     filter: Option<JoinFilter>,
     projection: Option<ProjectionRef>,
-    accelerator: Option<JoinAcceleratorRef>,
+    join_spec: Option<JoinAcceleratorSpec>,
 }
 
 impl NestedLoopJoinExecBuilder {
@@ -252,7 +252,7 @@ impl NestedLoopJoinExecBuilder {
             join_type,
             filter: None,
             projection: None,
-            accelerator: None,
+            join_spec: None,
         }
     }
 
@@ -273,13 +273,17 @@ impl NestedLoopJoinExecBuilder {
         self
     }
 
-    /// Set join accelerator.
-    pub fn with_accelerator(mut self, accelerator: JoinAcceleratorRef) -> Self {
-        self.accelerator = Some(accelerator);
+    /// Set planning-time join accelerator specification.
+    #[expect(dead_code)]
+    // Kept for internal accelerator experiments while the API remains crate-private.
+    pub(crate) fn with_join_spec(mut self, join_spec: JoinAcceleratorSpec) -> Self {
+        self.join_spec = Some(join_spec);
         self
     }
 
     /// Build resulting execution plan.
+    ///
+    /// [`JoinAccelerator`] must be constructed inside `build()` to ensure `swap_inputs` safe
     pub fn build(self) -> Result<NestedLoopJoinExec> {
         let Self {
             left,
@@ -287,22 +291,22 @@ impl NestedLoopJoinExecBuilder {
             join_type,
             filter,
             projection,
-            accelerator,
+            join_spec,
         } = self;
 
         let left_schema = left.schema();
         let right_schema = right.schema();
         check_join_is_valid(&left_schema, &right_schema, &[])?;
-        let accelerator = match accelerator {
-            Some(accelerator) => accelerator,
-            None => JoinAcceleratorBuilder::try_new(JoinAcceleratorSpec::new(
+        let join_spec = join_spec.unwrap_or_else(|| {
+            JoinAcceleratorSpec::new(
                 join_type,
                 JoinSide::Left,
                 Arc::clone(&left_schema),
                 Arc::clone(&right_schema),
                 filter.clone(),
-            ))?,
-        };
+            )
+        });
+        let accelerator = JoinAcceleratorBuilder::try_new(join_spec)?;
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, &join_type);
         let join_schema = Arc::new(join_schema);
@@ -338,7 +342,7 @@ impl From<&NestedLoopJoinExec> for NestedLoopJoinExecBuilder {
             join_type: exec.join_type,
             filter: exec.filter.clone(),
             projection: exec.projection.clone(),
-            accelerator: Some(Arc::clone(&exec.accelerator)),
+            join_spec: None,
         }
     }
 }
@@ -629,7 +633,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
             )
             .with_filter(self.filter.clone())
             .with_projection_ref(self.projection.clone())
-            .with_accelerator(Arc::clone(&self.accelerator))
             .build()?,
         ))
     }
@@ -801,6 +804,8 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 /// Left (build-side) data
 pub(crate) struct JoinLeftData {
     /// Build-side accelerator finalized after all build batches are consumed.
+    ///
+    /// The concatenated build-side batch is managed inside it.
     accelerator: Box<dyn JoinAccelerator>,
     /// Shared bitmap builder for visited left indices
     bitmap: SharedBitmapBuilder,
@@ -1268,10 +1273,6 @@ impl RecordBatchStream for NestedLoopJoinStream {
 
 /// Intermediate result for joining one left batch slice and a right row
 enum FilteredProbeCandidates {
-    Indices {
-        build_indices: UInt64Array,
-        probe_indices: UInt32Array,
-    },
     Range {
         probe_row: usize,
         build_range: Range<usize>,
@@ -1282,7 +1283,6 @@ enum FilteredProbeCandidates {
 impl FilteredProbeCandidates {
     fn has_matches(&self) -> bool {
         match self {
-            Self::Indices { build_indices, .. } => !build_indices.is_empty(),
             Self::Range {
                 build_range,
                 build_filter,
@@ -1299,17 +1299,6 @@ impl FilteredProbeCandidates {
         probe_batch_rows: usize,
     ) -> Result<()> {
         match self {
-            Self::Indices { probe_indices, .. } => {
-                for probe_index in probe_indices.iter().flatten() {
-                    let probe_index = probe_index as usize;
-                    if probe_index >= probe_batch_rows {
-                        return internal_err!(
-                            "Probe row index {probe_index} is out of bounds for a batch of {probe_batch_rows} rows"
-                        );
-                    }
-                    bitmap.set_bit(probe_index, true);
-                }
-            }
             Self::Range {
                 probe_row,
                 build_range,
@@ -1966,15 +1955,6 @@ impl NestedLoopJoinStream {
                 probe_row,
                 build_range,
             )?,
-            JoinProbeCandidates::BuildIndices {
-                build_indices,
-                probe_indices,
-            } => self.filter_probe_index_candidates(
-                left_data,
-                right_batch,
-                build_indices,
-                probe_indices,
-            )?,
         };
 
         self.record_probe_matches(left_data, right_batch, &filtered_candidates)?;
@@ -1993,34 +1973,6 @@ impl NestedLoopJoinStream {
         }
 
         self.build_probe_output_batch(left_data, right_batch, filtered_candidates)
-    }
-
-    fn filter_probe_index_candidates(
-        &self,
-        left_data: &JoinLeftData,
-        right_batch: &RecordBatch,
-        build_indices: UInt64Array,
-        probe_indices: UInt32Array,
-    ) -> Result<FilteredProbeCandidates> {
-        let (build_indices, probe_indices) = if let Some(filter) = &self.join_filter {
-            apply_join_filter_to_indices(
-                left_data.batch(),
-                right_batch,
-                build_indices,
-                probe_indices,
-                filter,
-                JoinSide::Left,
-                None,
-                self.join_type,
-            )?
-        } else {
-            (build_indices, probe_indices)
-        };
-
-        Ok(FilteredProbeCandidates::Indices {
-            build_indices,
-            probe_indices,
-        })
     }
 
     fn filter_probe_range_candidates(
@@ -2073,21 +2025,6 @@ impl NestedLoopJoinStream {
         filtered_candidates: FilteredProbeCandidates,
     ) -> Result<Option<RecordBatch>> {
         match filtered_candidates {
-            FilteredProbeCandidates::Indices {
-                build_indices,
-                probe_indices,
-                ..
-            } => build_batch_from_indices(
-                &self.output_schema,
-                left_data.batch(),
-                right_batch,
-                &build_indices,
-                &probe_indices,
-                &self.column_indices,
-                JoinSide::Left,
-                self.join_type,
-            )
-            .map(Some),
             FilteredProbeCandidates::Range {
                 probe_row,
                 build_range,
@@ -2123,11 +2060,6 @@ impl NestedLoopJoinStream {
         if need_produce_result_in_final(self.join_type) {
             let mut bitmap = left_data.bitmap().lock();
             match filtered_candidates {
-                FilteredProbeCandidates::Indices { build_indices, .. } => {
-                    build_indices.iter().flatten().for_each(|index| {
-                        bitmap.set_bit(index as usize, true);
-                    });
-                }
                 FilteredProbeCandidates::Range {
                     build_range,
                     build_filter,
@@ -3549,11 +3481,12 @@ pub(crate) mod tests {
         let right = build_right_table();
         let filter = prepare_join_filter();
 
-        let nested_loop_join =
+        let mut nested_loop_join =
             NestedLoopJoinExecBuilder::new(left, right, JoinType::Inner)
                 .with_filter(Some(filter))
-                .with_accelerator(Arc::new(NoSpillDummyJoinAccelerator::new(left_schema)))
                 .build()?;
+        nested_loop_join.accelerator =
+            Arc::new(NoSpillDummyJoinAccelerator::new(left_schema));
         let stream = nested_loop_join.execute(0, task_ctx)?;
         let err = common::collect(stream).await.unwrap_err();
 

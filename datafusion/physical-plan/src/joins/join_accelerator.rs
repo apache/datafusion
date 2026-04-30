@@ -15,17 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Join accelerator interfaces used by [`crate::joins::NestedLoopJoinExec`].
-//!
-//! The default probing implementation is a naive cartesian fallback that
-//! enumerates all build-side rows for each probe row in fixed-size chunks.
+//! Join accelerator interfaces used by [`crate::joins::NestedLoopJoinExec`], see
+//! comments in [`JoinAccelerator`] for details.
 
 use std::cmp::min;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::{UInt32Array, UInt64Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -36,20 +33,24 @@ use super::join_filter::JoinFilter;
 use datafusion_common::{Result, internal_datafusion_err, internal_err};
 
 /// Shared reference to a selected join accelerator.
-pub type JoinAcceleratorRef = Arc<dyn JoinAccelerator>;
+pub(crate) type JoinAcceleratorRef = Arc<dyn JoinAccelerator>;
 
 /// Planning-time specification used to select a join accelerator.
 #[derive(Debug, Clone)]
-pub struct JoinAcceleratorSpec {
+pub(crate) struct JoinAcceleratorSpec {
+    #[expect(dead_code)]
+    // Kept for accelerator selection once non-fallback implementations are enabled.
     join_type: JoinType,
     build_side: JoinSide,
     left_schema: SchemaRef,
     right_schema: SchemaRef,
+    #[expect(dead_code)]
+    // Kept for accelerator selection once non-fallback implementations are enabled.
     filter: Option<JoinFilter>,
 }
 
 impl JoinAcceleratorSpec {
-    pub fn new(
+    pub(crate) fn new(
         join_type: JoinType,
         build_side: JoinSide,
         left_schema: SchemaRef,
@@ -65,27 +66,7 @@ impl JoinAcceleratorSpec {
         }
     }
 
-    pub fn join_type(&self) -> JoinType {
-        self.join_type
-    }
-
-    pub fn build_side(&self) -> JoinSide {
-        self.build_side
-    }
-
-    pub fn left_schema(&self) -> &SchemaRef {
-        &self.left_schema
-    }
-
-    pub fn right_schema(&self) -> &SchemaRef {
-        &self.right_schema
-    }
-
-    pub fn filter(&self) -> Option<&JoinFilter> {
-        self.filter.as_ref()
-    }
-
-    pub fn build_schema(&self) -> &SchemaRef {
+    pub(crate) fn build_schema(&self) -> &SchemaRef {
         match self.build_side {
             JoinSide::Left => &self.left_schema,
             JoinSide::Right => &self.right_schema,
@@ -96,13 +77,13 @@ impl JoinAcceleratorSpec {
 
 /// Selects a planning-time join accelerator.
 #[derive(Debug, Default)]
-pub struct JoinAcceleratorBuilder;
+pub(crate) struct JoinAcceleratorBuilder;
 
 impl JoinAcceleratorBuilder {
     /// Select the accelerator for a nested loop join.
     ///
     /// This always succeeds because NLJ has a naive cartesian fallback.
-    pub fn try_new(spec: JoinAcceleratorSpec) -> Result<JoinAcceleratorRef> {
+    pub(crate) fn try_new(spec: JoinAcceleratorSpec) -> Result<JoinAcceleratorRef> {
         Ok(Arc::new(FallbackNestedLoopJoinAccelerator::new(spec)))
     }
 }
@@ -191,7 +172,13 @@ impl JoinAcceleratorBuilder {
 ///     }
 /// }
 /// ```
-pub trait JoinAccelerator: Debug + Send + Sync {
+///
+/// # Implementation Plan
+/// This trait is intended to become public. For now, keep it private while
+/// internal experiments stabilize the API.
+pub(crate) trait JoinAccelerator: Debug + Send + Sync {
+    #[cfg_attr(not(test), expect(dead_code))]
+    // Will be used in explain output when accelerator selection is visible.
     fn name(&self) -> &'static str;
 
     /// Return `true` only if this accelerator supports the nested-loop join
@@ -253,19 +240,22 @@ pub trait JoinAccelerator: Debug + Send + Sync {
 }
 
 /// Stateful batch-level probe cursor returned by a runtime [`JoinAccelerator`].
-pub trait JoinAcceleratorProber: Debug + Send {
+pub(crate) trait JoinAcceleratorProber: Debug + Send {
     /// Incrementally return the next candidate chunk for the active probe batch,
     /// returns `None` when the probing ends.
     ///
     /// Candidate indices are relative to the accelerator's concatenated build
     /// batch and the prepared probe batch returned by [`JoinAccelerator::init_prober`].
     ///
-    /// Implementations should:
-    /// - Try to emit as many matches as possible at once for efficiency
-    /// - Emit at most `batch_size` matches in one iteration, to make subsequent
-    ///   operations more memory-efficient
+    /// Efficiency guideline (violations won't cause error):
     ///
-    /// TODO(PR): Currently NLJ assumes all exact `batch_size` matches. A new join
+    /// - Try to emit as many matches as possible at once for internal efficiency
+    /// - Emit at most `batch_size` matches per iteration. This lowers latency to
+    ///   first output. Downstream operators are typically optimized for configured
+    ///   input bach size, larger batches can be slower to process or use more
+    ///   memory.
+    ///
+    /// TODO: Currently NLJ assumes all exact `batch_size` matches. A new join
     /// index might output fewer, so the caller might want a `BatchCoalescer` to
     /// vectorize the later remaining join filter evaluation.
     fn probe(&mut self) -> Result<Option<JoinProbeCandidates>>;
@@ -279,87 +269,15 @@ pub trait JoinAcceleratorProber: Debug + Send {
 /// - Build-side indices are relative to the concatenated build-side batch from
 ///   [`JoinAccelerator::build_batch`].
 #[derive(Debug, Clone)]
-pub enum JoinProbeCandidates {
+pub(crate) enum JoinProbeCandidates {
     /// Consecutive build rows for one probe row, represented as a range for
     /// efficiency in NLJ.
     BuildRange {
         probe_row: usize,
         build_range: Range<usize>,
     },
-    /// Arbitrary build/probe row pairs.
-    BuildIndices {
-        build_indices: UInt64Array,
-        probe_indices: UInt32Array,
-    },
-}
-
-impl JoinProbeCandidates {
-    pub fn try_new_indices(
-        build_indices: UInt64Array,
-        probe_indices: UInt32Array,
-    ) -> Result<Self> {
-        if build_indices.len() != probe_indices.len() {
-            return internal_err!(
-                "Join probe build/probe index lengths differ: {} vs {}",
-                build_indices.len(),
-                probe_indices.len()
-            );
-        }
-
-        Ok(Self::BuildIndices {
-            build_indices,
-            probe_indices,
-        })
-    }
-
-    /// Number of candidate build rows in this probe batch.
-    pub fn len(&self) -> usize {
-        match self {
-            Self::BuildRange { build_range, .. } => build_range.len(),
-            Self::BuildIndices { build_indices, .. } => build_indices.len(),
-        }
-    }
-
-    /// Returns `true` if this probe batch contains no candidate build rows.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Convert the batch into explicit build/probe index arrays.
-    pub fn into_indices(self) -> Result<(UInt64Array, UInt32Array)> {
-        match self {
-            Self::BuildRange {
-                probe_row,
-                build_range,
-            } => {
-                let build_indices = build_range
-                    .map(|index| {
-                        u64::try_from(index).map_err(|_| {
-                            internal_datafusion_err!(
-                                "Join probe range index does not fit into u64: {index}"
-                            )
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let build_indices = UInt64Array::from(build_indices);
-                let probe_row = u32::try_from(probe_row).map_err(|_| {
-                    internal_datafusion_err!(
-                        "Probe row index does not fit into u32: {probe_row}"
-                    )
-                })?;
-                let probe_indices = UInt32Array::from_iter_values(std::iter::repeat_n(
-                    probe_row,
-                    build_indices.len(),
-                ));
-                Ok((build_indices, probe_indices))
-            }
-            Self::BuildIndices {
-                build_indices,
-                probe_indices,
-                ..
-            } => Ok((build_indices, probe_indices)),
-        }
-    }
+    // Specialized joins will need more general representation like (build_index, probe_index)
+    // , so keep it a enum now.
 }
 
 #[derive(Debug, Clone)]

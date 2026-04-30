@@ -42,8 +42,8 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, JoinAcceleratorBuilder, JoinAcceleratorSpec,
-    NestedLoopJoinExecBuilder, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExecBuilder, PartitionMode,
+    SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -71,8 +71,8 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::{
-    DFSchema, DFSchemaRef, JoinSide, ScalarValue, exec_err, internal_datafusion_err,
-    internal_err, not_impl_err, plan_err,
+    DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err,
 };
 use datafusion_common::{
     TableReference, assert_eq_or_internal_err, assert_or_internal_err,
@@ -2376,20 +2376,9 @@ fn build_nested_loop_join(
     join_filter: Option<join_utils::JoinFilter>,
     join_type: JoinType,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let left_schema = physical_left.schema();
-    let right_schema = physical_right.schema();
-    let accelerator = JoinAcceleratorBuilder::try_new(JoinAcceleratorSpec::new(
-        join_type,
-        JoinSide::Left,
-        Arc::clone(&left_schema),
-        Arc::clone(&right_schema),
-        join_filter.clone(),
-    ))?;
-
     Ok(Arc::new(
         NestedLoopJoinExecBuilder::new(physical_left, physical_right, join_type)
             .with_filter(join_filter)
-            .with_accelerator(accelerator)
             .build()?,
     ))
 }
