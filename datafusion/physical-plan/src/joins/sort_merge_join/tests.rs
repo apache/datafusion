@@ -2615,7 +2615,7 @@ async fn spill_string_join_keys() -> Result<()> {
                     Arc::new(Int32Array::from(vec![100 + i, 200 + i])),
                 ],
             )
-                .unwrap()
+            .unwrap()
         })
         .collect();
 
@@ -2636,7 +2636,7 @@ async fn spill_string_join_keys() -> Result<()> {
                     Arc::new(Int32Array::from(vec![300 + i, 400 + i])),
                 ],
             )
-                .unwrap()
+            .unwrap()
         })
         .collect();
 
