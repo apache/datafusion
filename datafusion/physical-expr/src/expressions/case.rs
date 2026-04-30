@@ -902,8 +902,8 @@ impl CaseBody {
             })?;
 
             // If the 'when' predicate did not match any rows, continue to the next branch immediately.
-            // Like the old `true_count == 0` guard: `has_true()` only counts valid slots that are true
-            // (masked-null predicate slots are ignored), so no `prep_null_mask_filter` needed here.
+            // Only counts valid slots that are true (masked-null predicate slots are ignored)
+            // so no `prep_null_mask_filter` needed here.
             if !when_value.has_true() {
                 continue;
             }
