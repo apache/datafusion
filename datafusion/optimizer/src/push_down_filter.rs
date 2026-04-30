@@ -404,6 +404,10 @@ fn push_down_all_join(
     on_filter: Vec<Expr>,
 ) -> Result<Transformed<LogicalPlan>> {
     let is_inner_join = join.join_type == JoinType::Inner;
+    let original_left = Arc::clone(&join.left);
+    let original_right = Arc::clone(&join.right);
+    let original_filter = join.filter.clone();
+
     // Get pushable predicates from current optimizer state
     let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
 
@@ -510,6 +514,10 @@ fn push_down_all_join(
     join_conditions.extend(on_filter_join_conditions);
     join.filter = conjunction(join_conditions);
 
+    let transformed = !Arc::ptr_eq(&join.left, &original_left)
+        || !Arc::ptr_eq(&join.right, &original_right)
+        || join.filter != original_filter;
+
     // wrap the join on the filter whose predicates must be kept, if any
     let plan = LogicalPlan::Join(join);
     let plan = if let Some(predicate) = conjunction(keep_predicates) {
@@ -517,7 +525,7 @@ fn push_down_all_join(
     } else {
         plan
     };
-    Ok(Transformed::yes(plan))
+    Ok(Transformed::new_transformed(plan, transformed))
 }
 
 fn push_down_join(
@@ -1027,7 +1035,7 @@ impl OptimizerRule for PushDownFilter {
                     .collect::<Result<Vec<_>>>()?;
 
                 let agg_input = Arc::clone(&agg.input);
-                Transformed::yes(LogicalPlan::Aggregate(agg))
+                Transformed::no(LogicalPlan::Aggregate(agg))
                     .transform_data(|new_plan| {
                         // If we have a filter to push, we push it down to the input of the aggregate
                         if let Some(predicate) = conjunction(replaced_push_predicates) {
@@ -1123,7 +1131,7 @@ impl OptimizerRule for PushDownFilter {
                 // optimizers, such as the one used by Postgres.
 
                 let window_input = Arc::clone(&window.input);
-                Transformed::yes(LogicalPlan::Window(window))
+                Transformed::no(LogicalPlan::Window(window))
                     .transform_data(|new_plan| {
                         // If we have a filter to push, we push it down to the input of the window
                         if let Some(predicate) = conjunction(push_predicates) {
@@ -1199,18 +1207,19 @@ impl OptimizerRule for PushDownFilter {
                     .cloned()
                     .collect();
 
+                let scan_filters_changed = new_scan_filters != scan.filters;
                 let new_scan = LogicalPlan::TableScan(TableScan {
                     filters: new_scan_filters,
                     ..scan
                 });
 
-                Transformed::yes(new_scan).transform_data(|new_scan| {
-                    if let Some(predicate) = conjunction(new_predicate) {
-                        make_filter(predicate, Arc::new(new_scan)).map(Transformed::yes)
-                    } else {
-                        Ok(Transformed::no(new_scan))
-                    }
-                })
+                if let Some(predicate) = conjunction(new_predicate) {
+                    make_filter(predicate, Arc::new(new_scan)).map(|plan| {
+                        Transformed::new_transformed(plan, scan_filters_changed)
+                    })
+                } else {
+                    Ok(Transformed::yes(new_scan))
+                }
             }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
@@ -1687,6 +1696,11 @@ mod tests {
             .aggregate(vec![col("a")], vec![sum(col("b")).alias("b")])?
             .filter(col("b").gt(lit(10i64)))?
             .build()?;
+        let transformed = PushDownFilter::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!transformed.transformed);
+
         // filter of aggregate is after aggregation since they are non-commutative
         assert_optimized_plan_equal!(
             plan,
@@ -1879,6 +1893,10 @@ mod tests {
             .window(vec![window])?
             .filter(col("c").gt(lit(10i64)))?
             .build()?;
+        let transformed = PushDownFilter::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!transformed.transformed);
 
         assert_optimized_plan_equal!(
             plan,
@@ -3104,6 +3122,10 @@ mod tests {
                 Some(filter),
             )?
             .build()?;
+        let transformed = PushDownFilter::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!transformed.transformed);
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
@@ -3210,15 +3232,20 @@ mod tests {
         let plan =
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
 
-        let optimized_plan = PushDownFilter::new()
+        let optimized = PushDownFilter::new()
             .rewrite(plan, &OptimizerContext::new())
-            .expect("failed to optimize plan")
-            .data;
+            .expect("failed to optimize plan");
+        assert!(optimized.transformed);
+
+        let optimized_again = PushDownFilter::new()
+            .rewrite(optimized.data.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!optimized_again.transformed);
 
         // Optimizing the same plan multiple times should produce the same plan
         // each time.
         assert_optimized_plan_equal!(
-            optimized_plan,
+            optimized_again.data,
             @r"
         Filter: a = Int64(1)
           TableScan: test, partial_filters=[a = Int64(1)]
@@ -3230,6 +3257,11 @@ mod tests {
     fn filter_with_table_provider_unsupported() -> Result<()> {
         let plan =
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
+
+        let transformed = PushDownFilter::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!transformed.transformed);
 
         assert_optimized_plan_equal!(
             plan,

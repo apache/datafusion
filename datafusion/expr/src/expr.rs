@@ -2228,11 +2228,14 @@ impl Expr {
     pub fn infer_placeholder_types(self, schema: &DFSchema) -> Result<(Expr, bool)> {
         let mut has_placeholder = false;
         self.transform(|mut expr| {
+            let mut transformed = false;
             match &mut expr {
                 // Default to assuming the arguments are the same type
                 Expr::BinaryExpr(BinaryExpr { left, op: _, right }) => {
-                    rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
-                    rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
+                    transformed |=
+                        rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
+                    transformed |=
+                        rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
                 }
                 Expr::Between(Between {
                     expr,
@@ -2240,8 +2243,10 @@ impl Expr {
                     low,
                     high,
                 }) => {
-                    rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
-                    rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
+                    transformed |=
+                        rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
+                    transformed |=
+                        rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
                 }
                 Expr::InList(InList {
                     expr,
@@ -2249,19 +2254,20 @@ impl Expr {
                     negated: _,
                 }) => {
                     for item in list.iter_mut() {
-                        rewrite_placeholder(item, expr.as_ref(), schema)?;
+                        transformed |= rewrite_placeholder(item, expr.as_ref(), schema)?;
                     }
                 }
                 Expr::Like(Like { expr, pattern, .. })
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
-                    rewrite_placeholder(pattern.as_mut(), expr.as_ref(), schema)?;
+                    transformed |=
+                        rewrite_placeholder(pattern.as_mut(), expr.as_ref(), schema)?;
                 }
                 Expr::Placeholder(_) => {
                     has_placeholder = true;
                 }
                 _ => {}
             }
-            Ok(Transformed::yes(expr))
+            Ok(Transformed::new_transformed(expr, transformed))
         })
         .data()
         .map(|data| (data, has_placeholder))
@@ -2936,7 +2942,7 @@ impl HashNode for Expr {
 
 // Modifies expr to match the DataType, metadata, and nullability of other if it is
 // a placeholder with previously unspecified type information (i.e., most placeholders)
-fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
+fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<bool> {
     if let Expr::Placeholder(Placeholder { id: _, field }) = expr
         && field.is_none()
     {
@@ -2951,10 +2957,11 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
                 // We can't infer the nullability of the future parameter that might
                 // be bound, so ensure this is set to true
                 *field = Some(other_field.as_ref().clone().with_nullable(true).into());
+                return Ok(true);
             }
         }
     };
-    Ok(())
+    Ok(false)
 }
 
 #[macro_export]
@@ -3955,6 +3962,21 @@ mod test {
             },
             _ => panic!("Expected BinaryExpr"),
         }
+    }
+
+    #[test]
+    fn rewrite_placeholder_reports_no_change_when_type_already_known() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+        let mut expr = Expr::Placeholder(Placeholder::new_with_field(
+            "$1".to_string(),
+            Some(Arc::new(Field::new("name", DataType::Utf8, true))),
+        ));
+
+        let transformed = rewrite_placeholder(&mut expr, &col("name"), &df_schema)
+            .expect("failed to rewrite placeholder");
+        assert!(!transformed);
     }
 
     #[test]

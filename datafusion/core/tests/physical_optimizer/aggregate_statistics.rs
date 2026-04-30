@@ -117,6 +117,27 @@ fn check_batch(batch: RecordBatch, agg: &TestAggregate) {
     );
 }
 
+#[test]
+fn unchanged_plan_preserves_plan_arc() -> Result<()> {
+    let source = mock_data()?;
+    let schema = source.schema();
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+        expressions::binary(
+            expressions::col("a", &schema)?,
+            Operator::Gt,
+            cast(expressions::lit(1u32), &schema, DataType::Int32)?,
+            &schema,
+        )?,
+        source,
+    )?);
+
+    let config = ConfigOptions::new();
+    let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &config)?;
+    assert!(Arc::ptr_eq(&plan, &optimized));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_count_partial_direct_child() -> Result<()> {
     // basic test case with the aggregation applied on a source with exact statistics
@@ -277,10 +298,12 @@ async fn test_count_inexact_stat() -> Result<()> {
     )?;
 
     let conf = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(final_agg);
+    let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &conf)?;
 
     // check that the original ExecutionPlan was not replaced
     assert!(optimized.is::<AggregateExec>());
+    assert!(Arc::ptr_eq(&plan, &optimized));
 
     Ok(())
 }
@@ -321,10 +344,12 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
     )?;
 
     let conf = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(final_agg);
+    let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &conf)?;
 
     // check that the original ExecutionPlan was not replaced
     assert!(optimized.is::<AggregateExec>());
+    assert!(Arc::ptr_eq(&plan, &optimized));
 
     Ok(())
 }

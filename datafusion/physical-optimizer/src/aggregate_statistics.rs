@@ -86,13 +86,19 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 )?))
             } else {
                 plan.map_children(|child| {
-                    self.optimize(child, config).map(Transformed::yes)
+                    let optimized = self.optimize(Arc::clone(&child), config)?;
+                    let transformed = !Arc::ptr_eq(&child, &optimized);
+                    Ok(Transformed::new_transformed(optimized, transformed))
                 })
                 .data()
             }
         } else {
-            plan.map_children(|child| self.optimize(child, config).map(Transformed::yes))
-                .data()
+            plan.map_children(|child| {
+                let optimized = self.optimize(Arc::clone(&child), config)?;
+                let transformed = !Arc::ptr_eq(&child, &optimized);
+                Ok(Transformed::new_transformed(optimized, transformed))
+            })
+            .data()
         }
     }
 

@@ -566,7 +566,7 @@ impl TreeNodeRewriter for ConstEvaluator {
                     }
                     // For other expressions (like CASE, COALESCE), preserve the original
                     // to allow short-circuit evaluation at execution time
-                    Ok(Transformed::yes(expr))
+                    Ok(Transformed::no(expr))
                 }
             },
             Some(false) => Ok(Transformed::no(expr)),
@@ -2776,7 +2776,9 @@ mod tests {
         let expr = lit(0) / lit(0);
         let expected = expr.clone();
 
-        assert_eq!(simplify(expr), expected);
+        let (simplified, num_iter) = simplify_with_cycle_count(expr);
+        assert_eq!(simplified, expected);
+        assert_eq!(num_iter, 1);
     }
 
     #[test]
