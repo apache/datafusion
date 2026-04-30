@@ -23,7 +23,7 @@ use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, ScalarValue, not_impl_err};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::signature::Volatility;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -224,35 +224,104 @@ pub struct LambdaArgument {
     /// per outer sublist), avoiding the per-call `Schema::new` build that
     /// includes constructing the internal name -> index map.
     schema: SchemaRef,
+    /// A RecordBatch containing the captured columns inside this lambda body, if any
+    ///
+    /// For example, for `array_transform([2], v -> v + a + b)`,
+    /// this will be a `RecordBatch` with two columns, `a` and `b`
+    captures: Option<RecordBatch>,
 }
 
 impl LambdaArgument {
-    pub fn new(params: Vec<FieldRef>, body: Arc<dyn PhysicalExpr>) -> Self {
-        let schema = Arc::new(Schema::new(params.clone()));
+    pub fn new(
+        params: Vec<FieldRef>,
+        body: Arc<dyn PhysicalExpr>,
+        captures: Option<RecordBatch>,
+    ) -> Self {
+        let fields = match &captures {
+            Some(batch) => batch
+                .schema_ref()
+                .fields()
+                .iter()
+                .cloned()
+                .chain(params.clone())
+                .collect(),
+            None => params.clone(),
+        };
+
+        let schema = Arc::new(Schema::new(fields));
+
         Self {
             params,
             body,
             schema,
+            captures,
         }
     }
 
     /// Evaluate this lambda
     /// `args` should evaluate to the value of each parameter
     /// of the correspondent lambda returned in [HigherOrderUDF::lambda_parameters].
+    ///
+    /// `adjust` should adjust the captured columns of this
+    /// lambda, if any, relative to it's parameters
     pub fn evaluate(
         &self,
         args: &[&dyn Fn() -> Result<ArrayRef>],
+        adjust: impl FnOnce(&[ArrayRef]) -> Result<Vec<ArrayRef>>,
     ) -> Result<ColumnarValue> {
-        let columns = args
-            .iter()
-            .take(self.params.len())
-            .map(|arg| arg())
-            .collect::<Result<_>>()?;
+        let adjusted_captures = self
+            .captures
+            .as_ref()
+            .map(|captures| {
+                let adjusted_columns = adjust(captures.columns())?;
 
-        let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+                RecordBatch::try_new(captures.schema(), adjusted_columns)
+            })
+            .transpose()?;
 
-        self.body.evaluate(&batch)
+        let merged = merge_captures_with_variables(
+            adjusted_captures.as_ref(),
+            Arc::clone(&self.schema),
+            &self.params,
+            args,
+        )?;
+
+        self.body.evaluate(&merged)
     }
+}
+
+fn merge_captures_with_variables(
+    captures: Option<&RecordBatch>,
+    schema: SchemaRef,
+    params: &[FieldRef],
+    variables: &[&dyn Fn() -> Result<ArrayRef>],
+) -> Result<RecordBatch> {
+    if variables.len() < params.len() {
+        return exec_err!(
+            "expected at least {} lambda arguments to merge with captures, got {}",
+            params.len(),
+            variables.len()
+        );
+    }
+
+    let columns = match captures {
+        Some(captures) => {
+            let mut columns = captures.columns().to_vec();
+
+            for arg in &variables[..params.len()] {
+                columns.push(arg()?);
+            }
+
+            columns
+        }
+        None => variables
+            .iter()
+            .take(params.len())
+            .map(|arg| arg())
+            .collect::<Result<_>>()?,
+    };
+
+    Ok(RecordBatch::try_new(schema, columns)?)
 }
 
 /// Information about arguments passed to the function
