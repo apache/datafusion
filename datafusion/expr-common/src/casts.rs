@@ -163,6 +163,8 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
             | Operator::LtEq
             | Operator::Gt
             | Operator::GtEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
     )
 }
 
@@ -199,8 +201,13 @@ fn try_cast_string_literal_for_comparison_unwrap(
     to_type: &DataType,
     op: Operator,
 ) -> Option<ScalarValue> {
-    if !matches!(op, Operator::Eq | Operator::NotEq)
-        || !is_supported_string_type(to_type)
+    if !matches!(
+        op,
+        Operator::Eq
+            | Operator::NotEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+    ) || !is_supported_string_type(to_type)
         || !is_integer_type(from_type)
         || !matches!(
             lit_value,
@@ -936,10 +943,23 @@ mod tests {
             DataType::Int64,
             ScalarValue::Int32(Some(16)),
         );
+        expect_comparison_unwrap_with_op(
+            ScalarValue::Int64(Some(16)),
+            DataType::Int32,
+            DataType::Int64,
+            Operator::IsNotDistinctFrom,
+            ScalarValue::Int32(Some(16)),
+        );
         expect_no_comparison_unwrap(
             ScalarValue::Int32(Some(16)),
             DataType::Int64,
             DataType::Int32,
+        );
+        expect_no_comparison_unwrap_with_op(
+            ScalarValue::Int32(Some(16)),
+            DataType::Int64,
+            DataType::Int32,
+            Operator::IsDistinctFrom,
         );
         expect_no_comparison_unwrap(
             ScalarValue::UInt32(Some(16)),
@@ -993,11 +1013,24 @@ mod tests {
             Operator::Eq,
             ScalarValue::Int32(Some(123)),
         );
+        expect_comparison_unwrap_with_op(
+            ScalarValue::Utf8(Some("123".to_string())),
+            DataType::Int32,
+            DataType::Utf8,
+            Operator::IsNotDistinctFrom,
+            ScalarValue::Int32(Some(123)),
+        );
         expect_no_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("0123".to_string())),
             DataType::Int32,
             DataType::Utf8,
             Operator::Eq,
+        );
+        expect_no_comparison_unwrap_with_op(
+            ScalarValue::Utf8(Some("0123".to_string())),
+            DataType::Int32,
+            DataType::Utf8,
+            Operator::IsNotDistinctFrom,
         );
         expect_no_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("123".to_string())),

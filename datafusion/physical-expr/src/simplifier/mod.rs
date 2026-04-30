@@ -147,10 +147,10 @@ mod tests {
         let schema = test_schema();
         let simplifier = PhysicalExprSimplifier::new(&schema);
 
-        // Create: cast(c2 as INT32) != INT32(99)
-        let column_expr = col("c2", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int32, None));
-        let literal_expr = lit(ScalarValue::Int32(Some(99)));
+        // Create: cast(c1 as INT64) != INT64(99)
+        let column_expr = col("c1", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let literal_expr = lit(ScalarValue::Int64(Some(99)));
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::NotEq, literal_expr));
 
@@ -159,14 +159,14 @@ mod tests {
 
         let optimized_binary = as_binary(&optimized);
 
-        // Should be optimized to: c2 != INT64(99) (c2 is INT64, literal cast to match)
+        // Should be optimized to: c1 != INT32(99) (c1 is INT32, literal cast to match)
         let left_expr = optimized_binary.left();
         assert!(
             left_expr.downcast_ref::<CastExpr>().is_none()
                 && left_expr.downcast_ref::<TryCastExpr>().is_none()
         );
         let right_literal = as_literal(optimized_binary.right());
-        assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(99)));
+        assert_eq!(right_literal.value(), &ScalarValue::Int32(Some(99)));
     }
 
     #[test]
@@ -202,15 +202,12 @@ mod tests {
         let left_literal = as_literal(left_binary.right());
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(5)));
 
-        // Verify right side: c2 <= INT64(10)
+        // Verify right side keeps the source-domain-reducing cast: cast(c2 as INT32) <= INT32(10)
         let right_binary = as_binary(or_binary.right());
         let right_left_expr = right_binary.left();
-        assert!(
-            right_left_expr.downcast_ref::<CastExpr>().is_none()
-                && right_left_expr.downcast_ref::<TryCastExpr>().is_none()
-        );
+        assert!(right_left_expr.downcast_ref::<CastExpr>().is_some());
         let right_literal = as_literal(right_binary.right());
-        assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(10)));
+        assert_eq!(right_literal.value(), &ScalarValue::Int32(Some(10)));
     }
 
     #[test]
