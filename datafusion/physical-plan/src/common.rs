@@ -277,11 +277,19 @@ pub fn can_project(schema: &SchemaRef, projection: Option<&[usize]>) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::empty::EmptyExec;
+    use crate::projection::ProjectionExec;
+
+    use std::collections::HashMap;
 
     use arrow::{
         array::{Float32Array, Float64Array, UInt64Array},
-        datatypes::{DataType, Field},
+        datatypes::{DataType, Field, Schema},
     };
+
+    fn empty_exec(fields: Vec<Field>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(EmptyExec::new(Arc::new(Schema::new(fields))))
+    }
 
     #[test]
     fn test_compute_record_batch_statistics_empty() -> Result<()> {
@@ -380,5 +388,137 @@ mod tests {
 
         assert_eq!(actual, expected);
         Ok(())
+    }
+
+    #[test]
+    fn project_plan_to_schema_returns_input_when_schema_matches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let result = project_plan_to_schema(Arc::clone(&input), &schema)?;
+
+        assert!(Arc::ptr_eq(&input, &result));
+        Ok(())
+    }
+
+    #[test]
+    fn project_plan_to_schema_aliases_field_names_with_projection_exec() -> Result<()> {
+        let input = empty_exec(vec![
+            Field::new("recursive_a", DataType::Int32, false),
+            Field::new("recursive_b", DataType::Utf8, true),
+        ]);
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+
+        let result = project_plan_to_schema(Arc::clone(&input), &expected_schema)?;
+
+        let projection = result
+            .downcast_ref::<ProjectionExec>()
+            .expect("schema rename should use ProjectionExec");
+        assert!(Arc::ptr_eq(projection.input(), &input));
+        assert_eq!(projection.schema(), expected_schema);
+        assert_eq!(projection.expr()[0].alias, "a");
+        assert_eq!(projection.expr()[1].alias, "b");
+        Ok(())
+    }
+
+    #[test]
+    fn project_plan_to_schema_preserves_matching_metadata_while_renaming() -> Result<()> {
+        let field_metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        let schema_metadata =
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]);
+        let input_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("input", DataType::Int32, false)
+                    .with_metadata(field_metadata.clone()),
+            ],
+            schema_metadata.clone(),
+        ));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
+        let expected_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("expected", DataType::Int32, false)
+                    .with_metadata(field_metadata),
+            ],
+            schema_metadata,
+        ));
+
+        let result = project_plan_to_schema(input, &expected_schema)?;
+
+        assert_eq!(result.schema(), expected_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_column_count_mismatch() {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, false)]);
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("expected 2 column"));
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_type_mismatch() {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, false)]);
+        let expected_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("fields differ beyond name"));
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_nullability_mismatch() {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, true)]);
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "renamed",
+            DataType::Int32,
+            false,
+        )]));
+
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("fields differ beyond name"));
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_field_metadata_mismatch() {
+        let input =
+            empty_exec(vec![Field::new("a", DataType::Int32, false).with_metadata(
+                HashMap::from([("source".to_string(), "input".to_string())]),
+            )]);
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("renamed", DataType::Int32, false).with_metadata(HashMap::from([
+                ("source".to_string(), "expected".to_string()),
+            ])),
+        ]));
+
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("fields differ beyond name"));
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_schema_metadata_mismatch() {
+        let input_schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("a", DataType::Int32, false)],
+            HashMap::from([("source".to_string(), "input".to_string())]),
+        ));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
+        let expected_schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("renamed", DataType::Int32, false)],
+            HashMap::from([("source".to_string(), "expected".to_string())]),
+        ));
+
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("schema metadata differ"));
     }
 }
