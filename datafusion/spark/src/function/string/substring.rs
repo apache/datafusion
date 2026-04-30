@@ -159,7 +159,10 @@ fn spark_substring(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// - Zero start: treated as 1
 /// - Negative start: counts from end of string
 ///
-/// Returns the converted 1-based start position for use with `get_true_start_end`.
+/// The result may be `<= 0` when a negative start lands before the string
+/// (e.g. `start=-10` on a 3-char string gives `-6`). Such values are passed
+/// through to `get_true_start_end`, which clamps them and yields an empty
+/// slice — matching Spark's behavior for out-of-range negative positions.
 #[inline]
 fn spark_start_to_datafusion_start(start: i64, len: usize) -> i64 {
     if start >= 0 {
