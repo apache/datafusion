@@ -699,7 +699,7 @@ WITH RECURSIVE region_sales AS (
     SELECT
         s.salesperson_id AS salesperson_id,
         SUM(s.sale_amount) AS amount,
-      0 as level
+        SUM(0) as level
     FROM
         sales s
     GROUP BY
