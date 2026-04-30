@@ -183,6 +183,7 @@ parquet = { version = "58.1.0", default-features = false, features = [
 ] }
 pbjson = { version = "0.9.0" }
 pbjson-types = "0.9"
+pin-project = "1"
 # Should match arrow-flight's version of prost.
 prost = "0.14.1"
 rand = "0.9"

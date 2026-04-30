@@ -41,6 +41,7 @@ BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
+SQL_CARGO_COMMAND=${SQL_CARGO_COMMAND:-"cargo bench --bench sql"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 SIMULATE_LATENCY=${SIMULATE_LATENCY:-false}
 
@@ -685,14 +686,16 @@ run_tpch() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
-    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-
-    RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    FORMAT=$2
     echo "Running tpch benchmark..."
 
-    FORMAT=$2
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --scale-factor "${SCALE_FACTOR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env BENCH_NAME=tpch \
+      BENCH_SIZE="${SCALE_FACTOR}" \
+      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
+      TPCH_FILE_TYPE="${FORMAT}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the tpch in memory (needs tpch parquet data)
@@ -702,13 +705,15 @@ run_tpch_mem() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
-    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-
-    RESULTS_FILE="${RESULTS_DIR}/tpch_mem_sf${SCALE_FACTOR}.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
-    # -m means in memory
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --scale-factor "${SCALE_FACTOR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+
+    debug_run env BENCH_NAME=tpch \
+      BENCH_SIZE="${SCALE_FACTOR}" \
+      TPCH_FILE_TYPE="mem" \
+      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the tpcds benchmark
