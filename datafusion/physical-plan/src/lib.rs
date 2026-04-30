@@ -40,7 +40,6 @@ pub use datafusion_physical_expr::{
     Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
-pub use crate::common::normalize_batch_schema;
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::execution_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,

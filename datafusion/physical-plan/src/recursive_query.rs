@@ -24,11 +24,12 @@ use std::task::{Context, Poll};
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::common::normalize_batch_schema;
 use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
+use crate::expressions::Column;
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
+use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
@@ -39,7 +40,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{Result, internal_datafusion_err, internal_err, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::PhysicalExpr;
@@ -92,6 +93,7 @@ impl RecursiveQueryExec {
         let work_table = Arc::new(WorkTable::new(name.clone()));
         // Use the same work table for both the WorkTableExec and the recursive term
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
+        let recursive_term = project_to_schema(recursive_term, &static_term.schema())?;
         let cache = Self::compute_properties(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
@@ -135,6 +137,68 @@ impl RecursiveQueryExec {
             Boundedness::Bounded,
         )
     }
+}
+
+/// Return `input` unchanged if it already matches `expected_schema`; otherwise wrap it in
+/// a [`ProjectionExec`] that preserves the input columns positionally while aliasing them
+/// to `expected_schema`'s field names.
+///
+/// This is used for recursive CTEs because the static and recursive terms are planned
+/// independently. The recursive term can therefore produce equivalent columns with
+/// expression-derived names (for example `upper(r.val)`) while the recursive query's
+/// declared output schema comes from the static term (for example `val`). Aligning the
+/// recursive term with an explicit projection makes the physical plan expose the
+/// expected field names, instead of patching emitted [`RecordBatch`] schemas at the
+/// stream boundary.
+fn project_to_schema(
+    input: Arc<dyn ExecutionPlan>,
+    expected_schema: &SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    if input_schema.as_ref() == expected_schema.as_ref() {
+        return Ok(input);
+    }
+
+    if input_schema.fields().len() != expected_schema.fields().len() {
+        return internal_err!(
+            "RecursiveQueryExec expected recursive term to have {} column(s), got {}",
+            expected_schema.fields().len(),
+            input_schema.fields().len()
+        );
+    }
+
+    if let Some((i, (input_field, expected_field))) = input_schema
+        .fields()
+        .iter()
+        .zip(expected_schema.fields().iter())
+        .enumerate()
+        .find(|(_, (input_field, expected_field))| {
+            input_field.data_type() != expected_field.data_type()
+        })
+    {
+        return internal_err!(
+            "RecursiveQueryExec cannot project recursive term column {i} \
+             ('{}') to expected output field '{}': data types differ \
+             (recursive field: {:?}, expected field: {:?})",
+            input_field.name(),
+            expected_field.name(),
+            input_field,
+            expected_field
+        );
+    }
+
+    let projection_exprs = expected_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, expected_field)| ProjectionExpr {
+            expr: Arc::new(Column::new(input_schema.field(i).name(), i)),
+            alias: expected_field.name().clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let projection = ProjectionExec::try_new(projection_exprs, input)?;
+    Ok(Arc::new(projection))
 }
 
 impl ExecutionPlan for RecursiveQueryExec {
@@ -319,10 +383,6 @@ impl RecursiveQueryStream {
     ) -> Poll<Option<Result<RecordBatch>>> {
         let baseline_metrics = self.baseline_metrics.clone();
 
-        // Rebind to the declared output schema via the shared helper.
-        // See [`crate::common::normalize_batch_schema`] for full semantics.
-        batch = normalize_batch_schema(batch, &self.schema)?;
-
         if let Some(deduplicator) = &mut self.distinct_deduplicator {
             let _timer_guard = baseline_metrics.elapsed_compute().timer();
             batch = deduplicator.deduplicate(&batch)?;
@@ -494,4 +554,100 @@ fn new_groups_mask(
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::empty::EmptyExec;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    fn empty_exec(fields: Vec<Field>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(EmptyExec::new(Arc::new(Schema::new(fields))))
+    }
+
+    #[test]
+    fn project_to_schema_returns_input_when_schema_matches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let result = project_to_schema(Arc::clone(&input), &schema)?;
+
+        assert!(Arc::ptr_eq(&input, &result));
+        Ok(())
+    }
+
+    #[test]
+    fn project_to_schema_aliases_field_names_with_projection_exec() -> Result<()> {
+        let input = empty_exec(vec![
+            Field::new("recursive_a", DataType::Int32, false),
+            Field::new("recursive_b", DataType::Utf8, true),
+        ]);
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+
+        let result = project_to_schema(Arc::clone(&input), &expected_schema)?;
+
+        let projection = result
+            .downcast_ref::<ProjectionExec>()
+            .expect("schema rename should use ProjectionExec");
+        assert!(Arc::ptr_eq(projection.input(), &input));
+        assert_eq!(projection.schema(), expected_schema);
+        assert_eq!(projection.expr()[0].alias, "a");
+        assert_eq!(projection.expr()[1].alias, "b");
+        Ok(())
+    }
+
+    #[test]
+    fn project_to_schema_errors_on_column_count_mismatch() {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, false)]);
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let err = project_to_schema(input, &expected_schema).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("expected recursive term to have 2 column")
+        );
+    }
+
+    #[test]
+    fn project_to_schema_errors_on_type_mismatch() {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, false)]);
+        let expected_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+        let err = project_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("data types differ"));
+    }
+
+    #[test]
+    fn recursive_query_exec_projects_recursive_term_to_static_schema() -> Result<()> {
+        let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
+        let recursive_term =
+            empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, false)]);
+
+        let exec = RecursiveQueryExec::try_new(
+            "numbers".to_string(),
+            Arc::clone(&static_term),
+            Arc::clone(&recursive_term),
+            false,
+        )?;
+
+        assert_eq!(exec.schema(), static_term.schema());
+        let projection = exec
+            .recursive_term()
+            .downcast_ref::<ProjectionExec>()
+            .expect("recursive term should be aligned with ProjectionExec");
+        assert!(Arc::ptr_eq(projection.input(), &recursive_term));
+        assert_eq!(projection.schema(), static_term.schema());
+        assert_eq!(projection.expr()[0].alias, "value");
+        Ok(())
+    }
+}
