@@ -566,9 +566,10 @@ mod tests {
             args: HigherOrderFunctionArgs,
         ) -> Result<ColumnarValue> {
             match &args.args[0] {
-                ValueOrLambda::Lambda(lambda) => {
-                    lambda.evaluate(&[&|| Ok(Arc::new(NullArray::new(args.number_rows)))])
-                }
+                ValueOrLambda::Lambda(lambda) => lambda.evaluate(
+                    &[&|| Ok(Arc::new(NullArray::new(args.number_rows)))],
+                    |_| unreachable!(),
+                ),
                 ValueOrLambda::Value(value) => Ok(value.clone()),
             }
         }
