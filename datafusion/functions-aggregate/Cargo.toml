@@ -79,3 +79,11 @@ name = "min_max_bytes"
 [[bench]]
 name = "approx_distinct"
 harness = false
+
+[[bench]]
+name = "first_last"
+harness = false
+
+[[bench]]
+name = "count_distinct"
+harness = false

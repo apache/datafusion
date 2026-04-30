@@ -18,12 +18,19 @@
 //! FunctionRegistry trait
 
 use crate::expr_rewriter::FunctionRewrite;
+use crate::higher_order_function::HigherOrderUDF;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use arrow::datatypes::Field;
 use arrow_schema::DataType;
-use arrow_schema::extension::ExtensionType;
-use datafusion_common::types::{DFExtensionType, DFExtensionTypeRef};
+use arrow_schema::extension::{
+    Bool8, ExtensionType, FixedShapeTensor, Json, Opaque, TimestampWithOffset, Uuid,
+    VariableShapeTensor,
+};
+use datafusion_common::types::{
+    DFBool8, DFExtensionTypeRef, DFFixedShapeTensor, DFJson, DFOpaque,
+    DFTimestampWithOffset, DFUuid, DFVariableShapeTensor,
+};
 use datafusion_common::{HashMap, Result, not_impl_err, plan_datafusion_err};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
@@ -34,6 +41,9 @@ pub trait FunctionRegistry {
     /// Returns names of all available scalar user defined functions.
     fn udfs(&self) -> HashSet<String>;
 
+    /// Returns names of all available higher order user defined functions.
+    fn higher_order_function_names(&self) -> HashSet<String>;
+
     /// Returns names of all available aggregate user defined functions.
     fn udafs(&self) -> HashSet<String>;
 
@@ -43,6 +53,10 @@ pub trait FunctionRegistry {
     /// Returns a reference to the user defined scalar function (udf) named
     /// `name`.
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
+
+    /// Returns a reference to the user defined higher order function named
+    /// `name`.
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>>;
 
     /// Returns a reference to the user defined aggregate function (udaf) named
     /// `name`.
@@ -59,6 +73,17 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         not_impl_err!("Registering ScalarUDF")
+    }
+    /// Registers a new [`HigherOrderUDF`], returning any previously registered
+    /// implementation.
+    ///
+    /// Returns an error (the default) if the function can not be registered,
+    /// for example if the registry is read only.
+    fn register_higher_order_function(
+        &mut self,
+        _function: Arc<dyn HigherOrderUDF>,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        not_impl_err!("Registering HigherOrderUDF")
     }
     /// Registers a new [`AggregateUDF`], returning any previously registered
     /// implementation.
@@ -87,6 +112,18 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn deregister_udf(&mut self, _name: &str) -> Result<Option<Arc<ScalarUDF>>> {
         not_impl_err!("Deregistering ScalarUDF")
+    }
+
+    /// Deregisters a [`HigherOrderUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    fn deregister_higher_order_function(
+        &mut self,
+        _name: &str,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        not_impl_err!("Deregistering HigherOrderUDF")
     }
 
     /// Deregisters a [`AggregateUDF`], returning the implementation that was
@@ -160,6 +197,8 @@ pub struct MemoryFunctionRegistry {
     udafs: HashMap<String, Arc<AggregateUDF>>,
     /// Window Functions
     udwfs: HashMap<String, Arc<WindowUDF>>,
+    /// Higher Order Functions
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
 }
 
 impl MemoryFunctionRegistry {
@@ -180,6 +219,13 @@ impl FunctionRegistry for MemoryFunctionRegistry {
             .ok_or_else(|| plan_datafusion_err!("Function {name} not found"))
     }
 
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+        self.higher_order_functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("Higher Order Function {name} not found"))
+    }
+
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         self.udafs
             .get(name)
@@ -197,6 +243,14 @@ impl FunctionRegistry for MemoryFunctionRegistry {
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         Ok(self.udfs.insert(udf.name().to_string(), udf))
     }
+    fn register_higher_order_function(
+        &mut self,
+        function: Arc<dyn HigherOrderUDF>,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        Ok(self
+            .higher_order_functions
+            .insert(function.name().into(), function))
+    }
     fn register_udaf(
         &mut self,
         udaf: Arc<AggregateUDF>,
@@ -211,6 +265,10 @@ impl FunctionRegistry for MemoryFunctionRegistry {
         vec![]
     }
 
+    fn higher_order_function_names(&self) -> HashSet<String> {
+        self.higher_order_functions.keys().cloned().collect()
+    }
+
     fn udafs(&self) -> HashSet<String> {
         self.udafs.keys().cloned().collect()
     }
@@ -218,42 +276,6 @@ impl FunctionRegistry for MemoryFunctionRegistry {
     fn udwfs(&self) -> HashSet<String> {
         self.udwfs.keys().cloned().collect()
     }
-}
-
-/// A cheaply cloneable pointer to an [ExtensionTypeRegistration].
-pub type ExtensionTypeRegistrationRef = Arc<dyn ExtensionTypeRegistration>;
-
-/// The registration of an extension type. Implementations of this trait are responsible for
-/// *creating* instances of [`DFExtensionType`] that represent the entire semantics of an extension
-/// type.
-///
-/// # Why do we need a Registration?
-///
-/// A good question is why this trait is even necessary. Why not directly register the
-/// [`DFExtensionType`] in a registration?
-///
-/// While this works for extension types requiring no additional metadata (e.g., `arrow.uuid`), it
-/// does not work for more complex extension types with metadata. For example, consider an extension
-/// type `custom.shortened(n)` that aims to short the pretty-printing string to `n` characters.
-/// Here, `n` is a parameter of the extension type and should be a field in the struct that
-/// implements the [`DFExtensionType`]. The job of the registration is to read the metadata from the
-/// field and create the corresponding [`DFExtensionType`] instance with the correct `n` set.
-///
-/// The [`DefaultExtensionTypeRegistration`] provides a convenient way of creating registrations.
-pub trait ExtensionTypeRegistration: Debug + Send + Sync {
-    /// The name of the extension type.
-    ///
-    /// This name will be used to find the correct [ExtensionTypeRegistration] when an extension
-    /// type is encountered.
-    fn type_name(&self) -> &str;
-
-    /// Creates an extension type instance from the optional metadata. The name of the extension
-    /// type is not a parameter as it's already defined by the registration itself.
-    fn create_df_extension_type(
-        &self,
-        storage_type: &DataType,
-        metadata: Option<&str>,
-    ) -> Result<DFExtensionTypeRef>;
 }
 
 /// A cheaply cloneable pointer to an [ExtensionTypeRegistry].
@@ -292,7 +314,7 @@ pub trait ExtensionTypeRegistry: Debug + Send + Sync {
     }
 
     /// Returns all registered [ExtensionTypeRegistration].
-    fn extension_type_registrations(&self) -> Vec<Arc<dyn ExtensionTypeRegistration>>;
+    fn extension_type_registrations(&self) -> Vec<ExtensionTypeRegistrationRef>;
 
     /// Registers a new [ExtensionTypeRegistrationRef], returning any previously registered
     /// implementation.
@@ -328,74 +350,78 @@ pub trait ExtensionTypeRegistry: Debug + Send + Sync {
 
 /// A factory that creates instances of extension types from a storage [`DataType`] and the
 /// metadata.
-pub type ExtensionTypeFactory<TExtensionType> = dyn Fn(&DataType, <TExtensionType as ExtensionType>::Metadata) -> Result<TExtensionType>
-    + Send
-    + Sync;
+pub type ExtensionTypeFactory =
+    dyn Fn(&DataType, Option<&str>) -> Result<DFExtensionTypeRef> + Send + Sync;
 
-/// A default implementation of [ExtensionTypeRegistration] that parses the metadata from the
-/// given extension type and passes it to a constructor function.
-pub struct DefaultExtensionTypeRegistration<
-    TExtensionType: ExtensionType + DFExtensionType + 'static,
-> {
+/// A cheaply cloneable pointer to an [ExtensionTypeRegistration].
+pub type ExtensionTypeRegistrationRef = Arc<ExtensionTypeRegistration>;
+
+/// The registration of an extension type. Implementations of this trait are responsible for
+/// *creating* instances of [`DFExtensionType`] that represent the entire semantics of an extension
+/// type.
+///
+/// # Why do we need a Registration?
+///
+/// A good question is why this trait is even necessary. Why not directly register the
+/// [`DFExtensionType`] in a registry?
+///
+/// While this works for extension types requiring no additional metadata (e.g., `arrow.uuid`), it
+/// does not work for more complex extension types with metadata. For example, consider an extension
+/// type `custom.shortened(n)` that aims to short the pretty-printing string to `n` characters.
+/// Here, `n` is a parameter of the extension type and should be a field in the struct that
+/// implements the [`DFExtensionType`]. The job of the registration is to read the metadata from the
+/// field and create the corresponding [`DFExtensionType`] instance with the correct `n` set.
+///
+/// [`DFExtensionType`]: datafusion_common::types::DFExtensionType
+pub struct ExtensionTypeRegistration {
+    /// The name of the extension type.
+    name: String,
     /// A function that creates an instance of [`DFExtensionTypeRef`] from the storage type and the
     /// metadata.
-    factory: Box<ExtensionTypeFactory<TExtensionType>>,
+    factory: Box<ExtensionTypeFactory>,
 }
 
-impl<TExtensionType: ExtensionType + DFExtensionType + 'static>
-    DefaultExtensionTypeRegistration<TExtensionType>
-{
-    /// Creates a new registration for an extension type.
-    ///
-    /// The factory is not required to validate the storage [`DataType`], as the compatibility will
-    /// be checked by the registration using [`ExtensionType::supports_data_type`]. However, the
-    /// factory may still choose to do so.
+impl ExtensionTypeRegistration {
+    /// Creates a new registration for an extension type. The factory is required to validate that
+    /// the storage [`DataType`] is compatible with the extension type.
     pub fn new_arc(
-        factory: impl Fn(&DataType, TExtensionType::Metadata) -> Result<TExtensionType>
+        name: impl Into<String>,
+        factory: impl Fn(&DataType, Option<&str>) -> Result<DFExtensionTypeRef>
         + Send
         + Sync
         + 'static,
     ) -> ExtensionTypeRegistrationRef {
         Arc::new(Self {
+            name: name.into(),
             factory: Box::new(factory),
         })
     }
 }
 
-impl<TExtensionType: ExtensionType + DFExtensionType> ExtensionTypeRegistration
-    for DefaultExtensionTypeRegistration<TExtensionType>
-{
-    fn type_name(&self) -> &str {
-        TExtensionType::NAME
+impl ExtensionTypeRegistration {
+    /// The name of the extension type.
+    ///
+    /// This name will be used to find the correct [ExtensionTypeRegistration] when an extension
+    /// type is encountered.
+    pub fn type_name(&self) -> &str {
+        &self.name
     }
 
-    fn create_df_extension_type(
+    /// Creates an extension type instance from the optional metadata. The name of the extension
+    /// type is not a parameter as it's already defined by the registration itself.
+    pub fn create_df_extension_type(
         &self,
         storage_type: &DataType,
         metadata: Option<&str>,
     ) -> Result<DFExtensionTypeRef> {
-        let metadata = TExtensionType::deserialize_metadata(metadata)?;
-        let type_instance = self.factory.as_ref()(storage_type, metadata)?;
-        type_instance
-            .supports_data_type(storage_type)
-            .map_err(|_| {
-                plan_datafusion_err!(
-                    "Extension type {} obtained from registration does not support the storage data type {}",
-                    TExtensionType::NAME,
-                    storage_type
-                )
-            })?;
-
-        Ok(Arc::new(type_instance) as DFExtensionTypeRef)
+        self.factory.as_ref()(storage_type, metadata)
     }
 }
 
-impl<TExtensionType: ExtensionType + DFExtensionType> Debug
-    for DefaultExtensionTypeRegistration<TExtensionType>
-{
+impl Debug for ExtensionTypeRegistration {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DefaultExtensionTypeRegistration")
-            .field("type_name", &TExtensionType::NAME)
+            .field("type_name", &self.name)
             .finish()
     }
 }
@@ -424,9 +450,59 @@ impl MemoryExtensionTypeRegistry {
     /// Pre-registers the [canonical extension types](https://arrow.apache.org/docs/format/CanonicalExtensions.html)
     /// in the extension type registry.
     pub fn new_with_canonical_extension_types() -> Self {
-        let mapping = [DefaultExtensionTypeRegistration::new_arc(|_, _| {
-            Ok(arrow_schema::extension::Uuid {})
-        })];
+        let mapping = [
+            ExtensionTypeRegistration::new_arc(
+                FixedShapeTensor::NAME,
+                |storage_type, metadata| {
+                    Ok(Arc::new(DFFixedShapeTensor::try_new(
+                        storage_type,
+                        FixedShapeTensor::deserialize_metadata(metadata)?,
+                    )?))
+                },
+            ),
+            ExtensionTypeRegistration::new_arc(
+                VariableShapeTensor::NAME,
+                |storage_type, metadata| {
+                    Ok(Arc::new(DFVariableShapeTensor::try_new(
+                        storage_type,
+                        VariableShapeTensor::deserialize_metadata(metadata)?,
+                    )?))
+                },
+            ),
+            ExtensionTypeRegistration::new_arc(Json::NAME, |storage_type, metadata| {
+                Ok(Arc::new(DFJson::try_new(
+                    storage_type,
+                    Json::deserialize_metadata(metadata)?,
+                )?))
+            }),
+            ExtensionTypeRegistration::new_arc(Uuid::NAME, |storage_type, metadata| {
+                Ok(Arc::new(DFUuid::try_new(
+                    storage_type,
+                    Uuid::deserialize_metadata(metadata)?,
+                )?))
+            }),
+            ExtensionTypeRegistration::new_arc(Opaque::NAME, |storage_type, metadata| {
+                Ok(Arc::new(DFOpaque::try_new(
+                    storage_type,
+                    Opaque::deserialize_metadata(metadata)?,
+                )?))
+            }),
+            ExtensionTypeRegistration::new_arc(Bool8::NAME, |storage_type, metadata| {
+                Ok(Arc::new(DFBool8::try_new(
+                    storage_type,
+                    Bool8::deserialize_metadata(metadata)?,
+                )?))
+            }),
+            ExtensionTypeRegistration::new_arc(
+                TimestampWithOffset::NAME,
+                |storage_type, metadata| {
+                    Ok(Arc::new(DFTimestampWithOffset::try_new(
+                        storage_type,
+                        TimestampWithOffset::deserialize_metadata(metadata)?,
+                    )?))
+                },
+            ),
+        ];
 
         let mut extension_types = HashMap::new();
         for registration in mapping.into_iter() {
@@ -479,7 +555,7 @@ impl ExtensionTypeRegistry for MemoryExtensionTypeRegistry {
             .cloned()
     }
 
-    fn extension_type_registrations(&self) -> Vec<Arc<dyn ExtensionTypeRegistration>> {
+    fn extension_type_registrations(&self) -> Vec<ExtensionTypeRegistrationRef> {
         self.extension_types
             .read()
             .expect("Extension type registry lock poisoned")

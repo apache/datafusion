@@ -20,7 +20,7 @@ mod kernels;
 use crate::PhysicalExpr;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use std::hash::Hash;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
@@ -130,7 +130,7 @@ impl std::fmt::Display for BinaryExpr {
             expr: &dyn PhysicalExpr,
             precedence: u8,
         ) -> std::fmt::Result {
-            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(child) = expr.downcast_ref::<BinaryExpr>() {
                 let p = child.op.precedence();
                 if p == 0 || p < precedence {
                     write!(f, "({child})")?;
@@ -252,11 +252,6 @@ fn duration_to_days(array: &ArrayRef) -> Result<ArrayRef> {
 }
 
 impl PhysicalExpr for BinaryExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         BinaryTypeCoercer::new(
             &self.left.data_type(input_schema)?,
@@ -590,7 +585,7 @@ impl PhysicalExpr for BinaryExpr {
             expr: &dyn PhysicalExpr,
             precedence: u8,
         ) -> std::fmt::Result {
-            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(child) = expr.downcast_ref::<BinaryExpr>() {
                 let p = child.op.precedence();
                 if p == 0 || p < precedence {
                     write!(f, "(")?;
@@ -4668,7 +4663,6 @@ mod tests {
         schema: &Schema,
     ) -> Result<BinaryExpr> {
         Ok(binary_op(left, op, right, schema)?
-            .as_any()
             .downcast_ref::<BinaryExpr>()
             .unwrap()
             .clone())

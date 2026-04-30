@@ -44,6 +44,7 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+mod content_defined_chunking;
 mod custom_reader;
 #[cfg(feature = "parquet_encryption")]
 mod encryption;

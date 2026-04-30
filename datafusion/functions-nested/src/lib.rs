@@ -37,10 +37,16 @@
 #[macro_use]
 pub mod macros;
 
+#[macro_use]
+pub mod macros_lambda;
+
+pub mod array_compact;
 pub mod array_has;
+pub mod array_transform;
 pub mod arrays_zip;
 pub mod cardinality;
 pub mod concat;
+pub mod cosine_distance;
 pub mod dimension;
 pub mod distance;
 pub mod empty;
@@ -71,20 +77,23 @@ pub mod utils;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::ScalarUDF;
+use datafusion_expr::{HigherOrderUDF, ScalarUDF};
 use log::debug;
 use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::array_compact::array_compact;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::array_transform::array_transform;
     pub use super::arrays_zip::arrays_zip;
     pub use super::cardinality::cardinality;
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
+    pub use super::cosine_distance::cosine_distance;
     pub use super::dimension::array_dims;
     pub use super::dimension::array_ndims;
     pub use super::distance::array_distance;
@@ -128,6 +137,7 @@ pub mod expr_fn {
 /// Return all default nested type functions
 pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
     vec![
+        array_compact::array_compact_udf(),
         string::array_to_string_udf(),
         string::string_to_array_udf(),
         range::range_udf(),
@@ -150,6 +160,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         array_has::array_has_any_udf(),
         empty::array_empty_udf(),
         length::array_length_udf(),
+        cosine_distance::cosine_distance_udf(),
         distance::array_distance_udf(),
         flatten::flatten_udf(),
         min_max::array_max_udf(),
@@ -178,6 +189,10 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
     ]
 }
 
+pub fn all_default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
+    vec![array_transform::array_transform_higher_order_function()]
+}
+
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<ScalarUDF>> = all_default_nested_functions();
@@ -189,25 +204,43 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         Ok(()) as Result<()>
     })?;
 
+    let functions: Vec<Arc<dyn HigherOrderUDF>> = all_default_higher_order_functions();
+    functions.into_iter().try_for_each(|function| {
+        let existing_function = registry.register_higher_order_function(function)?;
+        if let Some(existing_function) = existing_function {
+            debug!(
+                "Overwrite existing higher-order function: {}",
+                existing_function.name()
+            );
+        }
+        Ok(()) as Result<()>
+    })?;
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::all_default_nested_functions;
+    use crate::{all_default_higher_order_functions, all_default_nested_functions};
     use datafusion_common::Result;
     use std::collections::HashSet;
 
     #[test]
     fn test_no_duplicate_name() -> Result<()> {
+        let scalars = all_default_nested_functions();
+        let scalars = scalars.iter().map(|s| (s.name(), s.aliases()));
+
+        let lambdas = all_default_higher_order_functions();
+        let lambdas = lambdas.iter().map(|l| (l.name(), l.aliases()));
+
         let mut names = HashSet::new();
-        for func in all_default_nested_functions() {
+
+        for (name, aliases) in scalars.chain(lambdas) {
             assert!(
-                names.insert(func.name().to_string().to_lowercase()),
-                "duplicate function name: {}",
-                func.name()
+                names.insert(name.to_string().to_lowercase()),
+                "duplicate function name: {name}",
             );
-            for alias in func.aliases() {
+            for alias in aliases {
                 assert!(
                     names.insert(alias.to_string().to_lowercase()),
                     "duplicate function name: {alias}"

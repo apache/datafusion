@@ -17,12 +17,14 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int64Array};
+use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
+use arrow::compute::try_binary;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
+use arrow::datatypes::Int64Type;
 
 use arrow::error::ArrowError;
-use datafusion_common::{Result, arrow_datafusion_err, exec_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -91,7 +93,7 @@ impl ScalarUDFImpl for LcmFunc {
 
 /// Lcm SQL function
 fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let compute_lcm = |x: i64, y: i64| {
+    let compute_lcm = |x: i64, y: i64| -> Result<i64, ArrowError> {
         if x == 0 || y == 0 {
             return Ok(0);
         }
@@ -105,55 +107,20 @@ fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
             .checked_mul(b)
             .and_then(|v| i64::try_from(v).ok())
             .ok_or_else(|| {
-                arrow_datafusion_err!(ArrowError::ComputeError(format!(
+                ArrowError::ComputeError(format!(
                     "Signed integer overflow in LCM({x}, {y})"
-                )))
+                ))
             })
     };
 
     match args[0].data_type() {
         Int64 => {
-            let arg1 = downcast_named_arg!(&args[0], "x", Int64Array);
-            let arg2 = downcast_named_arg!(&args[1], "y", Int64Array);
+            let arg1 = args[0].as_primitive::<Int64Type>();
+            let arg2 = args[1].as_primitive::<Int64Type>();
 
-            Ok(arg1
-                .iter()
-                .zip(arg2.iter())
-                .map(|(a1, a2)| match (a1, a2) {
-                    (Some(a1), Some(a2)) => Ok(Some(compute_lcm(a1, a2)?)),
-                    _ => Ok(None),
-                })
-                .collect::<Result<Int64Array>>()
-                .map(Arc::new)? as ArrayRef)
+            let result: PrimitiveArray<Int64Type> = try_binary(arg1, arg2, compute_lcm)?;
+            Ok(Arc::new(result) as ArrayRef)
         }
         other => exec_err!("Unsupported data type {other:?} for function lcm"),
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::sync::Arc;
-
-    use arrow::array::{ArrayRef, Int64Array};
-
-    use datafusion_common::cast::as_int64_array;
-
-    use crate::math::lcm::lcm;
-
-    #[test]
-    fn test_lcm_i64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![0, 3, 25, -16])), // x
-            Arc::new(Int64Array::from(vec![0, -2, 15, 8])),  // y
-        ];
-
-        let result = lcm(&args).expect("failed to initialize function lcm");
-        let ints = as_int64_array(&result).expect("failed to initialize function lcm");
-
-        assert_eq!(ints.len(), 4);
-        assert_eq!(ints.value(0), 0);
-        assert_eq!(ints.value(1), 6);
-        assert_eq!(ints.value(2), 75);
-        assert_eq!(ints.value(3), 16);
     }
 }

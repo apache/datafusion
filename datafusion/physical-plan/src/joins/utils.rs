@@ -59,6 +59,7 @@ use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
 use arrow_ord::cmp::not_distinct;
+use arrow_ord::ord::{DynComparator, make_comparator};
 use arrow_schema::{ArrowError, DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
@@ -471,8 +472,8 @@ fn estimate_join_cardinality(
         .iter()
         .map(|(left, right)| {
             match (
-                left.as_any().downcast_ref::<Column>(),
-                right.as_any().downcast_ref::<Column>(),
+                left.downcast_ref::<Column>(),
+                right.downcast_ref::<Column>(),
             ) {
                 (Some(left), Some(right)) => (
                     left_stats.column_statistics[left.index()].clone(),
@@ -530,35 +531,48 @@ fn estimate_join_cardinality(
             })
         }
 
-        // For SemiJoins estimation result is either zero, in cases when inputs
-        // are non-overlapping according to statistics, or equal to number of rows
-        // for outer input
-        JoinType::LeftSemi | JoinType::RightSemi => {
-            let (outer_stats, inner_stats) = match join_type {
-                JoinType::LeftSemi => (left_stats, right_stats),
-                _ => (right_stats, left_stats),
-            };
-            let cardinality = match estimate_disjoint_inputs(&outer_stats, &inner_stats) {
-                Some(estimation) => *estimation.get_value()?,
-                None => *outer_stats.num_rows.get_value()?,
-            };
+        JoinType::LeftSemi
+        | JoinType::RightSemi
+        | JoinType::LeftAnti
+        | JoinType::RightAnti => {
+            let is_left = matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti);
+            let is_anti = matches!(join_type, JoinType::LeftAnti | JoinType::RightAnti);
 
+            let ((outer_stats, inner_stats), (outer_col_stats, inner_col_stats)) =
+                if is_left {
+                    (
+                        (&left_stats, &right_stats),
+                        (&left_col_stats, &right_col_stats),
+                    )
+                } else {
+                    (
+                        (&right_stats, &left_stats),
+                        (&right_col_stats, &left_col_stats),
+                    )
+                };
+
+            let outer_rows = *outer_stats.num_rows.get_value()?;
+
+            let cardinality =
+                if estimate_disjoint_inputs(outer_stats, inner_stats).is_some() {
+                    // Disjoint inputs: semi produces 0, anti keeps all rows.
+                    if is_anti { outer_rows } else { 0 }
+                } else {
+                    match estimate_semi_join_cardinality(
+                        &outer_stats.num_rows,
+                        &inner_stats.num_rows,
+                        outer_col_stats,
+                        inner_col_stats,
+                    ) {
+                        Some(semi) if is_anti => outer_rows.saturating_sub(semi),
+                        Some(semi) => semi,
+                        None => outer_rows,
+                    }
+                };
+
+            let outer_stats = if is_left { left_stats } else { right_stats };
             Some(PartialJoinStatistics {
                 num_rows: cardinality,
-                column_statistics: outer_stats.column_statistics,
-            })
-        }
-
-        // For AntiJoins estimation always equals to outer statistics, as
-        // non-overlapping inputs won't affect estimation
-        JoinType::LeftAnti | JoinType::RightAnti => {
-            let outer_stats = match join_type {
-                JoinType::LeftAnti => left_stats,
-                _ => right_stats,
-            };
-
-            Some(PartialJoinStatistics {
-                num_rows: *outer_stats.num_rows.get_value()?,
                 column_statistics: outer_stats.column_statistics,
             })
         }
@@ -698,6 +712,95 @@ fn estimate_disjoint_inputs(
     None
 }
 
+/// Estimates the number of outer rows that have at least one matching
+/// key on the inner side (i.e. semi join cardinality) using NDV
+/// (Number of Distinct Values) statistics.
+///
+/// Assuming the smaller domain is contained in the larger, the number
+/// of overlapping distinct values is `min(outer_ndv, inner_ndv)`.
+/// Under the uniformity assumption (each distinct value contributes
+/// equally to row counts), the surviving fraction of outer rows is:
+///
+/// Null rows cannot match, so each column's selectivity is further
+/// reduced by the outer null fraction:
+///
+/// ```text
+/// null_frac_i = outer_null_count_i / outer_rows
+/// selectivity_i = min(outer_ndv_i, inner_ndv_i) / outer_ndv_i * (1 - null_frac_i)
+/// ```
+///
+/// For multi-column join keys the overall selectivity is the product
+/// of per-column factors:
+///
+/// ```text
+/// semi_cardinality = outer_rows * product_i(selectivity_i)
+/// ```
+///
+/// Anti join cardinality is derived as the complement:
+/// `outer_rows - semi_cardinality`.
+///
+/// Boundary cases:
+/// * `inner_ndv >= outer_ndv` → selectivity = `1.0 - null_frac`
+/// * `null_frac = 1.0` → selectivity = 0.0 (no non-null rows can match)
+/// * Missing NDV statistics → returns `None` (fallback to `outer_rows`)
+///
+/// PostgreSQL uses a similar approach in `eqjoinsel_semi`
+/// (`src/backend/utils/adt/selfuncs.c`). When NDV statistics are
+/// available on both sides it computes selectivity as `nd2 / nd1`,
+/// which is equivalent to `min(outer_ndv, inner_ndv) / outer_ndv`.
+/// If either side lacks statistics it falls back to a default.
+fn estimate_semi_join_cardinality(
+    outer_num_rows: &Precision<usize>,
+    inner_num_rows: &Precision<usize>,
+    outer_col_stats: &[ColumnStatistics],
+    inner_col_stats: &[ColumnStatistics],
+) -> Option<usize> {
+    let outer_rows = *outer_num_rows.get_value()?;
+    if outer_rows == 0 {
+        return Some(0);
+    }
+    let inner_rows = *inner_num_rows.get_value()?;
+    if inner_rows == 0 {
+        return Some(0);
+    }
+
+    let mut selectivity = 1.0_f64;
+    let mut has_selectivity_estimate = false;
+
+    for (outer_stat, inner_stat) in outer_col_stats.iter().zip(inner_col_stats.iter()) {
+        let outer_has_stats = outer_stat.distinct_count.get_value().is_some()
+            || (outer_stat.min_value.get_value().is_some()
+                && outer_stat.max_value.get_value().is_some());
+        let inner_has_stats = inner_stat.distinct_count.get_value().is_some()
+            || (inner_stat.min_value.get_value().is_some()
+                && inner_stat.max_value.get_value().is_some());
+        if !outer_has_stats || !inner_has_stats {
+            continue;
+        }
+
+        let outer_ndv = max_distinct_count(outer_num_rows, outer_stat);
+        let inner_ndv = max_distinct_count(inner_num_rows, inner_stat);
+
+        if let (Some(&o), Some(&i)) = (outer_ndv.get_value(), inner_ndv.get_value())
+            && o > 0
+        {
+            let null_frac = outer_stat
+                .null_count
+                .get_value()
+                .map(|&nc| nc as f64 / outer_rows as f64)
+                .unwrap_or(0.0);
+            selectivity *= (o.min(i) as f64) / (o as f64) * (1.0 - null_frac);
+            has_selectivity_estimate = true;
+        }
+    }
+
+    if has_selectivity_estimate {
+        Some((outer_rows as f64 * selectivity).ceil() as usize)
+    } else {
+        None
+    }
+}
+
 /// Estimate the number of maximum distinct values that can be present in the
 /// given column from its statistics. If distinct_count is available, uses it
 /// directly. Otherwise, if the column is numeric and has min/max values, it
@@ -708,7 +811,19 @@ fn max_distinct_count(
     stats: &ColumnStatistics,
 ) -> Precision<usize> {
     match &stats.distinct_count {
-        &dc @ (Precision::Exact(_) | Precision::Inexact(_)) => dc,
+        &dc @ (Precision::Exact(_) | Precision::Inexact(_)) => {
+            // NDV can never exceed the number of rows
+            match num_rows {
+                Precision::Absent => dc,
+                _ => {
+                    if dc.get_value() <= num_rows.get_value() {
+                        dc
+                    } else {
+                        num_rows.to_inexact()
+                    }
+                }
+            }
+        }
         _ => {
             // The number can never be greater than the number of rows we have
             // minus the nulls (since they don't count as distinct values).
@@ -1822,6 +1937,110 @@ fn eq_dyn_null(
     }
 }
 
+/// Pre-built comparator for join key columns that eliminates per-row type
+/// dispatch. Wraps `arrow_ord::ord::DynComparator` closures built once per
+/// batch pair, used for all row comparisons within those batches.
+///
+/// The first key column is stored separately so that single-column joins
+/// (the common case) avoid Vec iteration entirely, and multi-column joins
+/// short-circuit without entering the loop when the first column is
+/// selective.
+///
+/// Null handling is baked into the closures at construction time:
+/// - `NullEqualsNull`: `make_comparator` returns `Equal` for both-null, which
+///   is the desired behavior. Closures are used as-is.
+/// - `NullEqualsNothing`: columns where both sides contain nulls get a wrapper
+///   that returns `Less` for both-null. Columns where one side has no nulls
+///   skip the wrapper since both-null is impossible.
+///
+/// Because `NullEqualsNothing` wraps comparators to return `Less` for
+/// both-null, `is_equal` will return `false` for both-null rows when that
+/// mode is active. Callers needing both-null == equal semantics (e.g.,
+/// buffered head/tail equality in SMJ) should construct with
+/// `NullEqualsNull`.
+pub struct JoinKeyComparator {
+    first: DynComparator,
+    rest: Vec<DynComparator>,
+}
+
+impl JoinKeyComparator {
+    /// Build comparators for each join key column pair.
+    pub fn new(
+        left_arrays: &[ArrayRef],
+        right_arrays: &[ArrayRef],
+        sort_options: &[SortOptions],
+        null_equality: NullEquality,
+    ) -> Result<Self> {
+        debug_assert_eq!(left_arrays.len(), right_arrays.len());
+        debug_assert_eq!(left_arrays.len(), sort_options.len());
+
+        let mut iter = left_arrays
+            .iter()
+            .zip(right_arrays.iter())
+            .zip(sort_options.iter())
+            .map(|((l, r), opts)| {
+                let inner = make_comparator(l.as_ref(), r.as_ref(), *opts)?;
+                if null_equality == NullEquality::NullEqualsNothing {
+                    let ln = l.logical_nulls().filter(|n| n.null_count() > 0);
+                    let rn = r.logical_nulls().filter(|n| n.null_count() > 0);
+                    match (ln, rn) {
+                        // Both sides have nulls — wrap to override both-null.
+                        (Some(ln), Some(rn)) => Ok(Box::new(move |i, j| {
+                            if ln.is_null(i) && rn.is_null(j) {
+                                Ordering::Less
+                            } else {
+                                inner(i, j)
+                            }
+                        })
+                            as DynComparator),
+                        // One side has no nulls — both-null impossible, no wrap.
+                        _ => Ok(inner),
+                    }
+                } else {
+                    Ok(inner)
+                }
+            });
+
+        let first = iter.next().expect("join must have at least one key")?;
+        let rest = iter.collect::<Result<Vec<_>>>()?;
+        Ok(Self { first, rest })
+    }
+
+    /// Compare row `left` (in the left arrays) with row `right` (in the right
+    /// arrays). Returns the lexicographic ordering across all key columns.
+    #[inline]
+    pub fn compare(&self, left: usize, right: usize) -> Ordering {
+        let ord = (self.first)(left, right);
+        if ord != Ordering::Equal || self.rest.is_empty() {
+            return ord;
+        }
+        for cmp_fn in &self.rest {
+            let ord = cmp_fn(left, right);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+        }
+        Ordering::Equal
+    }
+
+    /// Check equality of row `left` (in the left arrays) with row `right`
+    /// (in the right arrays). Both-null is treated as equal when constructed
+    /// with `NullEqualsNull`. With `NullEqualsNothing`, both-null returns
+    /// `false` because the override is baked into the comparators.
+    #[inline]
+    pub fn is_equal(&self, left: usize, right: usize) -> bool {
+        if (self.first)(left, right) != Ordering::Equal {
+            return false;
+        }
+        for cmp_fn in &self.rest {
+            if cmp_fn(left, right) != Ordering::Equal {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Get comparison result of two rows of join arrays
 pub fn compare_join_arrays(
     left_arrays: &[ArrayRef],
@@ -2287,6 +2506,22 @@ mod tests {
                 (10, Inexact(1), Inexact(10), Absent, Absent),
                 Some(Inexact(0)),
             ),
+            // NDV > num_rows: distinct count should be capped at row count
+            (
+                (5, Inexact(1), Inexact(100), Inexact(50), Absent),
+                (10, Inexact(1), Inexact(100), Inexact(50), Absent),
+                // max_distinct_count caps: left NDV=min(50,5)=5, right NDV=min(50,10)=10
+                // cardinality = (5 * 10) / max(5, 10) = 50 / 10 = 5
+                Some(Inexact(5)),
+            ),
+            // NDV > num_rows on one side only
+            (
+                (3, Inexact(1), Inexact(100), Inexact(100), Absent),
+                (10, Inexact(1), Inexact(100), Inexact(5), Absent),
+                // max_distinct_count caps: left NDV=min(100,3)=3, right NDV=min(5,10)=5
+                // cardinality = (3 * 10) / max(3, 5) = 30 / 5 = 6
+                Some(Inexact(6)),
+            ),
         ];
 
         for (left_info, right_info, expected_cardinality) in cases {
@@ -2426,11 +2661,14 @@ mod tests {
         //   y: min=0, max=100, distinct=None
         //
         // Join on a=c, b=d (ignore x/y)
+        // Right column d has NDV=2500 but only 2000 rows, so NDV is capped
+        // to 2000. join_selectivity = max(500, 2000) = 2000.
+        // Inner cardinality = (1000 * 2000) / 2000 = 1000
         let cases = vec![
-            (JoinType::Inner, 800),
+            (JoinType::Inner, 1000),
             (JoinType::Left, 1000),
             (JoinType::Right, 2000),
-            (JoinType::Full, 2200),
+            (JoinType::Full, 2000),
         ];
 
         let left_col_stats = vec![
@@ -2561,7 +2799,7 @@ mod tests {
                 JoinType::LeftSemi,
                 (50, Inexact(10), Inexact(20), Absent, Absent),
                 (10, Inexact(15), Inexact(25), Absent, Absent),
-                Some(50),
+                Some(46),
             ),
             (
                 JoinType::RightSemi,
@@ -2597,13 +2835,13 @@ mod tests {
                 JoinType::LeftAnti,
                 (50, Inexact(10), Inexact(20), Absent, Absent),
                 (10, Inexact(15), Inexact(25), Absent, Absent),
-                Some(50),
+                Some(4),
             ),
             (
                 JoinType::RightAnti,
                 (50, Inexact(10), Inexact(20), Absent, Absent),
                 (10, Inexact(15), Inexact(25), Absent, Absent),
-                Some(10),
+                Some(0),
             ),
             (
                 JoinType::LeftAnti,
@@ -2628,6 +2866,108 @@ mod tests {
                 (50, Absent, Inexact(20), Absent, Absent),
                 (10, Inexact(30), Absent, Absent, Absent),
                 Some(50),
+            ),
+            // NDV-based semi join: outer_ndv=20, inner_ndv=10
+            // selectivity = 10/20 = 0.5, cardinality = ceil(50 * 0.5) = 25
+            (
+                JoinType::LeftSemi,
+                (50, Inexact(1), Inexact(100), Inexact(20), Absent),
+                (10, Inexact(1), Inexact(100), Inexact(10), Absent),
+                Some(25),
+            ),
+            // inner_ndv(30) >= outer_ndv(20) -> selectivity 1.0, no reduction
+            (
+                JoinType::LeftSemi,
+                (50, Inexact(1), Inexact(100), Inexact(20), Absent),
+                (100, Inexact(1), Inexact(100), Inexact(30), Absent),
+                Some(50),
+            ),
+            // NDV-based anti join: semi=25, anti = 50 - 25 = 25
+            (
+                JoinType::LeftAnti,
+                (50, Inexact(1), Inexact(100), Inexact(20), Absent),
+                (10, Inexact(1), Inexact(100), Inexact(10), Absent),
+                Some(25),
+            ),
+            // inner covers all outer: semi=50, anti = 0
+            (
+                JoinType::LeftAnti,
+                (50, Inexact(1), Inexact(100), Inexact(20), Absent),
+                (100, Inexact(1), Inexact(100), Inexact(30), Absent),
+                Some(0),
+            ),
+            // RightSemi with explicit NDV (NDV within row count, used as-is):
+            // For RightSemi, sides are swapped: outer = right (20 rows, ndv=10),
+            // inner = left (50 rows, ndv=5). selectivity = min(10,5)/10 = 0.5,
+            // cardinality = ceil(20 * 0.5) = 10.
+            (
+                JoinType::RightSemi,
+                (50, Inexact(1), Inexact(100), Inexact(5), Absent),
+                (20, Inexact(1), Inexact(100), Inexact(10), Absent),
+                Some(10),
+            ),
+            // RightAnti with explicit NDV: anti = outer_rows - semi = 20 - 10 = 10.
+            (
+                JoinType::RightAnti,
+                (50, Inexact(1), Inexact(100), Inexact(5), Absent),
+                (20, Inexact(1), Inexact(100), Inexact(10), Absent),
+                Some(10),
+            ),
+            // RightSemi where right-side NDV (20) exceeds right-side row count (10):
+            // NDV is clamped to 10, so outer_ndv=10, inner_ndv=10,
+            // selectivity = min(10,10)/10 = 1.0, cardinality = ceil(10 * 1.0) = 10.
+            (
+                JoinType::RightSemi,
+                (50, Inexact(1), Inexact(100), Inexact(10), Absent),
+                (10, Inexact(1), Inexact(100), Inexact(20), Absent),
+                Some(10),
+            ),
+            // RightAnti with NDV clamped by row count: anti = 10 - 10 = 0.
+            (
+                JoinType::RightAnti,
+                (50, Inexact(1), Inexact(100), Inexact(10), Absent),
+                (10, Inexact(1), Inexact(100), Inexact(20), Absent),
+                Some(0),
+            ),
+            // Empty inner table: no match possible, semi → 0
+            (
+                JoinType::LeftSemi,
+                (100, Absent, Absent, Absent, Absent),
+                (0, Absent, Absent, Absent, Absent),
+                Some(0),
+            ),
+            // NDV-based semi with nulls on outer side:
+            // outer_ndv=20, inner_ndv=10, null_frac=10/100=0.1
+            // selectivity = 10/20 * (1-0.1) = 0.5 * 0.9 = 0.45
+            // semi = ceil(100 * 0.45) = 45
+            (
+                JoinType::LeftSemi,
+                (100, Absent, Absent, Inexact(20), Inexact(10)),
+                (200, Absent, Absent, Inexact(10), Absent),
+                Some(45),
+            ),
+            // Anti-join with nulls on outer side:
+            // semi=45, anti = 100 - 45 = 55
+            (
+                JoinType::LeftAnti,
+                (100, Absent, Absent, Inexact(20), Inexact(10)),
+                (200, Absent, Absent, Inexact(10), Absent),
+                Some(55),
+            ),
+            // All outer rows are null: null_frac=1.0
+            // selectivity = 10/20 * (1-1.0) = 0.0, semi = 0
+            (
+                JoinType::LeftSemi,
+                (100, Absent, Absent, Inexact(20), Inexact(100)),
+                (200, Absent, Absent, Inexact(10), Absent),
+                Some(0),
+            ),
+            // All outer rows are null (anti): anti = 100 - 0 = 100
+            (
+                JoinType::LeftAnti,
+                (100, Absent, Absent, Inexact(20), Inexact(100)),
+                (200, Absent, Absent, Inexact(10), Absent),
+                Some(100),
             ),
         ];
 
@@ -2743,6 +3083,157 @@ mod tests {
         assert!(
             absent_inner_estimation.is_none(),
             "Expected \"None\" estimated SemiJoin cardinality for absent outer and inner num_rows"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_semi_join_multi_column_and_mixed_stats() -> Result<()> {
+        let join_on = vec![
+            (
+                Arc::new(Column::new("l_col0", 0)) as _,
+                Arc::new(Column::new("r_col0", 0)) as _,
+            ),
+            (
+                Arc::new(Column::new("l_col1", 1)) as _,
+                Arc::new(Column::new("r_col1", 1)) as _,
+            ),
+        ];
+
+        // Multi-column: both columns have NDV on both sides.
+        // col0: outer_ndv=20, inner_ndv=10 → selectivity = 10/20 = 0.5
+        // col1: outer_ndv=40, inner_ndv=10 → selectivity = 10/40 = 0.25
+        // total selectivity = 0.5 * 0.25 = 0.125
+        // semi = ceil(100 * 0.125) = 13
+        let result = estimate_join_cardinality(
+            &JoinType::LeftSemi,
+            Statistics {
+                num_rows: Inexact(100),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Inexact(20), Absent),
+                    create_column_stats(Absent, Absent, Inexact(40), Absent),
+                ],
+            },
+            Statistics {
+                num_rows: Inexact(200),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Inexact(10), Absent),
+                    create_column_stats(Absent, Absent, Inexact(10), Absent),
+                ],
+            },
+            &join_on,
+        )
+        .map(|c| c.num_rows);
+        assert_eq!(result, Some(13), "multi-column semi join");
+
+        // Multi-column anti: anti = 100 - 13 = 87
+        let result = estimate_join_cardinality(
+            &JoinType::LeftAnti,
+            Statistics {
+                num_rows: Inexact(100),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Inexact(20), Absent),
+                    create_column_stats(Absent, Absent, Inexact(40), Absent),
+                ],
+            },
+            Statistics {
+                num_rows: Inexact(200),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Inexact(10), Absent),
+                    create_column_stats(Absent, Absent, Inexact(10), Absent),
+                ],
+            },
+            &join_on,
+        )
+        .map(|c| c.num_rows);
+        assert_eq!(result, Some(87), "multi-column anti join");
+
+        // Mixed stats: col0 has NDV on both sides, col1 has NDV only on outer.
+        // col1 is skipped (either side missing), so selectivity comes from col0 only.
+        // col0: outer_ndv=20, inner_ndv=10 → selectivity = 0.5
+        // semi = ceil(100 * 0.5) = 50
+        let result = estimate_join_cardinality(
+            &JoinType::LeftSemi,
+            Statistics {
+                num_rows: Inexact(100),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Inexact(20), Absent),
+                    create_column_stats(Absent, Absent, Inexact(40), Absent),
+                ],
+            },
+            Statistics {
+                num_rows: Inexact(200),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Inexact(10), Absent),
+                    create_column_stats(Absent, Absent, Absent, Absent),
+                ],
+            },
+            &join_on,
+        )
+        .map(|c| c.num_rows);
+        assert_eq!(result, Some(50), "mixed stats: col1 skipped");
+
+        // Mixed stats: neither column has stats on both sides → fallback to outer_rows
+        let result = estimate_join_cardinality(
+            &JoinType::LeftSemi,
+            Statistics {
+                num_rows: Inexact(100),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Inexact(20), Absent),
+                    create_column_stats(Absent, Absent, Absent, Absent),
+                ],
+            },
+            Statistics {
+                num_rows: Inexact(200),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Absent, Absent),
+                    create_column_stats(Absent, Absent, Inexact(10), Absent),
+                ],
+            },
+            &join_on,
+        )
+        .map(|c| c.num_rows);
+        assert_eq!(result, Some(100), "no column has stats on both sides");
+
+        // Multi-column with nulls on one column:
+        // col0: outer_ndv=20, inner_ndv=10, null_frac=0.0 → 10/20 * 1.0 = 0.5
+        // col1: outer_ndv=40, inner_ndv=10, null_frac=20/100=0.2 → 10/40 * 0.8 = 0.2
+        // total selectivity = 0.5 * 0.2 = 0.1
+        // semi = ceil(100 * 0.1) = 10
+        let result = estimate_join_cardinality(
+            &JoinType::LeftSemi,
+            Statistics {
+                num_rows: Inexact(100),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Inexact(20), Absent),
+                    create_column_stats(Absent, Absent, Inexact(40), Inexact(20)),
+                ],
+            },
+            Statistics {
+                num_rows: Inexact(200),
+                total_byte_size: Absent,
+                column_statistics: vec![
+                    create_column_stats(Absent, Absent, Inexact(10), Absent),
+                    create_column_stats(Absent, Absent, Inexact(10), Absent),
+                ],
+            },
+            &join_on,
+        )
+        .map(|c| c.num_rows);
+        assert_eq!(
+            result,
+            Some(10),
+            "multi-column semi join with nulls on one column"
         );
 
         Ok(())
@@ -2873,7 +3364,6 @@ mod tests {
 
     fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {
         let col = expr
-            .as_any()
             .downcast_ref::<Column>()
             .expect("Projection items should be Column expression");
         assert_eq!(col.name(), name);
@@ -2948,5 +3438,193 @@ mod tests {
         };
         let result = max_distinct_count(&num_rows, &stats);
         assert_eq!(result, Exact(0));
+    }
+
+    #[test]
+    fn test_join_key_comparator_multi_column() {
+        let left_a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 2, 3]));
+        let left_b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+        let right_a: ArrayRef = Arc::new(Int32Array::from(vec![2, 2, 3, 4]));
+        let right_b: ArrayRef = Arc::new(StringArray::from(vec!["b", "d", "a", "a"]));
+
+        let opts = vec![SortOptions::default(), SortOptions::default()];
+        let cmp = JoinKeyComparator::new(
+            &[left_a, left_b],
+            &[right_a, right_b],
+            &opts,
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+
+        // left[0]=(1,"a") vs right[0]=(2,"b") -> Less (first column)
+        assert_eq!(cmp.compare(0, 0), Ordering::Less);
+        // left[1]=(2,"b") vs right[0]=(2,"b") -> Equal
+        assert_eq!(cmp.compare(1, 0), Ordering::Equal);
+        assert!(cmp.is_equal(1, 0));
+        // left[2]=(2,"c") vs right[1]=(2,"d") -> Less (second column)
+        assert_eq!(cmp.compare(2, 1), Ordering::Less);
+        // left[3]=(3,"d") vs right[0]=(2,"b") -> Greater
+        assert_eq!(cmp.compare(3, 0), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_join_key_comparator_null_equals_null() {
+        let left: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), None, None, Some(2)]));
+        let right: ArrayRef =
+            Arc::new(Int32Array::from(vec![None, None, Some(1), Some(2)]));
+
+        let opts = vec![SortOptions {
+            descending: false,
+            nulls_first: true,
+        }];
+        let cmp = JoinKeyComparator::new(
+            &[left],
+            &[right],
+            &opts,
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+
+        // left[1]=NULL vs right[1]=NULL -> Equal (NullEqualsNull)
+        assert_eq!(cmp.compare(1, 1), Ordering::Equal);
+        assert!(cmp.is_equal(1, 1));
+        // left[0]=1 vs right[0]=NULL -> Greater (nulls_first, non-null > null)
+        assert_eq!(cmp.compare(0, 0), Ordering::Greater);
+        // left[3]=2 vs right[3]=2 -> Equal
+        assert_eq!(cmp.compare(3, 3), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_join_key_comparator_null_equals_nothing() {
+        let left: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), None, None, Some(2)]));
+        let right: ArrayRef =
+            Arc::new(Int32Array::from(vec![None, None, Some(1), Some(2)]));
+
+        let opts = vec![SortOptions {
+            descending: false,
+            nulls_first: true,
+        }];
+        let cmp = JoinKeyComparator::new(
+            &[left],
+            &[right],
+            &opts,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+
+        // left[1]=NULL vs right[1]=NULL -> Less (NullEqualsNothing)
+        assert_eq!(cmp.compare(1, 1), Ordering::Less);
+        // left[0]=1 vs right[0]=NULL -> Greater (nulls_first)
+        assert_eq!(cmp.compare(0, 0), Ordering::Greater);
+        // left[3]=2 vs right[3]=2 -> Equal
+        assert_eq!(cmp.compare(3, 3), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_join_key_comparator_nulls_first_ordering() {
+        let left: ArrayRef = Arc::new(Int32Array::from(vec![None, Some(1)]));
+        let right: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
+
+        // nulls_first = true: null < non-null
+        let cmp_nf = JoinKeyComparator::new(
+            &[Arc::clone(&left)],
+            &[Arc::clone(&right)],
+            &[SortOptions {
+                descending: false,
+                nulls_first: true,
+            }],
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+        assert_eq!(cmp_nf.compare(0, 0), Ordering::Less);
+        assert_eq!(cmp_nf.compare(1, 1), Ordering::Greater);
+
+        // nulls_first = false: null > non-null
+        let cmp_nl = JoinKeyComparator::new(
+            &[left],
+            &[right],
+            &[SortOptions {
+                descending: false,
+                nulls_first: false,
+            }],
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+        assert_eq!(cmp_nl.compare(0, 0), Ordering::Greater);
+        assert_eq!(cmp_nl.compare(1, 1), Ordering::Less);
+    }
+
+    #[test]
+    fn test_max_distinct_count_preserves_precision_when_not_capped() {
+        assert_eq!(
+            max_distinct_count(
+                &Exact(10),
+                &ColumnStatistics {
+                    distinct_count: Exact(5),
+                    ..Default::default()
+                }
+            ),
+            Exact(5)
+        );
+        assert_eq!(
+            max_distinct_count(
+                &Exact(10),
+                &ColumnStatistics {
+                    distinct_count: Inexact(5),
+                    ..Default::default()
+                }
+            ),
+            Inexact(5)
+        );
+        // Inexact num_rows does not affect an exact NDV that is within bounds
+        assert_eq!(
+            max_distinct_count(
+                &Inexact(10),
+                &ColumnStatistics {
+                    distinct_count: Exact(5),
+                    ..Default::default()
+                }
+            ),
+            Exact(5)
+        );
+    }
+
+    #[test]
+    fn test_max_distinct_count_demotes_to_inexact_when_capped() {
+        // Exact NDV > Exact num_rows is an illegal state (NDV <= num_rows is a
+        // mathematical invariant), but the code handles it defensively by
+        // capping and demoting to inexact
+        assert_eq!(
+            max_distinct_count(
+                &Exact(10),
+                &ColumnStatistics {
+                    distinct_count: Exact(15),
+                    ..Default::default()
+                }
+            ),
+            Inexact(10)
+        );
+        assert_eq!(
+            max_distinct_count(
+                &Inexact(10),
+                &ColumnStatistics {
+                    distinct_count: Exact(15),
+                    ..Default::default()
+                }
+            ),
+            Inexact(10)
+        );
+        assert_eq!(
+            max_distinct_count(
+                &Exact(10),
+                &ColumnStatistics {
+                    distinct_count: Inexact(15),
+                    ..Default::default()
+                }
+            ),
+            Inexact(10)
+        );
     }
 }

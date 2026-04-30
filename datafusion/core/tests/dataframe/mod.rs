@@ -1204,26 +1204,26 @@ async fn window_using_aggregates() -> Result<()> {
     | first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     |             |          |                 |               |        |     |      | 1  | -85  |
-    | -85         | -101     | 14              | -12           | -12    | 83  | -101 | 4  | -54  |
-    | -85         | -101     | 17              | -25           | -25    | 83  | -101 | 5  | -31  |
-    | -85         | -12      | 10              | -32           | -34    | 83  | -85  | 3  | 13   |
-    | -85         | -25      | 3               | -56           | -56    | -25 | -85  | 1  | -5   |
-    | -85         | -31      | 18              | -29           | -28    | 83  | -101 | 5  | 36   |
-    | -85         | -38      | 16              | -25           | -25    | 83  | -101 | 4  | 65   |
-    | -85         | -43      | 7               | -43           | -43    | 83  | -85  | 2  | 45   |
-    | -85         | -48      | 6               | -35           | -36    | 83  | -85  | 2  | -43  |
-    | -85         | -5       | 4               | -37           | -40    | -5  | -85  | 1  | 83   |
-    | -85         | -54      | 15              | -17           | -18    | 83  | -101 | 4  | -38  |
-    | -85         | -56      | 2               | -70           | -70    | -56 | -85  | 1  | -25  |
-    | -85         | -72      | 9               | -43           | -43    | 83  | -85  | 3  | -12  |
-    | -85         | -85      | 1               | -85           | -85    | -85 | -85  | 1  | -56  |
-    | -85         | 13       | 11              | -17           | -18    | 83  | -85  | 3  | 14   |
-    | -85         | 13       | 11              | -25           | -25    | 83  | -85  | 3  | 13   |
-    | -85         | 14       | 12              | -12           | -12    | 83  | -85  | 3  | 17   |
-    | -85         | 17       | 13              | -11           | -8     | 83  | -85  | 4  | -101 |
-    | -85         | 45       | 8               | -34           | -34    | 83  | -85  | 3  | -72  |
-    | -85         | 65       | 17              | -17           | -18    | 83  | -101 | 5  | -101 |
-    | -85         | 83       | 5               | -25           | -25    | 83  | -85  | 2  | -48  |
+    | -85         | -101     | 14              | -12.0         | -12    | 83  | -101 | 4  | -54  |
+    | -85         | -101     | 17              | -25.0         | -25    | 83  | -101 | 5  | -31  |
+    | -85         | -12      | 10              | -32.75        | -34    | 83  | -85  | 3  | 13   |
+    | -85         | -25      | 3               | -56.0         | -56    | -25 | -85  | 1  | -5   |
+    | -85         | -31      | 18              | -29.75        | -28    | 83  | -101 | 5  | 36   |
+    | -85         | -38      | 16              | -25.0         | -25    | 83  | -101 | 4  | 65   |
+    | -85         | -43      | 7               | -43.0         | -43    | 83  | -85  | 2  | 45   |
+    | -85         | -48      | 6               | -35.75        | -36    | 83  | -85  | 2  | -43  |
+    | -85         | -5       | 4               | -37.75        | -40    | -5  | -85  | 1  | 83   |
+    | -85         | -54      | 15              | -17.0         | -18    | 83  | -101 | 4  | -38  |
+    | -85         | -56      | 2               | -70.5         | -70    | -56 | -85  | 1  | -25  |
+    | -85         | -72      | 9               | -43.0         | -43    | 83  | -85  | 3  | -12  |
+    | -85         | -85      | 1               | -85.0         | -85    | -85 | -85  | 1  | -56  |
+    | -85         | 13       | 11              | -17.0         | -18    | 83  | -85  | 3  | 14   |
+    | -85         | 13       | 11              | -25.0         | -25    | 83  | -85  | 3  | 13   |
+    | -85         | 14       | 12              | -12.0         | -12    | 83  | -85  | 3  | 17   |
+    | -85         | 17       | 13              | -11.25        | -8     | 83  | -85  | 4  | -101 |
+    | -85         | 45       | 8               | -34.5         | -34    | 83  | -85  | 3  | -72  |
+    | -85         | 65       | 17              | -17.0         | -18    | 83  | -101 | 5  | -101 |
+    | -85         | 83       | 5               | -25.0         | -25    | 83  | -85  | 2  | -48  |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     "
     );
@@ -2458,9 +2458,8 @@ async fn cache_producer_test() -> Result<()> {
         @r"
     CacheNode
       Projection: aggregate_test_100.c2, aggregate_test_100.c3, CAST(CAST(aggregate_test_100.c2 AS Int64) + CAST(aggregate_test_100.c3 AS Int64) AS Int64) AS sum
-        Projection: aggregate_test_100.c2, aggregate_test_100.c3
-          Limit: skip=0, fetch=1
-            TableScan: aggregate_test_100, fetch=1
+        Limit: skip=0, fetch=1
+          TableScan: aggregate_test_100 projection=[c2, c3], fetch=1
     "
     );
     Ok(())
@@ -6849,6 +6848,53 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
         partial_agg_exec_schema.is_ok(),
         "Expected get AggregateExec schema to succeed with duplicate state fields"
     );
+
+    Ok(())
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/21411
+/// grouping() should work when wrapped in an alias via the DataFrame API.
+///
+/// This bug only manifests through the DataFrame API because `.alias()` wraps
+/// the `grouping()` call in an `Expr::Alias` node at the aggregate expression
+/// level. The SQL planner handles aliasing separately (via projection), so the
+/// `ResolveGroupingFunction` analyzer rule never sees an `Expr::Alias` wrapper
+/// around the aggregate function in SQL queries — making SQL-based tests
+/// insufficient to cover this case.
+#[tokio::test]
+async fn test_grouping_with_alias() -> Result<()> {
+    use datafusion_functions_aggregate::expr_fn::grouping;
+
+    let df = create_test_table("test")
+        .await?
+        .aggregate(vec![col("a")], vec![grouping(col("a")).alias("g")])?
+        .sort(vec![Sort::new(col("a"), true, false)])?;
+
+    let results = df.collect().await?;
+
+    let expected = [
+        "+-----------+---+",
+        "| a         | g |",
+        "+-----------+---+",
+        "| 123AbcDef | 0 |",
+        "| CBAdef    | 0 |",
+        "| abc123    | 0 |",
+        "| abcDEF    | 0 |",
+        "+-----------+---+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Also verify that nested aliases (e.g. .alias("x").alias("g")) work correctly
+    let df = create_test_table("test")
+        .await?
+        .aggregate(
+            vec![col("a")],
+            vec![grouping(col("a")).alias("x").alias("g")],
+        )?
+        .sort(vec![Sort::new(col("a"), true, false)])?;
+
+    let results = df.collect().await?;
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }

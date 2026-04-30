@@ -34,16 +34,12 @@ use datafusion_expr::TableType;
 ///
 /// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
-pub trait SchemaProvider: Debug + Sync + Send {
+pub trait SchemaProvider: Any + Debug + Sync + Send {
     /// Returns the owner of the Schema, default is None. This value is reported
     /// as part of `information_tables.schemata
     fn owner_name(&self) -> Option<&str> {
         None
     }
-
-    /// Returns this `SchemaProvider` as [`Any`] so that it can be downcast to a
-    /// specific implementation.
-    fn as_any(&self) -> &dyn Any;
 
     /// Retrieves the list of available table names in this schema.
     fn table_names(&self) -> Vec<String>;
@@ -88,4 +84,24 @@ pub trait SchemaProvider: Debug + Sync + Send {
 
     /// Returns true if table exist in the schema provider, false otherwise.
     fn table_exist(&self, name: &str) -> bool;
+}
+
+impl dyn SchemaProvider {
+    /// Returns `true` if the schema provider is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn SchemaProvider>` via auto-deref.
+    pub fn is<T: SchemaProvider>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this schema provider to a concrete type `T`,
+    /// returning `None` if the provider is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn SchemaProvider>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: SchemaProvider>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }

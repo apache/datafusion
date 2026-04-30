@@ -17,19 +17,17 @@
 
 //! [`EmptyTable`] useful for testing.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::*;
 use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_common::project_schema;
-
-use crate::datasource::{TableProvider, TableType};
-use crate::error::Result;
-use crate::logical_expr::Expr;
+use datafusion_common::{Result, project_schema};
+use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
+
+use crate::Session;
+use crate::TableProvider;
 
 /// An empty plan that is useful for testing and generating plans
 /// without mapping them to actual data.
@@ -57,10 +55,6 @@ impl EmptyTable {
 
 #[async_trait]
 impl TableProvider for EmptyTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

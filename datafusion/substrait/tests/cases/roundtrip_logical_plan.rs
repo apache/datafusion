@@ -1754,6 +1754,140 @@ async fn roundtrip_read_filter() -> Result<()> {
     roundtrip_verify_read_filter_count("SELECT a FROM data where a < 5", 1).await
 }
 
+#[tokio::test]
+async fn roundtrip_placeholder_sql_filter() -> Result<()> {
+    let plan = generate_plan_from_sql("SELECT a, b FROM data WHERE a > $1", false, false)
+        .await?;
+
+    assert_snapshot!(
+    plan,
+    @r"
+    Projection: data.a, data.b
+      Filter: data.a > $1
+        TableScan: data
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_placeholder_sql_projection() -> Result<()> {
+    let plan =
+        generate_plan_from_sql("SELECT a, $1 FROM data WHERE a > $2", false, false)
+            .await?;
+
+    assert_snapshot!(
+    plan,
+    @r"
+    Projection: data.a, $1
+      Filter: data.a > $2
+        TableScan: data
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_placeholder_typed_int64() -> Result<()> {
+    let ctx = create_context().await?;
+
+    let placeholder =
+        Expr::Placeholder(datafusion::logical_expr::expr::Placeholder::new_with_field(
+            "$1".into(),
+            Some(Arc::new(Field::new("$1", DataType::Int64, true))),
+        ));
+    let scan_plan = ctx.table("data").await?.into_optimized_plan()?;
+    let plan = LogicalPlanBuilder::from(scan_plan)
+        .filter(col("a").gt(placeholder))?
+        .build()?;
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+    // Verify the producer emits a DynamicParameter in the Substrait proto
+    let plan_rel = proto.relations.first().unwrap();
+    let plan_json = format!("{plan_rel:?}");
+    assert!(
+        plan_json.contains("DynamicParameter"),
+        "Substrait proto should contain DynamicParameter, got: {plan_json}"
+    );
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    assert_snapshot!(
+    plan2,
+    @r"
+    Filter: data.a > $1
+      TableScan: data
+    "
+    );
+
+    assert_eq!(plan.schema(), plan2.schema());
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_placeholder_multiple_typed() -> Result<()> {
+    let ctx = create_context().await?;
+
+    let p1 =
+        Expr::Placeholder(datafusion::logical_expr::expr::Placeholder::new_with_field(
+            "$1".into(),
+            Some(Arc::new(Field::new("$1", DataType::Int64, true))),
+        ));
+    let p2 =
+        Expr::Placeholder(datafusion::logical_expr::expr::Placeholder::new_with_field(
+            "$2".into(),
+            Some(Arc::new(Field::new("$2", DataType::Decimal128(5, 2), true))),
+        ));
+    let scan_plan = ctx.table("data").await?.into_optimized_plan()?;
+    let plan = LogicalPlanBuilder::from(scan_plan)
+        .filter(col("a").gt(p1).and(col("b").lt(p2)))?
+        .build()?;
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    assert_snapshot!(
+    plan2,
+    @r"
+    Filter: data.a > $1 AND data.b < $2
+      TableScan: data
+    "
+    );
+
+    assert_eq!(plan.schema(), plan2.schema());
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_placeholder_typed_utf8() -> Result<()> {
+    let ctx = create_context().await?;
+
+    let placeholder =
+        Expr::Placeholder(datafusion::logical_expr::expr::Placeholder::new_with_field(
+            "$1".into(),
+            Some(Arc::new(Field::new("$1", DataType::Utf8, true))),
+        ));
+    let scan_plan = ctx.table("data").await?.into_optimized_plan()?;
+    let plan = LogicalPlanBuilder::from(scan_plan)
+        .filter(col("f").eq(placeholder))?
+        .build()?;
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    assert_snapshot!(
+    plan2,
+    @r"
+    Filter: data.f = $1
+      TableScan: data
+    "
+    );
+
+    assert_eq!(plan.schema(), plan2.schema());
+    Ok(())
+}
+
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
     // search for target_rel and field value in proto
     match &rel.rel_type {
