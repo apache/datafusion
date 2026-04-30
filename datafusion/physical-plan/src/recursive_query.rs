@@ -24,23 +24,22 @@ use std::task::{Context, Poll};
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
+use crate::common::project_plan_to_schema;
 use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
-use crate::expressions::Column;
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
-use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Result, internal_datafusion_err, internal_err, not_impl_err};
+use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::PhysicalExpr;
@@ -93,10 +92,8 @@ impl RecursiveQueryExec {
         let work_table = Arc::new(WorkTable::new(name.clone()));
         // Use the same work table for both the WorkTableExec and the recursive term
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        let recursive_term = align_recursive_term_to_static_schema(
-            recursive_term,
-            static_term.schema().as_ref(),
-        )?;
+        let recursive_term =
+            project_plan_to_schema(recursive_term, &static_term.schema())?;
         let cache = Self::compute_properties(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
@@ -395,64 +392,6 @@ fn assign_work_table(
     .data()
 }
 
-fn align_recursive_term_to_static_schema(
-    recursive_term: Arc<dyn ExecutionPlan>,
-    static_schema: &Schema,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let recursive_schema = recursive_term.schema();
-    if recursive_schema.as_ref() == static_schema {
-        return Ok(recursive_term);
-    }
-
-    if recursive_schema.fields().len() != static_schema.fields().len() {
-        return internal_err!(
-            "Cannot align recursive term to static term schema: expected {} column(s), got {}",
-            static_schema.fields().len(),
-            recursive_schema.fields().len()
-        );
-    }
-
-    if recursive_schema.metadata() != static_schema.metadata() {
-        return internal_err!(
-            "Cannot align recursive term to static term schema: schema metadata differ"
-        );
-    }
-
-    if let Some((i, (recursive_field, static_field))) = recursive_schema
-        .fields()
-        .iter()
-        .zip(static_schema.fields().iter())
-        .enumerate()
-        .find(|(_, (recursive_field, static_field))| {
-            recursive_field.data_type() != static_field.data_type()
-                || recursive_field.metadata() != static_field.metadata()
-        })
-    {
-        return internal_err!(
-            "Cannot align recursive term column {i} ('{}') to static field '{}': fields differ beyond name/nullability (recursive field: {:?}, static field: {:?})",
-            recursive_field.name(),
-            static_field.name(),
-            recursive_field,
-            static_field
-        );
-    }
-
-    let projection_exprs = static_schema
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(i, static_field)| ProjectionExpr {
-            expr: Arc::new(Column::new(recursive_schema.field(i).name(), i)),
-            alias: static_field.name().clone(),
-        })
-        .collect::<Vec<_>>();
-
-    Ok(Arc::new(ProjectionExec::try_new(
-        projection_exprs,
-        recursive_term,
-    )?))
-}
-
 impl Stream for RecursiveQueryStream {
     type Item = Result<RecordBatch>;
 
@@ -568,7 +507,7 @@ mod tests {
     fn recursive_query_exec_projects_recursive_term_to_reconciled_schema() -> Result<()> {
         let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
         let recursive_term =
-            empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
+            empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, false)]);
 
         let exec = RecursiveQueryExec::try_new(
             "numbers".to_string(),
@@ -583,8 +522,25 @@ mod tests {
             .downcast_ref::<ProjectionExec>()
             .expect("recursive term should be aligned with ProjectionExec");
         assert!(Arc::ptr_eq(projection.input(), &recursive_term));
-        assert!(projection.schema().field(0).is_nullable());
+        assert!(!projection.schema().field(0).is_nullable());
         assert_eq!(projection.expr()[0].alias, "value");
         Ok(())
+    }
+
+    #[test]
+    fn recursive_query_exec_rejects_nullability_mismatch() {
+        let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
+        let recursive_term =
+            empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
+
+        let err = RecursiveQueryExec::try_new(
+            "numbers".to_string(),
+            static_term,
+            recursive_term,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("fields differ beyond name"));
     }
 }
