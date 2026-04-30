@@ -42,6 +42,102 @@ pub(super) struct ArrayStaticFilter {
     map: HashMap<usize, (), ()>,
 }
 
+impl ArrayStaticFilter {
+    /// Computes a [`StaticFilter`] for the provided [`Array`] if there
+    /// are nulls present or there are more than the configured number of
+    /// elements.
+    ///
+    /// Note: This is split into a separate function as higher-rank trait bounds currently
+    /// cause type inference to misbehave
+    pub(super) fn try_new(in_array: ArrayRef) -> Result<ArrayStaticFilter> {
+        // Null type has no natural order - return empty hash set
+        if in_array.data_type() == &DataType::Null {
+            return Ok(ArrayStaticFilter {
+                in_array,
+                state: RandomState::default(),
+                map: HashMap::with_hasher(()),
+            });
+        }
+
+        let state = RandomState::default();
+        let map = Self::build_haystack_map(&in_array, &state)?;
+
+        Ok(Self {
+            in_array,
+            state,
+            map,
+        })
+    }
+
+    fn build_haystack_map(
+        haystack: &ArrayRef,
+        state: &RandomState,
+    ) -> Result<HashMap<usize, (), ()>> {
+        let mut map: HashMap<usize, (), ()> = HashMap::with_hasher(());
+
+        with_hashes([haystack.as_ref()], state, |hashes| -> Result<()> {
+            let cmp = make_comparator(haystack, haystack, SortOptions::default())?;
+
+            let insert_value = |idx| {
+                let hash = hashes[idx];
+                if let RawEntryMut::Vacant(v) = map
+                    .raw_entry_mut()
+                    .from_hash(hash, |x| cmp(*x, idx).is_eq())
+                {
+                    v.insert_with_hasher(hash, idx, (), |x| hashes[*x]);
+                }
+            };
+
+            match haystack.nulls() {
+                Some(nulls) => {
+                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                        .for_each(insert_value)
+                }
+                None => (0..haystack.len()).for_each(insert_value),
+            }
+
+            Ok(())
+        })?;
+
+        Ok(map)
+    }
+
+    fn find_needles_in_haystack(
+        &self,
+        needles: &dyn Array,
+        negated: bool,
+    ) -> Result<BooleanArray> {
+        let needle_nulls = needles.logical_nulls();
+        let needle_nulls = needle_nulls.as_ref();
+        let haystack_has_nulls = self.in_array.null_count() != 0;
+
+        with_hashes([needles], &self.state, |hashes| {
+            let cmp = make_comparator(needles, &self.in_array, SortOptions::default())?;
+            Ok((0..needles.len())
+                .map(|i| {
+                    // SQL three-valued logic: null IN (...) is always null
+                    if needle_nulls.is_some_and(|nulls| nulls.is_null(i)) {
+                        return None;
+                    }
+
+                    let hash = hashes[i];
+                    let contains = self
+                        .map
+                        .raw_entry()
+                        .from_hash(hash, |idx| cmp(i, *idx).is_eq())
+                        .is_some();
+
+                    match contains {
+                        true => Some(!negated),
+                        false if haystack_has_nulls => None,
+                        false => Some(negated),
+                    }
+                })
+                .collect())
+        })
+    }
+}
+
 impl StaticFilter for ArrayStaticFilter {
     fn null_count(&self) -> usize {
         self.in_array.null_count()
@@ -76,85 +172,6 @@ impl StaticFilter for ArrayStaticFilter {
             _ => {}
         }
 
-        let needle_nulls = v.logical_nulls();
-        let needle_nulls = needle_nulls.as_ref();
-        let haystack_has_nulls = self.in_array.null_count() != 0;
-
-        with_hashes([v], &self.state, |hashes| {
-            let cmp = make_comparator(v, &self.in_array, SortOptions::default())?;
-            Ok((0..v.len())
-                .map(|i| {
-                    // SQL three-valued logic: null IN (...) is always null
-                    if needle_nulls.is_some_and(|nulls| nulls.is_null(i)) {
-                        return None;
-                    }
-
-                    let hash = hashes[i];
-                    let contains = self
-                        .map
-                        .raw_entry()
-                        .from_hash(hash, |idx| cmp(i, *idx).is_eq())
-                        .is_some();
-
-                    match contains {
-                        true => Some(!negated),
-                        false if haystack_has_nulls => None,
-                        false => Some(negated),
-                    }
-                })
-                .collect())
-        })
-    }
-}
-
-impl ArrayStaticFilter {
-    /// Computes a [`StaticFilter`] for the provided [`Array`] if there
-    /// are nulls present or there are more than the configured number of
-    /// elements.
-    ///
-    /// Note: This is split into a separate function as higher-rank trait bounds currently
-    /// cause type inference to misbehave
-    pub(super) fn try_new(in_array: ArrayRef) -> Result<ArrayStaticFilter> {
-        // Null type has no natural order - return empty hash set
-        if in_array.data_type() == &DataType::Null {
-            return Ok(ArrayStaticFilter {
-                in_array,
-                state: RandomState::default(),
-                map: HashMap::with_hasher(()),
-            });
-        }
-
-        let state = RandomState::default();
-        let mut map: HashMap<usize, (), ()> = HashMap::with_hasher(());
-
-        with_hashes([&in_array], &state, |hashes| -> Result<()> {
-            let cmp = make_comparator(&in_array, &in_array, SortOptions::default())?;
-
-            let insert_value = |idx| {
-                let hash = hashes[idx];
-                if let RawEntryMut::Vacant(v) = map
-                    .raw_entry_mut()
-                    .from_hash(hash, |x| cmp(*x, idx).is_eq())
-                {
-                    v.insert_with_hasher(hash, idx, (), |x| hashes[*x]);
-                }
-            };
-
-            match in_array.nulls() {
-                Some(nulls) => {
-                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
-                        .for_each(insert_value)
-                }
-                None => (0..in_array.len()).for_each(insert_value),
-            }
-
-            Ok(())
-        })?;
-
-        Ok(Self {
-            in_array,
-            state,
-            map,
-        })
+        self.find_needles_in_haystack(v, negated)
     }
 }
