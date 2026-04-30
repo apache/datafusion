@@ -28,6 +28,7 @@ use datafusion_common::Result;
 use datafusion_common::hash_utils::{RandomState, with_hashes};
 use hashbrown::hash_map::RawEntryMut;
 
+use super::result::build_in_list_result;
 use super::static_filter::StaticFilter;
 
 /// Static filter for InList that stores the array and hash set for O(1) lookups
@@ -108,32 +109,25 @@ impl ArrayStaticFilter {
         negated: bool,
     ) -> Result<BooleanArray> {
         let needle_nulls = needles.logical_nulls();
-        let needle_nulls = needle_nulls.as_ref();
         let haystack_has_nulls = self.in_array.null_count() != 0;
 
-        with_hashes([needles], &self.state, |hashes| {
+        with_hashes([needles], &self.state, |needle_hashes| {
             let cmp = make_comparator(needles, &self.in_array, SortOptions::default())?;
-            Ok((0..needles.len())
-                .map(|i| {
-                    // SQL three-valued logic: null IN (...) is always null
-                    if needle_nulls.is_some_and(|nulls| nulls.is_null(i)) {
-                        return None;
-                    }
 
-                    let hash = hashes[i];
-                    let contains = self
-                        .map
+            Ok(build_in_list_result(
+                needles.len(),
+                needle_nulls.as_ref(),
+                haystack_has_nulls,
+                negated,
+                #[inline(always)]
+                |i| {
+                    let hash = needle_hashes[i];
+                    self.map
                         .raw_entry()
                         .from_hash(hash, |idx| cmp(i, *idx).is_eq())
-                        .is_some();
-
-                    match contains {
-                        true => Some(!negated),
-                        false if haystack_has_nulls => None,
-                        false => Some(negated),
-                    }
-                })
-                .collect())
+                        .is_some()
+                },
+            ))
         })
     }
 }
