@@ -123,6 +123,23 @@ fn try_evaluate_constant_list(
     }
 }
 
+/// Asserts that the InList expression's data type matches a list element's
+/// data type. `DataType::Null` list elements are accepted unconditionally so
+/// that null literals and `NullArray` haystacks remain compatible with any
+/// expression type.
+fn assert_inlist_data_types_match(
+    expr_data_type: &DataType,
+    list_data_type: &DataType,
+) -> Result<()> {
+    if *list_data_type != DataType::Null {
+        assert_or_internal_err!(
+            DFSchema::datatype_is_logically_equal(expr_data_type, list_data_type),
+            "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_data_type}"
+        );
+    }
+    Ok(())
+}
+
 impl InListExpr {
     /// Create a new InList expression
     fn new(
@@ -184,13 +201,7 @@ impl InListExpr {
         schema: &Schema,
     ) -> Result<Self> {
         let expr_data_type = expr.data_type(schema)?;
-        let array_data_type = array.data_type();
-        if *array_data_type != DataType::Null {
-            assert_or_internal_err!(
-                DFSchema::datatype_is_logically_equal(&expr_data_type, array_data_type),
-                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {array_data_type}"
-            );
-        }
+        assert_inlist_data_types_match(&expr_data_type, array.data_type())?;
 
         let list = (0..array.len())
             .map(|i| {
@@ -224,13 +235,7 @@ impl InListExpr {
         let expr_data_type = expr.data_type(schema)?;
         for list_expr in list.iter() {
             let list_expr_data_type = list_expr.data_type(schema)?;
-            assert_or_internal_err!(
-                DFSchema::datatype_is_logically_equal(
-                    &expr_data_type,
-                    &list_expr_data_type
-                ),
-                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-            );
+            assert_inlist_data_types_match(&expr_data_type, &list_expr_data_type)?;
         }
 
         // Try to create a static filter if all list expressions are constants
@@ -3756,6 +3761,63 @@ mod tests {
 
         let result = InListExpr::try_new_from_array(col_a, haystack, false, &schema);
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_struct_haystack() -> Result<()> {
+        let struct_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
+        ]);
+        let struct_dt = DataType::Struct(struct_fields.clone());
+        let schema = Schema::new(vec![Field::new("a", struct_dt, true)]);
+
+        // Needle: [{1,"a"}, {2,"b"}, NULL, {4,"d"}]
+        let needle = Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            ],
+            Some(vec![true, true, false, true].into()),
+        ));
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![needle])?;
+
+        // Haystack: [{1,"a"}, {4,"d"}]
+        let haystack: ArrayRef = Arc::new(StructArray::new(
+            struct_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 4])),
+                Arc::new(StringArray::from(vec!["a", "d"])),
+            ],
+            None,
+        ));
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(
+            Arc::clone(&col_a),
+            Arc::clone(&haystack),
+            false,
+            &schema,
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        // {1,"a"} -> true, {2,"b"} -> false, NULL -> NULL, {4,"d"} -> true
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), None, Some(true)])
+        );
+
+        // Negated path
+        let expr = InListExpr::try_new_from_array(col_a, haystack, true, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(false), Some(true), None, Some(false)])
+        );
+
         Ok(())
     }
 }
