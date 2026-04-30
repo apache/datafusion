@@ -268,11 +268,20 @@ pub fn pushdown_limit_helper(
                     .unwrap_or(plan_with_fetch);
 
                 if global_skip > 0 {
-                    add_global_limit(
-                        plan_with_preserve_order,
-                        global_skip,
-                        Some(global_fetch),
-                    )
+                    // Push offset to the plan. If accepted, the source
+                    // handles offset via shared atomic counter across
+                    // partitions — safe to eliminate GlobalLimitExec.
+                    if let Some(plan_with_offset) =
+                        plan_with_preserve_order.with_offset(global_skip)
+                    {
+                        plan_with_offset
+                    } else {
+                        add_global_limit(
+                            plan_with_preserve_order,
+                            global_skip,
+                            Some(global_fetch),
+                        )
+                    }
                 } else {
                     plan_with_preserve_order
                 }

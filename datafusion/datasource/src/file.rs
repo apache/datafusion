@@ -280,6 +280,13 @@ pub trait FileSource: Any + Send + Sync {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
+    /// Whether this source can efficiently skip rows for OFFSET queries
+    /// (e.g., by skipping entire row groups based on row counts).
+    /// Default: false.
+    fn supports_offset(&self) -> bool {
+        false
+    }
+
     /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should

@@ -396,6 +396,36 @@ impl PreparedAccessPlan {
 
         Ok(self)
     }
+
+    /// Apply a row-level offset by creating a [`RowSelection`] that skips
+    /// the first `remaining_offset` rows across all row groups.
+    pub(crate) fn apply_offset(
+        mut self,
+        remaining_offset: usize,
+        rg_metadata: &[RowGroupMetaData],
+    ) -> Self {
+        if remaining_offset == 0 || self.row_group_indexes.is_empty() {
+            return self;
+        }
+        let total_rows: usize = self
+            .row_group_indexes
+            .iter()
+            .map(|&idx| rg_metadata[idx].num_rows() as usize)
+            .sum();
+        let select_rows = total_rows.saturating_sub(remaining_offset);
+        if select_rows == 0 {
+            return self;
+        }
+        let offset_selection = RowSelection::from(vec![
+            RowSelector::skip(remaining_offset),
+            RowSelector::select(select_rows),
+        ]);
+        self.row_selection = Some(match self.row_selection {
+            Some(existing) => existing.intersection(&offset_selection),
+            None => offset_selection,
+        });
+        self
+    }
 }
 
 #[cfg(test)]

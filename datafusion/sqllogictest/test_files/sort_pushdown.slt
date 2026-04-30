@@ -2280,3 +2280,151 @@ SET datafusion.execution.collect_statistics = true;
 
 statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# ===========================================================
+# Test N: OFFSET pushdown to parquet
+# Verifies that OFFSET is pushed down to DataSourceExec,
+# eliminating GlobalLimitExec and skipping row groups.
+# ===========================================================
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 5;
+
+statement ok
+CREATE TABLE tn_data(id INT, value INT) AS VALUES
+(1,10),(2,20),(3,30),(4,40),(5,50),
+(6,60),(7,70),(8,80),(9,90),(10,100),
+(11,110),(12,120),(13,130),(14,140),(15,150);
+
+query I
+COPY (SELECT * FROM tn_data ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/tn_offset/data.parquet';
+----
+15
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE tn_offset(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tn_offset/data.parquet';
+
+# Test N.1: OFFSET pushdown — GlobalLimitExec eliminated, offset handled by parquet
+query TT
+EXPLAIN SELECT * FROM tn_offset LIMIT 3 OFFSET 5;
+----
+logical_plan
+01)Limit: skip=5, fetch=3
+02)--TableScan: tn_offset projection=[id, value], fetch=8
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tn_offset/data.parquet]]}, projection=[id, value], limit=8, offset=5, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+# Test N.2: Results skip first 5 rows, return next 3
+query II
+SELECT * FROM tn_offset LIMIT 3 OFFSET 5;
+----
+6 60
+7 70
+8 80
+
+# Test N.3: Large offset near end
+query II
+SELECT * FROM tn_offset LIMIT 3 OFFSET 12;
+----
+13 130
+14 140
+15 150
+
+# Test N.4: Offset at last few rows
+query II
+SELECT * FROM tn_offset LIMIT 10 OFFSET 13;
+----
+14 140
+15 150
+
+# Test N.5: Offset exactly at boundary (skip first RG entirely)
+query II
+SELECT * FROM tn_offset LIMIT 3 OFFSET 5;
+----
+6 60
+7 70
+8 80
+
+# Test N.6: Offset zero (no skip)
+query II
+SELECT * FROM tn_offset LIMIT 3 OFFSET 0;
+----
+1 10
+2 20
+3 30
+
+# Test N.7: LIMIT 5 OFFSET 10 spanning RG boundaries
+# With max_row_group_size=5, we have 3 RGs: [1-5], [6-10], [11-15]
+# OFFSET 10 skips rows 1-10, LIMIT 5 returns rows 11-15
+query II
+SELECT * FROM tn_offset LIMIT 5 OFFSET 10;
+----
+11 110
+12 120
+13 130
+14 140
+15 150
+
+# Test N.8: OFFSET with multi-partition (target_partitions=4)
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query II
+SELECT * FROM tn_offset LIMIT 3 OFFSET 5;
+----
+6 60
+7 70
+8 80
+
+# Restore single partition for remaining tests
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+# Test N.9: OFFSET with WHERE clause — offset still works
+# (GlobalLimitExec may remain when there is a filter)
+query II
+SELECT * FROM tn_offset WHERE value > 50 LIMIT 3 OFFSET 2;
+----
+8 80
+9 90
+10 100
+
+# Test N.10: OFFSET 0 is equivalent to no offset
+query II
+SELECT * FROM tn_offset LIMIT 5 OFFSET 0;
+----
+1 10
+2 20
+3 30
+4 40
+5 50
+
+# Cleanup Test N
+statement ok
+DROP TABLE tn_data;
+
+statement ok
+DROP TABLE tn_offset;
+
+# ===========================================================
+# Test O: Multi-file OFFSET — NOT pushed down (non-deterministic order)
+# GlobalLimitExec is kept for multi-file queries.
+# ===========================================================
+
+# Reset settings
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.execution.collect_statistics = true;
+
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;

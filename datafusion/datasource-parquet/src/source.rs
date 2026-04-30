@@ -560,6 +560,9 @@ impl FileSource for ParquetSource {
                 .batch_size
                 .expect("Batch size must set before creating ParquetMorselizer"),
             limit: base_config.limit,
+            remaining_offset: Arc::new(std::sync::atomic::AtomicUsize::new(
+                base_config.offset.unwrap_or(0),
+            )),
             preserve_order: base_config.preserve_order,
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
@@ -581,6 +584,10 @@ impl FileSource for ParquetSource {
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
         }))
+    }
+
+    fn supports_offset(&self) -> bool {
+        true
     }
 
     fn table_schema(&self) -> &TableSchema {

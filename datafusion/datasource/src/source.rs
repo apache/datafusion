@@ -174,6 +174,18 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
+
+    /// Return a copy of this DataSource with a new offset (number of rows to skip).
+    /// Returns `None` if the data source does not support offset pushdown.
+    fn with_offset(&self, _offset: usize) -> Option<Arc<dyn DataSource>> {
+        None
+    }
+
+    /// Gets the offset for the operator, `None` means there is no offset.
+    fn offset(&self) -> Option<usize> {
+        None
+    }
+
     fn metrics(&self) -> ExecutionPlanMetricsSet {
         ExecutionPlanMetricsSet::new()
     }
@@ -469,6 +481,22 @@ impl ExecutionPlan for DataSourceExec {
 
     fn fetch(&self) -> Option<usize> {
         self.data_source.fetch()
+    }
+
+    fn with_offset(&self, offset: usize) -> Option<Arc<dyn ExecutionPlan>> {
+        let data_source = self.data_source.with_offset(offset)?;
+        let cache = Arc::clone(&self.cache);
+        let execution_state = Arc::new(OnceLock::new());
+
+        Some(Arc::new(Self {
+            data_source,
+            cache,
+            execution_state,
+        }))
+    }
+
+    fn offset(&self) -> Option<usize> {
+        self.data_source.offset()
     }
 
     fn try_swapping_with_projection(
