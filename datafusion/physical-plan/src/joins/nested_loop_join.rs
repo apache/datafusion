@@ -283,7 +283,7 @@ impl NestedLoopJoinExecBuilder {
 
     /// Build resulting execution plan.
     ///
-    /// [`JoinAccelerator`] must be constructed inside `build()` to ensure `swap_inputs` safe
+    /// The join accelerator must be constructed inside `build()` so `swap_inputs` is safe.
     pub fn build(self) -> Result<NestedLoopJoinExec> {
         let Self {
             left,

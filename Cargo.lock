@@ -1740,6 +1740,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "clap",
+ "criterion",
  "datafusion",
  "datafusion-common",
  "datafusion-proto",
@@ -1755,6 +1756,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snmalloc-rs",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]
