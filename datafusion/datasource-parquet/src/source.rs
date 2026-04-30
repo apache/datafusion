@@ -294,6 +294,11 @@ pub struct ParquetSource {
     /// so we still need to sort them after reading, so the reverse scan is inexact.
     /// Used to optimize ORDER BY ... DESC on sorted data.
     reverse_row_groups: bool,
+    /// Shared remaining offset counter across all partitions.
+    /// Initialized from `FileScanConfig.offset` in `create_morselizer`;
+    /// all partitions clone the same Arc so offset consumption is
+    /// coordinated atomically.
+    remaining_offset: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl ParquetSource {
@@ -319,6 +324,7 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            remaining_offset: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -553,6 +559,15 @@ impl FileSource for ParquetSource {
             .as_ref()
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
 
+        // Initialize the shared offset from base_config on first partition.
+        // All partitions share the same Arc; scanning hasn't started yet
+        // (streams are created before poll_next), so no race with consumers.
+        if let Some(offset) = base_config.offset {
+            self.remaining_offset
+                .store(offset, std::sync::atomic::Ordering::SeqCst);
+        }
+        let remaining_offset = Arc::clone(&self.remaining_offset);
+
         Ok(Box::new(ParquetMorselizer {
             partition_index: partition,
             projection: self.projection.clone(),
@@ -560,9 +575,7 @@ impl FileSource for ParquetSource {
                 .batch_size
                 .expect("Batch size must set before creating ParquetMorselizer"),
             limit: base_config.limit,
-            remaining_offset: Arc::new(std::sync::atomic::AtomicUsize::new(
-                base_config.offset.unwrap_or(0),
-            )),
+            remaining_offset,
             preserve_order: base_config.preserve_order,
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),

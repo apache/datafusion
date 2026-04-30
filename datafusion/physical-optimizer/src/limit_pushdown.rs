@@ -216,11 +216,25 @@ pub fn pushdown_limit_helper(
             // fetch info to plan if possible. If not, we must add a limit node
             // with the information from the global state.
             let mut new_plan = plan_with_fetch;
-            // Execution plans can't (yet) handle skip, so if we have one,
-            // we still need to add a global limit
             if global_state.skip > 0 {
-                new_plan =
-                    add_global_limit(new_plan, global_state.skip, global_state.fetch);
+                // Try to push offset through the combining operator
+                // to its child (DataSourceExec).
+                let offset_pushed = {
+                    let children = new_plan.children();
+                    children.len() == 1
+                        && children[0].with_offset(global_state.skip).is_some()
+                };
+                if offset_pushed {
+                    let child = new_plan.children()[0]
+                        .with_offset(global_state.skip)
+                        .unwrap();
+                    let fallback = Arc::clone(&new_plan);
+                    new_plan =
+                        new_plan.with_new_children(vec![child]).unwrap_or(fallback);
+                } else {
+                    new_plan =
+                        add_global_limit(new_plan, global_state.skip, global_state.fetch);
+                }
             }
             global_state.fetch = skip_and_fetch;
             global_state.skip = 0;

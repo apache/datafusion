@@ -2374,6 +2374,7 @@ SELECT * FROM tn_offset LIMIT 5 OFFSET 10;
 15 150
 
 # Test N.8: OFFSET with multi-partition (target_partitions=4)
+# Small file stays as 1 group, but offset is still pushed down correctly.
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
