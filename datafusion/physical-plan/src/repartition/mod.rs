@@ -424,7 +424,6 @@ pub struct BatchPartitioner {
 enum BatchPartitionerState {
     Hash {
         exprs: Vec<Arc<dyn PhysicalExpr>>,
-        num_partitions: usize,
         partition_reducer: StrengthReducedU64,
         hash_buffer: Vec<u64>,
         indices: Vec<Vec<u32>>,
@@ -439,6 +438,14 @@ enum BatchPartitionerState {
 /// executions and runs.
 pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
+/// Computes `value % divisor` without division in the hot loop when `divisor`
+/// is fixed for many values.
+///
+/// Hash repartitioning computes a remainder for every row. Integer division is
+/// relatively expensive, so this precomputes the strength-reduced form of the
+/// divisor: powers of two use a bit mask, and other divisors use a reciprocal
+/// multiply to recover the quotient and therefore the remainder. This is the
+/// same invariant-divisor optimization compilers use for `%` by a constant.
 #[derive(Debug, Clone, Copy)]
 enum StrengthReducedU64 {
     PowerOfTwo { mask: u64 },
@@ -511,6 +518,9 @@ impl BatchPartitioner {
     /// - `num_partitions`: Total number of output partitions.
     /// - `timer`: Metric used to record time spent during repartitioning.
     ///
+    /// The partition count is fixed for the lifetime of the partitioner, so this
+    /// precomputes a strength-reduced reducer for `hash % num_partitions`.
+    ///
     /// # Errors
     /// Returns an error if `num_partitions` is zero.
     pub fn new_hash_partitioner(
@@ -525,7 +535,6 @@ impl BatchPartitioner {
         Ok(Self {
             state: BatchPartitionerState::Hash {
                 exprs,
-                num_partitions,
                 partition_reducer: StrengthReducedU64::new(num_partitions as u64),
                 hash_buffer: vec![],
                 indices: vec![vec![]; num_partitions],
@@ -571,7 +580,8 @@ impl BatchPartitioner {
     /// - `num_input_partitions`: Total number of input partitions.
     ///
     /// # Errors
-    /// Returns an error if the provided partitioning scheme is not supported.
+    /// Returns an error if the provided partitioning scheme is not supported,
+    /// or if hash partitioning is requested with zero output partitions.
     pub fn try_new(
         partitioning: Partitioning,
         timer: metrics::Time,
@@ -645,7 +655,6 @@ impl BatchPartitioner {
                 }
                 BatchPartitionerState::Hash {
                     exprs,
-                    num_partitions: _,
                     partition_reducer,
                     hash_buffer,
                     indices,
@@ -722,9 +731,9 @@ impl BatchPartitioner {
 
     // return the number of output partitions
     fn num_partitions(&self) -> usize {
-        match self.state {
-            BatchPartitionerState::RoundRobin { num_partitions, .. } => num_partitions,
-            BatchPartitionerState::Hash { num_partitions, .. } => num_partitions,
+        match &self.state {
+            BatchPartitionerState::RoundRobin { num_partitions, .. } => *num_partitions,
+            BatchPartitionerState::Hash { indices, .. } => indices.len(),
         }
     }
 }
