@@ -282,7 +282,7 @@ impl BufferedBatch {
             join_arrays,
             null_joined: vec![],
             size_estimation,
-            reserved_amount: 0, // set by allocate_reservation()
+            reserved_amount: 0,
             join_filter_status: vec![FilterState::Unvisited; num_rows],
             num_rows,
         }
@@ -1005,6 +1005,9 @@ impl MaterializingSortMergeJoinStream {
                         let join_arrays_mem = buffered_batch.join_arrays_mem();
                         if self.reservation.try_grow(join_arrays_mem).is_ok() {
                             buffered_batch.reserved_amount = join_arrays_mem;
+                            self.join_metrics
+                                .peak_mem_used()
+                                .set_max(self.reservation.size());
                         }
 
                         Ok(())
