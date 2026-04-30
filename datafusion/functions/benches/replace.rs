@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::OffsetSizeTrait;
+use arrow::array::{GenericStringArray, OffsetSizeTrait, StringViewArray};
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
@@ -29,31 +29,58 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Build a string array, dropping the null buffer when `null_density == 0.0`
+fn make_string_array<O: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
+) -> GenericStringArray<O> {
+    let arr = create_string_array_with_len::<O>(size, null_density, str_len);
+    if null_density == 0.0 {
+        let (offsets, values, _) = arr.into_parts();
+        GenericStringArray::<O>::new(offsets, values, None)
+    } else {
+        arr
+    }
+}
+
+fn make_string_view_array(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
+) -> StringViewArray {
+    let arr = create_string_view_array_with_len(size, null_density, str_len, false);
+    if null_density == 0.0 {
+        let (views, buffers, _) = arr.into_parts();
+        StringViewArray::new(views, buffers, None)
+    } else {
+        arr
+    }
+}
+
 fn create_args<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
     force_view_types: bool,
     from_len: usize,
     to_len: usize,
+    null_density: f32,
 ) -> Vec<ColumnarValue> {
+    // Apply `null_density` only to the string column; `from` and `to` are
+    // typically not NULL in real-world workloads.
     if force_view_types {
-        let string_array =
-            Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
-        let from_array = Arc::new(create_string_view_array_with_len(
-            size, 0.1, from_len, false,
-        ));
-        let to_array =
-            Arc::new(create_string_view_array_with_len(size, 0.1, to_len, false));
+        let string_array = Arc::new(make_string_view_array(size, null_density, str_len));
+        let from_array = Arc::new(make_string_view_array(size, 0.0, from_len));
+        let to_array = Arc::new(make_string_view_array(size, 0.0, to_len));
         vec![
             ColumnarValue::Array(string_array),
             ColumnarValue::Array(from_array),
             ColumnarValue::Array(to_array),
         ]
     } else {
-        let string_array =
-            Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len));
-        let from_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, from_len));
-        let to_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, to_len));
+        let string_array = Arc::new(make_string_array::<O>(size, null_density, str_len));
+        let from_array = Arc::new(make_string_array::<O>(size, 0.0, from_len));
+        let to_array = Arc::new(make_string_array::<O>(size, 0.0, to_len));
 
         vec![
             ColumnarValue::Array(string_array),
@@ -90,98 +117,50 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
 
-        // ASCII single character replacement (fast path)
-        let str_len = 32;
-        let args = create_args::<i32>(size, str_len, false, 1, 1);
-        group.bench_function(
-            format!("replace_string_ascii_single [size={size}, str_len={str_len}]"),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(invoke_replace_with_args(args_cloned, size))
-                })
-            },
-        );
+        for &nulls in &[0.0_f32, 0.2] {
+            for &str_len in &[32_usize, 128] {
+                // ASCII single character replacement (fast path)
+                let args = create_args::<i32>(size, str_len, false, 1, 1, nulls);
+                group.bench_function(
+                    format!(
+                        "replace_string_ascii_single [size={size}, str_len={str_len}, nulls={nulls}]"
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            let args_cloned = args.clone();
+                            black_box(invoke_replace_with_args(args_cloned, size))
+                        })
+                    },
+                );
 
-        // Multi-character strings (general path)
-        let args = create_args::<i32>(size, str_len, true, 3, 5);
-        group.bench_function(
-            format!("replace_string_view [size={size}, str_len={str_len}]"),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(invoke_replace_with_args(args_cloned, size))
-                })
-            },
-        );
+                // Multi-character strings (general path)
+                let args = create_args::<i32>(size, str_len, true, 3, 5, nulls);
+                group.bench_function(
+                    format!(
+                        "replace_string_view [size={size}, str_len={str_len}, nulls={nulls}]"
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            let args_cloned = args.clone();
+                            black_box(invoke_replace_with_args(args_cloned, size))
+                        })
+                    },
+                );
 
-        let args = create_args::<i32>(size, str_len, false, 3, 5);
-        group.bench_function(
-            format!("replace_string [size={size}, str_len={str_len}]"),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(invoke_replace_with_args(args_cloned, size))
-                })
-            },
-        );
-
-        let args = create_args::<i64>(size, str_len, false, 3, 5);
-        group.bench_function(
-            format!("replace_large_string [size={size}, str_len={str_len}]"),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(invoke_replace_with_args(args_cloned, size))
-                })
-            },
-        );
-
-        // Larger strings
-        let str_len = 128;
-        let args = create_args::<i32>(size, str_len, false, 1, 1);
-        group.bench_function(
-            format!("replace_string_ascii_single [size={size}, str_len={str_len}]"),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(invoke_replace_with_args(args_cloned, size))
-                })
-            },
-        );
-
-        let args = create_args::<i32>(size, str_len, true, 3, 5);
-        group.bench_function(
-            format!("replace_string_view [size={size}, str_len={str_len}]"),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(invoke_replace_with_args(args_cloned, size))
-                })
-            },
-        );
-
-        let args = create_args::<i32>(size, str_len, false, 3, 5);
-        group.bench_function(
-            format!("replace_string [size={size}, str_len={str_len}]"),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(invoke_replace_with_args(args_cloned, size))
-                })
-            },
-        );
-
-        let args = create_args::<i64>(size, str_len, false, 3, 5);
-        group.bench_function(
-            format!("replace_large_string [size={size}, str_len={str_len}]"),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(invoke_replace_with_args(args_cloned, size))
-                })
-            },
-        );
+                let args = create_args::<i32>(size, str_len, false, 3, 5, nulls);
+                group.bench_function(
+                    format!(
+                        "replace_string [size={size}, str_len={str_len}, nulls={nulls}]"
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            let args_cloned = args.clone();
+                            black_box(invoke_replace_with_args(args_cloned, size))
+                        })
+                    },
+                );
+            }
+        }
 
         group.finish();
     }

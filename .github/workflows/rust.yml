@@ -42,6 +42,9 @@ on:
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   # Check crate compiles and base cargo check passes
   linux-build-lib:
@@ -430,7 +433,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486  # v2.75.18
+        uses: taiki-e/install-action@481c34c1cf3a84c68b5e46f4eccfc82af798415a  # v2.75.23
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -740,7 +743,7 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
-          
+
       - name: Mark repository as safe for git
         # Required for git commands inside container (avoids "dubious ownership" error)
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -770,7 +773,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486  # v2.75.18
+        uses: taiki-e/install-action@481c34c1cf3a84c68b5e46f4eccfc82af798415a  # v2.75.23
         with:
           tool: cargo-msrv
 

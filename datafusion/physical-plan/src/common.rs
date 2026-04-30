@@ -33,10 +33,9 @@ use datafusion_common::{Result, plan_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use futures::{StreamExt, TryStreamExt};
-use parking_lot::Mutex;
 
 /// [`MemoryReservation`] used across query execution streams
-pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
+pub(crate) type SharedMemoryReservation = Arc<MemoryReservation>;
 
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {

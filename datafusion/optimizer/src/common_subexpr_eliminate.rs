@@ -30,7 +30,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, qualified_name};
-use datafusion_expr::expr::{Alias, ScalarFunction};
+use datafusion_expr::expr::{Alias, HigherOrderFunction, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -586,8 +586,12 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_) => {
                 // This rule handles recursion itself in a `ApplyOrder::TopDown` like
-                // manner.
-                plan.map_children(|c| self.rewrite(c, config))?
+                // manner. Process uncorrelated subqueries in expressions
+                // (e.g., Expr::ScalarSubquery), then direct children.
+                plan.map_uncorrelated_subqueries(|c| self.rewrite(c, config))?
+                    .transform_sibling(|plan| {
+                        plan.map_children(|c| self.rewrite(c, config))
+                    })?
             }
         };
 
@@ -647,10 +651,13 @@ impl CSEController for ExprCSEController<'_> {
 
     fn conditional_children(node: &Expr) -> Option<(Vec<&Expr>, Vec<&Expr>)> {
         match node {
-            // In case of `ScalarFunction`s we don't know which children are surely
+            // In case of `ScalarFunction`s and `HigherOrderFunction`s we don't know which children are surely
             // executed so start visiting all children conditionally and stop the
             // recursion with `TreeNodeRecursion::Jump`.
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                func.conditional_arguments(args)
+            }
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
                 func.conditional_arguments(args)
             }
 
@@ -693,6 +700,7 @@ impl CSEController for ExprCSEController<'_> {
 
     fn is_valid(node: &Expr) -> bool {
         !node.is_volatile_node()
+            && !matches!(node, Expr::Lambda(_) | Expr::LambdaVariable(_))
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {
@@ -722,6 +730,8 @@ impl CSEController for ExprCSEController<'_> {
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
                 | Expr::Wildcard { .. }
+                | Expr::Lambda(_)
+                | Expr::LambdaVariable(_)
         );
 
         let is_aggr = matches!(node, Expr::AggregateFunction(..));
