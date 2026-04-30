@@ -126,20 +126,26 @@ pub fn project_plan_to_schema(
         );
     }
 
-    if let Some((i, (input_field, expected_field))) = input_schema
+    if let Some((i, input_field, expected_field, mismatch)) = input_schema
         .fields()
         .iter()
         .zip(expected_schema.fields().iter())
         .enumerate()
-        .find(|(_, (input_field, expected_field))| {
-            input_field.data_type() != expected_field.data_type()
-                || input_field.is_nullable() != expected_field.is_nullable()
-                || input_field.metadata() != expected_field.metadata()
+        .find_map(|(i, (input_field, expected_field))| {
+            if input_field.data_type() != expected_field.data_type() {
+                Some((i, input_field, expected_field, "data type"))
+            } else if input_field.is_nullable() != expected_field.is_nullable() {
+                Some((i, input_field, expected_field, "nullability"))
+            } else if input_field.metadata() != expected_field.metadata() {
+                Some((i, input_field, expected_field, "metadata"))
+            } else {
+                None
+            }
         })
     {
         return plan_err!(
             "Cannot project plan column {i} ('{}') to expected output field '{}': \
-             fields differ beyond name (input field: {:?}, expected field: {:?})",
+             field {mismatch} differs (input field: {:?}, expected field: {:?})",
             input_field.name(),
             expected_field.name(),
             input_field,
@@ -474,7 +480,7 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
         let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
-        assert!(err.to_string().contains("fields differ beyond name"));
+        assert!(err.to_string().contains("field data type differs"));
     }
 
     #[test]
@@ -487,7 +493,7 @@ mod tests {
         )]));
 
         let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
-        assert!(err.to_string().contains("fields differ beyond name"));
+        assert!(err.to_string().contains("field nullability differs"));
     }
 
     #[test]
@@ -503,7 +509,7 @@ mod tests {
         ]));
 
         let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
-        assert!(err.to_string().contains("fields differ beyond name"));
+        assert!(err.to_string().contains("field metadata differs"));
     }
 
     #[test]

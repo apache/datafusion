@@ -541,6 +541,6 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.to_string().contains("fields differ beyond name"));
+        assert!(err.to_string().contains("field nullability differs"));
     }
 }
