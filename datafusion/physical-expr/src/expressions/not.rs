@@ -29,9 +29,13 @@ use datafusion_common::{Result, ScalarValue, cast::as_boolean_array, internal_er
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::statistics::Distribution::{self, Bernoulli};
+use datafusion_physical_expr_common::serde::{
+    DeserializeContext, PhysicalExprDeserialize,
+};
+use serde::Serialize;
 
 /// Not expression
-#[derive(Debug, Eq)]
+#[derive(Debug, Eq, Serialize)]
 pub struct NotExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
@@ -177,6 +181,22 @@ impl PhysicalExpr for NotExpr {
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "NOT ")?;
         self.arg.fmt_sql(f)
+    }
+
+    fn serde_tag(&self) -> &'static str {
+        <Self as PhysicalExprDeserialize>::TAG
+    }
+
+    fn erased_serialize(&self) -> Box<dyn erased_serde::Serialize + '_> {
+        Box::new(self)
+    }
+}
+
+impl PhysicalExprDeserialize for NotExpr {
+    const TAG: &'static str = "NotExpr";
+
+    fn deserialize(ctx: &mut DeserializeContext<'_, '_>) -> Result<Self> {
+        Ok(NotExpr::new(ctx.deserialize_unary("arg")?))
     }
 }
 

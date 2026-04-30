@@ -444,6 +444,40 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn placement(&self) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
     }
+
+    /// Stable identifier used by the format-agnostic serialization layer to
+    /// dispatch deserialization back to a concrete type.
+    ///
+    /// Returning the empty string (the default) means "this expression is not
+    /// serializable"; the [`serde::Serialize`] impl for `dyn PhysicalExpr` will
+    /// produce an error in that case. Implementations that opt in should
+    /// return a stable, globally unique string — typically by mirroring
+    /// `<Self as PhysicalExprDeserialize>::TAG`.
+    ///
+    /// See the [`serde`](crate::serde) module for the serialization story.
+    fn serde_tag(&self) -> &'static str {
+        ""
+    }
+
+    /// Returns a type-erased serializable view of this expression's body.
+    ///
+    /// The default implementation returns a sentinel that produces a
+    /// descriptive error when serialized. Implementations that wish to
+    /// participate in serialization should override this and return a
+    /// `Box::new(self)` (which requires `Self: serde::Serialize`), or any
+    /// other value that implements [`serde::Serialize`].
+    ///
+    /// Erasure via [`erased_serde::Serialize`] is what lets this method be
+    /// object-safe without `PhysicalExpr` having to extend `serde::Serialize`
+    /// (which would force every existing impl to add a `Serialize` impl).
+    ///
+    /// See the [`serde`](crate::serde) module for the full serialization
+    /// story, including how the result is wrapped in a `{tag, data}` envelope.
+    fn erased_serialize(&self) -> Box<dyn erased_serde::Serialize + '_> {
+        Box::new(crate::serde::NotSerializable(format!(
+            "PhysicalExpr serialization not implemented for {self}"
+        )))
+    }
 }
 
 #[deprecated(

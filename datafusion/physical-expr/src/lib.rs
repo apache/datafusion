@@ -42,6 +42,7 @@ pub mod planner;
 pub mod projection;
 mod scalar_function;
 pub mod scalar_subquery;
+pub mod serde;
 pub mod simplifier;
 pub mod statistics;
 pub mod utils;

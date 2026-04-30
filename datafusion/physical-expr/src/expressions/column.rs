@@ -30,6 +30,10 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::placement::ExpressionPlacement;
+use datafusion_physical_expr_common::serde::{
+    DeserializeContext, PhysicalExprDeserialize,
+};
+use serde::{Deserialize, Serialize};
 
 /// Represents the column at a given index in a RecordBatch
 ///
@@ -63,7 +67,7 @@ use datafusion_expr_common::placement::ExpressionPlacement;
 /// assert_eq!(column_c.index(), 2);
 /// ```
 /// [logical `Expr::Column`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Column
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Column {
     /// The name of the column (used for debugging and display purposes)
     name: String,
@@ -144,6 +148,22 @@ impl PhysicalExpr for Column {
 
     fn placement(&self) -> ExpressionPlacement {
         ExpressionPlacement::Column
+    }
+
+    fn serde_tag(&self) -> &'static str {
+        <Self as PhysicalExprDeserialize>::TAG
+    }
+
+    fn erased_serialize(&self) -> Box<dyn erased_serde::Serialize + '_> {
+        Box::new(self)
+    }
+}
+
+impl PhysicalExprDeserialize for Column {
+    const TAG: &'static str = "Column";
+
+    fn deserialize(ctx: &mut DeserializeContext<'_, '_>) -> Result<Self> {
+        ctx.deserialize::<Self>()
     }
 }
 
