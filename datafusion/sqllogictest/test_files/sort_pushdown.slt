@@ -2280,3 +2280,466 @@ SET datafusion.execution.collect_statistics = true;
 
 statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# ===========================================================
+# Test H: Row group reorder by statistics for TopK queries.
+# When a file has multiple row groups with overlapping or
+# out-of-order statistics, sort pushdown returns Inexact and
+# `reorder_by_statistics` reorders row groups within the file
+# so TopK finds optimal values first.
+# ===========================================================
+
+# Create a table with 9 rows and write to parquet with small row groups
+# so we get multiple row groups per file. Rows are inserted in a mixed
+# order so row groups span overlapping ranges (forcing Inexact path).
+statement ok
+CREATE TABLE th_mixed(id INT, value INT) AS VALUES
+  (15, 150), (5, 50),  (25, 250),
+  (10, 100), (20, 200), (1, 10),
+  (30, 300), (3, 30),  (18, 180);
+
+# Write with row_group_size=3 → 3 rows per RG, 3 RGs total
+# RG statistics (unsorted order): RG0(5-25), RG1(1-20), RG2(3-30)
+# Note: files are overlapping → Inexact path → TopK retained
+query I
+COPY (SELECT * FROM th_mixed)
+TO 'test_files/scratch/sort_pushdown/th_reorder/data.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '3');
+----
+9
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE th_reorder(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/th_reorder/data.parquet';
+
+# Test H.1: ASC ORDER BY with LIMIT — Inexact path (file has no declared ordering)
+# Plan: SortExec(TopK) preserved. RG reorder happens inside DataSourceExec
+# (not visible in EXPLAIN, but verified by unit tests in access_plan.rs).
+query TT
+EXPLAIN SELECT * FROM th_reorder ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: th_reorder.id ASC NULLS LAST, fetch=3
+02)--TableScan: th_reorder projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/th_reorder/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Results must be correct regardless of RG reorder.
+query II
+SELECT * FROM th_reorder ORDER BY id ASC LIMIT 3;
+----
+1 10
+3 30
+5 50
+
+# Test H.2: DESC ORDER BY with LIMIT — reorder + reverse compose
+query TT
+EXPLAIN SELECT * FROM th_reorder ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: th_reorder.id DESC NULLS FIRST, fetch=3
+02)--TableScan: th_reorder projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/th_reorder/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+query II
+SELECT * FROM th_reorder ORDER BY id DESC LIMIT 3;
+----
+30 300
+25 250
+20 200
+
+# Test H.3: Full sort (no LIMIT) — output must still be correctly sorted
+query II
+SELECT * FROM th_reorder ORDER BY id ASC;
+----
+1 10
+3 30
+5 50
+10 100
+15 150
+18 180
+20 200
+25 250
+30 300
+
+# Test H.4: ORDER BY expression (not a simple column) — reorder should
+# gracefully skip, results still correct
+query II
+SELECT id, value FROM th_reorder ORDER BY id + 1 ASC LIMIT 3;
+----
+1 10
+3 30
+5 50
+
+# Cleanup Test H
+statement ok
+DROP TABLE th_mixed;
+
+statement ok
+DROP TABLE th_reorder;
+
+# ===========================================================
+# Test J: Non-overlapping RGs without WITH ORDER —
+# RG reorder via DynamicFilter sort_options
+# ===========================================================
+
+# Create data written in scrambled order but with non-overlapping RGs
+statement ok
+CREATE TABLE tj_high(id INT, value INT) AS VALUES (10,100),(11,110),(12,120);
+
+statement ok
+CREATE TABLE tj_mid(id INT, value INT) AS VALUES (4,40),(5,50),(6,60);
+
+statement ok
+CREATE TABLE tj_low(id INT, value INT) AS VALUES (1,10),(2,20),(3,30);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+# Write in scrambled order: high, low, mid → RGs are non-overlapping but not sorted
+query I
+COPY (
+  SELECT * FROM tj_high
+  UNION ALL SELECT * FROM tj_low
+  UNION ALL SELECT * FROM tj_mid
+)
+TO 'test_files/scratch/sort_pushdown/tj_scrambled/data.parquet';
+----
+9
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+# No WITH ORDER — tests non-sort-pushdown TopK path
+statement ok
+CREATE EXTERNAL TABLE tj_scrambled(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tj_scrambled/data.parquet';
+
+# Test J.1: DESC LIMIT — RG reorder + reverse from DynamicFilter
+query TT
+EXPLAIN SELECT * FROM tj_scrambled ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: tj_scrambled.id DESC NULLS FIRST, fetch=3
+02)--TableScan: tj_scrambled projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tj_scrambled/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Test J.2: Results must be correct
+query II
+SELECT * FROM tj_scrambled ORDER BY id DESC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Test J.3: ASC LIMIT
+query II
+SELECT * FROM tj_scrambled ORDER BY id ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+# Test J.4: DESC with WHERE
+query II
+SELECT * FROM tj_scrambled WHERE value >= 50 ORDER BY id DESC LIMIT 2;
+----
+12 120
+11 110
+
+# Test J.5: Full sort without LIMIT (no TopK, no reorder)
+query II
+SELECT * FROM tj_scrambled ORDER BY id ASC;
+----
+1 10
+2 20
+3 30
+4 40
+5 50
+6 60
+10 100
+11 110
+12 120
+
+# Cleanup Test J
+statement ok
+DROP TABLE tj_high;
+
+statement ok
+DROP TABLE tj_mid;
+
+statement ok
+DROP TABLE tj_low;
+
+statement ok
+DROP TABLE tj_scrambled;
+
+# ===========================================================
+# Test K: Overlapping RGs without WITH ORDER —
+# reorder still helps TopK find good values faster
+# ===========================================================
+
+# Create data with overlapping ranges
+statement ok
+CREATE TABLE tk_data(id INT, value INT) AS VALUES
+(1,10),(5,50),(9,90),
+(3,30),(7,70),(11,110),
+(2,20),(6,60),(10,100);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+query I
+COPY (SELECT * FROM tk_data)
+TO 'test_files/scratch/sort_pushdown/tk_overlap/data.parquet';
+----
+9
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE tk_overlap(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tk_overlap/data.parquet';
+
+# Test K.1: DESC LIMIT on overlapping RGs — results must be correct
+query II
+SELECT * FROM tk_overlap ORDER BY id DESC LIMIT 3;
+----
+11 110
+10 100
+9 90
+
+# Test K.2: ASC LIMIT on overlapping RGs
+query II
+SELECT * FROM tk_overlap ORDER BY id ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+# Test K.3: Full sort (verify all data present)
+query II
+SELECT * FROM tk_overlap ORDER BY id ASC;
+----
+1 10
+2 20
+3 30
+5 50
+6 60
+7 70
+9 90
+10 100
+11 110
+
+# Cleanup Test K
+statement ok
+DROP TABLE tk_data;
+
+statement ok
+DROP TABLE tk_overlap;
+
+# ===========================================================
+# Test L: Multi-key ORDER BY — uses first key for RG reorder
+# ===========================================================
+
+statement ok
+CREATE TABLE tl_data(id INT, name VARCHAR, value INT) AS VALUES
+(10, 'a', 100), (11, 'b', 110), (12, 'c', 120),
+(4, 'd', 40), (5, 'e', 50), (6, 'f', 60),
+(1, 'g', 10), (2, 'h', 20), (3, 'i', 30);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+query I
+COPY (SELECT * FROM tl_data)
+TO 'test_files/scratch/sort_pushdown/tl_multikey/data.parquet';
+----
+9
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE tl_multikey(id INT, name VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tl_multikey/data.parquet';
+
+# Test L.1: Multi-key DESC — first key determines RG reorder
+query IIT
+SELECT id, value, name FROM tl_multikey ORDER BY id DESC, name ASC LIMIT 3;
+----
+12 120 c
+11 110 b
+10 100 a
+
+# Test L.2: Multi-key ASC
+query IIT
+SELECT id, value, name FROM tl_multikey ORDER BY id ASC, name DESC LIMIT 3;
+----
+1 10 g
+2 20 h
+3 30 i
+
+# Test L.3: Multi-key with 3 sort columns
+query IIT
+SELECT id, value, name FROM tl_multikey ORDER BY id DESC, value DESC, name ASC LIMIT 5;
+----
+12 120 c
+11 110 b
+10 100 a
+6 60 f
+5 50 e
+
+# Test L.4: WITH ORDER + multi-key DESC LIMIT
+statement ok
+CREATE EXTERNAL TABLE tl_sorted(id INT, name VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tl_multikey/data.parquet'
+WITH ORDER (id ASC);
+
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# Multi-key with sort pushdown — first key triggers reverse
+query TT
+EXPLAIN SELECT id, value FROM tl_sorted ORDER BY id DESC, value ASC LIMIT 3;
+----
+logical_plan
+01)Sort: tl_sorted.id DESC NULLS FIRST, tl_sorted.value ASC NULLS LAST, fetch=3
+02)--TableScan: tl_sorted projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC, value@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tl_multikey/data.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+query II
+SELECT id, value FROM tl_sorted ORDER BY id DESC, value ASC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Cleanup Test L
+statement ok
+DROP TABLE tl_data;
+
+statement ok
+DROP TABLE tl_multikey;
+
+statement ok
+DROP TABLE tl_sorted;
+
+# ===========================================================
+# Test P: Multi-file reorder in shared work queue for TopK.
+# Files are reordered by statistics so the most promising
+# files are processed first across all partitions.
+# ===========================================================
+
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+statement ok
+SET datafusion.execution.collect_statistics = true;
+
+# Create 3 separate files with non-overlapping ranges in "wrong" order:
+# file_high (id 10-12), file_low (id 1-3), file_mid (id 4-6)
+statement ok
+CREATE TABLE tp_high(id INT, value INT) AS VALUES (10,100),(11,110),(12,120);
+
+statement ok
+CREATE TABLE tp_mid(id INT, value INT) AS VALUES (4,40),(5,50),(6,60);
+
+statement ok
+CREATE TABLE tp_low(id INT, value INT) AS VALUES (1,10),(2,20),(3,30);
+
+query I
+COPY (SELECT * FROM tp_high)
+TO 'test_files/scratch/sort_pushdown/tp_multifile/high.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM tp_mid)
+TO 'test_files/scratch/sort_pushdown/tp_multifile/mid.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM tp_low)
+TO 'test_files/scratch/sort_pushdown/tp_multifile/low.parquet';
+----
+3
+
+# External table over the directory — files discovered in FS order
+statement ok
+CREATE EXTERNAL TABLE tp_multifile(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tp_multifile/';
+
+# Test P.1: DESC LIMIT — reorder_files puts high.parquet first
+query II
+SELECT * FROM tp_multifile ORDER BY id DESC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Test P.2: ASC LIMIT — reorder_files puts low.parquet first
+query II
+SELECT * FROM tp_multifile ORDER BY id ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+# Test P.3: Full sort — all data present and correct
+query II
+SELECT * FROM tp_multifile ORDER BY id ASC;
+----
+1 10
+2 20
+3 30
+4 40
+5 50
+6 60
+10 100
+11 110
+12 120
+
+# Test P.4: DESC LIMIT with WHERE
+query II
+SELECT * FROM tp_multifile WHERE value >= 40 ORDER BY id DESC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Cleanup Test P
+statement ok
+DROP TABLE tp_high;
+
+statement ok
+DROP TABLE tp_mid;
+
+statement ok
+DROP TABLE tp_low;
+
+statement ok
+DROP TABLE tp_multifile;
+
+# Restore settings
+statement ok
+SET datafusion.execution.target_partitions = 4;

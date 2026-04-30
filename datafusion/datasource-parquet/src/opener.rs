@@ -46,11 +46,13 @@ use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
     MetricCategory, PruningMetrics,
@@ -139,6 +141,8 @@ pub(super) struct ParquetMorselizer {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Optional sort order used to reorder row groups by their min/max statistics.
+    pub sort_order_for_reorder: Option<LexOrdering>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -289,6 +293,7 @@ struct PreparedParquetOpen {
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
     reverse_row_groups: bool,
+    sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -658,6 +663,7 @@ impl ParquetMorselizer {
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
             reverse_row_groups: self.reverse_row_groups,
+            sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
@@ -1111,6 +1117,114 @@ impl RowGroupsPrunedParquetOpen {
                 page_pruning_result.pages_skipped_by_fully_matched,
             );
         }
+
+        // Row group ordering optimization (two composable steps applied in
+        // every per-morselizer-run access plan via the `prepare_access_plan`
+        // closure below):
+        //
+        // 1. reorder_by_statistics: sort RGs by min values (ASC) to align
+        //    with the file's declared output ordering. This fixes out-of-order
+        //    RGs (e.g., from append-heavy workloads) without changing direction.
+        //    Skipped gracefully when statistics are unavailable.
+        //
+        // 2. reverse: flip the order for DESC queries. Applied AFTER reorder
+        //    so the reversed order is correct whether or not reorder changed
+        //    anything. Also handles row_selection remapping.
+        //
+        // For sorted data: reorder is a no-op, reverse gives perfect DESC.
+        // For unsorted data: reorder fixes the order, reverse flips for DESC.
+        let reorder_optimizer: Option<
+            Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+        > = if let Some(sort_order) = &prepared.sort_order_for_reorder {
+            Some(
+                Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                    sort_order.clone(),
+                ))
+                    as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+            )
+        } else if let Some(predicate) = &prepared.predicate
+            && let Some(df) = find_dynamic_filter(predicate)
+            && let Some(sort_options) = df.sort_options()
+            && !sort_options.is_empty()
+        {
+            // Build a sort order from DynamicFilter for non-sort-pushdown TopK.
+            // Quick bail: check if the sort column exists in file schema.
+            let children = df.children();
+            if !children.is_empty() {
+                let col = find_column_in_expr(children[0]);
+                if let Some(c) = col
+                    && prepared
+                        .physical_file_schema
+                        .field_with_name(c.name())
+                        .is_ok()
+                {
+                    // Use the unwrapped Column (not the original expr which
+                    // may be wrapped in Cast etc.) so reorder_by_statistics
+                    // can extract the column name for StatisticsConverter.
+                    let sort_expr =
+                        datafusion_physical_expr_common::sort_expr::PhysicalSortExpr {
+                            expr: Arc::new(c.clone()),
+                            options: arrow::compute::SortOptions {
+                                descending: false,
+                                nulls_first: sort_options[0].nulls_first,
+                            },
+                        };
+                    LexOrdering::new(vec![sort_expr]).map(|order| {
+                        Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                            order,
+                        ))
+                            as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Reverse for DESC queries. Only when reorder is active (the sort
+        // column exists in parquet stats). Without reorder, reversing RGs
+        // randomly changes I/O patterns with no benefit.
+        let is_descending = prepared.reverse_row_groups
+            || (reorder_optimizer.is_some()
+                && prepared
+                    .predicate
+                    .as_ref()
+                    .and_then(find_dynamic_filter)
+                    .and_then(|df| df.sort_options().map(|opts| opts[0].descending))
+                    .unwrap_or(false));
+        let reverse_optimizer: Option<
+            Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+        > = if is_descending {
+            Some(Box::new(crate::access_plan_optimizer::ReverseRowGroups))
+        } else {
+            None
+        };
+
+        // Prepare access plans (extract row groups and row selection), then
+        // apply the reorder + reverse optimizers above to each.
+        let prepare_access_plan =
+            |plan: ParquetAccessPlan| -> Result<PreparedAccessPlan> {
+                let mut prepared_plan = plan.prepare(rg_metadata)?;
+                if let Some(opt) = &reorder_optimizer {
+                    prepared_plan = opt.optimize(
+                        prepared_plan,
+                        file_metadata.as_ref(),
+                        &prepared.physical_file_schema,
+                    )?;
+                }
+                if let Some(opt) = &reverse_optimizer {
+                    prepared_plan = opt.optimize(
+                        prepared_plan,
+                        file_metadata.as_ref(),
+                        &prepared.physical_file_schema,
+                    )?;
+                }
+                Ok(prepared_plan)
+            };
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
         let read_plan = build_projection_read_plan(
@@ -1769,6 +1883,39 @@ async fn load_page_index<T: AsyncFileReader>(
     }
 }
 
+/// Find a `DynamicFilterPhysicalExpr` in the expression tree.
+fn find_dynamic_filter(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Option<&DynamicFilterPhysicalExpr> {
+    if let Some(df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+        return Some(df);
+    }
+    for child in expr.children() {
+        if let Some(df) = find_dynamic_filter(child) {
+            return Some(df);
+        }
+    }
+    None
+}
+
+/// Find a `Column` expression in the tree, unwrapping single-child wrappers
+/// like CastExpr. Returns None if the expression is not a simple column ref.
+fn find_column_in_expr(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Option<&datafusion_physical_expr::expressions::Column> {
+    if let Some(col) =
+        expr.downcast_ref::<datafusion_physical_expr::expressions::Column>()
+    {
+        return Some(col);
+    }
+    let children = expr.children();
+    if children.len() == 1 {
+        find_column_in_expr(children[0])
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1971,6 +2118,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                sort_order_for_reorder: None,
             }
         }
     }

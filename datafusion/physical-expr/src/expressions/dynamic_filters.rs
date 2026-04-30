@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::compute::SortOptions;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt::Display, hash::Hash, sync::Arc};
@@ -75,6 +76,12 @@ pub struct DynamicFilterPhysicalExpr {
     /// But this can have overhead in production, so it's only included in our tests.
     data_type: Arc<RwLock<Option<DataType>>>,
     nullable: Arc<RwLock<Option<bool>>>,
+    /// Optional sort options for each child expression.
+    /// When set (e.g., by SortExec for TopK), downstream consumers like the
+    /// parquet reader can use these to reorder row groups by statistics.
+    sort_options: Option<Vec<SortOptions>>,
+    /// Optional TopK fetch limit (K in LIMIT K).
+    fetch: Option<usize>,
 }
 
 /// Atomic internal state of a [`DynamicFilterPhysicalExpr`].
@@ -208,7 +215,36 @@ impl DynamicFilterPhysicalExpr {
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
+            sort_options: None,
+            fetch: None,
         }
+    }
+
+    /// Create a new [`DynamicFilterPhysicalExpr`] with sort options.
+    ///
+    /// Sort options indicate the sort direction for each child expression,
+    /// enabling downstream consumers (e.g., parquet readers) to reorder
+    /// row groups by statistics for TopK queries.
+    pub fn new_with_sort_options(
+        children: Vec<Arc<dyn PhysicalExpr>>,
+        inner: Arc<dyn PhysicalExpr>,
+        sort_options: Vec<SortOptions>,
+        fetch: Option<usize>,
+    ) -> Self {
+        let mut this = Self::new(children, inner);
+        this.sort_options = Some(sort_options);
+        this.fetch = fetch;
+        this
+    }
+
+    /// Returns the sort options for each child expression, if available.
+    pub fn sort_options(&self) -> Option<&[SortOptions]> {
+        self.sort_options.as_deref()
+    }
+
+    /// Returns the TopK fetch limit (K), if available.
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 
     fn remap_children(
@@ -423,6 +459,8 @@ impl DynamicFilterPhysicalExpr {
             remapped_children,
             inner: Arc::new(RwLock::new(inner)),
             state_watch,
+            sort_options: None,
+            fetch: None,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
@@ -458,6 +496,8 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
+            sort_options: self.sort_options.clone(),
+            fetch: self.fetch,
         }))
     }
 

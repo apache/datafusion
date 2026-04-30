@@ -55,7 +55,7 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
 use object_store::ObjectStore;
 #[cfg(feature = "parquet_encryption")]
@@ -294,6 +294,8 @@ pub struct ParquetSource {
     /// so we still need to sort them after reading, so the reverse scan is inexact.
     /// Used to optimize ORDER BY ... DESC on sorted data.
     reverse_row_groups: bool,
+    /// Optional sort order used to reorder row groups by min/max statistics.
+    sort_order_for_reorder: Option<LexOrdering>,
 }
 
 impl ParquetSource {
@@ -319,6 +321,7 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            sort_order_for_reorder: None,
         }
     }
 
@@ -482,6 +485,79 @@ impl ParquetSource {
     pub(crate) fn reverse_row_groups(&self) -> bool {
         self.reverse_row_groups
     }
+
+    /// Extract TopK sort column name and direction from available sources.
+    fn extract_topk_sort_info(&self) -> Option<(String, bool)> {
+        // Try from predicate's DynamicFilterPhysicalExpr
+        if let Some(predicate) = &self.predicate
+            && let Some(info) = Self::sort_info_from_dynamic_filter(predicate)
+        {
+            return Some(info);
+        }
+
+        // Fallback to sort_order_for_reorder (Inexact sort pushdown path)
+        if let Some(sort_order) = &self.sort_order_for_reorder
+            && !sort_order.is_empty()
+        {
+            let first = sort_order.first();
+            if let Some(col) = first
+                .expr
+                .downcast_ref::<datafusion_physical_expr::expressions::Column>()
+            {
+                return Some((col.name().to_string(), self.reverse_row_groups));
+            }
+        }
+
+        None
+    }
+
+    /// Try to extract sort column name and direction from a DynamicFilterPhysicalExpr.
+    fn sort_info_from_dynamic_filter(
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Option<(String, bool)> {
+        let cloned = Arc::clone(expr);
+        let any_arc: Arc<dyn std::any::Any + Send + Sync> = cloned;
+        if let Ok(df) = Arc::downcast::<
+            datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr,
+        >(any_arc)
+        {
+            let sort_options = df.sort_options()?;
+            if sort_options.is_empty() {
+                return None;
+            }
+            let children = df.children();
+            if children.is_empty() {
+                return None;
+            }
+            let col = children[0]
+                .downcast_ref::<datafusion_physical_expr::expressions::Column>()?;
+            return Some((col.name().to_string(), sort_options[0].descending));
+        }
+
+        // Recursively check children (e.g., AND(DynamicFilter, WhereFilter))
+        for child in expr.children() {
+            if let Some(info) = Self::sort_info_from_dynamic_filter(child) {
+                return Some(info);
+            }
+        }
+
+        None
+    }
+
+    /// Extract the sort key from a file's statistics for reordering.
+    fn sort_key_for_file(
+        file: &datafusion_datasource::PartitionedFile,
+        col_idx: usize,
+        descending: bool,
+    ) -> Option<datafusion_common::ScalarValue> {
+        let stats = file.statistics.as_ref()?;
+        let col_stats = stats.column_statistics.get(col_idx)?;
+        if descending {
+            col_stats.min_value.get_value().cloned()
+        } else {
+            col_stats.max_value.get_value().cloned()
+        }
+    }
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
@@ -581,7 +657,50 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
+            sort_order_for_reorder: self.sort_order_for_reorder.clone(),
         }))
+    }
+
+    fn reorder_files(
+        &self,
+        mut files: Vec<datafusion_datasource::PartitionedFile>,
+    ) -> Vec<datafusion_datasource::PartitionedFile> {
+        let (col_name, descending) = match self.extract_topk_sort_info() {
+            Some(info) => info,
+            None => return files,
+        };
+
+        let table_schema = self.table_schema.table_schema();
+        let col_idx = match table_schema.index_of(&col_name) {
+            Ok(idx) => idx,
+            Err(_) => return files,
+        };
+
+        files.sort_by(|a, b| {
+            let key_a = Self::sort_key_for_file(a, col_idx, descending);
+            let key_b = Self::sort_key_for_file(b, col_idx, descending);
+            match (key_a, key_b) {
+                (Some(va), Some(vb)) => {
+                    if descending {
+                        vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+                    } else {
+                        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
+
+        log::debug!(
+            "Reordered {} files by {} {} for TopK optimization",
+            files.len(),
+            col_name,
+            if descending { "DESC" } else { "ASC" }
+        );
+
+        files
     }
 
     fn table_schema(&self) -> &TableSchema {
@@ -822,7 +941,9 @@ impl FileSource for ParquetSource {
 
         // Return Inexact because we're only reversing row group order,
         // not guaranteeing perfect row-level ordering
-        let new_source = self.clone().with_reverse_row_groups(true);
+        let sort_order = LexOrdering::new(order.iter().cloned());
+        let mut new_source = self.clone().with_reverse_row_groups(true);
+        new_source.sort_order_for_reorder = sort_order;
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })

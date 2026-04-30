@@ -16,7 +16,12 @@
 // under the License.
 
 use crate::sort::reverse_row_selection;
+use arrow::datatypes::Schema;
 use datafusion_common::{Result, assert_eq_or_internal_err};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use log::debug;
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 
@@ -483,6 +488,98 @@ impl PreparedAccessPlan {
             row_group_indexes,
             row_selection,
         })
+    }
+
+    /// Reorder row groups by their min statistics for the given sort order.
+    ///
+    /// This helps TopK queries find optimal values first. Row groups are
+    /// always sorted by min values in ASC order — direction (DESC) is
+    /// handled separately by `reverse()` which is applied after reorder.
+    ///
+    /// Gracefully skips reordering when:
+    /// - There is a row_selection (too complex to remap)
+    /// - 0 or 1 row groups (nothing to reorder)
+    /// - Sort expression is not a simple column reference
+    /// - Statistics are unavailable
+    pub(crate) fn reorder_by_statistics(
+        mut self,
+        sort_order: &LexOrdering,
+        file_metadata: &ParquetMetaData,
+        arrow_schema: &Schema,
+    ) -> Result<Self> {
+        // Skip if row_selection present (too complex to remap)
+        if self.row_selection.is_some() {
+            debug!("Skipping RG reorder: row_selection present");
+            return Ok(self);
+        }
+
+        // Nothing to reorder
+        if self.row_group_indexes.len() <= 1 {
+            return Ok(self);
+        }
+
+        let first_sort_expr = sort_order.first();
+
+        // Extract column name from sort expression
+        let column: &Column = match first_sort_expr.expr.downcast_ref::<Column>() {
+            Some(col) => col,
+            None => {
+                debug!("Skipping RG reorder: sort expr is not a simple column");
+                return Ok(self);
+            }
+        };
+
+        // Build statistics converter for this column
+        let converter = match StatisticsConverter::try_new(
+            column.name(),
+            arrow_schema,
+            file_metadata.file_metadata().schema_descr(),
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                debug!("Skipping RG reorder: cannot create stats converter: {e}");
+                return Ok(self);
+            }
+        };
+
+        // Always sort ASC by min values — direction is handled by reverse
+        let rg_metadata: Vec<&RowGroupMetaData> = self
+            .row_group_indexes
+            .iter()
+            .map(|&idx| file_metadata.row_group(idx))
+            .collect();
+
+        let stat_values = match converter.row_group_mins(rg_metadata.iter().copied()) {
+            Ok(vals) => vals,
+            Err(e) => {
+                debug!("Skipping RG reorder: cannot get min values: {e}");
+                return Ok(self);
+            }
+        };
+
+        let sort_options = arrow::compute::SortOptions {
+            descending: false,
+            nulls_first: first_sort_expr.options.nulls_first,
+        };
+        let sorted_indices =
+            match arrow::compute::sort_to_indices(&stat_values, Some(sort_options), None)
+            {
+                Ok(indices) => indices,
+                Err(e) => {
+                    debug!("Skipping RG reorder: sort failed: {e}");
+                    return Ok(self);
+                }
+            };
+
+        // Apply the reordering
+        let original_indexes = self.row_group_indexes.clone();
+        self.row_group_indexes = sorted_indices
+            .values()
+            .iter()
+            .map(|&i| original_indexes[i as usize])
+            .collect();
+
+        Ok(self)
     }
 
     /// Reverse the access plan for reverse scanning
