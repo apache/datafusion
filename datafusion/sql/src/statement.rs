@@ -2364,7 +2364,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let table_source = self.context_provider.get_table_source(table_name.clone())?;
         let table_schema = DFSchema::try_from(table_source.schema())?;
 
-        // Convert ObjectNames to Idents; reject multi-part column names
         let columns: Vec<Ident> = columns
             .into_iter()
             .map(|name| {
@@ -2373,12 +2372,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Multi-part column names in INSERT not supported: {name}"
                     );
                 }
-                match name.0.into_iter().next().unwrap() {
-                    ast::ObjectNamePart::Identifier(ident) => Ok(ident),
-                    other => not_impl_err!(
-                        "Non-identifier column name part in INSERT not supported: {other}"
-                    ),
-                }
+                let part = &name.0[0];
+                let Some(ident) = part.as_ident() else {
+                    return not_impl_err!(
+                        "Non-identifier column name part in INSERT not supported: {part}"
+                    );
+                };
+                Ok(ident.clone())
             })
             .collect::<Result<Vec<_>>>()?;
 
