@@ -23,10 +23,9 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{SortOptions, take};
 use arrow::datatypes::DataType;
 use arrow::util::bit_iterator::BitIndexIterator;
-use datafusion_common::HashMap;
 use datafusion_common::Result;
 use datafusion_common::hash_utils::{RandomState, with_hashes};
-use hashbrown::hash_map::RawEntryMut;
+use hashbrown::HashTable;
 
 use super::result::build_in_list_result;
 use super::static_filter::StaticFilter;
@@ -36,11 +35,8 @@ use super::static_filter::StaticFilter;
 pub(super) struct ArrayStaticFilter {
     in_array: ArrayRef,
     state: RandomState,
-    /// Used to provide a lookup from value to in list index
-    ///
-    /// Note: usize::hash is not used, instead the raw entry
-    /// API is used to store entries w.r.t their value
-    map: HashMap<usize, (), ()>,
+    /// Stores indices into `in_array` for O(1) lookups.
+    table: HashTable<usize>,
 }
 
 impl ArrayStaticFilter {
@@ -56,36 +52,34 @@ impl ArrayStaticFilter {
             return Ok(ArrayStaticFilter {
                 in_array,
                 state: RandomState::default(),
-                map: HashMap::with_hasher(()),
+                table: HashTable::new(),
             });
         }
 
         let state = RandomState::default();
-        let map = Self::build_haystack_map(&in_array, &state)?;
+        let table = Self::build_haystack_table(&in_array, &state)?;
 
         Ok(Self {
             in_array,
             state,
-            map,
+            table,
         })
     }
 
-    fn build_haystack_map(
+    fn build_haystack_table(
         haystack: &ArrayRef,
         state: &RandomState,
-    ) -> Result<HashMap<usize, (), ()>> {
-        let mut map: HashMap<usize, (), ()> = HashMap::with_hasher(());
+    ) -> Result<HashTable<usize>> {
+        let mut table = HashTable::new();
 
         with_hashes([haystack.as_ref()], state, |hashes| -> Result<()> {
             let cmp = make_comparator(haystack, haystack, SortOptions::default())?;
 
             let insert_value = |idx| {
                 let hash = hashes[idx];
-                if let RawEntryMut::Vacant(v) = map
-                    .raw_entry_mut()
-                    .from_hash(hash, |x| cmp(*x, idx).is_eq())
-                {
-                    v.insert_with_hasher(hash, idx, (), |x| hashes[*x]);
+                // Only insert if not already present (deduplication)
+                if table.find(hash, |&x| cmp(x, idx).is_eq()).is_none() {
+                    table.insert_unique(hash, idx, |&x| hashes[x]);
                 }
             };
 
@@ -100,7 +94,7 @@ impl ArrayStaticFilter {
             Ok(())
         })?;
 
-        Ok(map)
+        Ok(table)
     }
 
     fn find_needles_in_haystack(
@@ -122,10 +116,7 @@ impl ArrayStaticFilter {
                 #[inline(always)]
                 |i| {
                     let hash = needle_hashes[i];
-                    self.map
-                        .raw_entry()
-                        .from_hash(hash, |idx| cmp(i, *idx).is_eq())
-                        .is_some()
+                    self.table.find(hash, |&idx| cmp(i, idx).is_eq()).is_some()
                 },
             ))
         })
