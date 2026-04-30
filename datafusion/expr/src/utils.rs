@@ -353,14 +353,13 @@ fn get_excluded_columns(
                             "EXCLUDE with multi-part identifiers is not supported: {name}"
                         );
                     }
-                    match &name.0[0] {
-                        sqlparser::ast::ObjectNamePart::Identifier(ident) => {
-                            Ok(ident.clone())
-                        }
-                        other => plan_err!(
-                            "EXCLUDE with non-identifier name part is not supported: {other}"
-                        ),
-                    }
+                    let part = &name.0[0];
+                    let Some(ident) = part.as_ident() else {
+                        return plan_err!(
+                            "EXCLUDE with non-identifier name part is not supported: {part}"
+                        );
+                    };
+                    Ok(ident.clone())
                 };
             exclude_owned = match exclude {
                 ExcludeSelectItem::Single(name) => vec![object_name_to_ident(name)?],
