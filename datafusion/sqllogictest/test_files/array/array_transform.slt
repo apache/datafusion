@@ -16,7 +16,7 @@
 # under the License.
 
 #############
-## Higher Order Function Tests
+## array_transform Tests
 #############
 
 statement ok
@@ -172,10 +172,10 @@ select array_transform([3, 5, 0], v -> case when v > 1 then 2 when v > 4 then 6 
 
 #case with inner higher order function
 query I??
-select 
+select
     t.number,
     t.list,
-    case 
+    case
         when t.number > 30 then array_transform(t.list, v -> v+1)
         else array_transform(t.list, v -> v*2)
     end
@@ -272,84 +272,6 @@ SELECT array_transform([1], v -> v -> v+1);
 
 query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 30"\)
 SELECT array_transform([1], () -> 1);
-
-##########
-## array_any_match tests
-##########
-
-# basic: some elements match
-query B
-SELECT array_any_match([1, 2, 3], x -> x > 2);
-----
-true
-
-# basic: no elements match
-query B
-SELECT array_any_match([1, 2, 3], x -> x > 5);
-----
-false
-
-# empty array returns false
-query B
-SELECT array_any_match(arrow_cast(make_array(), 'List(Int32)'), x -> x > 0);
-----
-false
-
-# null array returns null
-query B
-SELECT array_any_match(arrow_cast(NULL, 'List(Int32)'), x -> x > 0);
-----
-NULL
-
-# predicate returns null for some elements, false for others -> null
-query B
-SELECT array_any_match([1, 2, NULL], x -> x > 5);
-----
-NULL
-
-# predicate returns null for some elements but true for others -> true
-query B
-SELECT array_any_match([1, NULL, 10], x -> x > 5);
-----
-true
-
-# multiple rows
-query B
-SELECT array_any_match(list, x -> x > 5) FROM t;
-----
-true
-true
-true
-
-# predicate always returns null -> null
-query B
-SELECT array_any_match([1, 2, 3], x -> NULL::boolean);
-----
-NULL
-
-# all elements null, predicate always null -> null
-query B
-SELECT array_any_match(arrow_cast([NULL, NULL, NULL], 'List(Int32)'), x -> x > 5);
-----
-NULL
-
-# predicate returns true for null elements -> true
-query B
-SELECT array_any_match(arrow_cast([NULL, NULL], 'List(Int32)'), x -> x IS NULL);
-----
-true
-
-# alias any_match works
-query B
-SELECT any_match([1, 2, 3], x -> x > 2);
-----
-true
-
-# alias list_any_match works
-query B
-SELECT list_any_match([1, 2, 3], x -> x > 2);
-----
-true
 
 statement ok
 drop table t;
