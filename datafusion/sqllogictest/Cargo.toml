@@ -94,7 +94,7 @@ harness = false
 name = "sqllogictests"
 path = "bin/sqllogictests.rs"
 
-# Opportunistic cargo-machete cleanup: serde_json is pulled with a feature to get
+# serde_json is pulled with a feature to get
 # consistent pg display, but is not directly used in this crate.
 [package.metadata.cargo-machete]
 ignored = ["serde_json"]
