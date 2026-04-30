@@ -2030,6 +2030,10 @@ impl ConversionSpecifier {
         let decimal = BigDecimal::from_bigint(decimal, scale);
 
         // Handle sign
+        // TODO: `negative_in_parentheses` (the `(` flag) is not implemented here.
+        // Java/Spark wrap negative values in parentheses when this flag is set
+        // (e.g. `%(,.2f` with -1234.5 → "(1,234.50)"), but this path always
+        // uses a minus sign. See `format_float` for the correct implementation.
         let is_negative = decimal.sign() == Sign::Minus;
         let abs_decimal = decimal.abs();
 
@@ -2722,6 +2726,44 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
             ],
             Ok(Some("  +1,234,567.89")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_parentheses_float() -> Result<()> {
+        // %(,15.2f with negative — parentheses + grouping + width
+        // Java: String.format("%(,15.2f", -1234.5) → "     (1,234.50)"
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(-1234.5))),
+            ],
+            Ok(Some("     (1,234.50)")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_parentheses_decimal() -> Result<()> {
+        // %(,15.2f on negative decimal — format_decimal ignores negative_in_parentheses,
+        // always uses '-'. Check TODO in fn format_decimal
+        // Java: String.format("%(,15.2f", -1234.5) → "     (1,234.50)"
+        // Ours: "      -1,234.50" (minus sign, no parens)
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 10, 2)),
+            ],
+            Ok(Some("      -1,234.50")),
             &str,
             Utf8,
             StringArray
