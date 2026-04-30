@@ -22,14 +22,16 @@ use std::fs::metadata;
 use std::sync::Arc;
 
 use super::SendableRecordBatchStream;
+use crate::expressions::Column;
+use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::stream::RecordBatchReceiverStream;
-use crate::{ColumnStatistics, Statistics};
+use crate::{ColumnStatistics, ExecutionPlan, Statistics};
 
 use arrow::array::Array;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{Result, plan_err};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use futures::{StreamExt, TryStreamExt};
@@ -87,6 +89,77 @@ fn build_file_list_recurse(
         }
     }
     Ok(())
+}
+
+/// Align `input`'s physical plan schema with `expected_schema` when only field names differ.
+///
+/// This helper is intended for operators that combine independently planned children but
+/// expose a single declared output schema. It returns `input` unchanged when schemas already
+/// match exactly. Otherwise, it validates that projection can safely produce the expected
+/// schema, then wraps `input` in a [`ProjectionExec`] that keeps columns in their existing
+/// positional order and aliases them to `expected_schema`'s field names.
+///
+/// [`ProjectionExec`] can rename fields but preserves column data types, nullability, field
+/// metadata, and schema metadata from the input expressions. Therefore, this helper rejects
+/// mismatches in those attributes rather than returning a plan whose schema still differs
+/// from `expected_schema`.
+pub fn project_plan_to_schema(
+    input: Arc<dyn ExecutionPlan>,
+    expected_schema: &SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    if input_schema.as_ref() == expected_schema.as_ref() {
+        return Ok(input);
+    }
+
+    if input_schema.fields().len() != expected_schema.fields().len() {
+        return internal_err!(
+            "Cannot project plan to expected schema: expected {} column(s), got {}",
+            expected_schema.fields().len(),
+            input_schema.fields().len()
+        );
+    }
+
+    if input_schema.metadata() != expected_schema.metadata() {
+        return internal_err!(
+            "Cannot project plan to expected schema: schema metadata differ"
+        );
+    }
+
+    if let Some((i, (input_field, expected_field))) = input_schema
+        .fields()
+        .iter()
+        .zip(expected_schema.fields().iter())
+        .enumerate()
+        .find(|(_, (input_field, expected_field))| {
+            input_field.data_type() != expected_field.data_type()
+                || input_field.is_nullable() != expected_field.is_nullable()
+                || input_field.metadata() != expected_field.metadata()
+        })
+    {
+        return internal_err!(
+            "Cannot project plan column {i} ('{}') to expected output field '{}': \
+             fields differ beyond name (input field: {:?}, expected field: {:?})",
+            input_field.name(),
+            expected_field.name(),
+            input_field,
+            expected_field
+        );
+    }
+
+    let projection_exprs = expected_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, expected_field)| ProjectionExpr {
+            expr: Arc::new(Column::new(input_schema.field(i).name(), i)),
+            alias: expected_field.name().clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let projection = ProjectionExec::try_new(projection_exprs, input)?;
+    debug_assert_eq!(projection.schema().as_ref(), expected_schema.as_ref());
+    Ok(Arc::new(projection))
 }
 
 /// If running in a tokio context spawns the execution of `stream` to a separate task

@@ -24,12 +24,11 @@ use std::task::{Context, Poll};
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
+use crate::common::project_plan_to_schema;
 use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
-use crate::expressions::Column;
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
-use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
@@ -40,7 +39,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Result, internal_datafusion_err, internal_err, not_impl_err};
+use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::PhysicalExpr;
@@ -93,7 +92,8 @@ impl RecursiveQueryExec {
         let work_table = Arc::new(WorkTable::new(name.clone()));
         // Use the same work table for both the WorkTableExec and the recursive term
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        let recursive_term = project_to_schema(recursive_term, &static_term.schema())?;
+        let recursive_term =
+            project_plan_to_schema(recursive_term, &static_term.schema())?;
         let cache = Self::compute_properties(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
@@ -137,68 +137,6 @@ impl RecursiveQueryExec {
             Boundedness::Bounded,
         )
     }
-}
-
-/// Return `input` unchanged if it already matches `expected_schema`; otherwise wrap it in
-/// a [`ProjectionExec`] that preserves the input columns positionally while aliasing them
-/// to `expected_schema`'s field names.
-///
-/// This is used for recursive CTEs because the static and recursive terms are planned
-/// independently. The recursive term can therefore produce equivalent columns with
-/// expression-derived names (for example `upper(r.val)`) while the recursive query's
-/// declared output schema comes from the static term (for example `val`). Aligning the
-/// recursive term with an explicit projection makes the physical plan expose the
-/// expected field names, instead of patching emitted [`RecordBatch`] schemas at the
-/// stream boundary.
-fn project_to_schema(
-    input: Arc<dyn ExecutionPlan>,
-    expected_schema: &SchemaRef,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let input_schema = input.schema();
-    if input_schema.as_ref() == expected_schema.as_ref() {
-        return Ok(input);
-    }
-
-    if input_schema.fields().len() != expected_schema.fields().len() {
-        return internal_err!(
-            "RecursiveQueryExec expected recursive term to have {} column(s), got {}",
-            expected_schema.fields().len(),
-            input_schema.fields().len()
-        );
-    }
-
-    if let Some((i, (input_field, expected_field))) = input_schema
-        .fields()
-        .iter()
-        .zip(expected_schema.fields().iter())
-        .enumerate()
-        .find(|(_, (input_field, expected_field))| {
-            input_field.data_type() != expected_field.data_type()
-        })
-    {
-        return internal_err!(
-            "RecursiveQueryExec cannot project recursive term column {i} \
-             ('{}') to expected output field '{}': data types differ \
-             (recursive field: {:?}, expected field: {:?})",
-            input_field.name(),
-            expected_field.name(),
-            input_field,
-            expected_field
-        );
-    }
-
-    let projection_exprs = expected_schema
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(i, expected_field)| ProjectionExpr {
-            expr: Arc::new(Column::new(input_schema.field(i).name(), i)),
-            alias: expected_field.name().clone(),
-        })
-        .collect::<Vec<_>>();
-
-    let projection = ProjectionExec::try_new(projection_exprs, input)?;
-    Ok(Arc::new(projection))
 }
 
 impl ExecutionPlan for RecursiveQueryExec {
@@ -557,6 +495,9 @@ fn new_groups_mask(
 mod tests {
     use super::*;
     use crate::empty::EmptyExec;
+    use crate::projection::ProjectionExec;
+
+    use std::collections::HashMap;
 
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -565,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn project_to_schema_returns_input_when_schema_matches() -> Result<()> {
+    fn project_plan_to_schema_returns_input_when_schema_matches() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::Int32,
@@ -573,14 +514,14 @@ mod tests {
         )]));
         let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
-        let result = project_to_schema(Arc::clone(&input), &schema)?;
+        let result = project_plan_to_schema(Arc::clone(&input), &schema)?;
 
         assert!(Arc::ptr_eq(&input, &result));
         Ok(())
     }
 
     #[test]
-    fn project_to_schema_aliases_field_names_with_projection_exec() -> Result<()> {
+    fn project_plan_to_schema_aliases_field_names_with_projection_exec() -> Result<()> {
         let input = empty_exec(vec![
             Field::new("recursive_a", DataType::Int32, false),
             Field::new("recursive_b", DataType::Utf8, true),
@@ -590,7 +531,7 @@ mod tests {
             Field::new("b", DataType::Utf8, true),
         ]));
 
-        let result = project_to_schema(Arc::clone(&input), &expected_schema)?;
+        let result = project_plan_to_schema(Arc::clone(&input), &expected_schema)?;
 
         let projection = result
             .downcast_ref::<ProjectionExec>()
@@ -603,28 +544,97 @@ mod tests {
     }
 
     #[test]
-    fn project_to_schema_errors_on_column_count_mismatch() {
+    fn project_plan_to_schema_preserves_matching_metadata_while_renaming() -> Result<()> {
+        let field_metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        let schema_metadata =
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]);
+        let input_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("input", DataType::Int32, false)
+                    .with_metadata(field_metadata.clone()),
+            ],
+            schema_metadata.clone(),
+        ));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
+        let expected_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("expected", DataType::Int32, false)
+                    .with_metadata(field_metadata),
+            ],
+            schema_metadata,
+        ));
+
+        let result = project_plan_to_schema(input, &expected_schema)?;
+
+        assert_eq!(result.schema(), expected_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_column_count_mismatch() {
         let input = empty_exec(vec![Field::new("a", DataType::Int32, false)]);
         let expected_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
 
-        let err = project_to_schema(input, &expected_schema).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("expected recursive term to have 2 column")
-        );
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("expected 2 column"));
     }
 
     #[test]
-    fn project_to_schema_errors_on_type_mismatch() {
+    fn project_plan_to_schema_errors_on_type_mismatch() {
         let input = empty_exec(vec![Field::new("a", DataType::Int32, false)]);
         let expected_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
-        let err = project_to_schema(input, &expected_schema).unwrap_err();
-        assert!(err.to_string().contains("data types differ"));
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("fields differ beyond name"));
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_nullability_mismatch() {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, true)]);
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "renamed",
+            DataType::Int32,
+            false,
+        )]));
+
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("fields differ beyond name"));
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_field_metadata_mismatch() {
+        let input =
+            empty_exec(vec![Field::new("a", DataType::Int32, false).with_metadata(
+                HashMap::from([("source".to_string(), "input".to_string())]),
+            )]);
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("renamed", DataType::Int32, false).with_metadata(HashMap::from([
+                ("source".to_string(), "expected".to_string()),
+            ])),
+        ]));
+
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("fields differ beyond name"));
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_schema_metadata_mismatch() {
+        let input_schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("a", DataType::Int32, false)],
+            HashMap::from([("source".to_string(), "input".to_string())]),
+        ));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
+        let expected_schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("renamed", DataType::Int32, false)],
+            HashMap::from([("source".to_string(), "expected".to_string())]),
+        ));
+
+        let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("schema metadata differ"));
     }
 
     #[test]
