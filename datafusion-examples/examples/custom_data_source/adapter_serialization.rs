@@ -17,9 +17,9 @@
 
 //! See `main.rs` for how to run it.
 //!
-//! This example demonstrates how to use the `PhysicalExtensionCodec` trait's
-//! interception methods (`serialize_physical_plan` and `deserialize_physical_plan`)
-//! to implement custom serialization logic.
+//! This example demonstrates how to use the `PhysicalProtoConverterExtension`
+//! trait's interception methods (`execution_plan_to_proto` and
+//! `proto_to_execution_plan`) to implement custom serialization logic.
 //!
 //! The key insight is that `FileScanConfig::expr_adapter_factory` is NOT serialized by
 //! default. This example shows how to:
@@ -28,9 +28,10 @@
 //! 3. Store the inner DataSourceExec (without adapter) as a child in the extension's inputs field
 //! 4. Unwrap and restore the adapter during deserialization
 //!
-//! This demonstrates nested serialization (protobuf outer, JSON inner) and the power
-//! of the `PhysicalExtensionCodec` interception pattern. Both plan and expression
-//! serialization route through the codec, enabling interception at every node in the tree.
+//! This demonstrates nested serialization (protobuf outer, JSON inner) and the
+//! power of `PhysicalProtoConverterExtension`. Both plan and expression
+//! serialization route through converter hooks, enabling interception at every
+//! node in the tree.
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -61,7 +62,7 @@ use datafusion_proto::bytes::{
 use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
-    PhysicalExtensionCodec, PhysicalProtoConverterExtension,
+    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
 use datafusion_proto::protobuf::{
@@ -177,7 +178,7 @@ pub async fn adapter_serialization() -> Result<()> {
     println!("\n=== Example Complete! ===");
     println!("Key takeaways:");
     println!(
-        "  1. PhysicalExtensionCodec provides serialize_physical_plan/deserialize_physical_plan hooks"
+        "  1. PhysicalProtoConverterExtension provides execution_plan_to_proto/proto_to_execution_plan hooks"
     );
     println!("  2. Custom metadata can be wrapped as PhysicalExtensionNode");
     println!("  3. Nested serialization (protobuf + JSON) works seamlessly");
@@ -303,9 +304,10 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
-        // We don't need this for the example - we use serialize_physical_plan instead
+        // We don't need this for the example - adapter wrapping happens in
+        // `execution_plan_to_proto` instead.
         not_impl_err!(
-            "try_encode not used - adapter wrapping happens in serialize_physical_plan"
+            "try_encode not used - adapter wrapping happens in execution_plan_to_proto"
         )
     }
 }
@@ -371,9 +373,8 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
     // Interception point: override deserialization to unwrap adapters
     fn proto_to_execution_plan(
         &self,
-        ctx: &TaskContext,
-        extension_codec: &dyn PhysicalExtensionCodec,
         proto: &PhysicalPlanNode,
+        ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check if this is our custom extension wrapper
         if let Some(PhysicalPlanType::Extension(extension)) = &proto.physical_plan_type
@@ -395,11 +396,7 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
             let inner_proto = &extension.inputs[0];
 
             // Deserialize the inner plan
-            let inner_plan = inner_proto.try_into_physical_plan_with_converter(
-                ctx,
-                extension_codec,
-                self,
-            )?;
+            let inner_plan = self.default_proto_to_execution_plan(inner_proto, ctx)?;
 
             // Recreate the adapter factory
             let adapter_factory = create_adapter_factory(&payload.adapter_metadata.tag);
@@ -409,17 +406,16 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
         }
 
         // Not our extension - use default deserialization
-        proto.try_into_physical_plan_with_converter(ctx, extension_codec, self)
+        self.default_proto_to_execution_plan(proto, ctx)
     }
 
     fn proto_to_physical_expr(
         &self,
         proto: &PhysicalExprNode,
-        ctx: &TaskContext,
         input_schema: &Schema,
-        codec: &dyn PhysicalExtensionCodec,
+        ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
+        parse_physical_expr_with_converter(proto, input_schema, ctx, self)
     }
 
     fn physical_expr_to_proto(

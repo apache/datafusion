@@ -28,8 +28,13 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility, col, logical_plan::LogicalPlan,
+    ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
+    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF,
+    LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ValueOrLambda, Volatility, col,
+    expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
+    lambda,
+    logical_plan::LogicalPlan,
     test::function_stub::sum_udaf,
 };
 use datafusion_functions::{string, unicode};
@@ -51,7 +56,9 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
-use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+use sqlparser::dialect::{
+    DatabricksDialect, Dialect, GenericDialect, HiveDialect, MySqlDialect,
+};
 use sqlparser::parser::Parser;
 
 mod cases;
@@ -3491,7 +3498,11 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 }
 
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
-    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
+    let state = MockSessionState::default()
+        .with_aggregate_function(sum_udaf())
+        .with_higher_order_function(Arc::new(MockArrayReduce::new()))
+        .with_scalar_function(make_array_udf())
+        .with_expr_planner(Arc::new(CustomExprPlanner {})); // plan array literal
     let context = MockContextProvider { state };
     let planner = SqlToRel::new(&context);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
@@ -5319,4 +5330,160 @@ Sort: customer.c_custkey ASC NULLS LAST
       TableScan: customer
 "#
     );
+}
+
+#[test]
+fn test_progressive_lambda_parameters() {
+    let sql = "select array_reduce([1.0, 2.0], 0, (acc, v) -> acc + v, v -> -v)";
+
+    let expr = logical_plan_with_dialect(sql, &DatabricksDialect)
+        .unwrap()
+        .head_output_expr()
+        .unwrap()
+        .unwrap();
+
+    // taking into account the user defined coercion that coerced the List(Float64) to List(Float32),
+    // test that merge accumulator parameter and finish parameter correctly got the type of the merge
+    // lambda output (Float32 instead of Float64), and not the initial value type (Int64)
+    assert_eq!(
+        expr,
+        Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(MockArrayReduce::new()),
+            vec![
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    make_array_udf(),
+                    // note the array being reduced is List(Float64)
+                    vec![
+                        Expr::Literal(1.0f64.into(), None),
+                        Expr::Literal(2.0f64.into(), None)
+                    ]
+                )),
+                Expr::Literal(0i64.into(), None),
+                lambda(
+                    ["acc", "v"],
+                    // lambda vars are Float32
+                    resolved_lambda_var("acc", DataType::Float32)
+                        + resolved_lambda_var("v", DataType::Float32)
+                ),
+                lambda(["v"], -resolved_lambda_var("v", DataType::Float32)),
+            ]
+        ))
+    )
+}
+
+fn resolved_lambda_var(name: &str, dt: DataType) -> Expr {
+    Expr::LambdaVariable(LambdaVariable::new(
+        name.to_string(),
+        Some(Arc::new(Field::new(name.to_string(), dt, true))),
+    ))
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct MockArrayReduce {
+    signature: HigherOrderSignature,
+}
+
+impl MockArrayReduce {
+    #[expect(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+        }
+    }
+}
+
+impl HigherOrderUDF for MockArrayReduce {
+    fn name(&self) -> &str {
+        "array_reduce"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn signature(&self) -> &HigherOrderSignature {
+        &self.signature
+    }
+
+    fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [_list, initial] = arg_types else {
+            unreachable!()
+        };
+
+        Ok(vec![
+            DataType::new_list(DataType::Float32, true),
+            initial.clone(),
+        ])
+    }
+
+    fn lambda_parameters(
+        &self,
+        step: usize,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> Result<LambdaParametersProgress> {
+        // optional finish not supported for simplicity
+        let [
+            ValueOrLambda::Value(list),
+            ValueOrLambda::Value(initial_value),
+            ValueOrLambda::Lambda(merge),
+            ValueOrLambda::Lambda(_finish),
+        ] = fields
+        else {
+            unreachable!()
+        };
+
+        let list_field = match list.data_type() {
+            DataType::List(field) => field,
+            _ => unreachable!(),
+        };
+
+        Ok(match (step, merge) {
+            (0, None) => {
+                // at the first step, we use the initial_value as merge accumulator,
+                // and return None for finish since we don't know the output of merge
+                LambdaParametersProgress::Partial(vec![
+                    // merge
+                    Some(vec![Arc::clone(initial_value), Arc::clone(list_field)]),
+                    // finish
+                    None,
+                ])
+            }
+            (1, Some(accumulator)) | (0, Some(accumulator)) => {
+                // now we can use the merge output as it's accumulator and
+                // as the finish parameter
+                LambdaParametersProgress::Complete(vec![
+                    // merge
+                    vec![Arc::clone(accumulator), Arc::clone(list_field)],
+                    // finish
+                    vec![Arc::clone(accumulator)],
+                ])
+            }
+            (1, None) => {
+                unreachable!()
+            }
+            _ => todo!(),
+        })
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: HigherOrderReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        // optional finish not supported for simplicity
+        let [
+            ValueOrLambda::Value(_list),
+            ValueOrLambda::Value(_initial_value),
+            ValueOrLambda::Lambda(_merge),
+            ValueOrLambda::Lambda(finish),
+        ] = args.arg_fields
+        else {
+            unreachable!()
+        };
+
+        Ok(Arc::clone(finish))
+    }
+
+    fn invoke_with_args(&self, _args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+        unreachable!()
+    }
 }
