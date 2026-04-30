@@ -98,6 +98,7 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE skew_parquet
 STORED AS PARQUET
+WITH ORDER (x)
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
 
 query TT
