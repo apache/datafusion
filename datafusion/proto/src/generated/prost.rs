@@ -5,7 +5,7 @@
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -77,6 +77,8 @@ pub mod logical_plan_node {
         CteWorkTableScan(super::CteWorkTableScanNode),
         #[prost(message, tag = "33")]
         Dml(::prost::alloc::boxed::Box<super::DmlNode>),
+        #[prost(message, tag = "34")]
+        EmptyTableScan(super::EmptyTableScanNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -195,8 +197,8 @@ pub mod projection_node {
 pub struct SelectionNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    #[prost(message, optional, tag = "2")]
-    pub expr: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortNode {
@@ -382,8 +384,8 @@ pub struct JoinNode {
     pub right_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
     pub null_equality: i32,
-    #[prost(message, optional, tag = "8")]
-    pub filter: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, boxed, tag = "8")]
+    pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistinctNode {
@@ -578,7 +580,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -656,12 +658,27 @@ pub mod logical_expr_node {
         Placeholder(super::PlaceholderNode),
         #[prost(message, tag = "35")]
         Unnest(super::Unnest),
+        /// Subquery expressions
+        #[prost(message, tag = "36")]
+        ScalarSubqueryExpr(::prost::alloc::boxed::Box<super::ScalarSubqueryExprNode>),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Wildcard {
     #[prost(message, optional, tag = "1")]
     pub qualifier: ::core::option::Option<TableReference>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubqueryNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub subquery: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub outer_ref_columns: ::prost::alloc::vec::Vec<LogicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarSubqueryExprNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub subquery: ::core::option::Option<::prost::alloc::boxed::Box<SubqueryNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlaceholderNode {
@@ -1102,7 +1119,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1186,6 +1203,8 @@ pub mod physical_plan_node {
         Buffer(::prost::alloc::boxed::Box<super::BufferExecNode>),
         #[prost(message, tag = "38")]
         ArrowScan(super::ArrowScanExecNode),
+        #[prost(message, tag = "39")]
+        ScalarSubquery(::prost::alloc::boxed::Box<super::ScalarSubqueryExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1317,7 +1336,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1370,6 +1389,8 @@ pub mod physical_expr_node {
         UnknownColumn(super::UnknownColumn),
         #[prost(message, tag = "21")]
         HashExpr(super::PhysicalHashExprNode),
+        #[prost(message, tag = "22")]
+        ScalarSubquery(super::PhysicalScalarSubqueryExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2096,6 +2117,17 @@ pub struct CteWorkTableScanNode {
     #[prost(message, optional, tag = "2")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EmptyTableScanNode {
+    #[prost(message, optional, tag = "1")]
+    pub table_name: ::core::option::Option<TableReference>,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(message, optional, tag = "3")]
+    pub projection: ::core::option::Option<ProjectionColumns>,
+    #[prost(message, repeated, tag = "4")]
+    pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GenerateSeriesArgsContainsNull {
     #[prost(enumeration = "GenerateSeriesName", tag = "1")]
@@ -2201,6 +2233,22 @@ pub struct BufferExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(uint64, tag = "2")]
     pub capacity: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarSubqueryExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub subqueries: ::prost::alloc::vec::Vec<PhysicalPlanNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalScalarSubqueryExprNode {
+    #[prost(message, optional, tag = "1")]
+    pub data_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(bool, tag = "2")]
+    pub nullable: bool,
+    #[prost(uint32, tag = "3")]
+    pub index: u32,
 }
 /// Identifies a built-in file format supported by DataFusion.
 /// Used by DefaultLogicalExtensionCodec to serialize/deserialize
