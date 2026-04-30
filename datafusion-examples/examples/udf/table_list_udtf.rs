@@ -91,11 +91,11 @@ impl TableFunctionImpl for TableListUdtf {
             let Some(catalog) = catalog_list.catalog(&catalog_name) else {
                 continue;
             };
-            for schema_name in catalog.schema_names() {
-                let Some(schema) = catalog.schema(&schema_name) else {
+            for schema_name in catalog.schema_names()? {
+                let Some(schema) = catalog.schema(&schema_name)? else {
                     continue;
                 };
-                for table_name in schema.table_names() {
+                for table_name in schema.table_names()? {
                     let Some(provider) = block_in_place(|| {
                         Handle::current().block_on(schema.table(&table_name))
                     })?

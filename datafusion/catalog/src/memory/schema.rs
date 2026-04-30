@@ -46,11 +46,12 @@ impl Default for MemorySchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for MemorySchemaProvider {
-    fn table_names(&self) -> Vec<String> {
-        self.tables
+    fn table_names(&self) -> datafusion_common::Result<Vec<String>> {
+        Ok(self
+            .tables
             .iter()
             .map(|table| table.key().clone())
-            .collect()
+            .collect())
     }
 
     async fn table(
@@ -65,7 +66,7 @@ impl SchemaProvider for MemorySchemaProvider {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        if self.table_exist(name.as_str()) {
+        if self.table_exist(name.as_str())? {
             return exec_err!("The table {name} already exists");
         }
         Ok(self.tables.insert(name, table))
@@ -78,7 +79,7 @@ impl SchemaProvider for MemorySchemaProvider {
         Ok(self.tables.remove(name).map(|(_, table)| table))
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        self.tables.contains_key(name)
+    fn table_exist(&self, name: &str) -> datafusion_common::Result<bool> {
+        Ok(self.tables.contains_key(name))
     }
 }

@@ -32,8 +32,8 @@ async fn create_custom_table() -> Result<()> {
     ctx.sql(sql).await.unwrap();
 
     let cat = ctx.catalog("datafusion").unwrap();
-    let schema = cat.schema("public").unwrap();
-    let exists = schema.table_exist("dt");
+    let schema = cat.schema("public")?.unwrap();
+    let exists = schema.table_exist("dt")?;
     assert!(exists, "Table should have been created!");
 
     Ok(())
@@ -51,9 +51,9 @@ async fn create_external_table_with_ddl() -> Result<()> {
     ctx.sql(sql).await.unwrap();
 
     let cat = ctx.catalog("datafusion").unwrap();
-    let schema = cat.schema("public").unwrap();
+    let schema = cat.schema("public")?.unwrap();
 
-    let exists = schema.table_exist("dt");
+    let exists = schema.table_exist("dt")?;
     assert!(exists, "Table should have been created!");
 
     let table_schema = schema.table("dt").await.unwrap().unwrap().schema();
@@ -75,16 +75,16 @@ async fn create_drop_table() -> Result<()> {
     ctx.sql(sql).await.unwrap();
 
     let cat = ctx.catalog("datafusion").unwrap();
-    let schema = cat.schema("public").unwrap();
+    let schema = cat.schema("public")?.unwrap();
 
-    let exists = schema.table_exist("dt");
+    let exists = schema.table_exist("dt")?;
     assert!(exists, "Table should have been created!");
 
     // Drop the table
     let sql = "DROP TABLE dt;";
     ctx.sql(sql).await.unwrap();
 
-    let exists = schema.table_exist("dt");
+    let exists = schema.table_exist("dt")?;
     assert!(!exists, "Table should have been dropped!");
 
     Ok(())

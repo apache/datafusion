@@ -88,7 +88,7 @@ impl Default for FixedSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for FixedSchemaProvider {
-    fn table_names(&self) -> Vec<String> {
+    fn table_names(&self) -> Result<Vec<String>> {
         self.inner.table_names()
     }
 
@@ -96,7 +96,7 @@ impl SchemaProvider for FixedSchemaProvider {
         self.inner.table(name).await
     }
 
-    fn table_exist(&self, name: &str) -> bool {
+    fn table_exist(&self, name: &str) -> Result<bool> {
         self.inner.table_exist(name)
     }
 
@@ -137,11 +137,11 @@ impl Default for FixedCatalogProvider {
 }
 
 impl CatalogProvider for FixedCatalogProvider {
-    fn schema_names(&self) -> Vec<String> {
+    fn schema_names(&self) -> Result<Vec<String>> {
         self.inner.schema_names()
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+    fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
         self.inner.schema(name)
     }
 

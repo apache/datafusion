@@ -118,7 +118,7 @@ impl ListingSchemaProvider {
                 .to_string()
                 .ok_or_else(|| internal_datafusion_err!("Cannot parse file name!"))?;
 
-            if !self.table_exist(table_name) {
+            if !self.table_exist(table_name)? {
                 let table_url = format!("{}/{}", self.authority, table_path);
 
                 let name = TableReference::bare(table_name);
@@ -145,13 +145,14 @@ impl ListingSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for ListingSchemaProvider {
-    fn table_names(&self) -> Vec<String> {
-        self.tables
+    fn table_names(&self) -> datafusion_common::Result<Vec<String>> {
+        Ok(self
+            .tables
             .lock()
             .expect("Can't lock tables")
             .keys()
             .map(|it| it.to_string())
-            .collect()
+            .collect())
     }
 
     async fn table(
@@ -185,11 +186,12 @@ impl SchemaProvider for ListingSchemaProvider {
         Ok(self.tables.lock().expect("Can't lock tables").remove(name))
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        self.tables
+    fn table_exist(&self, name: &str) -> datafusion_common::Result<bool> {
+        Ok(self
+            .tables
             .lock()
             .expect("Can't lock tables")
-            .contains_key(name)
+            .contains_key(name))
     }
 }
 

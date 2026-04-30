@@ -37,8 +37,8 @@ impl SchemaProvider for ResolvedSchemaProvider {
         self.owner_name.as_deref()
     }
 
-    fn table_names(&self) -> Vec<String> {
-        self.cached_tables.keys().cloned().collect()
+    fn table_names(&self) -> Result<Vec<String>> {
+        Ok(self.cached_tables.keys().cloned().collect())
     }
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -61,8 +61,8 @@ impl SchemaProvider for ResolvedSchemaProvider {
         )
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        self.cached_tables.contains_key(name)
+    fn table_exist(&self, name: &str) -> Result<bool> {
+        Ok(self.cached_tables.contains_key(name))
     }
 }
 
@@ -111,12 +111,12 @@ struct ResolvedCatalogProvider {
     cached_schemas: HashMap<String, Arc<dyn SchemaProvider>>,
 }
 impl CatalogProvider for ResolvedCatalogProvider {
-    fn schema_names(&self) -> Vec<String> {
-        self.cached_schemas.keys().cloned().collect()
+    fn schema_names(&self) -> Result<Vec<String>> {
+        Ok(self.cached_schemas.keys().cloned().collect())
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.cached_schemas.get(name).cloned()
+    fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        Ok(self.cached_schemas.get(name).cloned())
     }
 }
 
@@ -592,12 +592,19 @@ mod tests {
             );
 
             for schema_ref in found_schemas {
-                let schema = cached_provider.schema(schema_ref);
+                let schema = cached_provider
+                    .schema(schema_ref)
+                    .expect("schema lookup should succeed");
                 assert!(schema.is_some());
             }
 
             for schema_ref in not_found_schemas {
-                assert!(cached_provider.schema(schema_ref).is_none());
+                assert!(
+                    cached_provider
+                        .schema(schema_ref)
+                        .expect("schema lookup should succeed")
+                        .is_none()
+                );
             }
         }
 
@@ -729,7 +736,8 @@ mod tests {
                 .unwrap();
             let schema = catalog
                 .schema(table_ref.schema().unwrap_or(MOCK_SCHEMA))
-                .unwrap();
+                .expect("schema lookup should succeed")
+                .expect("default schema should exist");
             assert!(schema.table(table_ref.table()).await.unwrap().is_some());
         }
     }

@@ -227,8 +227,8 @@ struct StrictOrdersSchema {
 
 #[async_trait]
 impl SchemaProvider for StrictOrdersSchema {
-    fn table_names(&self) -> Vec<String> {
-        vec!["orders".to_string()]
+    fn table_names(&self) -> Result<Vec<String>> {
+        Ok(vec!["orders".to_string()])
     }
 
     async fn table(
@@ -244,8 +244,8 @@ impl SchemaProvider for StrictOrdersSchema {
         }
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        name == "orders"
+    fn table_exist(&self, name: &str) -> Result<bool> {
+        Ok(name == "orders")
     }
 }
 
