@@ -42,6 +42,9 @@ on:
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   # Check crate compiles and base cargo check passes
   linux-build-lib:
@@ -740,7 +743,7 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
-          
+
       - name: Mark repository as safe for git
         # Required for git commands inside container (avoids "dubious ownership" error)
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
