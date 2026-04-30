@@ -79,7 +79,7 @@ use log::debug;
 use parking_lot::Mutex;
 
 use crate::metrics::SpillMetrics;
-use crate::spill::in_progress_spill_file::InProgressSpillFile;
+use crate::spill::replayable_spill_input::ReplayableStreamSource;
 use crate::spill::spill_manager::SpillManager;
 
 #[expect(rustdoc::private_intra_doc_links)]
@@ -931,16 +931,8 @@ pub(crate) struct SpillStateActive {
     reservation: MemoryReservation,
     /// Accumulated left batches for the current chunk
     pending_batches: Vec<RecordBatch>,
-    /// SpillManager for right-side spilling
-    right_spill_manager: SpillManager,
-    /// In-progress spill file for writing right batches during first pass
-    right_spill_in_progress: Option<InProgressSpillFile>,
-    /// Completed right-side spill file (available after first pass)
-    right_spill_file: Option<RefCountedTempFile>,
-    /// Max right batch memory size (for read_spill_as_stream)
-    right_max_batch_memory: usize,
-    /// Whether this is the first right-side pass (need to spill while reading)
-    is_first_right_pass: bool,
+    /// Right input that spills on the first pass and replays from spill later.
+    right_input: ReplayableStreamSource,
 }
 
 pub(crate) struct NestedLoopJoinStream {
@@ -960,7 +952,8 @@ pub(crate) struct NestedLoopJoinStream {
     /// type of the join
     pub(crate) join_type: JoinType,
     /// the probe-side(right) table data of the nested loop join
-    pub(crate) right_data: SendableRecordBatchStream,
+    /// `Option` is used because memory-limited path requires resetting it.
+    pub(crate) right_data: Option<SendableRecordBatchStream>,
     /// the build-side table data of the nested loop join
     pub(crate) left_data: OnceFut<JoinLeftData>,
     /// Projection to construct the output schema from the left and right tables.
@@ -1258,7 +1251,7 @@ impl NestedLoopJoinStream {
             output_schema: Arc::clone(&schema),
             join_filter: filter,
             join_type,
-            right_data,
+            right_data: Some(right_data),
             column_indices,
             left_data,
             metrics,
@@ -1356,7 +1349,15 @@ impl NestedLoopJoinStream {
             .register(context.memory_pool());
 
         // Create SpillManager for right-side spilling
-        let right_schema = self.right_data.schema();
+        let right_schema = self
+            .right_data
+            .as_ref()
+            .expect("right_data must be present before fallback")
+            .schema();
+        let right_data = self
+            .right_data
+            .take()
+            .expect("right_data must be present before fallback");
         let right_spill_manager = SpillManager::new(
             context.runtime_env(),
             self.metrics.spill_metrics.clone(),
@@ -1370,11 +1371,11 @@ impl NestedLoopJoinStream {
             left_schema: None,
             reservation,
             pending_batches: Vec::new(),
-            right_spill_manager,
-            right_spill_in_progress: None,
-            right_spill_file: None,
-            right_max_batch_memory: 0,
-            is_first_right_pass: true,
+            right_input: ReplayableStreamSource::new(
+                right_data,
+                right_spill_manager,
+                "NestedLoopJoin right spill",
+            ),
         }));
 
         // State stays BufferingLeft — next poll will enter
@@ -1571,33 +1572,12 @@ impl NestedLoopJoinStream {
 
         self.buffered_left_data = Some(Arc::new(left_data));
 
-        // Set up right-side stream for this pass
-        if !active.is_first_right_pass {
-            if let Some(file) = active.right_spill_file.as_ref() {
-                match active.right_spill_manager.read_spill_as_stream(
-                    file.clone(),
-                    Some(active.right_max_batch_memory),
-                ) {
-                    Ok(stream) => {
-                        self.right_data = stream;
-                    }
-                    Err(e) => {
-                        return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                    }
-                }
+        match active.right_input.open_pass() {
+            Ok(stream) => {
+                self.right_data = Some(stream);
             }
-        } else {
-            // First pass: create InProgressSpillFile for right side
-            match active
-                .right_spill_manager
-                .create_in_progress_file("NestedLoopJoin right spill")
-            {
-                Ok(file) => {
-                    active.right_spill_in_progress = Some(file);
-                }
-                Err(e) => {
-                    return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                }
+            Err(e) => {
+                return ControlFlow::Break(Poll::Ready(Some(Err(e))));
             }
         }
 
@@ -1613,7 +1593,12 @@ impl NestedLoopJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        match self.right_data.poll_next_unpin(cx) {
+        match self
+            .right_data
+            .as_mut()
+            .expect("right_data must be present while fetching right")
+            .poll_next_unpin(cx)
+        {
             Poll::Ready(result) => match result {
                 Some(Ok(right_batch)) => {
                     // Update metrics
@@ -1624,19 +1609,6 @@ impl NestedLoopJoinStream {
                     // Skip the empty batch
                     if right_batch_rows == 0 {
                         return ControlFlow::Continue(());
-                    }
-
-                    // In memory-limited mode, spill right batch to disk on first pass
-                    if let SpillState::Active(ref mut active) = self.spill_state
-                        && active.is_first_right_pass
-                        && let Some(ref mut spill_file) = active.right_spill_in_progress
-                    {
-                        if let Err(e) = spill_file.append_batch(&right_batch) {
-                            return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                        }
-                        active.right_max_batch_memory = active
-                            .right_max_batch_memory
-                            .max(right_batch.get_array_memory_size());
                     }
 
                     self.current_right_batch = Some(right_batch);
@@ -1654,29 +1626,6 @@ impl NestedLoopJoinStream {
                 }
                 Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
                 None => {
-                    // Right stream exhausted.
-                    // In memory-limited mode, finalize the spill file after first pass.
-                    if let SpillState::Active(ref mut active) = self.spill_state
-                        && active.is_first_right_pass
-                    {
-                        if let Some(mut spill_in_progress) =
-                            active.right_spill_in_progress.take()
-                        {
-                            match spill_in_progress.finish() {
-                                Ok(Some(file)) => {
-                                    active.right_spill_file = Some(file);
-                                }
-                                Ok(None) => {
-                                    // No data was spilled (right side was empty)
-                                }
-                                Err(e) => {
-                                    return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                                }
-                            }
-                        }
-                        active.is_first_right_pass = false;
-                    }
-
                     self.state = NLJState::EmitLeftUnmatched;
                     ControlFlow::Continue(())
                 }
@@ -2257,7 +2206,11 @@ impl NestedLoopJoinStream {
         }
         let bitmap_sliced = BooleanArray::new(bitmap_sliced.finish(), None);
 
-        let right_schema = self.right_data.schema();
+        let right_schema = self
+            .right_data
+            .as_ref()
+            .expect("right_data must be present when building unmatched batch")
+            .schema();
         build_unmatched_batch(
             &self.output_schema,
             &left_batch_sliced,

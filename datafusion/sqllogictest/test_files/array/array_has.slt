@@ -517,16 +517,18 @@ logical_plan
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
 05)--------Projection:
-06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
-07)------------TableScan: generate_series() projection=[value]
+06)----------Filter: __common_expr_3 IS NULL AND Boolean(NULL) OR __common_expr_3 IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")]) IS NOT DISTINCT FROM Boolean(true) AND __common_expr_3 IS NOT NULL
+07)------------Projection: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) AS __common_expr_3
+08)--------------TableScan: generate_series() projection=[value]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: __common_expr_3@0 IS NULL AND NULL OR __common_expr_3@0 IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]) IS NOT DISTINCT FROM true AND __common_expr_3@0 IS NOT NULL, projection=[]
+06)----------ProjectionExec: expr=[substr(md5(CAST(value@0 AS Utf8View)), 1, 32) as __common_expr_3]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -754,26 +756,26 @@ select 5 <= any(make_array());
 false
 
 # Mixed NULL + non-NULL array where no non-NULL element satisfies the condition
-# These return false (NULLs are skipped by array_min/array_max)
+# These return NULL because NULLs leave the result indeterminate
 query B
 select 5 > any(make_array(6, NULL));
 ----
-false
+NULL
 
 query B
 select 5 < any(make_array(3, NULL));
 ----
-false
+NULL
 
 query B
 select 5 >= any(make_array(6, NULL));
 ----
-false
+NULL
 
 query B
 select 5 <= any(make_array(3, NULL));
 ----
-false
+NULL
 
 # Mixed NULL + non-NULL array where a non-NULL element satisfies the condition
 query B
@@ -804,33 +806,38 @@ true
 query B
 select 5 <> any(make_array(5, NULL));
 ----
-false
+NULL
 
-# All-NULL array: all operators should return false
+# All-NULL array: all operators should return NULL (unknown comparison)
 query B
 select 5 > any(make_array(NULL::INT, NULL::INT));
 ----
-false
+NULL
 
 query B
 select 5 < any(make_array(NULL::INT, NULL::INT));
 ----
-false
+NULL
 
 query B
 select 5 >= any(make_array(NULL::INT, NULL::INT));
 ----
-false
+NULL
 
 query B
 select 5 <= any(make_array(NULL::INT, NULL::INT));
 ----
-false
+NULL
 
 query B
 select 5 <> any(make_array(NULL::INT, NULL::INT));
 ----
-false
+NULL
+
+query B
+select 5 = any(make_array(NULL::INT, NULL::INT));
+----
+NULL
 
 # NULL left operand: should return NULL for non-empty arrays
 query B
@@ -887,6 +894,35 @@ NULL
 
 query B
 select 5 <> any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 = any(NULL::INT[]);
+----
+NULL
+
+# NULL = ANY with non-empty array
+query B
+select NULL = any(make_array(1, 2, 3));
+----
+NULL
+
+# = ANY with no match, no NULLs
+query B
+select 5 = any(make_array(1, 2, 3));
+----
+false
+
+# = ANY with mixed NULL (satisfying) returns TRUE
+query B
+select 5 = any(make_array(5, NULL));
+----
+true
+
+# = ANY with mixed NULL (non-satisfying): NULLs leave result indeterminate
+query B
+select 5 = any(make_array(1, 2, NULL));
 ----
 NULL
 

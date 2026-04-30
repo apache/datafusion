@@ -38,12 +38,7 @@ mod tests {
     fn test_ffi_physical_optimizer_rule() -> Result<(), DataFusionError> {
         let module = get_module()?;
 
-        let ffi_rule = module.create_physical_optimizer_rule().ok_or(
-            DataFusionError::NotImplemented(
-                "External module failed to implement create_physical_optimizer_rule"
-                    .to_string(),
-            ),
-        )?();
+        let ffi_rule = (module.create_physical_optimizer_rule)();
 
         let foreign_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
             (&ffi_rule).into();
