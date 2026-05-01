@@ -16,6 +16,7 @@
 // under the License.
 
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt::Display, hash::Hash, sync::Arc};
 use tokio::sync::watch;
 
@@ -27,7 +28,6 @@ use datafusion_common::{
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::DynHash;
-use rand::random;
 
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,7 +121,7 @@ impl std::fmt::Debug for Inner {
 impl Inner {
     fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self {
-            expression_id: random::<u64>(),
+            expression_id: EXPR_ID_SOURCE.next(),
             // Start with generation 1 which gives us a different result for [`PhysicalExpr::generation`] than the default 0.
             // This is not currently used anywhere but it seems useful to have this simple distinction.
             generation: 1,
@@ -539,6 +539,30 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         Some(self.inner.read().expression_id)
     }
 }
+
+/// An atomic counter used to generate monotonic u64 ids.
+struct ExpressionIdAtomicCounter {
+    inner: AtomicU64,
+}
+
+impl ExpressionIdAtomicCounter {
+    const fn new() -> Self {
+        Self {
+            inner: AtomicU64::new(0),
+        }
+    }
+
+    /// Retruns a fresh `expression_id` by incrementing the internal counter.
+    fn next(&self) -> u64 {
+        self.inner.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+/// Process-wide source of deterministic `expression_id`s for [`DynamicFilterPhysicalExpr`].
+///
+/// Currently, no other [`PhysicalExpr`]s use this source. If needed, it can be moved out of this
+/// file and be made public for other expressions to use.
+static EXPR_ID_SOURCE: ExpressionIdAtomicCounter = ExpressionIdAtomicCounter::new();
 
 #[cfg(test)]
 mod test {
