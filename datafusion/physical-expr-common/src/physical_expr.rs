@@ -355,48 +355,10 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// See the [`fmt_sql`] function for an example of printing `PhysicalExpr`s as SQL.
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result;
 
-    /// Take a snapshot of this `PhysicalExpr`, if it is dynamic.
-    ///
-    /// "Dynamic" in this case means containing references to structures that may change
-    /// during plan execution, such as hash tables.
-    ///
-    /// This method is used to capture the current state of `PhysicalExpr`s that may contain
-    /// dynamic references to other operators in order to serialize it over the wire
-    /// or treat it via downcast matching.
-    ///
-    /// You should not call this method directly as it does not handle recursion.
-    /// Instead use [`snapshot_physical_expr`] to handle recursion and capture the
-    /// full state of the `PhysicalExpr`.
-    ///
-    /// This is expected to return "simple" expressions that do not have mutable state
-    /// and are composed of DataFusion's built-in `PhysicalExpr` implementations.
-    /// Callers however should *not* assume anything about the returned expressions
-    /// since callers and implementers may not agree on what "simple" or "built-in"
-    /// means.
-    /// In other words, if you need to serialize a `PhysicalExpr` across the wire
-    /// you should call this method and then try to serialize the result,
-    /// but you should handle unknown or unexpected `PhysicalExpr` implementations gracefully
-    /// just as if you had not called this method at all.
-    ///
-    /// In particular, consider:
-    /// * A `PhysicalExpr` that references the current state of a `datafusion::physical_plan::TopK`
-    ///   that is involved in a query with `SELECT * FROM t1 ORDER BY a LIMIT 10`.
-    ///   This function may return something like `a >= 12`.
-    /// * A `PhysicalExpr` that references the current state of a `datafusion::physical_plan::joins::HashJoinExec`
-    ///   from a query such as `SELECT * FROM t1 JOIN t2 ON t1.a = t2.b`.
-    ///   This function may return something like `t2.b IN (1, 5, 7)`.
-    ///
-    /// A system or function that can only deal with a hardcoded set of `PhysicalExpr` implementations
-    /// or needs to serialize this state to bytes may not be able to handle these dynamic references.
-    /// In such cases, we should return a simplified version of the `PhysicalExpr` that does not
-    /// contain these dynamic references.
-    ///
-    /// Systems that implement remote execution of plans, e.g. serialize a portion of the query plan
-    /// and send it across the wire to a remote executor may want to call this method after
-    /// every batch on the source side and broadcast / update the current snapshot to the remote executor.
-    ///
-    /// Note for implementers: this method should *not* handle recursion.
-    /// Recursion is handled in [`snapshot_physical_expr`].
+    #[deprecated(
+        since = "54.0.0",
+        note = "downcast to `DynamicFilterPhysicalExpr` and call `current()` instead"
+    )]
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // By default, we return None to indicate that this PhysicalExpr does not
         // have any dynamic references or state.
@@ -616,38 +578,22 @@ pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
     Wrapper { expr }
 }
 
-/// Take a snapshot of the given `PhysicalExpr` if it is dynamic.
-///
-/// Take a snapshot of this `PhysicalExpr` if it is dynamic.
-/// This is used to capture the current state of `PhysicalExpr`s that may contain
-/// dynamic references to other operators in order to serialize it over the wire
-/// or treat it via downcast matching.
-///
-/// See the documentation of [`PhysicalExpr::snapshot`] for more details.
-///
-/// # Returns
-///
-/// Returns a snapshot of the `PhysicalExpr` if it is dynamic, otherwise
-/// returns itself.
+#[deprecated(
+    since = "54.0.0",
+    note = "downcast to `DynamicFilterPhysicalExpr` and call `current()` instead"
+)]
+#[allow(deprecated)]
 pub fn snapshot_physical_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     snapshot_physical_expr_opt(expr).data()
 }
 
-/// Take a snapshot of the given `PhysicalExpr` if it is dynamic.
-///
-/// Take a snapshot of this `PhysicalExpr` if it is dynamic.
-/// This is used to capture the current state of `PhysicalExpr`s that may contain
-/// dynamic references to other operators in order to serialize it over the wire
-/// or treat it via downcast matching.
-///
-/// See the documentation of [`PhysicalExpr::snapshot`] for more details.
-///
-/// # Returns
-///
-/// Returns a `[`Transformed`] indicating whether a snapshot was taken,
-/// along with the resulting `PhysicalExpr`.
+#[deprecated(
+    since = "54.0.0",
+    note = "downcast to `DynamicFilterPhysicalExpr` and call `current()` instead"
+)]
+#[allow(deprecated)]
 pub fn snapshot_physical_expr_opt(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {

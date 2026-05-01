@@ -611,14 +611,20 @@ mod test {
             &filter_schema_1,
         )
         .unwrap();
-        let snap = dynamic_filter_1.snapshot().unwrap().unwrap();
+        let dynamic_filter_1_df = dynamic_filter_1
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("Expected DynamicFilterPhysicalExpr");
+        let snap = dynamic_filter_1_df.current().unwrap();
         insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32 } }, fail_on_overflow: false }"#);
         let dynamic_filter_2 = reassign_expr_columns(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             &filter_schema_2,
         )
         .unwrap();
-        let snap = dynamic_filter_2.snapshot().unwrap().unwrap();
+        let dynamic_filter_2_df = dynamic_filter_2
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("Expected DynamicFilterPhysicalExpr");
+        let snap = dynamic_filter_2_df.current().unwrap();
         insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32 } }, fail_on_overflow: false }"#);
         // Both filters allow evaluating the same expression
         let batch_1 = RecordBatch::try_new(
@@ -683,6 +689,7 @@ mod test {
         assert!(arr_1.eq(&expected));
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_snapshot() {
         let expr = lit(42) as Arc<dyn PhysicalExpr>;

@@ -42,9 +42,9 @@ use datafusion_common::{
     tree_node::{Transformed, TreeNode},
 };
 use datafusion_expr_common::operator::Operator;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
-use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
@@ -456,22 +456,28 @@ impl PruningPredicate {
     /// details.
     ///
     /// Note that `PruningPredicate` does not attempt to normalize or simplify
-    /// the input expression unless calling [`snapshot_physical_expr_opt`]
-    /// returns a new expression.
+    /// the input expression unless any [`DynamicFilterPhysicalExpr`] nodes
+    /// are replaced with their current value.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to make sure the expressions can be used for pruning.
     pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
-        // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
-        // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
-        // so that PruningPredicate can work with a static expression.
-        let tf = snapshot_physical_expr_opt(expr)?;
+        // Replace any `DynamicFilterPhysicalExpr` nodes with their current value so
+        // that `PruningPredicate` can work with a static expression.
+        let tf = expr.transform_up(|e| {
+            if let Some(df) = e.downcast_ref::<DynamicFilterPhysicalExpr>() {
+                Ok(Transformed::yes(df.current()?))
+            } else {
+                Ok(Transformed::no(e))
+            }
+        })?;
         if tf.transformed {
             // If we had an expression such as Dynamic(part_col < 5 and col < 10)
             // (this could come from something like `select * from t order by part_col, col, limit 10`)
-            // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
-            // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
-            // the expression we have now is `8 < 5 and col < 10`.
-            // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
+            // after replacing the dynamic filter with its current value and because
+            // `DynamicFilterPhysicalExpr` applies child replacements to its children,
+            // and previously `replace_columns_with_literals` may have been called with
+            // partition values, the expression we have now is `8 < 5 and col < 10`.
+            // Thus we need a simplifier pass to get `false and col < 10` => `false` here.
             let simplifier = PhysicalExprSimplifier::new(&schema);
             expr = simplifier.simplify(tf.data)?;
         } else {

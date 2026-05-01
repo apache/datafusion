@@ -326,9 +326,10 @@ use itertools::{Itertools, izip};
 /// building a specialized [`PhysicalExpr`] that can be evaluated at runtime
 /// and internally maintains a reference to the hash table or other state.
 ///
-/// To make working with these sorts of dynamic filters more tractable we have the method [`PhysicalExpr::snapshot`]
-/// which attempts to simplify a dynamic filter into a "basic" non-dynamic filter.
-/// For a join this could mean converting it to an `InList` filter or a min/max filter for example.
+/// To make working with these sorts of dynamic filters more tractable callers can downcast a
+/// [`PhysicalExpr`] to [`DynamicFilterPhysicalExpr`] and call `current()` to get a snapshot
+/// of the expression (ie. a a static filter expression). For a join this could mean converting
+/// it to an `InList` filter or a min/max filter for example.
 /// See `datafusion/physical-plan/src/dynamic_filters.rs` for more details.
 ///
 /// # Example: Push TopK filters into Scans
@@ -376,7 +377,7 @@ use itertools::{Itertools, izip};
 /// <https://github.com/apache/datafusion/issues/15037>
 ///
 /// [`PhysicalExpr`]: datafusion_physical_plan::PhysicalExpr
-/// [`PhysicalExpr::snapshot`]: datafusion_physical_plan::PhysicalExpr::snapshot
+/// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
 /// [`FilterExec`]: datafusion_physical_plan::filter::FilterExec
 /// [`ProjectionExec`]: datafusion_physical_plan::projection::ProjectionExec
 /// [`AggregateExec`]: datafusion_physical_plan::aggregates::AggregateExec
