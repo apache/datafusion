@@ -272,7 +272,7 @@ where
     O: OffsetSizeTrait,
 {
     let num_rows = string_array.len();
-    // Output is null IFF any input is null.
+    // Output is null if and only if any input is null.
     let nulls = NullBuffer::union(
         NullBuffer::union(string_array.nulls(), delimiter_array.nulls()).as_ref(),
         count_array.nulls(),
