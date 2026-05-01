@@ -716,18 +716,23 @@ impl protobuf::PhysicalPlanNode {
             })?;
 
         let filter_selectivity = filter.default_filter_selectivity.try_into();
-        let projection = if !filter.projection.is_empty() {
-            Some(
-                filter
-                    .projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
+        // Preserve the `None` state across proto boundaries. Proto cannot distinguish
+        // between `None` (full projection) and `Some(vec![])` (empty projection) since
+        // both serialize as an empty list. If all columns are included, we reconstruct
+        // `None` to avoid losing this semantic distinction on deserialization.
+        let num_fields = input.schema().fields().len();
+        let mut is_full_projection = filter.projection.len() == num_fields;
+        let mut projection_vec: Vec<usize> = Vec::with_capacity(filter.projection.len());
+        for (i, idx) in filter.projection.iter().enumerate() {
+            let idx = *idx as usize;
+            is_full_projection &= idx == i;
+            projection_vec.push(idx);
+        }
+        let projection = if is_full_projection {
             None
+        } else {
+            Some(projection_vec)
         };
-
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
             .with_batch_size(filter.batch_size as usize)
@@ -2339,9 +2344,12 @@ impl protobuf::PhysicalPlanNode {
                             .physical_expr_to_proto(exec.predicate(), codec)?,
                     ),
                     default_filter_selectivity: exec.default_selectivity() as u32,
-                    projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
-                        v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                    }),
+                    projection: match exec.projection() {
+                        None => (0..exec.input().schema().fields().len())
+                            .map(|i| i as u32)
+                            .collect(),
+                        Some(v) => v.iter().map(|x| *x as u32).collect(),
+                    },
                     batch_size: exec.batch_size() as u32,
                     fetch: exec.fetch().map(|f| f as u32),
                 },

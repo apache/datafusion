@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
-use arrow::array::{ArrayRef, BooleanArray, new_empty_array};
+use arrow::array::{Array, ArrayRef, BooleanArray, new_empty_array};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
@@ -109,17 +109,15 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             );
         }
 
-        let selection_count = selection.true_count();
-
         // First, check if we can avoid filtering altogether.
-        if selection_count == row_count {
+        if selection.null_count() == 0 && !selection.has_false() {
             // All values from the `selection` filter are true and match the input batch.
             // No need to perform any filtering.
             return self.evaluate(batch);
         }
 
         // Next, prepare the result array for each 'true' row in the selection vector.
-        let filtered_result = if selection_count == 0 {
+        let filtered_result = if !selection.has_true() {
             // Do not call `evaluate` when the selection is empty.
             // `evaluate_selection` is used to conditionally evaluate expressions.
             // When the expression in question is fallible, evaluating it with an empty
@@ -132,7 +130,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             // If we reach this point, there's no other option than to filter the batch.
             // This is a fairly costly operation since it requires creating partial copies
             // (worst case of length `row_count - 1`) of all the arrays in the record batch.
-            // The resulting `filtered_batch` will contain `selection_count` rows.
+            // The resulting `filtered_batch` will contain one row per true in `selection`.
             let filtered_batch = filter_record_batch(batch, selection)?;
             self.evaluate(&filtered_batch)?
         };
@@ -181,10 +179,18 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// A `Result` containing the output interval for the expression in
     /// case of success, or an error object in case of failure.
     ///
+    /// Note that the output bounds must form an **envelope** that contains all
+    /// possible outputs of the expression given the input bounds. While
+    /// expressions should output the tightest possible bounds, they do not need
+    /// to be exact and can be conservative.
+    ///
     /// # Example
     ///
     /// If the expression is `a + b`, and the input intervals are `a: [1, 2]`
     /// and `b: [3, 4]`, then the output interval would be `[4, 6]`.
+    ///
+    /// If the expression is `sin(a)`, it is correct (though not precise) to
+    /// produce the interval `[-1, 1]` for any input interval for `a`.
     fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
         not_impl_err!("Not implemented for {self}")
     }

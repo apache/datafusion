@@ -42,14 +42,29 @@ use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::utils::remove_list_null_values;
 use datafusion_common::{
-    Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
-    internal_err, plan_err,
+    Result, ScalarValue, exec_err, internal_datafusion_err, internal_err,
+    plan_datafusion_err, plan_err,
 };
 use datafusion_expr::type_coercion::functions::value_fields_with_higher_order_udf;
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderUDF,
     LambdaArgument, LambdaParametersProgress, ValueOrLambda, Volatility, expr_vec_fmt,
 };
+
+/// Per-argument classification cached at construction time.
+///
+/// Walking the wrapped lambda tree and scanning a `Vec<usize>` of lambda
+/// positions used to be done on every `evaluate` call. Both costs collapse
+/// to a single up-front pass by storing the classification (and the resolved
+/// inner [`LambdaExpr`]) here.
+enum ArgSlot {
+    /// A regular value-producing expression at this position.
+    Value,
+    /// A lambda position. Stores the inner [`LambdaExpr`] pre-extracted from
+    /// any wrapper expressions that may have been introduced via
+    /// [`PhysicalExpr::with_new_children`] tree rewrites.
+    Lambda(Arc<LambdaExpr>),
+}
 
 /// Physical expression of a higher order function
 pub struct HigherOrderFunctionExpr {
@@ -73,15 +88,10 @@ pub struct HigherOrderFunctionExpr {
     ///                 LiteralExpression(2)
     /// ```
     args: Vec<Arc<dyn PhysicalExpr>>,
-    /// Positions in `args` where lambdas were top level arguments during try_new_with_schema
-    /// but may have been wrapped by tree node rewrites via with_new_children, like:
-    ///
-    /// ```ignore
-    /// expr.transform(|expr| Ok(Transformed::yes(Arc::new(DebugExpr::new(expr)))))
-    /// ```
-    ///
-    /// For example, for `array_transform([2, 3], v -> v != 2)`, this will be `vec![1]`
-    lambda_positions: Vec<usize>,
+    /// Per-arg classification, parallel to `args`. Length always equals
+    /// `args.len()`. Lambda variants carry the resolved inner [`LambdaExpr`]
+    /// so `evaluate` doesn't walk through wrapper nodes.
+    slots: Vec<ArgSlot>,
     /// The output field associated this expression
     ///
     /// For example, for `array_transform([2, 3], v -> v != 2)`, this will be
@@ -93,11 +103,17 @@ pub struct HigherOrderFunctionExpr {
 
 impl Debug for HigherOrderFunctionExpr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let lambda_positions: Vec<_> = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| matches!(slot, ArgSlot::Lambda(_)).then_some(i))
+            .collect();
         f.debug_struct("HigherOrderFunctionExpr")
             .field("fun", &"<FUNC>")
             .field("name", &self.name)
             .field("args", &self.args)
-            .field("lambda_positions", &self.lambda_positions)
+            .field("lambda_positions", &lambda_positions)
             .field("return_field", &self.return_field)
             .finish()
     }
@@ -115,17 +131,18 @@ impl HigherOrderFunctionExpr {
         config_options: Arc<ConfigOptions>,
     ) -> Result<Self> {
         let name = fun.name().to_string();
-        let mut lambda_positions = vec![];
+        let mut slots = Vec::with_capacity(args.len());
         let arg_fields = args
             .iter()
-            .enumerate()
-            .map(|(i, e)| match e.downcast_ref::<LambdaExpr>() {
+            .map(|e| match e.downcast_ref::<LambdaExpr>() {
                 Some(lambda) => {
-                    lambda_positions.push(i);
-
+                    slots.push(ArgSlot::Lambda(Arc::new(lambda.clone())));
                     Ok(ValueOrLambda::Lambda(lambda.body().return_field(schema)?))
                 }
-                None => Ok(ValueOrLambda::Value(e.return_field(schema)?)),
+                None => {
+                    slots.push(ArgSlot::Value);
+                    Ok(ValueOrLambda::Value(e.return_field(schema)?))
+                }
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -148,7 +165,7 @@ impl HigherOrderFunctionExpr {
             fun,
             name,
             args,
-            lambda_positions,
+            slots,
             return_field,
             config_options,
         })
@@ -182,8 +199,41 @@ impl HigherOrderFunctionExpr {
         &self.config_options
     }
 
-    pub fn lambda_positions(&self) -> &[usize] {
-        &self.lambda_positions
+    /// Resolve every lambda's parameter list. Returns an empty `Vec` when
+    /// there are no lambdas, avoiding the [`HigherOrderUDF::lambda_parameters`]
+    /// virtual call entirely.
+    fn resolve_lambda_parameters(
+        &self,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> Result<Vec<Vec<FieldRef>>> {
+        let num_lambdas = self
+            .slots
+            .iter()
+            .filter(|s| matches!(s, ArgSlot::Lambda(_)))
+            .count();
+        if num_lambdas == 0 {
+            return Ok(Vec::new());
+        }
+        match self.fun().lambda_parameters(0, fields)? {
+            LambdaParametersProgress::Partial(_) => plan_err!(
+                "{} lambda_parameters returned a partial result when the return type of all it's lambdas were provided",
+                self.name()
+            ),
+            LambdaParametersProgress::Complete(items) => {
+                // functions can support multiple lambdas where some trailing ones are optional,
+                // but to simplify the implementor, lambda_parameters returns the parameters of all of them,
+                // so we can't do equality check. one example is spark reduce:
+                // https://spark.apache.org/docs/latest/api/sql/index.html#reduce
+                if items.len() < num_lambdas {
+                    return exec_err!(
+                        "{} invocation defined {num_lambdas} but lambda_parameters returned only {}",
+                        self.name(),
+                        items.len()
+                    );
+                }
+                Ok(items)
+            }
+        }
     }
 }
 
@@ -199,18 +249,19 @@ impl PartialEq for HigherOrderFunctionExpr {
             // The equality implementation is somewhat expensive, so let's short-circuit when possible.
             return true;
         }
+        // `slots` is a deterministic function of `fun` and `args`, so it's
+        // not part of the comparison.
         let Self {
             fun,
             name,
             args,
-            lambda_positions,
+            slots: _,
             return_field,
             config_options,
         } = self;
         fun.eq(&o.fun)
             && name.eq(&o.name)
             && args.eq(&o.args)
-            && lambda_positions.eq(&o.lambda_positions)
             && return_field.eq(&o.return_field)
             && (Arc::ptr_eq(config_options, &o.config_options)
                 || sorted_config_entries(config_options)
@@ -224,14 +275,13 @@ impl Hash for HigherOrderFunctionExpr {
             fun,
             name,
             args,
-            lambda_positions,
+            slots: _,
             return_field,
             config_options: _, // expensive to hash, and often equal
         } = self;
         fun.hash(state);
         name.hash(state);
         args.hash(state);
-        lambda_positions.hash(state);
         return_field.hash(state);
     }
 }
@@ -244,81 +294,31 @@ fn sorted_config_entries(config_options: &ConfigOptions) -> Vec<ConfigEntry> {
 
 impl PhysicalExpr for HigherOrderFunctionExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let arg_fields = self
-            .args
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                if self.lambda_positions.contains(&i) {
-                    let lambda = wrapped_lambda(e).ok_or_else(|| {
-                        exec_datafusion_err!(
-                            "{} unable to unwrap lambda from {e} at position {i}",
-                            self.name()
-                        )
-                    })?;
-
-                    Ok(ValueOrLambda::Lambda(
-                        lambda.body().return_field(batch.schema_ref())?,
-                    ))
-                } else {
-                    Ok(ValueOrLambda::Value(e.return_field(batch.schema_ref())?))
+        let mut arg_fields = Vec::with_capacity(self.args.len());
+        let mut fields = Vec::with_capacity(self.args.len());
+        for (arg, slot) in self.args.iter().zip(&self.slots) {
+            match slot {
+                ArgSlot::Lambda(lambda) => {
+                    let field = lambda.body().return_field(batch.schema_ref())?;
+                    arg_fields.push(ValueOrLambda::Lambda(Arc::clone(&field)));
+                    fields.push(ValueOrLambda::Lambda(Some(field)));
                 }
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let fields = arg_fields
-            .iter()
-            .map(|field| match field {
-                ValueOrLambda::Lambda(field) => {
-                    ValueOrLambda::Lambda(Some(Arc::clone(field)))
+                ArgSlot::Value => {
+                    let field = arg.return_field(batch.schema_ref())?;
+                    arg_fields.push(ValueOrLambda::Value(Arc::clone(&field)));
+                    fields.push(ValueOrLambda::Value(field));
                 }
-                ValueOrLambda::Value(field) => ValueOrLambda::Value(Arc::clone(field)),
-            })
-            .collect::<Vec<_>>();
-
-        // lambda_parameters refers only to lambdas and not to values, so instead
-        // of zipping it with self.args, we iterate over self.args and only
-        // consume from lambda_parameters when a given argument is a lambda
-        // to reconstruct the arguments list with the correct order
-        // this supports any value and lambda positioning including
-        // multiple lambdas interleaved with values
-        let mut lambda_parameters = match self.fun().lambda_parameters(0, &fields)? {
-            LambdaParametersProgress::Partial(_) => {
-                return plan_err!(
-                    "{} lambda_parameters returned a partial result when the return type of all it's lambdas were provided",
-                    self.name()
-                );
             }
-            LambdaParametersProgress::Complete(items) => items.into_iter(),
-        };
-
-        let num_lambdas = self.args.len() - fields.len();
-
-        // functions can support multiple lambdas where some trailing ones are optional,
-        // but to simplify the implementor, lambda_parameters returns the parameters of all of them,
-        // so we can't do equality check. one example is spark reduce:
-        // https://spark.apache.org/docs/latest/api/sql/index.html#reduce
-        if lambda_parameters.len() < num_lambdas {
-            return exec_err!(
-                "{} invocation defined {num_lambdas} but lambda_parameters returned only {}",
-                self.name(),
-                lambda_parameters.len()
-            );
         }
+
+        let mut lambda_parameters = self.resolve_lambda_parameters(&fields)?.into_iter();
 
         let args = self
             .args
             .iter()
-            .enumerate()
-            .map(|(i, arg)| {
-                if self.lambda_positions.contains(&i) {
-                    let lambda = wrapped_lambda(arg).ok_or_else(|| {
-                        exec_datafusion_err!(
-                            "{} unable to unwrap lambda from {arg} at position {i}",
-                            self.name()
-                        )
-                    })?;
-
+            .zip(&self.slots)
+            .map(|(arg, slot)| match slot {
+                ArgSlot::Lambda(lambda) => {
                     let lambda_params = lambda_parameters.next().ok_or_else(|| {
                         internal_datafusion_err!(
                             "params len should have been checked above"
@@ -341,17 +341,25 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         params,
                         Arc::clone(lambda.body()),
                     )))
-                } else {
+                }
+                ArgSlot::Value => {
                     let value = arg.evaluate(batch)?;
 
-                    let value =
-                        if self.fun.clear_null_values() && matches!(value.data_type(), DataType::List(_) | DataType::LargeList(_)) {
-                            ColumnarValue::Array(remove_list_null_values(
-                                &value.into_array(batch.num_rows())?,
-                            )?)
+                    let value = if self.fun.clear_null_values()
+                        && matches!(
+                            value.data_type(),
+                            DataType::List(_) | DataType::LargeList(_)
+                        )
+                    {
+                        let arr = value.into_array(batch.num_rows())?;
+                        if arr.null_count() == 0 {
+                            ColumnarValue::Array(arr)
                         } else {
-                            value
-                        };
+                            ColumnarValue::Array(remove_list_null_values(&arr)?)
+                        }
+                    } else {
+                        value
+                    };
 
                     Ok(ValueOrLambda::Value(value))
                 }
@@ -412,20 +420,30 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             );
         }
 
+        // Re-derive `slots` for the new children using the original slot kinds
+        // as the source of truth for which positions must (still) be lambdas.
+        let mut new_slots = Vec::with_capacity(children.len());
         for (i, child) in children.iter().enumerate() {
-            if self.lambda_positions.contains(&i) {
-                if wrapped_lambda(child).is_none() {
-                    return plan_err!(
-                        "{} unable to unwrap lambda from {} at position {i}",
-                        &children[i],
-                        self.name()
-                    );
+            match &self.slots[i] {
+                ArgSlot::Lambda(_) => {
+                    let lambda = wrapped_lambda(child).ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "{} unable to unwrap lambda from {} at position {i}",
+                            &children[i],
+                            self.name()
+                        )
+                    })?;
+                    new_slots.push(ArgSlot::Lambda(Arc::new(lambda.clone())));
                 }
-            } else if child.is::<LambdaExpr>() {
-                return plan_err!(
-                    "{} received a lambda via with_new_children at position {i} that wasn't a lambda before",
-                    self.name()
-                );
+                ArgSlot::Value => {
+                    if child.is::<LambdaExpr>() {
+                        return plan_err!(
+                            "{} received a lambda via with_new_children at position {i} that wasn't a lambda before",
+                            self.name()
+                        );
+                    }
+                    new_slots.push(ArgSlot::Value);
+                }
             }
         }
 
@@ -433,7 +451,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             name: self.name.clone(),
             fun: Arc::clone(&self.fun),
             args: children,
-            lambda_positions: self.lambda_positions.clone(),
+            slots: new_slots,
             return_field: Arc::clone(&self.return_field),
             config_options: Arc::clone(&self.config_options),
         }))
