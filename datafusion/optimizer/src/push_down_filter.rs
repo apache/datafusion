@@ -414,15 +414,15 @@ fn push_down_all_join(
     // 3) should be kept as filter conditions
     let left_schema = join.left.schema();
     let right_schema = join.right.schema();
-
-    let left_schema_columns = schema_columns(left_schema.as_ref());
-    let right_schema_columns = schema_columns(right_schema.as_ref());
+    let left_schema_columns = schema_columns(left_schema);
+    let right_schema_columns = schema_columns(right_schema);
 
     let mut left_push = vec![];
     let mut right_push = vec![];
     let mut keep_predicates = vec![];
     let mut join_conditions = vec![];
     let mut checker = ColumnChecker::new(left_schema, right_schema);
+
     for predicate in predicates {
         if left_preserved && checker.is_left_only(&predicate) {
             left_push.push(predicate);
@@ -448,16 +448,13 @@ fn push_down_all_join(
 
     let mut on_filter_join_conditions = vec![];
     let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type);
-
-    if !on_filter.is_empty() {
-        for on in on_filter {
-            if on_left_preserved && checker.is_left_only(&on) {
-                left_push.push(on)
-            } else if on_right_preserved && checker.is_right_only(&on) {
-                right_push.push(on)
-            } else {
-                on_filter_join_conditions.push(on)
-            }
+    for on in on_filter {
+        if on_left_preserved && checker.is_left_only(&on) {
+            left_push.push(on)
+        } else if on_right_preserved && checker.is_right_only(&on) {
+            right_push.push(on)
+        } else {
+            on_filter_join_conditions.push(on)
         }
     }
 
@@ -473,6 +470,7 @@ fn push_down_all_join(
             &left_schema_columns,
         ));
     }
+
     if right_preserved {
         right_push.extend(extract_or_clauses_for_join(
             &keep_predicates,
@@ -492,11 +490,25 @@ fn push_down_all_join(
             &left_schema_columns,
         ));
     }
+
     if on_right_preserved {
         right_push.extend(extract_or_clauses_for_join(
             &on_filter_join_conditions,
             &right_schema_columns,
         ));
+    }
+
+    // Add any new join conditions as the non join predicates
+    let join_conditions_empty = join_conditions.is_empty();
+    join_conditions.extend(on_filter_join_conditions);
+    join.filter = conjunction(join_conditions);
+
+    if join_conditions_empty && left_push.is_empty() && right_push.is_empty() {
+        // wrap the join on the filter whose predicates must be kept, if any
+        return Ok(Transformed::no(with_filters(
+            keep_predicates,
+            LogicalPlan::Join(join),
+        )));
     }
 
     if let Some(predicate) = conjunction(left_push) {
@@ -510,10 +522,6 @@ fn push_down_all_join(
             predicate, join.right,
         )));
     }
-
-    // Add any new join conditions as the non join predicates
-    join_conditions.extend(on_filter_join_conditions);
-    join.filter = conjunction(join_conditions);
 
     // wrap the join on the filter whose predicates must be kept, if any
     Ok(Transformed::yes(with_filters(
@@ -1140,13 +1148,24 @@ impl OptimizerRule for PushDownFilter {
                     .map(|(&pred, _)| pred);
 
                 // Add new scan filters
-                scan.filters = scan
+                let new_scan_filters = scan
                     .filters
                     .iter()
                     .chain(new_scan_filters)
                     .unique()
                     .cloned()
                     .collect();
+
+                if supported_filters
+                    .iter()
+                    .all(|res| res == &TableProviderFilterPushDown::Inexact)
+                    && scan.filters == new_scan_filters
+                {
+                    filter.input = Arc::new(LogicalPlan::TableScan(scan));
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                } else {
+                    scan.filters = new_scan_filters;
+                }
 
                 // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
                 // and also include volatile and subquery-containing filters
@@ -1605,6 +1624,10 @@ mod tests {
             .aggregate(vec![col("a")], vec![sum(col("b")).alias("b")])?
             .filter(col("b").gt(lit(10i64)))?
             .build()?;
+        let transformed = PushDownFilter::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!transformed.transformed);
         // filter of aggregate is after aggregation since they are non-commutative
         assert_optimized_plan_equal!(
             plan,
@@ -1797,6 +1820,10 @@ mod tests {
             .window(vec![window])?
             .filter(col("c").gt(lit(10i64)))?
             .build()?;
+        let transformed = PushDownFilter::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!transformed.transformed);
 
         assert_optimized_plan_equal!(
             plan,
@@ -3022,6 +3049,10 @@ mod tests {
                 Some(filter),
             )?
             .build()?;
+        let transformed = PushDownFilter::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!transformed.transformed);
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
@@ -3128,15 +3159,20 @@ mod tests {
         let plan =
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
 
-        let optimized_plan = PushDownFilter::new()
+        let optimized = PushDownFilter::new()
             .rewrite(plan, &OptimizerContext::new())
-            .expect("failed to optimize plan")
-            .data;
+            .expect("failed to optimize plan");
+        assert!(optimized.transformed);
+
+        let optimized_again = PushDownFilter::new()
+            .rewrite(optimized.data.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!optimized_again.transformed);
 
         // Optimizing the same plan multiple times should produce the same plan
         // each time.
         assert_optimized_plan_equal!(
-            optimized_plan,
+            optimized_again.data,
             @r"
         Filter: a = Int64(1)
           TableScan: test, partial_filters=[a = Int64(1)]
@@ -3148,6 +3184,11 @@ mod tests {
     fn filter_with_table_provider_unsupported() -> Result<()> {
         let plan =
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
+
+        let transformed = PushDownFilter::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())
+            .expect("failed to optimize plan");
+        assert!(!transformed.transformed);
 
         assert_optimized_plan_equal!(
             plan,
