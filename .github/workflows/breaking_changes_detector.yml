@@ -20,8 +20,24 @@
 # Only public workspace crates that have file changes are checked.
 # Internal crates (benchmarks, test-utils, sqllogictest, doc) are excluded.
 #
-# If breaking changes are found, a sticky comment is posted on the PR.
-# The comment is removed automatically once the issues are resolved.
+# This workflow only runs cargo-semver-checks and uploads the result as an
+# artifact. The actual PR comment is posted by a companion workflow
+# (`breaking_changes_detector_comment.yml`) that picks up the artifact via
+# `workflow_run`.
+#
+# Why split it?
+#   "The GITHUB_TOKEN has read-only permissions in pull requests from forked
+#    repositories."
+#     https://docs.github.com/en/actions/reference/events-that-trigger-workflows#pull_request
+# A read-only token cannot post comments, so on fork PRs the previous
+# single-workflow design failed with HTTP 403. We can't simply broaden the
+# trigger here either: cargo-semver-checks compiles PR code (build.rs, proc
+# macros), so granting this job a write token would expose it to any code
+# in the PR. And ASF infra policy independently forbids `pull_request_target`
+# for any workflow that exposes GITHUB_TOKEN
+# (https://infra.apache.org/github-actions-policy.html). The companion
+# `workflow_run` workflow runs in the base-repo context with write access
+# and never executes PR code.
 
 name: "Detect breaking changes"
 
@@ -37,11 +53,6 @@ jobs:
   check-semver:
     name: Check semver
     runs-on: ubuntu-latest
-    outputs:
-      logs: ${{ steps.check_semver.outputs.logs }}
-      # Default to "success" so the comment job clears any stale comment
-      # when the check step is skipped (e.g. no published crates changed).
-      result: ${{ steps.check_semver.outputs.result || 'success' }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -66,6 +77,15 @@ jobs:
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           echo "Changed crates: $PACKAGES"
 
+      # `datafusion-substrait` (and crates that depend on it via sqllogictest)
+      # have a build script that calls protoc, which is not preinstalled on
+      # ubuntu-latest runners.
+      - name: Install Protobuf Compiler
+        if: steps.changed_crates.outputs.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
       - name: Install cargo-semver-checks
         if: steps.changed_crates.outputs.packages != ''
         uses: taiki-e/install-action@94cb46f8d6e437890146ffbd78a778b78e623fb2  # v2.74.0
@@ -85,11 +105,6 @@ jobs:
           ci/scripts/changed_crates.sh semver-check "origin/${BASE_REF}" $PACKAGES \
             2>&1 | tee /tmp/semver-output.txt
           EXIT_CODE=${PIPESTATUS[0]}
-          {
-            echo "logs<<EOF"
-            sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
           # Pass the result through an output instead of failing the job:
           # a detected breaking change should surface as a PR comment, not a
           # red check, so PR authors aren't confused by an intentional break.
@@ -99,28 +114,29 @@ jobs:
             echo "result=failure" >> "$GITHUB_OUTPUT"
           fi
 
-  # Post or remove a sticky comment on the PR based on the semver check result.
-  comment-on-pr:
-    name: Comment on pull request
-    runs-on: ubuntu-latest
-    needs: check-semver
-    if: always()
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        with:
-          sparse-checkout: ci/scripts
-
-      - name: Update PR comment
+      # Stage the data the companion comment workflow needs into a single
+      # directory. We default the result to "success" so the comment
+      # workflow clears any stale comment when the check step is skipped
+      # (e.g. no published crates changed).
+      - name: Stage artifact for comment workflow
+        if: always()
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          CHECK_RESULT: ${{ needs.check-semver.outputs.result }}
-          SEMVER_LOGS: ${{ needs.check-semver.outputs.logs }}
+          CHECK_RESULT: ${{ steps.check_semver.outputs.result || 'success' }}
         run: |
-          ci/scripts/changed_crates.sh comment \
-            "$REPO" "$PR_NUMBER" "$CHECK_RESULT" "$SEMVER_LOGS"
+          mkdir -p semver-artifact
+          echo "$PR_NUMBER" > semver-artifact/pr_number
+          echo "$CHECK_RESULT" > semver-artifact/result
+          if [ -f /tmp/semver-output.txt ]; then
+            sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt > semver-artifact/logs
+          else
+            : > semver-artifact/logs
+          fi
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: semver-check-result
+          path: semver-artifact/
+          retention-days: 1

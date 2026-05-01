@@ -16,7 +16,7 @@
 # under the License.
 
 #############
-## Higher Order Function Tests
+## array_transform Tests
 #############
 
 statement ok
@@ -172,10 +172,10 @@ select array_transform([3, 5, 0], v -> case when v > 1 then 2 when v > 4 then 6 
 
 #case with inner higher order function
 query I??
-select 
+select
     t.number,
     t.list,
-    case 
+    case
         when t.number > 30 then array_transform(t.list, v -> v+1)
         else array_transform(t.list, v -> v*2)
     end
