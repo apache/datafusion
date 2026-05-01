@@ -1848,6 +1848,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "criterion",
+ "datafusion-proto-common",
  "foldhash 0.2.0",
  "half",
  "hashbrown 0.17.0",
@@ -1895,6 +1896,7 @@ dependencies = [
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-proto-common",
  "datafusion-session",
  "flate2",
  "futures",
@@ -1967,6 +1969,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-proto-common",
  "datafusion-session",
  "futures",
  "object_store",
@@ -1988,6 +1991,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-proto-common",
  "datafusion-session",
  "futures",
  "object_store",
@@ -2017,6 +2021,7 @@ dependencies = [
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-proto-common",
  "datafusion-pruning",
  "datafusion-session",
  "futures",
@@ -2112,6 +2117,7 @@ dependencies = [
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window-common",
  "datafusion-physical-expr-common",
+ "datafusion-proto-common",
  "env_logger",
  "indexmap 2.14.0",
  "insta",
@@ -2346,6 +2352,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-aggregate-common",
  "datafusion-physical-expr-common",
+ "datafusion-proto-common",
  "half",
  "hashbrown 0.17.0",
  "indexmap 2.14.0",
@@ -2381,6 +2388,7 @@ dependencies = [
  "criterion",
  "datafusion-common",
  "datafusion-expr-common",
+ "datafusion-proto-common",
  "hashbrown 0.17.0",
  "indexmap 2.14.0",
  "itertools 0.14.0",
@@ -2453,7 +2461,6 @@ version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
- "chrono",
  "datafusion",
  "datafusion-catalog",
  "datafusion-catalog-listing",
@@ -2475,12 +2482,9 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-proto-common",
  "doc-comment",
- "object_store",
- "pbjson 0.9.0",
  "pretty_assertions",
  "prost",
  "rand 0.9.4",
- "serde",
  "serde_json",
  "tokio",
 ]
@@ -2490,7 +2494,6 @@ name = "datafusion-proto-common"
 version = "53.1.0"
 dependencies = [
  "arrow",
- "datafusion-common",
  "doc-comment",
  "pbjson 0.9.0",
  "prost",
@@ -3111,14 +3114,6 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
-]
-
-[[package]]
-name = "gen"
-version = "0.1.0"
-dependencies = [
- "pbjson-build 0.9.0",
- "prost-build",
 ]
 
 [[package]]

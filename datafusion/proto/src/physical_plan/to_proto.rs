@@ -24,12 +24,6 @@ use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::{FileRange, PartitionedFile};
-use datafusion_datasource_csv::file_format::CsvSink;
-use datafusion_datasource_json::file_format::JsonSink;
-#[cfg(feature = "parquet")]
-use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_expr::WindowFrame;
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
@@ -37,8 +31,8 @@ use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindo
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    BinaryExpr, CaseExpr, CastExpr, InListExpr, IsNotNullExpr, IsNullExpr, LikeExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -172,9 +166,7 @@ pub fn serialize_physical_window_expr(
         codec,
         proto_converter,
     )?;
-    let window_frame: protobuf::WindowFrame = window_frame
-        .as_ref()
-        .try_into()
+    let window_frame = protobuf::WindowFrame::try_from(window_frame.as_ref())
         .map_err(|e| internal_datafusion_err!("{e}"))?;
 
     Ok(protobuf::PhysicalWindowExprNode {
@@ -247,6 +239,29 @@ pub fn serialize_physical_expr(
     )
 }
 
+/// Concrete [`PhysicalExprEncode`] driver used to back
+/// [`PhysicalExprEncodeCtx`] when expressions invoke `PhysicalExpr::to_proto`.
+///
+/// Wraps the existing extension codec + converter pair so individual
+/// expressions can recurse into children without depending on
+/// `datafusion-proto` directly.
+///
+/// [`PhysicalExprEncode`]: datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode
+/// [`PhysicalExprEncodeCtx`]: datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx
+struct ConverterEncoder<'a> {
+    codec: &'a dyn PhysicalExtensionCodec,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
+
+impl datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode
+    for ConverterEncoder<'_>
+{
+    fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<protobuf::PhysicalExprNode> {
+        self.proto_converter
+            .physical_expr_to_proto(expr, self.codec)
+    }
+}
+
 /// Serialize a `PhysicalExpr` to default protobuf representation.
 ///
 /// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
@@ -261,6 +276,20 @@ pub fn serialize_physical_expr_with_converter(
     // Snapshot the expr in case it has dynamic predicate state so
     // it can be serialized
     let expr = snapshot_physical_expr(Arc::clone(value))?;
+
+    // Give the expression a chance to serialize itself first. Returning
+    // `Ok(Some(node))` lets expressions with private state (e.g.
+    // `DynamicFilterPhysicalExpr`) avoid exposing pub-for-proto accessors.
+    // `Ok(None)` falls through to the downcast chain below — that's the
+    // default for built-in expressions which haven't been migrated yet.
+    let encoder = ConverterEncoder {
+        codec,
+        proto_converter,
+    };
+    let ctx = datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx::new(&encoder);
+    if let Some(node) = expr.to_proto(&ctx)? {
+        return Ok(node);
+    }
 
     // HashTableLookupExpr is used for dynamic filter pushdown in hash joins.
     // It contains an Arc<dyn JoinHashMapType> (the build-side hash table) which
@@ -287,17 +316,7 @@ pub fn serialize_physical_expr_with_converter(
         });
     }
 
-    if let Some(expr) = expr.downcast_ref::<Column>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
-                protobuf::PhysicalColumn {
-                    name: expr.name().to_string(),
-                    index: expr.index() as u32,
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
+    if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
         Ok(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
@@ -605,55 +624,6 @@ fn serialize_when_then_expr(
     })
 }
 
-impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
-    type Error = DataFusionError;
-
-    fn try_from(pf: &PartitionedFile) -> Result<Self> {
-        let last_modified = pf.object_meta.last_modified;
-        let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "Invalid timestamp on PartitionedFile::ObjectMeta: {last_modified}"
-            ))
-        })? as u64;
-        Ok(protobuf::PartitionedFile {
-            path: pf.object_meta.location.as_ref().to_owned(),
-            size: pf.object_meta.size,
-            last_modified_ns,
-            partition_values: pf
-                .partition_values
-                .iter()
-                .map(|v| v.try_into())
-                .collect::<Result<Vec<_>, _>>()?,
-            range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
-            statistics: pf.statistics.as_ref().map(|s| s.as_ref().into()),
-        })
-    }
-}
-
-impl TryFrom<&FileRange> for protobuf::FileRange {
-    type Error = DataFusionError;
-
-    fn try_from(value: &FileRange) -> Result<Self> {
-        Ok(protobuf::FileRange {
-            start: value.start,
-            end: value.end,
-        })
-    }
-}
-
-impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
-    type Error = DataFusionError;
-
-    fn try_from(gr: &[PartitionedFile]) -> Result<Self, Self::Error> {
-        Ok(protobuf::FileGroup {
-            files: gr
-                .iter()
-                .map(|f| f.try_into())
-                .collect::<Result<Vec<_>, _>>()?,
-        })
-    }
-}
-
 pub fn serialize_file_scan_config(
     conf: &FileScanConfig,
     codec: &dyn PhysicalExtensionCodec,
@@ -662,7 +632,7 @@ pub fn serialize_file_scan_config(
     let file_groups = conf
         .file_groups
         .iter()
-        .map(|p| p.files().try_into())
+        .map(protobuf::FileGroup::try_from)
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut output_orderings = vec![];
@@ -758,87 +728,4 @@ pub fn serialize_record_batches(batches: &[RecordBatch]) -> Result<Vec<u8>> {
     }
     writer.finish()?;
     Ok(buf)
-}
-
-impl TryFrom<&JsonSink> for protobuf::JsonSink {
-    type Error = DataFusionError;
-
-    fn try_from(value: &JsonSink) -> Result<Self, Self::Error> {
-        Ok(Self {
-            config: Some(value.config().try_into()?),
-            writer_options: Some(value.writer_options().try_into()?),
-        })
-    }
-}
-
-impl TryFrom<&CsvSink> for protobuf::CsvSink {
-    type Error = DataFusionError;
-
-    fn try_from(value: &CsvSink) -> Result<Self, Self::Error> {
-        Ok(Self {
-            config: Some(value.config().try_into()?),
-            writer_options: Some(value.writer_options().try_into()?),
-        })
-    }
-}
-
-#[cfg(feature = "parquet")]
-impl TryFrom<&ParquetSink> for protobuf::ParquetSink {
-    type Error = DataFusionError;
-
-    fn try_from(value: &ParquetSink) -> Result<Self, Self::Error> {
-        Ok(Self {
-            config: Some(value.config().try_into()?),
-            parquet_options: Some(value.parquet_options().try_into()?),
-        })
-    }
-}
-
-impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
-    type Error = DataFusionError;
-
-    fn try_from(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
-        let file_groups = conf
-            .file_group
-            .iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>>>()?;
-        let table_paths = conf
-            .table_paths
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        let table_partition_cols = conf
-            .table_partition_cols
-            .iter()
-            .map(|(name, data_type)| {
-                Ok(protobuf::PartitionColumn {
-                    name: name.to_owned(),
-                    arrow_type: Some(data_type.try_into()?),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let file_output_mode = match conf.file_output_mode {
-            datafusion_datasource::file_sink_config::FileOutputMode::Automatic => {
-                protobuf::FileOutputMode::Automatic
-            }
-            datafusion_datasource::file_sink_config::FileOutputMode::SingleFile => {
-                protobuf::FileOutputMode::SingleFile
-            }
-            datafusion_datasource::file_sink_config::FileOutputMode::Directory => {
-                protobuf::FileOutputMode::Directory
-            }
-        };
-        Ok(Self {
-            object_store_url: conf.object_store_url.to_string(),
-            file_groups,
-            table_paths,
-            output_schema: Some(conf.output_schema.as_ref().try_into()?),
-            table_partition_cols,
-            keep_partition_by_columns: conf.keep_partition_by_columns,
-            insert_op: conf.insert_op as i32,
-            file_extension: conf.file_extension.to_string(),
-            file_output_mode: file_output_mode.into(),
-        })
-    }
 }

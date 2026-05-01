@@ -45,6 +45,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
 datafusion-pruning = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
@@ -78,6 +79,7 @@ parquet_encryption = [
     "datafusion-common/parquet_encryption",
     "datafusion-execution/parquet_encryption",
 ]
+proto = ["dep:datafusion-proto-common", "datafusion-datasource/proto"]
 
 [[bench]]
 name = "parquet_nested_filter_pushdown"

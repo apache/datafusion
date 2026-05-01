@@ -42,6 +42,7 @@ name = "datafusion_expr"
 
 [features]
 default = ["sql"]
+proto = ["dep:datafusion-proto-common", "datafusion-common/proto"]
 recursive_protection = ["dep:recursive"]
 sql = ["sqlparser"]
 
@@ -56,6 +57,7 @@ datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 recursive = { workspace = true, optional = true }

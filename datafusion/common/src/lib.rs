@@ -52,6 +52,8 @@ pub mod nested_struct;
 mod null_equality;
 pub mod parquet_config;
 pub mod parsers;
+#[cfg(feature = "proto")]
+pub mod proto;
 pub mod pruning;
 pub mod rounding;
 pub mod scalar;

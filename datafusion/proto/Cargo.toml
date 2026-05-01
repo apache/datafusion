@@ -36,7 +36,13 @@ name = "datafusion_proto"
 
 [features]
 default = ["parquet"]
-json = ["pbjson", "serde", "serde_json", "datafusion-proto-common/json"]
+json = ["serde_json", "datafusion-proto-common/json"]
+# Back-compat alias: pbjson used to be an optional dep auto-creating a `pbjson`
+# feature. After the proto-common extraction, datafusion-proto no longer has a
+# direct pbjson dep; the JSON serde plumbing forwards through proto-common.
+# Keep `pbjson` as a feature alias for `json` so downstream `features = ["pbjson"]`
+# continues to work.
+pbjson = ["json"]
 parquet = ["datafusion-datasource-parquet", "datafusion-common/parquet", "datafusion/parquet"]
 avro = ["datafusion-datasource-avro"]
 
@@ -46,28 +52,24 @@ avro = ["datafusion-datasource-avro"]
 
 [dependencies]
 arrow = { workspace = true }
-chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
-datafusion-common = { workspace = true }
-datafusion-datasource = { workspace = true }
+datafusion-common = { workspace = true, features = ["proto"] }
+datafusion-datasource = { workspace = true, features = ["proto"] }
 datafusion-datasource-arrow = { workspace = true }
 datafusion-datasource-avro = { workspace = true, optional = true }
-datafusion-datasource-csv = { workspace = true }
-datafusion-datasource-json = { workspace = true }
-datafusion-datasource-parquet = { workspace = true, optional = true }
+datafusion-datasource-csv = { workspace = true, features = ["proto"] }
+datafusion-datasource-json = { workspace = true, features = ["proto"] }
+datafusion-datasource-parquet = { workspace = true, optional = true, features = ["proto"] }
 datafusion-execution = { workspace = true }
-datafusion-expr = { workspace = true }
+datafusion-expr = { workspace = true, features = ["proto"] }
 datafusion-functions-table = { workspace = true }
-datafusion-physical-expr = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
+datafusion-physical-expr = { workspace = true, features = ["proto"] }
+datafusion-physical-expr-common = { workspace = true, features = ["proto"] }
 datafusion-physical-plan = { workspace = true }
 datafusion-proto-common = { workspace = true }
-object_store = { workspace = true }
-pbjson = { workspace = true, optional = true }
 prost = { workspace = true }
 rand = { workspace = true }
-serde = { version = "1.0", optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]

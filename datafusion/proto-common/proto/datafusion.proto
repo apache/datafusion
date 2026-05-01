@@ -24,7 +24,7 @@ option java_multiple_files = true;
 option java_package = "org.apache.datafusion.protobuf";
 option java_outer_classname = "DatafusionProto";
 
-import "datafusion/proto-common/proto/datafusion_common.proto";
+import "datafusion_common.proto";
 
 // logical plan
 // LogicalPlan is a nested type

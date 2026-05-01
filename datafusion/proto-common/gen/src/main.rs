@@ -19,17 +19,18 @@ use std::path::Path;
 
 fn main() -> Result<(), String> {
     let proto_dir = Path::new("proto");
-    let proto_path = Path::new("proto/datafusion_common.proto");
+    let common_proto = Path::new("proto/datafusion_common.proto");
+    let datafusion_proto = Path::new("proto/datafusion.proto");
 
-    // proto definitions has to be there
     let descriptor_path = proto_dir.join("proto_descriptor.bin");
 
     prost_build::Config::new()
         .file_descriptor_set_path(&descriptor_path)
         .out_dir("src")
         .compile_well_known_types()
+        .protoc_arg("--experimental_allow_proto3_optional")
         .extern_path(".google.protobuf", "::pbjson_types")
-        .compile_protos(&[proto_path], &["proto"])
+        .compile_protos(&[common_proto, datafusion_proto], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {e}"))?;
 
     let descriptor_set = std::fs::read(&descriptor_path)
@@ -41,14 +42,28 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|e| {
             panic!("Cannot register descriptors {:?}: {}", &descriptor_set, e)
         })
-        .build(&[".datafusion_common"])
+        .build(&[".datafusion_common", ".datafusion"])
         .map_err(|e| format!("pbjson compilation failed: {e}"))?;
 
-    let prost = Path::new("src/datafusion_common.rs");
-    let pbjson = Path::new("src/datafusion_common.serde.rs");
-
-    std::fs::copy(prost, "src/generated/prost.rs").unwrap();
-    std::fs::copy(pbjson, "src/generated/pbjson.rs").unwrap();
+    // prost emits one file per package; pbjson emits one per package.
+    // Copy each into src/generated/ under stable names that mod.rs `include!`s.
+    for (src, dst) in [
+        (
+            "src/datafusion_common.rs",
+            "src/generated/datafusion_common.rs",
+        ),
+        ("src/datafusion.rs", "src/generated/datafusion.rs"),
+        (
+            "src/datafusion_common.serde.rs",
+            "src/generated/datafusion_common.serde.rs",
+        ),
+        (
+            "src/datafusion.serde.rs",
+            "src/generated/datafusion.serde.rs",
+        ),
+    ] {
+        std::fs::copy(src, dst).unwrap();
+    }
 
     Ok(())
 }

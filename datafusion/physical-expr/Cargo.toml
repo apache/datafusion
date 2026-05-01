@@ -42,6 +42,12 @@ name = "datafusion_physical_expr"
 
 [features]
 recursive_protection = ["dep:recursive"]
+# Forwards the `proto` feature to `datafusion-physical-expr-common`, exposing
+# `PhysicalExpr::to_proto` and letting expressions in this crate implement it.
+proto = [
+    "dep:datafusion-proto-common",
+    "datafusion-physical-expr-common/proto",
+]
 
 [dependencies]
 arrow = { workspace = true }
@@ -50,6 +56,7 @@ datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }

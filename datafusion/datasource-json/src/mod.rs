@@ -22,6 +22,8 @@
 
 pub mod boundary_stream;
 pub mod file_format;
+#[cfg(feature = "proto")]
+pub mod proto;
 pub mod source;
 pub mod utils;
 

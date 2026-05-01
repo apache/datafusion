@@ -47,7 +47,6 @@ members = [
     "datafusion/pruning",
     "datafusion/physical-plan",
     "datafusion/proto",
-    "datafusion/proto/gen",
     "datafusion/proto-common",
     "datafusion/proto-common/gen",
     "datafusion/session",

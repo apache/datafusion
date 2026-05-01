@@ -30,6 +30,8 @@ pub mod metadata;
 mod metrics;
 mod opener;
 mod page_filter;
+#[cfg(feature = "proto")]
+pub mod proto;
 mod reader;
 mod row_filter;
 mod row_group_filter;

@@ -145,6 +145,40 @@ impl PhysicalExpr for Column {
     fn placement(&self) -> ExpressionPlacement {
         ExpressionPlacement::Column
     }
+
+    #[cfg(feature = "proto")]
+    fn to_proto(
+        &self,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_common::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_common::protobuf;
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
+                protobuf::PhysicalColumn {
+                    name: self.name.clone(),
+                    index: self.index as u32,
+                },
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl Column {
+    /// Reconstruct a [`Column`] from its protobuf representation.
+    ///
+    /// The decode context is currently unused, but is threaded through so
+    /// that future expressions with child sub-expressions can recurse via
+    /// [`PhysicalExprDecodeCtx::decode`].
+    ///
+    /// [`PhysicalExprDecodeCtx::decode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::decode
+    pub fn try_from_proto(
+        node: &datafusion_proto_common::protobuf::PhysicalColumn,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Column::new(&node.name, node.index as usize)))
+    }
 }
 
 impl Column {

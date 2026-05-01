@@ -587,8 +587,8 @@ jobs:
           rust-version: stable
       - name: Run gen
         run: ./regen.sh
-        working-directory: ./datafusion/proto
-      - name: Verify workspace clean (if this fails, run ./datafusion/proto/regen.sh and check in results)
+        working-directory: ./datafusion/proto-common
+      - name: Verify workspace clean (if this fails, run ./datafusion/proto-common/regen.sh and check in results)
         run: git diff --exit-code
 
   check-fmt:
@@ -603,9 +603,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run
-        run: |
-          echo '' > datafusion/proto/src/generated/datafusion.rs
-          ci/scripts/rust_fmt.sh
+        run: ci/scripts/rust_fmt.sh
 
   # Coverage job disabled due to
   # https://github.com/apache/datafusion/issues/3678

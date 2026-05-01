@@ -25,74 +25,26 @@
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
-//! Serialize / Deserialize DataFusion Primitive Types to bytes
+//! `prost`-generated DataFusion protobuf model types + Arrow conversion impls.
 //!
-//! This crate provides support for serializing and deserializing the
-//! following structures to and from bytes:
+//! This crate is the schema source of truth for DataFusion's logical and
+//! physical plan protobuf schemas (see `proto/datafusion.proto` and
+//! `proto/datafusion_common.proto`). It owns:
 //!
-//! 1. [`ScalarValue`]'s
+//! - the prost-generated structs and pbjson serde impls, and
+//! - the arrow-side `From`/`TryFrom` conversion impls (Schema, Field,
+//!   DataType, TimeUnit, IntervalUnit) — these have to live here because
+//!   both `arrow::*` and the proto types are foreign to every other crate.
 //!
-//! [`ScalarValue`]: datafusion_common::ScalarValue
+//! Conversions to and from `datafusion-common` types live in
+//! `datafusion-common::proto` (under the `proto` feature) so this crate
+//! has no `datafusion-*` runtime deps.
 //!
-//! Internally, this crate is implemented by converting the common types to [protocol
-//! buffers] using [prost].
+//! Most users should depend on [`datafusion-proto`] instead, which re-exports
+//! these types under [`datafusion_proto::protobuf`].
 //!
-//! [protocol buffers]: https://developers.google.com/protocol-buffers
-//! [prost]: https://docs.rs/prost/latest/prost/
-//!
-//! # Version Compatibility
-//!
-//! The serialized form are not guaranteed to be compatible across
-//! DataFusion versions. A plan serialized with one version of DataFusion
-//! may not be able to deserialized with a different version.
-//!
-//! # See Also
-//!
-//! The binary format created by this crate supports the full range of DataFusion
-//! plans, but is DataFusion specific. See [datafusion-substrait] for a crate
-//! which can encode many DataFusion plans using the [substrait.io] standard.
-//!
-//! [datafusion-substrait]: https://docs.rs/datafusion-substrait/latest/datafusion_substrait
-//! [substrait.io]: https://substrait.io
-//!
-//! # Example: Serializing [`ScalarValue`]s
-//! ```
-//! # use datafusion_common::{ScalarValue, Result};
-//! # use prost::{bytes::{Bytes, BytesMut}};
-//! # use datafusion_common::plan_datafusion_err;
-//! # use datafusion_proto_common::protobuf_common;
-//! # use prost::Message;
-//! # fn main() -> Result<()>{
-//! // Create a new ScalarValue
-//! let val = ScalarValue::UInt64(Some(3));
-//! let mut buffer = BytesMut::new();
-//! let protobuf: protobuf_common::ScalarValue = match val {
-//!     ScalarValue::UInt64(Some(val)) => protobuf_common::ScalarValue {
-//!         value: Some(protobuf_common::scalar_value::Value::Uint64Value(val)),
-//!     },
-//!     _ => unreachable!(),
-//! };
-//!
-//! protobuf
-//!     .encode(&mut buffer)
-//!     .map_err(|e| plan_datafusion_err!("Error encoding protobuf as bytes: {e}"))?;
-//! // Convert it to bytes (for sending over the network, etc.)
-//! let bytes: Bytes = buffer.into();
-//!
-//! let protobuf = protobuf_common::ScalarValue::decode(bytes).map_err(|e| {
-//!     plan_datafusion_err!("Error decoding ScalarValue as protobuf: {e}")
-//! })?;
-//! // Decode bytes from somewhere (over network, etc.) back to ScalarValue
-//! let decoded_val: ScalarValue = match protobuf.value {
-//!     Some(protobuf_common::scalar_value::Value::Uint64Value(val)) => {
-//!         ScalarValue::UInt64(Some(val))
-//!     }
-//!     _ => unreachable!(),
-//! };
-//! assert_eq!(val, decoded_val);
-//! # Ok(())
-//! # }
-//! ```
+//! [`datafusion-proto`]: https://crates.io/crates/datafusion-proto
+//! [`datafusion_proto::protobuf`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/protobuf/index.html
 
 pub mod common;
 pub mod from_proto;
@@ -100,9 +52,19 @@ pub mod generated;
 pub mod to_proto;
 
 pub use from_proto::Error as FromProtoError;
-pub use generated::datafusion_proto_common as protobuf_common;
-pub use generated::datafusion_proto_common::*;
+pub use generated::common_pkg as protobuf_common;
+pub use generated::common_pkg::*;
 pub use to_proto::Error as ToProtoError;
+
+/// All DataFusion protobuf model types (both `package datafusion` and
+/// `package datafusion_common`) re-exported from a single flat namespace.
+///
+/// This is the canonical location for these prost-generated types.
+/// `datafusion-proto` re-exports it as `datafusion_proto::protobuf`.
+pub mod protobuf {
+    pub use crate::generated::common_pkg::*;
+    pub use crate::generated::datafusion::*;
+}
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);

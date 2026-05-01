@@ -15,16 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// This code is generated so we don't want to fix any lint violations manually
-#[allow(clippy::allow_attributes)]
-#[allow(clippy::all)]
-#[rustfmt::skip]
-pub mod datafusion {
-    include!("prost.rs");
-    include!("datafusion_proto_common.rs");
-
-    #[cfg(feature = "json")]
-    include!("pbjson.rs");
-}
-
-pub use datafusion_proto_common::protobuf_common as datafusion_common;
+// All prost-generated types live in `datafusion-proto-common`. Re-export them
+// here so existing call sites that use `datafusion_proto::generated::datafusion::*`
+// continue to compile without change.
+pub use datafusion_proto_common::generated::common_pkg as datafusion_common;
+pub use datafusion_proto_common::generated::datafusion;

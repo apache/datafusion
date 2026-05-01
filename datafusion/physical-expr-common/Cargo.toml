@@ -40,11 +40,18 @@ workspace = true
 [lib]
 name = "datafusion_physical_expr_common"
 
+[features]
+default = []
+# Enables the `PhysicalExpr::to_proto` hook used by `datafusion-proto`.
+# Off by default so crates that never serialize plans pay nothing.
+proto = ["dep:datafusion-proto-common"]
+
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }

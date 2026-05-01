@@ -40,6 +40,8 @@ pub mod file_stream;
 pub mod memory;
 pub mod morsel;
 pub mod projection;
+#[cfg(feature = "proto")]
+pub mod proto;
 pub mod schema_adapter;
 pub mod sink;
 pub mod source;

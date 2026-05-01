@@ -50,6 +50,7 @@ parquet_encryption = [
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
 parquet = ["dep:parquet"]
+proto = ["dep:datafusion-proto-common"]
 sql = ["sqlparser"]
 
 [[bench]]
@@ -69,6 +70,7 @@ arrow = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 chrono = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
 foldhash = "0.2"
 half = { workspace = true }
 hashbrown = { workspace = true }

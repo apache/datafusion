@@ -2138,8 +2138,9 @@ fn roundtrip_dfschema() {
     assert_eq!(dfschema, returned_dfschema);
 
     let arc_dfschema = Arc::new(dfschema.clone());
-    let proto_dfschema: protobuf::DfSchema = (&arc_dfschema).try_into().unwrap();
-    let returned_arc_dfschema: DFSchemaRef = proto_dfschema.try_into().unwrap();
+    let proto_dfschema: protobuf::DfSchema = arc_dfschema.as_ref().try_into().unwrap();
+    let returned_dfschema: DFSchema = (&proto_dfschema).try_into().unwrap();
+    let returned_arc_dfschema: DFSchemaRef = Arc::new(returned_dfschema);
     assert_eq!(arc_dfschema, returned_arc_dfschema);
     assert_eq!(dfschema, *returned_arc_dfschema);
 }

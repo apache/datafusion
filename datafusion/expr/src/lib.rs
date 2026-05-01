@@ -55,6 +55,8 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod extension_types;
 pub mod function;
+#[cfg(feature = "proto")]
+pub mod proto;
 pub mod select_expr;
 pub mod groups_accumulator {
     pub use datafusion_expr_common::groups_accumulator::*;

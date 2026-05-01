@@ -21,6 +21,8 @@
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
 pub mod file_format;
+#[cfg(feature = "proto")]
+pub mod proto;
 pub mod source;
 
 use std::sync::Arc;
