@@ -3828,11 +3828,13 @@ fn calc_func_dependencies_for_project(
     exprs: &[Expr],
     input: &LogicalPlan,
 ) -> Result<FunctionalDependencies> {
+    const NON_INPUT_EXPR: usize = usize::MAX;
     let input_fields = input.schema().field_names();
-    // Calculate expression indices (if present) in the input schema.
-    let proj_indices = exprs
-        .iter()
-        .map(|expr| match expr {
+    // Keep one entry per output field. Non-input expressions occupy their
+    // output position so later input columns remap to their actual output index.
+    let mut proj_indices = vec![];
+    for expr in exprs {
+        match expr {
             #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => {
                 let wildcard_fields = exprlist_to_fields(
@@ -3842,44 +3844,41 @@ fn calc_func_dependencies_for_project(
                     }],
                     input,
                 )?;
-                Ok::<_, DataFusionError>(
-                    wildcard_fields
-                        .into_iter()
-                        .filter_map(|(qualifier, f)| {
-                            let flat_name = qualifier
-                                .map(|t| format!("{}.{}", t, f.name()))
-                                .unwrap_or_else(|| f.name().clone());
-                            input_fields.iter().position(|item| *item == flat_name)
-                        })
-                        .collect::<Vec<_>>(),
-                )
+                proj_indices.extend(wildcard_fields.into_iter().map(|(qualifier, f)| {
+                    let flat_name = qualifier
+                        .map(|t| format!("{}.{}", t, f.name()))
+                        .unwrap_or_else(|| f.name().clone());
+                    input_fields
+                        .iter()
+                        .position(|item| *item == flat_name)
+                        .unwrap_or(NON_INPUT_EXPR)
+                }));
             }
             Expr::Alias(alias) => {
                 let name = format!("{}", alias.expr);
-                Ok(input_fields
-                    .iter()
-                    .position(|item| *item == name)
-                    .map(|i| vec![i])
-                    .unwrap_or(vec![]))
+                proj_indices.push(
+                    input_fields
+                        .iter()
+                        .position(|item| *item == name)
+                        .unwrap_or(NON_INPUT_EXPR),
+                );
             }
             _ => {
                 let name = format!("{expr}");
-                Ok(input_fields
-                    .iter()
-                    .position(|item| *item == name)
-                    .map(|i| vec![i])
-                    .unwrap_or(vec![]))
+                proj_indices.push(
+                    input_fields
+                        .iter()
+                        .position(|item| *item == name)
+                        .unwrap_or(NON_INPUT_EXPR),
+                );
             }
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+        }
+    }
 
     Ok(input
         .schema()
         .functional_dependencies()
-        .project_functional_dependencies(&proj_indices, exprs.len()))
+        .project_functional_dependencies(&proj_indices, proj_indices.len()))
 }
 
 /// Sorts its input according to a list of sort expressions.
