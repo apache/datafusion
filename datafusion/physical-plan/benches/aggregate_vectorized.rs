@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
-use arrow::datatypes::{Int32Type, StringViewType};
+use arrow::array::{ArrayRef, UInt64Array};
+use arrow::datatypes::{Field, Int32Type, Schema, StringViewType};
 use arrow::util::bench_util::{
     create_primitive_array, create_string_view_array_with_len,
     create_string_view_array_with_max_len,
@@ -30,6 +30,8 @@ use criterion::{
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupColumn;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
+use datafusion_physical_plan::aggregates::group_values::new_group_values;
+use datafusion_physical_plan::aggregates::order::GroupOrdering;
 use rand::distr::{Bernoulli, Distribution};
 use std::hint::black_box;
 use std::sync::Arc;
@@ -40,6 +42,7 @@ const NULL_DENSITIES: [f32; 3] = [0.0, 0.1, 0.5];
 fn bench_vectorized_append(c: &mut Criterion) {
     byte_view_vectorized_append(c);
     primitive_vectorized_append(c);
+    single_group_by_primitive_intern(c);
 }
 
 fn byte_view_vectorized_append(c: &mut Criterion) {
@@ -174,6 +177,53 @@ fn primitive_vectorized_append(c: &mut Criterion) {
             }
             bench_single_primitive::<true>(&mut group, size, &rows, null_density);
         }
+    }
+
+    group.finish();
+}
+
+fn single_group_by_primitive_intern(c: &mut Criterion) {
+    const BATCH_SIZE: usize = 4096;
+    const BATCHES: usize = 16;
+
+    let cases = [
+        ("low_cardinality", 128),
+        ("high_cardinality", BATCH_SIZE * BATCHES),
+    ];
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "group_key",
+        DataType::UInt64,
+        true,
+    )]));
+    let mut group = c.benchmark_group("GroupValuesPrimitive_intern");
+
+    for (case_name, distinct) in cases {
+        let batches = (0..BATCHES)
+            .map(|batch| {
+                let start = batch * BATCH_SIZE;
+                let values = (start..start + BATCH_SIZE)
+                    .map(|value| Some((value % distinct) as u64));
+                Arc::new(UInt64Array::from_iter(values)) as ArrayRef
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(case_name, |b| {
+            b.iter(|| {
+                let mut group_values =
+                    new_group_values(Arc::clone(&schema), &GroupOrdering::None).unwrap();
+                let mut groups = Vec::with_capacity(BATCH_SIZE);
+
+                for batch in &batches {
+                    group_values
+                        .intern(std::slice::from_ref(batch), &mut groups)
+                        .unwrap();
+                    black_box(&groups);
+                }
+
+                black_box(group_values.len());
+            });
+        });
     }
 
     group.finish();

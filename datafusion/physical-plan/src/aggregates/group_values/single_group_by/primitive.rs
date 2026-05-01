@@ -24,7 +24,6 @@ use arrow::array::{
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::hash_table::HashTable;
@@ -82,17 +81,12 @@ hash_float!(f16, f32, f64);
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// The data type of the output array
     data_type: DataType,
-    /// Stores the `(group_index, hash)` based on the hash of its value
-    ///
-    /// We also store `hash` is for reducing cost of rehashing. Such cost
-    /// is obvious in high cardinality group by situation.
-    /// More details can see:
-    /// <https://github.com/apache/datafusion/issues/15961>
-    map: HashTable<(usize, u64)>,
+    /// Stores the group index and value, keyed by the hash of the value
+    map: HashTable<(usize, T::Native)>,
     /// The group index of the null value if any
     null_group: Option<usize>,
-    /// The values for each group index
-    values: Vec<T::Native>,
+    /// The number of groups, including the null group if present
+    num_groups: usize,
     /// The random state used to generate hashes
     random_state: RandomState,
 }
@@ -103,7 +97,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
         Self {
             data_type,
             map: HashTable::with_capacity(128),
-            values: Vec::with_capacity(128),
+            num_groups: 0,
             null_group: None,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
@@ -121,8 +115,8 @@ where
         for v in cols[0].as_primitive::<T>() {
             let group_id = match v {
                 None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(Default::default());
+                    let group_id = self.num_groups;
+                    self.num_groups += 1;
                     group_id
                 }),
                 Some(key) => {
@@ -130,18 +124,16 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |&(g, h)| unsafe {
-                            hash == h && self.values.get_unchecked(g).is_eq(key)
-                        },
-                        |&(_, h)| h,
+                        |&(_, value)| value.is_eq(key),
+                        |&(_, value)| value.hash(state),
                     );
 
                     match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
                         hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.values.len();
-                            v.insert((g, hash));
-                            self.values.push(key);
+                            let g = self.num_groups;
+                            v.insert((g, key));
+                            self.num_groups += 1;
                             g
                         }
                     }
@@ -153,15 +145,15 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
+        self.map.capacity() * size_of::<(usize, T::Native)>()
     }
 
     fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.num_groups == 0
     }
 
     fn len(&self) -> usize {
-        self.values.len()
+        self.num_groups
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -182,21 +174,30 @@ where
 
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
-                self.map.clear();
-                build_primitive(std::mem::take(&mut self.values), self.null_group.take())
+                let mut values = vec![T::default_value(); self.num_groups];
+                for (group_idx, value) in std::mem::take(&mut self.map) {
+                    values[group_idx] = value;
+                }
+                self.num_groups = 0;
+
+                build_primitive(values, self.null_group.take())
             }
             EmitTo::First(n) => {
-                self.map.retain(|entry| {
+                let mut values = vec![T::default_value(); n];
+
+                self.map.retain(|(group_idx, value)| {
                     // Decrement group index by n
-                    let group_idx = entry.0;
                     match group_idx.checked_sub(n) {
                         // Group index was >= n, shift value down
                         Some(sub) => {
-                            entry.0 = sub;
+                            *group_idx = sub;
                             true
                         }
                         // Group index was < n, so remove from table
-                        None => false,
+                        None => {
+                            values[*group_idx] = *value;
+                            false
+                        }
                     }
                 });
                 let null_group = match &mut self.null_group {
@@ -207,9 +208,8 @@ where
                     Some(_) => self.null_group.take(),
                     None => None,
                 };
-                let mut split = self.values.split_off(n);
-                std::mem::swap(&mut self.values, &mut split);
-                build_primitive(split, null_group)
+                self.num_groups -= n;
+                build_primitive(values, null_group)
             }
         };
 
@@ -217,9 +217,75 @@ where
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
-        self.values.clear();
-        self.values.shrink_to(num_rows);
+        self.num_groups = 0;
+        self.null_group = None;
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, UInt64Array};
+    use arrow::datatypes::UInt64Type;
+
+    fn values(array: &ArrayRef) -> Vec<Option<u64>> {
+        let array = array.as_primitive::<UInt64Type>();
+        (0..array.len())
+            .map(|idx| {
+                if array.is_null(idx) {
+                    None
+                } else {
+                    Some(array.value(idx))
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn primitive_emit_all_reconstructs_group_order() -> Result<()> {
+        let input = Arc::new(UInt64Array::from(vec![Some(10), Some(20), None, Some(10)]))
+            as ArrayRef;
+        let mut group_values = GroupValuesPrimitive::<UInt64Type>::new(DataType::UInt64);
+        let mut groups = vec![];
+
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![0, 1, 2, 0]);
+
+        let output = group_values.emit(EmitTo::All)?;
+        assert_eq!(values(&output[0]), vec![Some(10), Some(20), None]);
+        assert!(group_values.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_emit_first_reindexes_remaining_groups() -> Result<()> {
+        let input = Arc::new(UInt64Array::from(vec![
+            Some(10),
+            None,
+            Some(20),
+            Some(30),
+            Some(10),
+        ])) as ArrayRef;
+        let mut group_values = GroupValuesPrimitive::<UInt64Type>::new(DataType::UInt64);
+        let mut groups = vec![];
+
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![0, 1, 2, 3, 0]);
+
+        let output = group_values.emit(EmitTo::First(2))?;
+        assert_eq!(values(&output[0]), vec![Some(10), None]);
+        assert_eq!(group_values.len(), 2);
+
+        let input = Arc::new(UInt64Array::from(vec![Some(20), Some(40)])) as ArrayRef;
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![0, 2]);
+
+        let output = group_values.emit(EmitTo::All)?;
+        assert_eq!(values(&output[0]), vec![Some(20), Some(30), Some(40)]);
+
+        Ok(())
     }
 }
