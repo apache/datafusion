@@ -531,14 +531,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 .iter()
                                 .zip(input_fields)
                                 .map(|(field, input_field)| {
-                                    let target_field = Arc::new(
-                                        Field::new(
-                                            field.name(),
-                                            field.data_type().clone(),
-                                            field.is_nullable(),
-                                        )
-                                        .with_metadata(field.metadata().clone()),
-                                    );
                                     let metadata =
                                         FieldMetadata::new_from_field(field.as_ref());
                                     let alias_metadata = if metadata.is_empty() {
@@ -548,7 +540,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     };
                                     Expr::Cast(Cast::new_from_field(
                                         Box::new(col(input_field.name())),
-                                        target_field,
+                                        Arc::clone(field),
                                     ))
                                     .alias_with_metadata(field.name(), alias_metadata)
                                 })
