@@ -490,11 +490,6 @@ impl PartialEq for HigherOrderFunction {
 }
 
 /// A named reference to a lambda parameter which includes it's own [`FieldRef`],
-/// which is used to implement [`ExprSchemable`], for example. Note the field must
-/// be set in order to create a physical lambda variable. A helper to automatically
-/// set them will be added in the future
-///
-/// A named reference to a lambda parameter which includes it's own [`FieldRef`],
 /// which is used to implement [`ExprSchemable`], for example. It is an option only to make
 /// easier for `expr_api` users to construct lambda variables, but any expression
 /// tree or [`LogicalPlan`] containing unresolved variables must be resolved before
@@ -502,9 +497,9 @@ impl PartialEq for HigherOrderFunction {
 /// [`LogicalPlan::resolve_lambda_variables`]. The default SQL planner produces
 /// already resolved variables and no further resolving is required.
 ///
-/// After resolving, if any non-lambda argument from the lambda function
-/// which this variables originates from have it's type, nullability or
-/// metadata changed, the resolved field may became outdated and must be
+/// After resolving, if any argument from the lambda function which this
+/// variables originates from have it's field changed (type, nullability,
+/// metadata, etc), the resolved variable may became outdated and must be
 /// resolved again.
 ///
 /// [`LogicalPlan`]: crate::LogicalPlan
@@ -3840,8 +3835,6 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
     use crate::expr_fn::col;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,

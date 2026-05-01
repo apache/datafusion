@@ -21,7 +21,8 @@ use crate::expr::{
     HigherOrderFunction, display_comma_separated,
     schema_name_from_exprs_comma_separated_without_space,
 };
-use crate::{ColumnarValue, Documentation, Expr};
+use crate::type_coercion::functions::value_fields_with_higher_order_udf;
+use crate::{ColumnarValue, Documentation, Expr, ExprSchemable};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow_schema::SchemaRef;
@@ -713,14 +714,14 @@ pub(crate) fn resolve_lambda_variables(
             resolve_higher_order_function(func, args, schema, vars)
         }
         Expr::LambdaVariable(mut var) => {
-            let fields_chain = vars.get(&var.name).ok_or_else(|| {
+            let field_stack = vars.get(&var.name).ok_or_else(|| {
                 plan_datafusion_err!(
                     "missing field of lambda variable {} while resolving",
                     var.name
                 )
             })?;
 
-            let field = fields_chain.last().ok_or_else(|| {
+            let field = field_stack.last().ok_or_else(|| {
                 internal_datafusion_err!("every entry should have at least one field")
             })?;
 
@@ -766,15 +767,96 @@ fn resolve_higher_order_function(
     };
 
     let transformed = args.transformed;
-    let func = HigherOrderFunction::new(func, args.data);
+    let mut args = args.data;
 
-    let mut lambdas_params = func.lambda_parameters(schema)?.into_iter();
-
-    let num_lambdas = func
-        .args
+    let current_fields = args
         .iter()
-        .filter(|arg| matches!(arg, Expr::Lambda(_)))
-        .count();
+        .map(|e| match e {
+            Expr::Lambda(_lambda_function) => Ok(ValueOrLambda::Lambda(None)),
+            _ => Ok(ValueOrLambda::Value(e.to_field(schema)?.1)),
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // coerce fields because coercion may alter the lambda parameters
+    let mut fields = value_fields_with_higher_order_udf(&current_fields, func.as_ref())?;
+
+    let num_lambdas = args.iter().filter(|a| matches!(a, Expr::Lambda(_))).count();
+
+    let mut step = 0;
+
+    let lambdas_params = loop {
+        match func.lambda_parameters(step, &fields)? {
+            LambdaParametersProgress::Partial(params) => {
+                let mut params = params.into_iter();
+
+                if params.len() != num_lambdas {
+                    return plan_err!(
+                        "{} lambda_parameters returned {} lambdas but {num_lambdas} expected",
+                        func.name(),
+                        params.len()
+                    );
+                }
+
+                for (arg, field) in std::iter::zip(&mut args, &mut fields) {
+                    match (arg, field) {
+                        (Expr::Lambda(lambda), ValueOrLambda::Lambda(field)) => {
+                            let params = params.next().ok_or_else(|| {
+                                internal_datafusion_err!(
+                                    "params len should have been checked above"
+                                )
+                            })?;
+
+                            if let Some(params) = params {
+                                for (name, field) in
+                                    std::iter::zip(&lambda.params, params)
+                                {
+                                    vars.entry_ref(name)
+                                        .or_default()
+                                        .push(field.renamed(name.as_str()));
+                                }
+
+                                let body_with_vars = resolve_lambda_variables(
+                                    mem::take(lambda.body.as_mut()),
+                                    schema,
+                                    vars,
+                                )?;
+
+                                remove_scope(vars, &lambda.params)?;
+
+                                *field = Some(body_with_vars.data.to_field(schema)?.1);
+                                *lambda.body = body_with_vars.data;
+                            }
+                        }
+                        (_, ValueOrLambda::Lambda(_)) => {
+                            return internal_err!(
+                                "value_fields_with_higher_order_udf returned a value for a lambda argument"
+                            );
+                        }
+                        (Expr::Lambda(_), ValueOrLambda::Value(_)) => {
+                            return internal_err!(
+                                "value_fields_with_higher_order_udf returned a lambda for a value argument"
+                            );
+                        }
+                        (_, ValueOrLambda::Value(_)) => {} // nothing to do
+                    }
+                }
+            }
+            LambdaParametersProgress::Complete(params) => break params,
+        }
+
+        let limit = func.signature().lambda_parameters_max_iterations;
+
+        step += 1;
+
+        if step > limit {
+            return plan_err!(
+                "{} lambda_parameters called {limit} times without completion",
+                func.name()
+            );
+        }
+    };
+
+    let mut lambdas_params = lambdas_params.into_iter();
 
     if num_lambdas != lambdas_params.len() {
         return plan_err!(
@@ -784,7 +866,7 @@ fn resolve_higher_order_function(
         );
     }
 
-    let args = func.args.map_elements(|arg| match arg {
+    let args = args.map_elements(|arg| match arg {
         Expr::Lambda(mut lambda) => {
             let lambda_params = lambdas_params.next().ok_or_else(|| {
                 internal_datafusion_err!(
@@ -795,7 +877,7 @@ fn resolve_higher_order_function(
             if lambda.params.len() > lambda_params.len() {
                 return plan_err!(
                     "{} lambda defined {} params ({}), but only {} supported",
-                    func.func.name(),
+                    func.name(),
                     lambda.params.len(),
                     display_comma_separated(&lambda.params),
                     lambda_params.len()
@@ -810,7 +892,9 @@ fn resolve_higher_order_function(
             }
 
             for (param, field) in std::iter::zip(&lambda.params, lambda_params) {
-                vars.entry_ref(param).or_default().push(field);
+                vars.entry_ref(param)
+                    .or_default()
+                    .push(field.renamed(param.as_str()));
             }
 
             let transformed =
@@ -818,26 +902,7 @@ fn resolve_higher_order_function(
 
             *lambda.body = transformed.data;
 
-            for param in &lambda.params {
-                match vars.entry_ref(param) {
-                    EntryRef::Occupied(mut v) => {
-                        if v.get().len() == 1 {
-                            v.remove();
-                        } else {
-                            v.get_mut().pop().ok_or_else(|| {
-                                internal_datafusion_err!(
-                                    "every entry should have at least one field"
-                                )
-                            })?;
-                        }
-                    }
-                    EntryRef::Vacant(_v) => {
-                        return internal_err!(
-                            "the loop above should have inserted a value for every param"
-                        );
-                    }
-                }
-            }
+            remove_scope(vars, &lambda.params)?;
 
             Ok(Transformed::new(
                 Expr::Lambda(lambda),
@@ -845,14 +910,40 @@ fn resolve_higher_order_function(
                 TreeNodeRecursion::Jump,
             ))
         }
-        arg => Ok(Transformed::no(arg)), // resolved above
+        arg => Ok(Transformed::no(arg)), // resolved at the start of the function
     })?;
 
     Ok(Transformed::new(
-        Expr::HigherOrderFunction(HigherOrderFunction::new(func.func, args.data)),
+        Expr::HigherOrderFunction(HigherOrderFunction::new(func, args.data)),
         transformed || args.transformed,
         TreeNodeRecursion::Jump,
     ))
+}
+
+fn remove_scope(
+    vars: &mut HashMap<String, Vec<FieldRef>>,
+    scope: &[String],
+) -> Result<()> {
+    for param in scope {
+        match vars.entry_ref(param) {
+            EntryRef::Occupied(mut v) => {
+                if v.get().len() == 1 {
+                    v.remove();
+                } else {
+                    v.get_mut().pop().ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "every entry should have at least one field"
+                        )
+                    })?;
+                }
+            }
+            EntryRef::Vacant(_v) => {
+                return internal_err!("no empty value should be in the map");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn all_unique(params: &[String]) -> bool {
@@ -882,7 +973,7 @@ mod tests {
         Expr, HigherOrderSignature, HigherOrderUDF, LambdaParametersProgress,
         ValueOrLambda, col,
         expr::{HigherOrderFunction, LambdaVariable},
-        lambda, lambda_var,
+        lambda, lambda_var, lit,
     };
 
     #[derive(Debug, PartialEq, Eq, Hash)]
@@ -968,6 +1059,99 @@ mod tests {
         hasher.finish()
     }
 
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MockArrayReduce {
+        signature: HigherOrderSignature,
+    }
+
+    impl HigherOrderUDF for MockArrayReduce {
+        fn name(&self) -> &str {
+            "array_reduce"
+        }
+
+        fn aliases(&self) -> &[String] {
+            &[]
+        }
+
+        fn signature(&self) -> &HigherOrderSignature {
+            &self.signature
+        }
+
+        fn lambda_parameters(
+            &self,
+            step: usize,
+            fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            // optional finish not supported for simplicity
+            let [
+                ValueOrLambda::Value(list),
+                ValueOrLambda::Value(initial_value),
+                ValueOrLambda::Lambda(merge),
+                ValueOrLambda::Lambda(_finish),
+            ] = fields
+            else {
+                unreachable!()
+            };
+
+            let list_field = match list.data_type() {
+                DataType::List(field) => field,
+                _ => unreachable!(),
+            };
+
+            Ok(match (step, merge) {
+                (0, None) => {
+                    // at the first step, we use the initial_value as merge accumulator,
+                    // and return None for finish since we don't know the output of merge
+                    LambdaParametersProgress::Partial(vec![
+                        // merge
+                        Some(vec![Arc::clone(initial_value), Arc::clone(list_field)]),
+                        // finish
+                        None,
+                    ])
+                }
+                (1, Some(accumulator)) | (0, Some(accumulator)) => {
+                    // now we can use the merge output as it's accumulator and
+                    // as the finish parameter
+                    LambdaParametersProgress::Complete(vec![
+                        // merge
+                        vec![Arc::clone(accumulator), Arc::clone(list_field)],
+                        // finish
+                        vec![Arc::clone(accumulator)],
+                    ])
+                }
+                (1, None) => {
+                    unreachable!()
+                }
+                _ => unreachable!(),
+            })
+        }
+
+        fn return_field_from_args(
+            &self,
+            args: HigherOrderReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            // optional finish not supported for simplicity
+            let [
+                ValueOrLambda::Value(_list),
+                ValueOrLambda::Value(_initial_value),
+                ValueOrLambda::Lambda(_merge),
+                ValueOrLambda::Lambda(finish),
+            ] = args.arg_fields
+            else {
+                unreachable!()
+            };
+
+            Ok(Arc::clone(finish))
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unreachable!()
+        }
+    }
+
     #[test]
     fn test_resolve_lambda_variables() {
         let schema = DFSchema::try_from(Schema::new(vec![Field::new(
@@ -977,102 +1161,106 @@ mod tests {
         )]))
         .unwrap();
 
-        #[derive(Debug, Hash, PartialEq, Eq)]
-        struct MockHigherOrderUDF {
-            signature: HigherOrderSignature,
-        }
-
-        impl HigherOrderUDF for MockHigherOrderUDF {
-            fn name(&self) -> &str {
-                "array_transform"
-            }
-
-            fn signature(&self) -> &HigherOrderSignature {
-                &self.signature
-            }
-
-            fn lambda_parameters(
-                &self,
-                _step: usize,
-                fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
-            ) -> Result<LambdaParametersProgress> {
-                let ValueOrLambda::Value(list) = &fields[0] else {
-                    unreachable!()
-                };
-
-                let (item, index_type) = match list.data_type() {
-                    DataType::List(field) => (field, DataType::Int32),
-                    _ => unreachable!(),
-                };
-
-                let index = Arc::new(Field::new("", index_type, false));
-
-                Ok(LambdaParametersProgress::Complete(vec![vec![
-                    Arc::clone(item),
-                    index,
-                ]]))
-            }
-
-            fn return_field_from_args(
-                &self,
-                _args: HigherOrderReturnFieldArgs,
-            ) -> Result<FieldRef> {
-                Ok(Arc::new(Field::new("", DataType::Null, true)))
-            }
-
-            fn invoke_with_args(
-                &self,
-                _args: HigherOrderFunctionArgs,
-            ) -> Result<ColumnarValue> {
-                unimplemented!()
-            }
-        }
-
-        let func = Arc::new(MockHigherOrderUDF {
+        let func = Arc::new(MockArrayReduce {
             signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
         }) as _;
 
-        // array_transform(c, v -> array_transform(v, (v, i) -> v+i))
+        /*
+           array_reduce(
+               c,
+               0,
+               (acc1, v) -> acc + array_reduce(
+                   v,
+                   0,
+                   (acc2, v) -> acc2 + acc1 + v,
+                   reduced -> reduced * 2.0
+               ),
+               reduced -> reduced * 2
+           )
+        */
         let expr = Expr::HigherOrderFunction(HigherOrderFunction::new(
             Arc::clone(&func),
             vec![
                 col("c"),
+                lit(0),
                 lambda(
-                    ["v"],
-                    Expr::HigherOrderFunction(HigherOrderFunction::new(
-                        Arc::clone(&func),
-                        vec![
-                            lambda_var("v"),
-                            lambda(["v", "i"], lambda_var("v") + lambda_var("i")),
-                        ],
-                    )),
+                    ["acc1", "v"],
+                    lambda_var("acc1")
+                        + Expr::HigherOrderFunction(HigherOrderFunction::new(
+                            Arc::clone(&func),
+                            vec![
+                                lambda_var("v"),
+                                lit(0),
+                                lambda(
+                                    ["acc2", "v"],
+                                    lambda_var("acc2")
+                                        + lambda_var("acc1")
+                                        + lambda_var("v"),
+                                ),
+                                lambda(["reduced"], lambda_var("reduced") * lit(2.0)),
+                            ],
+                        )),
                 ),
+                lambda(["reduced"], lambda_var("reduced") * lit(2)),
             ],
         ));
 
         let resolved_expr = expr.resolve_lambda_variables(&schema).unwrap().data;
 
+        /*
+           array_reduce(
+               c@[[Int32]],
+               0@Int64,
+               (acc1@Float64, v@[Int32]) -> acc@Float64 + array_reduce(
+                   v@[Int32],
+                   0@Int64,
+                   (acc2@Float64, v@Int32) -> acc2@Float64 + acc1@Float64 + v@Int32,
+                   reducedFloat64 -> reduced@Float64 * 2.0@Float64
+               ),
+               reduced@Float64 -> reduced@Float64 * 2@Int64
+           )
+        */
         let expected = Expr::HigherOrderFunction(HigherOrderFunction::new(
             Arc::clone(&func),
             vec![
                 col("c"),
+                lit(0),
                 lambda(
-                    ["v"],
-                    Expr::HigherOrderFunction(HigherOrderFunction::new(
-                        func,
-                        vec![
-                            resolved_lambda_var(
-                                "v",
-                                DataType::new_list(DataType::Int32, true),
-                                true,
-                            ),
-                            lambda(
-                                ["v", "i"],
-                                resolved_lambda_var("v", DataType::Int32, true)
-                                    + resolved_lambda_var("i", DataType::Int32, false),
-                            ),
-                        ],
-                    )),
+                    ["acc1", "v"],
+                    resolved_lambda_var("acc1", DataType::Float64, true)
+                        + Expr::HigherOrderFunction(HigherOrderFunction::new(
+                            Arc::clone(&func),
+                            vec![
+                                resolved_lambda_var(
+                                    "v",
+                                    DataType::new_list(DataType::Int32, true),
+                                    true,
+                                ),
+                                lit(0),
+                                lambda(
+                                    ["acc2", "v"],
+                                    resolved_lambda_var("acc2", DataType::Float64, true)
+                                        + resolved_lambda_var(
+                                            "acc1",
+                                            DataType::Float64,
+                                            true,
+                                        )
+                                        + resolved_lambda_var("v", DataType::Int32, true),
+                                ),
+                                lambda(
+                                    ["reduced"],
+                                    resolved_lambda_var(
+                                        "reduced",
+                                        DataType::Float64,
+                                        true,
+                                    ) * lit(2.0),
+                                ),
+                            ],
+                        )),
+                ),
+                lambda(
+                    ["reduced"],
+                    resolved_lambda_var("reduced", DataType::Float64, true) * lit(2),
                 ),
             ],
         ));
