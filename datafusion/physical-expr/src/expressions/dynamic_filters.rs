@@ -552,7 +552,7 @@ impl ExpressionIdAtomicCounter {
         }
     }
 
-    /// Retruns a fresh `expression_id` by incrementing the internal counter.
+    /// Returns a fresh `expression_id` by incrementing the internal counter.
     fn next(&self) -> u64 {
         self.inner.fetch_add(1, Ordering::Relaxed)
     }
