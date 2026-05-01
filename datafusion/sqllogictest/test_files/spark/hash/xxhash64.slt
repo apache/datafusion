@@ -171,11 +171,12 @@ SELECT xxhash64(named_struct('a', 1, 'b', 2));
 ----
 -8198029865082835910
 
-# Array/List hashing
+# Array/List hashing - Spark chains hashes across list elements:
+# hash(elem_n, hash(elem_n-1, ... hash(elem_0, seed) ...))
 query I
 SELECT xxhash64(arrow_cast(make_array(1, 2, 3), 'List(Int32)'));
 ----
-6258084186791473711
+8592097078962733837
 
 # Test with table data
 statement ok
