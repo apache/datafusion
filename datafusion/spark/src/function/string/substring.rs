@@ -347,7 +347,7 @@ impl SubstringBuilder for BinaryViewBuilder {
         BinaryViewBuilder::append_null(self);
     }
     fn append_empty(&mut self) {
-        BinaryViewBuilder::append_value(self, &[]);
+        BinaryViewBuilder::append_value(self, []);
     }
 }
 
