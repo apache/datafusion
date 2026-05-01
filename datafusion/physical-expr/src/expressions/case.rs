@@ -18,6 +18,7 @@
 mod literal_lookup_table;
 
 use super::{Column, Literal};
+use crate::IsFalsy;
 use crate::PhysicalExpr;
 use crate::expressions::{LambdaExpr, LambdaVariable, lit, try_cast};
 use arrow::array::*;
@@ -1373,6 +1374,36 @@ impl PhysicalExpr for CaseExpr {
             write!(f, " ")?;
         }
         write!(f, "END")
+    }
+
+    fn is_null(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // CASE is NULL if ALL result branches (THEN values + ELSE) are NULL.
+        // If there's no ELSE, the implicit ELSE is NULL.
+        for (_when, then) in &self.body.when_then_expr {
+            match then.is_null(null_columns) {
+                IsFalsy::Always => {}
+                IsFalsy::Never => return IsFalsy::Never,
+                IsFalsy::Sometimes => return IsFalsy::Sometimes,
+            }
+        }
+        match &self.body.else_expr {
+            Some(else_expr) => else_expr.is_null(null_columns),
+            None => IsFalsy::Always, // implicit ELSE NULL
+        }
+    }
+    fn is_not_true(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // CASE is not-true if ALL result branches (THEN values + ELSE) are not-true.
+        for (_when, then) in &self.body.when_then_expr {
+            match then.is_not_true(null_columns) {
+                IsFalsy::Always => {}
+                IsFalsy::Never => return IsFalsy::Never,
+                IsFalsy::Sometimes => return IsFalsy::Sometimes,
+            }
+        }
+        match &self.body.else_expr {
+            Some(else_expr) => else_expr.is_not_true(null_columns),
+            None => IsFalsy::Always, // implicit ELSE NULL is not-true
+        }
     }
 }
 

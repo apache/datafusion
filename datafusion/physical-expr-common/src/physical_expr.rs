@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -43,6 +44,18 @@ use itertools::izip;
 
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
+
+/// Describes whether a boolean property (like being NULL or not-true)
+/// is guaranteed to hold for an expression given a set of null columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IsFalsy {
+    /// The property always holds for any input.
+    Always,
+    /// May or may not hold depending on input values (unknown).
+    Sometimes,
+    /// The property never holds for any input.
+    Never,
+}
 
 /// [`PhysicalExpr`]s represent expressions such as `A + 1` or `CAST(c1 AS int)`.
 ///
@@ -443,6 +456,33 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// The default implementation returns [`ExpressionPlacement::KeepInPlace`].
     fn placement(&self) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
+    }
+
+    /// Returns whether this expression is guaranteed to evaluate to `NULL`
+    /// when all columns in `null_columns` are `NULL`.
+    ///
+    /// `null_columns` contains the column indices (in the input schema) that
+    /// are assumed to be `NULL`.
+    ///
+    /// - [`IsFalsy::Always`]: definitely evaluates to `NULL`
+    /// - [`IsFalsy::Never`]: definitely does NOT evaluate to `NULL`
+    /// - [`IsFalsy::Sometimes`][]: unknown (conservative default)
+    fn is_null(&self, _null_columns: &HashSet<usize>) -> IsFalsy {
+        IsFalsy::Sometimes
+    }
+
+    /// Returns whether this expression is guaranteed to be not-true
+    /// (i.e., evaluates to `NULL` or `FALSE`) when all columns in
+    /// `null_columns` are `NULL`.
+    ///
+    /// `null_columns` contains the column indices (in the input schema) that
+    /// are assumed to be `NULL`.
+    ///
+    /// - [`IsFalsy::Always`]: some rows may evaluate `NULL` or `FALSE`
+    /// - [`IsFalsy::Never`]: definitely does NOT evaluate to `NULL` or `FALSE`
+    /// - [`IsFalsy::Sometimes`][]: unknown (conservative default)
+    fn is_not_true(&self, _null_columns: &HashSet<usize>) -> IsFalsy {
+        IsFalsy::Sometimes
     }
 }
 

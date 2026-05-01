@@ -36,6 +36,9 @@ mod not;
 mod try_cast;
 mod unknown_column;
 
+#[cfg(test)]
+mod null_rejection_tests;
+
 pub use crate::PhysicalSortExpr;
 /// Module with some convenient methods used in expression building
 pub use crate::aggregate::stats::StatsType;

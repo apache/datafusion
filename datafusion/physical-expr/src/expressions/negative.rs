@@ -20,6 +20,7 @@
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::IsFalsy;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::FieldRef;
@@ -171,6 +172,16 @@ impl PhysicalExpr for NegativeExpr {
         write!(f, "(- ")?;
         self.arg.fmt_sql(f)?;
         write!(f, ")")
+    }
+
+    fn is_null(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // -NULL = NULL
+        self.arg.is_null(null_columns)
+    }
+
+    fn is_not_true(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // -NULL = NULL → not-true
+        self.arg.is_null(null_columns)
     }
 }
 

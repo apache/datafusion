@@ -17,6 +17,7 @@
 
 mod kernels;
 
+use crate::IsFalsy;
 use crate::PhysicalExpr;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use std::hash::Hash;
@@ -606,6 +607,178 @@ impl PhysicalExpr for BinaryExpr {
         write_child(f, self.left.as_ref(), precedence)?;
         write!(f, " {} ", self.op)?;
         write_child(f, self.right.as_ref(), precedence)
+    }
+
+    fn is_null(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        match self.op {
+            // Comparisons and arithmetic: NULL if either child is NULL
+            Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq
+            | Operator::Plus
+            | Operator::Minus
+            | Operator::Multiply
+            | Operator::Divide
+            | Operator::Modulo
+            | Operator::StringConcat
+            | Operator::LikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotLikeMatch
+            | Operator::NotILikeMatch
+            | Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseXor
+            | Operator::BitwiseShiftLeft
+            | Operator::BitwiseShiftRight
+            | Operator::AtArrow
+            | Operator::ArrowAt => {
+                match (
+                    self.left.is_null(null_columns),
+                    self.right.is_null(null_columns),
+                ) {
+                    (IsFalsy::Always, _) | (_, IsFalsy::Always) => IsFalsy::Always,
+                    (IsFalsy::Never, IsFalsy::Never) => IsFalsy::Never,
+                    _ => IsFalsy::Sometimes,
+                }
+            }
+            // IS DISTINCT FROM / IS NOT DISTINCT FROM never return NULL
+            Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => IsFalsy::Never,
+            // AND: NULL only when neither side is FALSE and at least one is NULL
+            //   FALSE AND NULL = FALSE (not null)
+            //   NULL AND FALSE = FALSE (not null)
+            //   NULL AND TRUE = NULL
+            //   NULL AND NULL = NULL
+            Operator::And => {
+                let l_null = self.left.is_null(null_columns);
+                let r_null = self.right.is_null(null_columns);
+                let l_not_true = self.left.is_not_true(null_columns);
+                let r_not_true = self.right.is_not_true(null_columns);
+
+                // If either child is definitely FALSE → AND = FALSE (not null)
+                let l_false = l_not_true == IsFalsy::Always && l_null == IsFalsy::Never;
+                let r_false = r_not_true == IsFalsy::Always && r_null == IsFalsy::Never;
+                if l_false || r_false {
+                    return IsFalsy::Never;
+                }
+
+                // If both children definitely not null → AND not null
+                if l_null == IsFalsy::Never && r_null == IsFalsy::Never {
+                    return IsFalsy::Never;
+                }
+
+                // If both children definitely NULL → AND = NULL
+                if l_null == IsFalsy::Always && r_null == IsFalsy::Always {
+                    return IsFalsy::Always;
+                }
+
+                IsFalsy::Sometimes
+            }
+            // OR: NULL only when neither side is TRUE and at least one is NULL
+            //   TRUE OR NULL = TRUE (not null)
+            //   NULL OR FALSE = NULL
+            //   NULL OR NULL = NULL
+            Operator::Or => {
+                let l_null = self.left.is_null(null_columns);
+                let r_null = self.right.is_null(null_columns);
+                let l_not_true = self.left.is_not_true(null_columns);
+                let r_not_true = self.right.is_not_true(null_columns);
+
+                // If both children definitely not null → OR not null
+                if l_null == IsFalsy::Never && r_null == IsFalsy::Never {
+                    return IsFalsy::Never;
+                }
+
+                // If both children definitely NULL → OR = NULL
+                if l_null == IsFalsy::Always && r_null == IsFalsy::Always {
+                    return IsFalsy::Always;
+                }
+
+                // If one child is NULL and other is definitely FALSE → OR = NULL
+                let l_false = l_not_true == IsFalsy::Always && l_null == IsFalsy::Never;
+                let r_false = r_not_true == IsFalsy::Always && r_null == IsFalsy::Never;
+                if (l_null == IsFalsy::Always && r_false)
+                    || (r_null == IsFalsy::Always && l_false)
+                {
+                    return IsFalsy::Always;
+                }
+
+                IsFalsy::Sometimes
+            }
+            // All other operators: unknown
+            _ => IsFalsy::Sometimes,
+        }
+    }
+
+    fn is_not_true(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        match self.op {
+            // AND: not-true if EITHER child is not-true
+            Operator::And => match (
+                self.left.is_not_true(null_columns),
+                self.right.is_not_true(null_columns),
+            ) {
+                (IsFalsy::Always, _) | (_, IsFalsy::Always) => IsFalsy::Always,
+                (IsFalsy::Never, IsFalsy::Never) => IsFalsy::Never,
+                _ => IsFalsy::Sometimes,
+            },
+            // OR: not-true only if BOTH children are not-true
+            Operator::Or => match (
+                self.left.is_not_true(null_columns),
+                self.right.is_not_true(null_columns),
+            ) {
+                (IsFalsy::Always, IsFalsy::Always) => IsFalsy::Always,
+                (IsFalsy::Never, _) | (_, IsFalsy::Never) => IsFalsy::Never,
+                _ => IsFalsy::Sometimes,
+            },
+            // IS DISTINCT FROM: FALSE when both NULL, TRUE when one NULL other not
+            //   Never returns NULL.
+            Operator::IsDistinctFrom => {
+                let l_null = self.left.is_null(null_columns);
+                let r_null = self.right.is_null(null_columns);
+                match (l_null, r_null) {
+                    // Both NULL → FALSE → not-true
+                    (IsFalsy::Always, IsFalsy::Always) => IsFalsy::Always,
+                    // One NULL, other not → TRUE → passes
+                    (IsFalsy::Always, IsFalsy::Never)
+                    | (IsFalsy::Never, IsFalsy::Always) => IsFalsy::Never,
+                    // Neither NULL → could be TRUE or FALSE
+                    (IsFalsy::Never, IsFalsy::Never) => IsFalsy::Sometimes,
+                    _ => IsFalsy::Sometimes,
+                }
+            }
+            // IS NOT DISTINCT FROM: TRUE when both NULL, FALSE when one NULL other not
+            //   Never returns NULL.
+            Operator::IsNotDistinctFrom => {
+                let l_null = self.left.is_null(null_columns);
+                let r_null = self.right.is_null(null_columns);
+                match (l_null, r_null) {
+                    // Both NULL → TRUE → passes
+                    (IsFalsy::Always, IsFalsy::Always) => IsFalsy::Never,
+                    // One NULL, other not → FALSE → not-true
+                    (IsFalsy::Always, IsFalsy::Never)
+                    | (IsFalsy::Never, IsFalsy::Always) => IsFalsy::Always,
+                    // Neither NULL → could be TRUE or FALSE
+                    (IsFalsy::Never, IsFalsy::Never) => IsFalsy::Sometimes,
+                    _ => IsFalsy::Sometimes,
+                }
+            }
+            // All other operators (comparisons, arithmetic):
+            // NULL propagates through these operators.
+            _ => match (
+                self.left.is_null(null_columns),
+                self.right.is_null(null_columns),
+            ) {
+                (IsFalsy::Always, _) | (_, IsFalsy::Always) => IsFalsy::Always,
+                (IsFalsy::Never, IsFalsy::Never) => IsFalsy::Never,
+                _ => IsFalsy::Sometimes,
+            },
+        }
     }
 }
 

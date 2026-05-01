@@ -19,6 +19,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::IsFalsy;
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::CastOptions;
@@ -118,6 +119,16 @@ impl PhysicalExpr for TryCastExpr {
         write!(f, "TRY_CAST(")?;
         self.expr.fmt_sql(f)?;
         write!(f, " AS {:?})", self.cast_type)
+    }
+
+    fn is_null(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // TRY_CAST(NULL) = NULL
+        self.expr.is_null(null_columns)
+    }
+
+    fn is_not_true(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // TRY_CAST(NULL) = NULL → not-true
+        self.expr.is_null(null_columns)
     }
 }
 

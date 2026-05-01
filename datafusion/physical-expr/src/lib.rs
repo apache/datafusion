@@ -65,7 +65,9 @@ pub use physical_expr::{
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
 };
 
-pub use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
+pub use datafusion_physical_expr_common::physical_expr::{
+    IsFalsy, PhysicalExpr, PhysicalExprRef,
+};
 pub use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
     PhysicalSortRequirement,

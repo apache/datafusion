@@ -19,6 +19,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::physical_expr::IsFalsy;
 use crate::physical_expr::PhysicalExpr;
 
 use arrow::compute::{CastOptions, can_cast_types};
@@ -297,6 +298,16 @@ impl PhysicalExpr for CastExpr {
         write!(f, " AS {:?}", self.cast_type())?;
 
         write!(f, ")")
+    }
+
+    fn is_null(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // CAST(NULL) = NULL
+        self.expr.is_null(null_columns)
+    }
+
+    fn is_not_true(&self, null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // CAST(NULL) = NULL → not-true
+        self.expr.is_null(null_columns)
     }
 }
 

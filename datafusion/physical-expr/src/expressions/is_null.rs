@@ -17,6 +17,7 @@
 
 //! IS NULL expression
 
+use crate::IsFalsy;
 use crate::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
@@ -101,6 +102,16 @@ impl PhysicalExpr for IsNullExpr {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.arg.fmt_sql(f)?;
         write!(f, " IS NULL")
+    }
+
+    fn is_null(&self, _null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // IS NULL never returns NULL — always TRUE or FALSE
+        IsFalsy::Never
+    }
+
+    fn is_not_true(&self, _null_columns: &std::collections::HashSet<usize>) -> IsFalsy {
+        // IS NULL(NULL) = TRUE — passes the filter, not rejected
+        IsFalsy::Never
     }
 }
 

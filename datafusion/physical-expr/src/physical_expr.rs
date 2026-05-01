@@ -30,6 +30,7 @@ use datafusion_expr::{Expr, SortExpr};
 
 use itertools::izip;
 // Exports:
+pub(crate) use datafusion_physical_expr_common::physical_expr::IsFalsy;
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
