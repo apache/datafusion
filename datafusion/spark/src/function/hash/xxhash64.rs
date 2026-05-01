@@ -20,9 +20,10 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, DictionaryArray, Int64Array, types::ArrowDictionaryKeyType,
 };
+use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::compute::take;
 use arrow::datatypes::{ArrowNativeType, DataType};
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -67,10 +68,6 @@ impl ScalarUDFImpl for SparkXxhash64 {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.is_empty() {
-            return exec_err!("xxhash64 requires at least one argument");
-        }
-
         let num_rows = args.number_rows;
         let mut hashes: Vec<u64> = vec![DEFAULT_SEED; num_rows];
 
@@ -82,8 +79,12 @@ impl ScalarUDFImpl for SparkXxhash64 {
                 hashes[0] as i64,
             ))))
         } else {
-            let hashes: Vec<i64> = hashes.into_iter().map(|h| h as i64).collect();
-            Ok(ColumnarValue::Array(Arc::new(Int64Array::from(hashes))))
+            // Reinterpret Vec<u64> as ScalarBuffer<i64> without copying — both
+            // types have identical layout, and `as i64` is a bitcast.
+            let buffer = ScalarBuffer::<i64>::from(Buffer::from_vec(hashes));
+            Ok(ColumnarValue::Array(Arc::new(Int64Array::new(
+                buffer, None,
+            ))))
         }
     }
 }
@@ -112,14 +113,7 @@ fn create_xxhash64_hashes_dictionary<K: ArrowDictionaryKeyType>(
 
         for (hash, key) in hashes_buffer.iter_mut().zip(dict_array.keys().iter()) {
             if let Some(key) = key {
-                let idx = key.to_usize().ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Can not convert key value {:?} to usize in dictionary of type {:?}",
-                        key,
-                        dict_array.data_type()
-                    ))
-                })?;
-                *hash = dict_hashes[idx]
+                *hash = dict_hashes[key.as_usize()]
             }
             // No update for Null keys, consistent with other types.
         }
@@ -132,10 +126,7 @@ fn create_xxhash64_hashes_dictionary<K: ArrowDictionaryKeyType>(
 /// The number of rows to hash is determined by `hashes_buffer.len()`.
 /// `hashes_buffer` should be pre-sized appropriately and seeded with the
 /// initial hash value (Spark uses `42`).
-fn create_xxhash64_hashes<'a>(
-    arrays: &[ArrayRef],
-    hashes_buffer: &'a mut [u64],
-) -> Result<&'a mut [u64]> {
+fn create_xxhash64_hashes(arrays: &[ArrayRef], hashes_buffer: &mut [u64]) -> Result<()> {
     create_hashes_internal!(
         arrays,
         hashes_buffer,
@@ -143,7 +134,7 @@ fn create_xxhash64_hashes<'a>(
         create_xxhash64_hashes_dictionary,
         create_xxhash64_hashes
     );
-    Ok(hashes_buffer)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -213,40 +204,27 @@ mod tests {
         assert_ne!(h, seed);
     }
 
+    /// Spark normalizes `-0.0` to `0.0` before hashing, so both produce
+    /// the same hash. Exercise the dispatch through `create_xxhash64_hashes`
+    /// to cover the `hash_array_primitive_float!` normalization path.
     #[test]
-    fn test_xxhash64_f32() {
-        let seed = 42u64;
-        let neg_zero = -0.0f32;
-        let pos_zero = 0.0f32;
-        assert_eq!(
-            spark_compatible_xxhash64(0i32.to_le_bytes(), seed),
-            spark_compatible_xxhash64(pos_zero.to_le_bytes(), seed),
-        );
-        // -0.0 normalized: hash 0i32 bytes
-        let bytes = if neg_zero == 0.0 && neg_zero.is_sign_negative() {
-            0i32.to_le_bytes()
-        } else {
-            neg_zero.to_le_bytes()
-        };
-        assert_eq!(
-            spark_compatible_xxhash64(0i32.to_le_bytes(), seed),
-            spark_compatible_xxhash64(bytes, seed),
-        );
+    fn test_xxhash64_negative_zero_f32() {
+        use arrow::array::Float32Array;
+        let array: ArrayRef = Arc::new(Float32Array::from(vec![0.0f32, -0.0f32]));
+        let mut hashes = vec![DEFAULT_SEED; 2];
+        create_xxhash64_hashes(&[array], &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]);
+        assert_eq!(hashes[0], spark_compatible_xxhash64(0i32.to_le_bytes(), 42));
     }
 
     #[test]
-    fn test_xxhash64_f64() {
-        let seed = 42u64;
-        let neg_zero = -0.0f64;
-        let bytes = if neg_zero == 0.0 && neg_zero.is_sign_negative() {
-            0i64.to_le_bytes()
-        } else {
-            neg_zero.to_le_bytes()
-        };
-        assert_eq!(
-            spark_compatible_xxhash64(0i64.to_le_bytes(), seed),
-            spark_compatible_xxhash64(bytes, seed),
-        );
+    fn test_xxhash64_negative_zero_f64() {
+        use arrow::array::Float64Array;
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![0.0f64, -0.0f64]));
+        let mut hashes = vec![DEFAULT_SEED; 2];
+        create_xxhash64_hashes(&[array], &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]);
+        assert_eq!(hashes[0], spark_compatible_xxhash64(0i64.to_le_bytes(), 42));
     }
 
     #[test]
