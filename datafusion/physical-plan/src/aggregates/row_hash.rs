@@ -23,7 +23,10 @@ use std::vec;
 
 use super::AggregateExec;
 use super::order::GroupOrdering;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    DenseLookupHint, GroupByMetrics, GroupValues, new_group_values,
+    new_group_values_with_hint,
+};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
@@ -32,14 +35,15 @@ use crate::aggregates::{
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
-use crate::{PhysicalExpr, aggregates, metrics};
+use crate::{ExecutionPlanProperties, PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, resources_datafusion_err,
+    DataFusionError, Result, ScalarValue as DfScalarValue, Statistics,
+    assert_eq_or_internal_err, assert_or_internal_err, internal_err,
+    resources_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -56,6 +60,70 @@ use datafusion_common::utils::memory::get_record_batch_memory_size;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
+
+fn scalar_to_dense_i128(value: &DfScalarValue) -> Option<i128> {
+    match value {
+        DfScalarValue::Decimal32(Some(value), _, _)
+        | DfScalarValue::Int32(Some(value))
+        | DfScalarValue::Date32(Some(value))
+        | DfScalarValue::Time32Second(Some(value))
+        | DfScalarValue::Time32Millisecond(Some(value))
+        | DfScalarValue::IntervalYearMonth(Some(value)) => Some(*value as i128),
+        DfScalarValue::Decimal64(Some(value), _, _)
+        | DfScalarValue::Int64(Some(value))
+        | DfScalarValue::Date64(Some(value))
+        | DfScalarValue::Time64Microsecond(Some(value))
+        | DfScalarValue::Time64Nanosecond(Some(value))
+        | DfScalarValue::TimestampSecond(Some(value), _)
+        | DfScalarValue::TimestampMillisecond(Some(value), _)
+        | DfScalarValue::TimestampMicrosecond(Some(value), _)
+        | DfScalarValue::TimestampNanosecond(Some(value), _)
+        | DfScalarValue::DurationSecond(Some(value))
+        | DfScalarValue::DurationMillisecond(Some(value))
+        | DfScalarValue::DurationMicrosecond(Some(value))
+        | DfScalarValue::DurationNanosecond(Some(value)) => Some(*value as i128),
+        DfScalarValue::Decimal128(Some(value), _, _) => Some(*value),
+        DfScalarValue::Int8(Some(value)) => Some(*value as i128),
+        DfScalarValue::Int16(Some(value)) => Some(*value as i128),
+        DfScalarValue::UInt8(Some(value)) => Some(*value as i128),
+        DfScalarValue::UInt16(Some(value)) => Some(*value as i128),
+        DfScalarValue::UInt32(Some(value)) => Some(*value as i128),
+        DfScalarValue::UInt64(Some(value)) => Some(*value as i128),
+        _ => None,
+    }
+}
+
+fn dense_lookup_hint_from_stats(
+    group_by: &PhysicalGroupBy,
+    statistics: &Statistics,
+    num_row_divisor: usize,
+) -> Option<DenseLookupHint> {
+    if !group_by.is_single() || group_by.expr().len() != 1 {
+        return None;
+    }
+
+    let (expr, _) = &group_by.expr()[0];
+    let column = expr.downcast_ref::<Column>()?;
+    let column_statistics = statistics.column_statistics.get(column.index())?;
+    let min = scalar_to_dense_i128(column_statistics.min_value.get_value()?)?;
+    let max = scalar_to_dense_i128(column_statistics.max_value.get_value()?)?;
+    let hint = DenseLookupHint::try_new(min, max)?;
+    let rows = *statistics.num_rows.get_value()?;
+    let rows_per_partition = rows / num_row_divisor.max(1);
+
+    hint.has_minimum_estimated_fill(rows_per_partition)
+        .then_some(hint)
+}
+
+fn dense_lookup_hint_for_input(agg: &AggregateExec) -> Result<Option<DenseLookupHint>> {
+    let statistics = agg.input().partition_statistics(None)?;
+    let partition_count = agg.input().output_partitioning().partition_count();
+    Ok(dense_lookup_hint_from_stats(
+        &agg.group_by,
+        &statistics,
+        partition_count,
+    ))
+}
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -470,6 +538,7 @@ impl GroupedHashAggregateStream {
         let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let batch_size = context.session_config().batch_size();
+        let dense_lookup_hint = dense_lookup_hint_for_input(agg)?;
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
@@ -587,7 +656,8 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let group_values =
+            new_group_values_with_hint(group_schema, &group_ordering, dense_lookup_hint)?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
@@ -1361,10 +1431,41 @@ mod tests {
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ColumnStatistics;
+    use datafusion_common::stats::Precision;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
+
+    fn dense_lookup_test_stats(num_rows: usize, min: i32, max: i32) -> Statistics {
+        let mut column_statistics = ColumnStatistics::new_unknown();
+        column_statistics.min_value = Precision::Exact(DfScalarValue::Int32(Some(min)));
+        column_statistics.max_value = Precision::Exact(DfScalarValue::Int32(Some(max)));
+
+        Statistics {
+            num_rows: Precision::Exact(num_rows),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![column_statistics],
+        }
+    }
+
+    #[test]
+    fn dense_lookup_hint_uses_rows_per_partition_threshold() {
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            Arc::new(Column::new("group_col", 0)) as Arc<dyn PhysicalExpr>,
+            "group_col".to_string(),
+        )]);
+
+        let stats = dense_lookup_test_stats(4_000, 0, 2_000);
+        assert!(dense_lookup_hint_from_stats(&group_by, &stats, 10).is_none());
+
+        let stats = dense_lookup_test_stats(4_100, 0, 2_000);
+        assert!(dense_lookup_hint_from_stats(&group_by, &stats, 10).is_some());
+
+        let stats = dense_lookup_test_stats(1_000_000, 0, 1_000_000);
+        assert!(dense_lookup_hint_from_stats(&group_by, &stats, 1).is_none());
+    }
 
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {

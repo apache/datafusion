@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{
+    DENSE_LOOKUP_MAX_BYTES, DENSE_LOOKUP_MIN_FILL_DENOMINATOR,
+    DENSE_LOOKUP_MIN_FILL_NUMERATOR, DenseLookupHint, GroupValues,
+};
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
@@ -32,10 +35,7 @@ use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::sync::Arc;
 
-const DENSE_LOOKUP_MAX_BYTES: usize = 2 * 1024 * 1024;
 const DENSE_LOOKUP_FILL_EXEMPT_BYTES: usize = 8 * 1024;
-const DENSE_LOOKUP_MIN_FILL_NUMERATOR: usize = 1;
-const DENSE_LOOKUP_MIN_FILL_DENOMINATOR: usize = 5;
 const DENSE_EMPTY_GROUP: usize = usize::MAX;
 
 /// A trait to allow hashing of floating point numbers
@@ -147,19 +147,32 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     num_groups: usize,
     /// The random state used to generate hashes
     random_state: RandomState,
+    /// Static dense lookup range selected from execution-plan statistics
+    dense_lookup_hint: Option<DenseLookupHint>,
     /// Set once observed values are not suitable for dense lookup
     dense_lookup_disabled: bool,
 }
 
-impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
+impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T>
+where
+    T::Native: DenseRangeValue + HashValue,
+{
     pub fn new(data_type: DataType) -> Self {
+        Self::new_with_dense_lookup_hint(data_type, None)
+    }
+
+    pub(crate) fn new_with_dense_lookup_hint(
+        data_type: DataType,
+        dense_lookup_hint: Option<DenseLookupHint>,
+    ) -> Self {
         assert!(PrimitiveArray::<T>::is_compatible(&data_type));
         Self {
             data_type,
-            store: PrimitiveGroupStore::Hash(HashTable::with_capacity(128)),
+            store: Self::empty_store(dense_lookup_hint),
             num_groups: 0,
             null_group: None,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            dense_lookup_hint,
             dense_lookup_disabled: false,
         }
     }
@@ -169,6 +182,26 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T>
 where
     T::Native: DenseRangeValue + HashValue,
 {
+    fn empty_store(
+        dense_lookup_hint: Option<DenseLookupHint>,
+    ) -> PrimitiveGroupStore<T::Native> {
+        dense_lookup_hint.map_or_else(
+            || PrimitiveGroupStore::Hash(HashTable::with_capacity(128)),
+            |hint| {
+                PrimitiveGroupStore::Dense(DenseGroupValues {
+                    min: hint.min,
+                    group_ids: vec![DENSE_EMPTY_GROUP; hint.range_len],
+                    values: vec![],
+                    occupied_slots: 0,
+                })
+            },
+        )
+    }
+
+    fn dense_lookup_forced(&self) -> bool {
+        self.dense_lookup_hint.is_some() && !self.dense_lookup_disabled
+    }
+
     fn dense_offset(min: i128, key: T::Native) -> Option<usize> {
         key.to_dense_i128()?.checked_sub(min)?.try_into().ok()
     }
@@ -233,6 +266,7 @@ where
     fn try_expand_dense_for_values(
         dense: &mut DenseGroupValues<T::Native>,
         values: &PrimitiveArray<T>,
+        force_dense: bool,
     ) -> bool {
         let Some(current_max) = dense
             .min
@@ -262,10 +296,12 @@ where
             return false;
         };
 
-        if !Self::dense_can_have_minimum_fill(
-            dense.occupied_slots + non_null_rows,
-            new_range_len,
-        ) {
+        if !force_dense
+            && !Self::dense_can_have_minimum_fill(
+                dense.occupied_slots + non_null_rows,
+                new_range_len,
+            )
+        {
             return false;
         }
 
@@ -292,18 +328,18 @@ where
         values: &PrimitiveArray<T>,
         groups: &mut Vec<usize>,
     ) -> bool {
+        let force_dense = self.dense_lookup_forced();
         let PrimitiveGroupStore::Dense(dense) = &mut self.store else {
             return false;
         };
 
-        if !Self::dense_has_minimum_fill(dense) {
+        if !force_dense && !Self::dense_has_minimum_fill(dense) {
             return false;
         }
 
         groups.clear();
         let mut null_group = self.null_group;
         let mut num_groups = self.num_groups;
-        let mut mutated = false;
 
         for v in values {
             let group_id = match v {
@@ -314,7 +350,6 @@ where
                         num_groups += 1;
                         null_group = Some(group_id);
                         dense.values.push(T::default_value());
-                        mutated = true;
                         group_id
                     }
                 },
@@ -324,9 +359,7 @@ where
                     else {
                         self.null_group = null_group;
                         self.num_groups = num_groups;
-                        if mutated {
-                            self.dense_lookup_disabled = true;
-                        } else if Self::try_expand_dense_for_values(dense, values) {
+                        if Self::try_expand_dense_for_values(dense, values, force_dense) {
                             return self.intern_existing_dense(values, groups);
                         } else {
                             self.dense_lookup_disabled = true;
@@ -341,7 +374,6 @@ where
                         dense.group_ids[offset] = group_id;
                         dense.values.push(key);
                         dense.occupied_slots += 1;
-                        mutated = true;
                         group_id
                     } else {
                         group_id
@@ -353,7 +385,7 @@ where
 
         self.null_group = null_group;
         self.num_groups = num_groups;
-        if !Self::dense_has_minimum_fill(dense) {
+        if !force_dense && !Self::dense_has_minimum_fill(dense) {
             self.dense_lookup_disabled = true;
             groups.clear();
             return false;
@@ -625,6 +657,7 @@ where
                 };
                 self.num_groups = 0;
                 self.dense_lookup_disabled = false;
+                self.store = Self::empty_store(self.dense_lookup_hint);
 
                 build_primitive(values, self.null_group.take())
             }
@@ -678,7 +711,7 @@ where
                     None => None,
                 };
                 self.num_groups -= n;
-                if dense_below_minimum_fill {
+                if dense_below_minimum_fill && !self.dense_lookup_forced() {
                     self.dense_lookup_disabled = true;
                     self.convert_dense_to_hash();
                 }
@@ -693,14 +726,18 @@ where
         self.num_groups = 0;
         self.null_group = None;
         self.dense_lookup_disabled = false;
+        if self.dense_lookup_hint.is_some() {
+            self.store = Self::empty_store(self.dense_lookup_hint);
+            return;
+        }
+
         match &mut self.store {
             PrimitiveGroupStore::Hash(map) => {
                 map.clear();
                 map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
             }
             PrimitiveGroupStore::Dense(_) => {
-                self.store =
-                    PrimitiveGroupStore::Hash(HashTable::with_capacity(num_rows));
+                self.store = Self::empty_store(self.dense_lookup_hint);
             }
         }
     }
@@ -807,6 +844,24 @@ mod tests {
     }
 
     #[test]
+    fn primitive_dense_lookup_hint_keeps_sparse_range_dense() -> Result<()> {
+        let input = Arc::new(UInt64Array::from(vec![Some(0), Some(2_000)])) as ArrayRef;
+        let hint = DenseLookupHint::try_new(0, 2_000).unwrap();
+        let mut group_values =
+            GroupValuesPrimitive::<UInt64Type>::new_with_dense_lookup_hint(
+                DataType::UInt64,
+                Some(hint),
+            );
+        let mut groups = vec![];
+
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![0, 1]);
+        assert!(is_dense(&group_values));
+
+        Ok(())
+    }
+
+    #[test]
     fn primitive_dense_lookup_used_for_small_sparse_range() -> Result<()> {
         let input = Arc::new(UInt64Array::from(vec![Some(0), Some(999)])) as ArrayRef;
         let mut group_values = GroupValuesPrimitive::<UInt64Type>::new(DataType::UInt64);
@@ -895,6 +950,30 @@ mod tests {
         assert_eq!(output_values[1099], Some(1099));
         assert_eq!(group_values.len(), 1);
         assert!(!is_dense(&group_values));
+
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_dense_lookup_hint_stays_dense_after_sparse_emit() -> Result<()> {
+        let input = Arc::new(UInt64Array::from_iter_values(0..1101)) as ArrayRef;
+        let hint = DenseLookupHint::try_new(0, 1100).unwrap();
+        let mut group_values =
+            GroupValuesPrimitive::<UInt64Type>::new_with_dense_lookup_hint(
+                DataType::UInt64,
+                Some(hint),
+            );
+        let mut groups = vec![];
+
+        group_values.intern(&[input], &mut groups)?;
+        assert!(is_dense(&group_values));
+
+        group_values.emit(EmitTo::First(1100))?;
+        assert_eq!(group_values.len(), 1);
+        assert!(is_dense(&group_values));
+
+        group_values.clear_shrink(0);
+        assert!(is_dense(&group_values));
 
         Ok(())
     }

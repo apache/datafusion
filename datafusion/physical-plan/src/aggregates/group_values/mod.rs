@@ -25,6 +25,7 @@ use arrow::array::types::{
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
+use std::mem::size_of;
 
 use datafusion_expr::EmitTo;
 
@@ -50,6 +51,32 @@ mod metrics;
 mod null_builder;
 
 pub(crate) use metrics::GroupByMetrics;
+
+pub(crate) const DENSE_LOOKUP_MAX_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const DENSE_LOOKUP_MIN_FILL_NUMERATOR: usize = 1;
+pub(crate) const DENSE_LOOKUP_MIN_FILL_DENOMINATOR: usize = 5;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DenseLookupHint {
+    pub(crate) min: i128,
+    pub(crate) range_len: usize,
+}
+
+impl DenseLookupHint {
+    pub(crate) fn try_new(min: i128, max: i128) -> Option<Self> {
+        let range_len: usize = max.checked_sub(min)?.checked_add(1)?.try_into().ok()?;
+        let bytes = range_len.checked_mul(size_of::<usize>())?;
+        (bytes <= DENSE_LOOKUP_MAX_BYTES).then_some(Self { min, range_len })
+    }
+
+    pub(crate) fn has_minimum_estimated_fill(self, rows_per_partition: usize) -> bool {
+        let range_threshold = self.range_len * DENSE_LOOKUP_MIN_FILL_NUMERATOR;
+        match rows_per_partition.checked_mul(DENSE_LOOKUP_MIN_FILL_DENOMINATOR) {
+            Some(rows) => rows > range_threshold,
+            None => true,
+        }
+    }
+}
 
 /// Stores the group values during hash aggregation.
 ///
@@ -135,12 +162,28 @@ pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
+    new_group_values_with_hint(schema, group_ordering, None)
+}
+
+pub(crate) fn new_group_values_with_hint(
+    schema: SchemaRef,
+    group_ordering: &GroupOrdering,
+    dense_lookup_hint: Option<DenseLookupHint>,
+) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
         macro_rules! downcast_helper {
             ($t:ty, $d:ident) => {
-                return Ok(Box::new(GroupValuesPrimitive::<$t>::new($d.clone())))
+                return Ok(match dense_lookup_hint {
+                    Some(hint) => {
+                        Box::new(GroupValuesPrimitive::<$t>::new_with_dense_lookup_hint(
+                            $d.clone(),
+                            Some(hint),
+                        ))
+                    }
+                    None => Box::new(GroupValuesPrimitive::<$t>::new($d.clone())),
+                })
             };
         }
 
