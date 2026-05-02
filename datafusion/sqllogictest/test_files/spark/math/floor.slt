@@ -218,3 +218,76 @@ query RT
 SELECT floor(-56.7::DECIMAL(3,1)), arrow_typeof(floor(-56.7::DECIMAL(3,1)));
 ----
 -57 Decimal128(3, 0)
+
+# NaN and Infinity (Float64)
+# Matches Spark: (long)Math.floor(x) — NaN → 0, +Inf → Long.MAX_VALUE, -Inf → Long.MIN_VALUE
+query III
+SELECT floor('NaN'::DOUBLE), floor('Infinity'::DOUBLE), floor('-Infinity'::DOUBLE);
+----
+0 9223372036854775807 -9223372036854775808
+
+# NaN and Infinity (Float32) — same saturating behavior
+query III
+SELECT floor('NaN'::FLOAT), floor('Infinity'::FLOAT), floor('-Infinity'::FLOAT);
+----
+0 9223372036854775807 -9223372036854775808
+
+# NaN/Infinity in array form
+query I
+SELECT floor(a) FROM (VALUES ('NaN'::DOUBLE), ('Infinity'::DOUBLE), ('-Infinity'::DOUBLE), (NULL::DOUBLE)) AS t(a);
+----
+0
+9223372036854775807
+-9223372036854775808
+NULL
+
+####################
+## Boundary cases ##
+####################
+
+# Int16 boundaries (i16::MAX, i16::MIN) pass through as Int64
+query III
+SELECT floor(32767::SMALLINT), floor(-32768::SMALLINT), floor(NULL::SMALLINT);
+----
+32767 -32768 NULL
+
+# Int32 boundaries (i32::MAX, i32::MIN) pass through as Int64
+query III
+SELECT floor(2147483647::INT), floor(-2147483648::INT), floor(NULL::INT);
+----
+2147483647 -2147483648 NULL
+
+# Float values exceeding Int64 range saturate at Int64 boundaries
+query II
+SELECT floor(1e20::DOUBLE), floor(-1e20::DOUBLE);
+----
+9223372036854775807 -9223372036854775808
+
+query II
+SELECT floor(1e20::FLOAT), floor(-1e20::FLOAT);
+----
+9223372036854775807 -9223372036854775808
+
+# Negative zero floors to 0 (not -1) since -0.0 == 0.0
+query II
+SELECT floor(-0.0::DOUBLE), floor(-0.0::FLOAT);
+----
+0 0
+
+# Tiny negative float still rounds toward negative infinity → -1
+query I
+SELECT floor(-1e-300::DOUBLE);
+----
+-1
+
+# Decimal precision lower-bound clamp: DECIMAL(38, 38) → Decimal128(1, 0)
+query RT
+SELECT floor(0.5::DECIMAL(38,38)), arrow_typeof(floor(0.5::DECIMAL(38,38)));
+----
+0 Decimal128(1, 0)
+
+# Decimal value at the boundary between two integers (just under .5 vs just over)
+query RR
+SELECT floor(0.49::DECIMAL(3,2)), floor(-0.49::DECIMAL(3,2));
+----
+0 -1

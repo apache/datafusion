@@ -112,7 +112,7 @@ macro_rules! apply_int64 {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v.map($f))))
             }
             other => internal_err!(
-                "floor: expected {} but got {:?}",
+                "floor: data type mismatch — expected scalar of type {} but got {:?}",
                 stringify!($scalar_variant),
                 other.data_type()
             ),
@@ -172,7 +172,7 @@ fn spark_floor(
                 ColumnarValue::Scalar(ScalarValue::Decimal128(v, _, _)) => {
                     let DataType::Decimal128(new_p, new_s) = return_type else {
                         return internal_err!(
-                            "floor: expected Decimal128 return type but got {:?}",
+                            "floor: data type mismatch — expected Decimal128 return type but got {:?}",
                             return_type
                         );
                     };
@@ -183,7 +183,7 @@ fn spark_floor(
                     )))
                 }
                 other => internal_err!(
-                    "floor: expected Decimal128 scalar but got {:?}",
+                    "floor: data type mismatch — expected Decimal128 scalar but got {:?}",
                     other.data_type()
                 ),
             }
