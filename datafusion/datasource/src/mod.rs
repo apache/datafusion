@@ -67,9 +67,17 @@ pub use table_schema::TableSchema;
 #[expect(deprecated)]
 pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
+use std::any::Any;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
+
+/// User-defined per-file extension data, keyed by concrete Rust type.
+///
+/// Re-exported from [`datafusion_common::extensions::Extensions`]; the same
+/// type backs `SessionConfig::extensions`, `ExtendedStatistics::extensions`,
+/// and other extension fields throughout DataFusion.
+pub type FileExtensions = datafusion_common::extensions::Extensions;
 
 /// Stream of files get listed from object store
 #[deprecated(
@@ -148,8 +156,10 @@ pub struct PartitionedFile {
     /// underlying format (for example, Parquet `sorting_columns`), but it may also be set
     /// explicitly via [`Self::with_ordering`].
     pub ordering: Option<LexOrdering>,
-    /// An optional field for user defined per object metadata
-    pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// User-defined per-file metadata, keyed by Rust type. Multiple
+    /// independent components can each attach their own data here without
+    /// conflict — see [`FileExtensions`].
+    pub extensions: FileExtensions,
     /// The estimated size of the parquet metadata, in bytes
     pub metadata_size_hint: Option<usize>,
 }
@@ -169,7 +179,7 @@ impl PartitionedFile {
             range: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
         }
     }
@@ -182,7 +192,7 @@ impl PartitionedFile {
             range: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
         }
     }
@@ -201,7 +211,7 @@ impl PartitionedFile {
             range: Some(FileRange { start, end }),
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
         }
         .with_range(start, end)
@@ -257,15 +267,28 @@ impl PartitionedFile {
         self
     }
 
-    /// Update the user defined extensions for this file.
+    /// Attach a typed user-defined extension to this file. Multiple
+    /// independent extensions can be attached, each keyed by its concrete
+    /// Rust type. Inserting a value of a type that already has an extension
+    /// replaces the previous one.
     ///
-    /// This can be used to pass reader specific information.
-    pub fn with_extensions(
-        mut self,
-        extensions: Arc<dyn std::any::Any + Send + Sync>,
-    ) -> Self {
-        self.extensions = Some(extensions);
+    /// This can be used to pass reader-specific information (e.g. a
+    /// `ParquetAccessPlan`, or a custom index entry).
+    pub fn with_extension<T: Any + Send + Sync>(mut self, value: T) -> Self {
+        self.extensions.insert(value);
         self
+    }
+
+    /// Like [`Self::with_extension`] but accepts an already-`Arc`ed value,
+    /// avoiding an extra allocation.
+    pub fn with_extension_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
+        self.extensions.insert_arc(value);
+        self
+    }
+
+    /// Borrow the extension of type `T`, if one is attached.
+    pub fn extension<T: Any + Send + Sync>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
     }
 
     /// Update the statistics for this file.
@@ -338,7 +361,7 @@ impl From<ObjectMeta> for PartitionedFile {
             range: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
         }
     }
@@ -535,7 +558,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                 }],
             })),
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
         };
         files.push(file);

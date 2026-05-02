@@ -71,7 +71,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         .into_iter()
         .map(|meta| {
             PartitionedFile::new_from_meta(meta)
-                .with_extensions(Arc::new(String::from(EXPECTED_USER_DEFINED_METADATA)))
+                .with_extension(String::from(EXPECTED_USER_DEFINED_METADATA))
         })
         .collect();
 
@@ -119,12 +119,8 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
         let metadata = partitioned_file
-            .extensions
-            .as_ref()
+            .extension::<String>()
             .expect("has user defined metadata");
-        let metadata = metadata
-            .downcast_ref::<String>()
-            .expect("has string metadata");
 
         assert_eq!(EXPECTED_USER_DEFINED_METADATA, &metadata[..]);
 

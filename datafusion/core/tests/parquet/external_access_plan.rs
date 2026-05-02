@@ -349,7 +349,7 @@ impl TestFull {
 
         // add the access plan, if any, as an extension
         if let Some(access_plan) = access_plan {
-            partitioned_file = partitioned_file.with_extensions(Arc::new(access_plan));
+            partitioned_file = partitioned_file.with_extension(access_plan);
         }
 
         // Create a DataSourceExec to read the file

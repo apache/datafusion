@@ -230,7 +230,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// access_plan.skip(4);
 /// // provide the plan as extension to the FileScanConfig
 /// let partitioned_file = PartitionedFile::new("my_file.parquet", 1234)
-///   .with_extensions(Arc::new(access_plan));
+///   .with_extension(access_plan);
 /// // create a FileScanConfig to scan this file
 /// let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), Arc::new(ParquetSource::new(schema())))
 ///     .with_file(partitioned_file).build();
