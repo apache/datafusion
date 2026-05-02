@@ -3760,7 +3760,7 @@ mod tests {
                 column_metadata_as_hex: None,
             },
         );
-        let err = FileEncryptionProperties::try_from(enc)
+        let err = FileEncryptionProperties::try_from(enc.clone())
             .unwrap_err()
             .to_string();
         assert!(
@@ -3776,7 +3776,7 @@ mod tests {
                 column_metadata_as_hex: Some("zz".to_string()),
             },
         );
-        let err = FileEncryptionProperties::try_from(enc)
+        let err = FileEncryptionProperties::try_from(enc.clone())
             .unwrap_err()
             .to_string();
         assert!(err.contains("Unable to decode hex column metadata for column col1"));
@@ -3784,7 +3784,7 @@ mod tests {
 
         // Encryption: invalid AAD prefix hex
         enc.aad_prefix_as_hex = "zz".to_string();
-        let err = FileEncryptionProperties::try_from(enc)
+        let err = FileEncryptionProperties::try_from(enc.clone())
             .unwrap_err()
             .to_string();
         assert!(err.contains("Unable to decode hex AAD prefix"));
@@ -3814,7 +3814,7 @@ mod tests {
                 column_key_as_hex: "bad".to_string(),
             },
         );
-        let err = FileDecryptionProperties::try_from(dec)
+        let err = FileDecryptionProperties::try_from(dec.clone())
             .unwrap_err()
             .to_string();
         assert!(err.contains("Could not decode hex column key"));
@@ -3823,7 +3823,7 @@ mod tests {
 
         // Decryption: invalid footer key hex
         dec.footer_key_as_hex = "bad".to_string();
-        let err = FileDecryptionProperties::try_from(dec)
+        let err = FileDecryptionProperties::try_from(dec.clone())
             .unwrap_err()
             .to_string();
         assert!(err.contains("Could not decode hex footer key"));
@@ -3831,7 +3831,7 @@ mod tests {
 
         // Decryption: invalid AAD prefix hex
         dec.aad_prefix_as_hex = "zz".to_string();
-        let err = FileDecryptionProperties::try_from(dec)
+        let err = FileDecryptionProperties::try_from(dec.clone())
             .unwrap_err()
             .to_string();
         assert!(err.contains("Could not decode hex AAD prefix"));
