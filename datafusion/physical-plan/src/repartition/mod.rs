@@ -322,11 +322,11 @@ impl RepartitionExecState {
 
         let mut channels = HashMap::with_capacity(txs.len());
         for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
-            let reservation = Arc::new(Mutex::new(
+            let reservation = Arc::new(
                 MemoryConsumer::new(format!("{name}[{partition}]"))
                     .with_can_spill(true)
                     .register(context.memory_pool()),
-            ));
+            );
 
             // Create spill channels based on mode:
             // - preserve_order: one spill channel per (input, output) pair for proper FIFO ordering
@@ -424,7 +424,7 @@ pub struct BatchPartitioner {
 enum BatchPartitionerState {
     Hash {
         exprs: Vec<Arc<dyn PhysicalExpr>>,
-        num_partitions: usize,
+        partition_reducer: StrengthReducedU64,
         hash_buffer: Vec<u64>,
         indices: Vec<Vec<u32>>,
     },
@@ -438,6 +438,78 @@ enum BatchPartitionerState {
 /// executions and runs.
 pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
+/// Computes `value % divisor` without division in the hot loop when `divisor`
+/// is fixed for many values.
+///
+/// Hash repartitioning computes a remainder for every row. Integer division is
+/// relatively expensive, so this precomputes the strength-reduced form of the
+/// divisor: powers of two use a bit mask, and other divisors use a reciprocal
+/// multiply to recover the quotient and therefore the remainder. This is the
+/// same invariant-divisor optimization compilers use for `%` by a constant.
+#[derive(Debug, Clone, Copy)]
+enum StrengthReducedU64 {
+    PowerOfTwo { mask: u64 },
+    Reciprocal { divisor: u64, reciprocal: u128 },
+}
+
+impl StrengthReducedU64 {
+    fn new(divisor: u64) -> Self {
+        debug_assert!(divisor > 0);
+
+        if divisor.is_power_of_two() {
+            Self::PowerOfTwo { mask: divisor - 1 }
+        } else {
+            Self::Reciprocal {
+                divisor,
+                // ceil(2^128 / divisor), computed without representing 2^128
+                reciprocal: u128::MAX / u128::from(divisor) + 1,
+            }
+        }
+    }
+
+    fn partition_indices(self, hash_buffer: &[u64], indices: &mut [Vec<u32>]) {
+        match self {
+            Self::PowerOfTwo { mask } => {
+                for (index, hash) in hash_buffer.iter().enumerate() {
+                    indices[(*hash & mask) as usize].push(index as u32);
+                }
+            }
+            Self::Reciprocal {
+                divisor,
+                reciprocal,
+            } => {
+                for (index, hash) in hash_buffer.iter().enumerate() {
+                    let quotient = Self::quotient(*hash, reciprocal);
+                    let partition = *hash - quotient * divisor;
+                    indices[partition as usize].push(index as u32);
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn remainder(self, value: u64) -> u64 {
+        match self {
+            Self::PowerOfTwo { mask } => value & mask,
+            Self::Reciprocal {
+                divisor,
+                reciprocal,
+            } => value - Self::quotient(value, reciprocal) * divisor,
+        }
+    }
+
+    #[inline]
+    fn quotient(value: u64, reciprocal: u128) -> u64 {
+        let reciprocal_low = reciprocal as u64;
+        let reciprocal_high = (reciprocal >> 64) as u64;
+        let low_product = u128::from(value) * u128::from(reciprocal_low);
+        let high_product = u128::from(value) * u128::from(reciprocal_high);
+        let carry = ((high_product & u128::from(u64::MAX)) + (low_product >> 64)) >> 64;
+
+        ((high_product >> 64) + carry) as u64
+    }
+}
+
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
     ///
@@ -446,22 +518,29 @@ impl BatchPartitioner {
     /// - `num_partitions`: Total number of output partitions.
     /// - `timer`: Metric used to record time spent during repartitioning.
     ///
-    /// # Notes
-    /// This constructor cannot fail and performs no validation.
+    /// The partition count is fixed for the lifetime of the partitioner, so this
+    /// precomputes a strength-reduced reducer for `hash % num_partitions`.
+    ///
+    /// # Errors
+    /// Returns an error if `num_partitions` is zero.
     pub fn new_hash_partitioner(
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
         timer: metrics::Time,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        if num_partitions == 0 {
+            return internal_err!("Hash repartition requires at least one partition");
+        }
+
+        Ok(Self {
             state: BatchPartitionerState::Hash {
                 exprs,
-                num_partitions,
+                partition_reducer: StrengthReducedU64::new(num_partitions as u64),
                 hash_buffer: vec![],
                 indices: vec![vec![]; num_partitions],
             },
             timer,
-        }
+        })
     }
 
     /// Create a new [`BatchPartitioner`] for round-robin repartitioning.
@@ -501,7 +580,8 @@ impl BatchPartitioner {
     /// - `num_input_partitions`: Total number of input partitions.
     ///
     /// # Errors
-    /// Returns an error if the provided partitioning scheme is not supported.
+    /// Returns an error if the provided partitioning scheme is not supported,
+    /// or if hash partitioning is requested with zero output partitions.
     pub fn try_new(
         partitioning: Partitioning,
         timer: metrics::Time,
@@ -510,7 +590,7 @@ impl BatchPartitioner {
     ) -> Result<Self> {
         match partitioning {
             Partitioning::Hash(exprs, num_partitions) => {
-                Ok(Self::new_hash_partitioner(exprs, num_partitions, timer))
+                Self::new_hash_partitioner(exprs, num_partitions, timer)
             }
             Partitioning::RoundRobinBatch(num_partitions) => {
                 Ok(Self::new_round_robin_partitioner(
@@ -575,7 +655,7 @@ impl BatchPartitioner {
                 }
                 BatchPartitionerState::Hash {
                     exprs,
-                    num_partitions: partitions,
+                    partition_reducer,
                     hash_buffer,
                     indices,
                 } => {
@@ -596,9 +676,7 @@ impl BatchPartitioner {
 
                     indices.iter_mut().for_each(|v| v.clear());
 
-                    for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize].push(index as u32);
-                    }
+                    partition_reducer.partition_indices(hash_buffer, indices);
 
                     // Finished building index-arrays for output partitions
                     timer.done();
@@ -653,9 +731,9 @@ impl BatchPartitioner {
 
     // return the number of output partitions
     fn num_partitions(&self) -> usize {
-        match self.state {
-            BatchPartitionerState::RoundRobin { num_partitions, .. } => num_partitions,
-            BatchPartitionerState::Hash { num_partitions, .. } => num_partitions,
+        match &self.state {
+            BatchPartitionerState::RoundRobin { num_partitions, .. } => *num_partitions,
+            BatchPartitionerState::Hash { indices, .. } => indices.len(),
         }
     }
 }
@@ -1359,7 +1437,7 @@ impl RepartitionExec {
                     exprs.clone(),
                     *num_partitions,
                     metrics.repartition_time.clone(),
-                )
+                )?
             }
             Partitioning::RoundRobinBatch(num_partitions) => {
                 BatchPartitioner::new_round_robin_partitioner(
@@ -1401,7 +1479,7 @@ impl RepartitionExec {
                 // if there is still a receiver, send to it
                 if let Some(channel) = output_channels.get_mut(&partition) {
                     let (batch_to_send, is_memory_batch) =
-                        match channel.reservation.lock().try_grow(size) {
+                        match channel.reservation.try_grow(size) {
                             Ok(_) => {
                                 // Memory available - send in-memory batch
                                 (RepartitionBatch::Memory(batch), true)
@@ -1419,7 +1497,7 @@ impl RepartitionExec {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         // Only shrink memory if it was a memory batch
                         if is_memory_batch {
-                            channel.reservation.lock().shrink(size);
+                            channel.reservation.shrink(size);
                         }
                         output_channels.remove(&partition);
                     }
@@ -1638,9 +1716,7 @@ impl PerPartitionStream {
                         Some(Some(v)) => match v {
                             Ok(RepartitionBatch::Memory(batch)) => {
                                 // Release memory and return batch
-                                self.reservation
-                                    .lock()
-                                    .shrink(batch.get_array_memory_size());
+                                self.reservation.shrink(batch.get_array_memory_size());
                                 return Poll::Ready(Some(Ok(batch)));
                             }
                             Ok(RepartitionBatch::Spilled) => {
@@ -1784,6 +1860,98 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use insta::assert_snapshot;
+
+    #[test]
+    fn strength_reduced_u64_remainder_matches_modulo() {
+        let divisors = [
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            10,
+            16,
+            31,
+            32,
+            63,
+            64,
+            65,
+            97,
+            u64::from(u32::MAX),
+            u64::from(u32::MAX) + 1,
+            1_u64 << 32,
+            (1_u64 << 63) - 1,
+            1_u64 << 63,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+        let values = [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            31,
+            32,
+            33,
+            63,
+            64,
+            65,
+            u64::from(u32::MAX) - 1,
+            u64::from(u32::MAX),
+            u64::from(u32::MAX) + 1,
+            (1_u64 << 32) - 1,
+            1_u64 << 32,
+            (1_u64 << 32) + 1,
+            (1_u64 << 63) - 1,
+            1_u64 << 63,
+            (1_u64 << 63) + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+
+        for divisor in divisors {
+            let reducer = StrengthReducedU64::new(divisor);
+            for value in values {
+                assert_eq!(
+                    reducer.remainder(value),
+                    value % divisor,
+                    "value={value} divisor={divisor}"
+                );
+            }
+
+            let mut value = 0x1234_5678_9abc_def0 ^ divisor;
+            for _ in 0..10_000 {
+                value = value
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                assert_eq!(
+                    reducer.remainder(value),
+                    value % divisor,
+                    "value={value} divisor={divisor}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hash_partitioner_requires_nonzero_partitions() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let timer = MetricBuilder::new(&metrics).subset_time("test", 0);
+
+        let err = BatchPartitioner::new_hash_partitioner(vec![], 0, timer)
+            .err()
+            .expect("zero hash partitions should fail")
+            .to_string();
+
+        assert!(
+            err.contains("Hash repartition requires at least one partition"),
+            "actual: {err}"
+        );
+    }
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {

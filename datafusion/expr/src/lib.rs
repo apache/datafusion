@@ -37,6 +37,7 @@
 
 extern crate core;
 
+mod higher_order_function;
 mod literal;
 mod operation;
 mod partition_evaluator;
@@ -111,6 +112,11 @@ pub use expr_schema::ExprSchemable;
 pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
+};
+pub use higher_order_function::{
+    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderTypeSignature, HigherOrderUDF, LambdaArgument, LambdaParametersProgress,
+    ValueOrLambda,
 };
 pub use literal::{
     Literal, TimestampLiteral, lit, lit_timestamp_nano, lit_with_metadata,

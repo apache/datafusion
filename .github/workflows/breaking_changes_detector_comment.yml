@@ -1,0 +1,132 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Companion to `breaking_changes_detector.yml`. Posts the sticky PR comment.
+#
+# Why this workflow exists:
+#   "The GITHUB_TOKEN has read-only permissions in pull requests from forked
+#    repositories."
+#     https://docs.github.com/en/actions/reference/events-that-trigger-workflows#pull_request
+# That is why the upstream `pull_request` workflow cannot post the comment
+# itself when the PR comes from a fork.
+#
+# Why not `pull_request_target`? ASF infra policy forbids it:
+#   "You MUST NOT use `pull_request_target` as a trigger on ANY action that
+#    exports ANY confidential credentials or tokens such as GITHUB_TOKEN or
+#    NPM_TOKEN."
+#     https://infra.apache.org/github-actions-policy.html
+# `workflow_run` is the supported alternative: it runs in the base
+# repository's context regardless of where the upstream run was triggered
+# from, so the GITHUB_TOKEN here can be granted `pull-requests: write`. See:
+#   https://docs.github.com/en/actions/reference/events-that-trigger-workflows#workflow_run
+#
+# Security note: this workflow MUST NOT check out or execute any code from
+# the PR. The artifact's contents originate from a workflow run that may
+# have compiled fork-controlled code, so PR_NUMBER and CHECK_RESULT are
+# validated against strict patterns before being passed to any action.
+
+name: "Detect breaking changes - Comment"
+
+on:
+  workflow_run:
+    workflows: ["Detect breaking changes"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  comment-on-pr:
+    name: Comment on pull request
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    # Scoped to the minimum needed to upsert/delete the sticky comment.
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Download semver-check artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: semver-check-result
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ./semver-artifact
+
+      - name: Read and validate artifact
+        id: read
+        run: |
+          set -euo pipefail
+          # Validate every field: the artifact comes from a workflow run
+          # that compiled fork-controlled code, so its contents are untrusted.
+          PR_NUMBER=$(cat ./semver-artifact/pr_number)
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "Invalid PR number: $PR_NUMBER" >&2
+            exit 1
+          fi
+          CHECK_RESULT=$(cat ./semver-artifact/result)
+          if [[ "$CHECK_RESULT" != "success" && "$CHECK_RESULT" != "failure" ]]; then
+            echo "Invalid check result: $CHECK_RESULT" >&2
+            exit 1
+          fi
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "result=$CHECK_RESULT" >> "$GITHUB_OUTPUT"
+
+          # Multi-line output: random delimiter so a malicious log line can't
+          # close the heredoc and inject extra output keys. See:
+          #   https://docs.github.com/en/actions/reference/workflow-commands-for-github-actions#multiline-strings
+          DELIM="EOF_$(openssl rand -hex 16)"
+          {
+            echo "logs<<${DELIM}"
+            cat ./semver-artifact/logs
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The marker `<!-- semver-check-comment -->` is what makes the comment
+      # "sticky": maintain-one-comment uses it to find and replace (or
+      # delete) the existing comment instead of stacking new ones.
+      - name: Upsert sticky comment
+        if: steps.read.outputs.result != 'success'
+        uses: actions-cool/maintain-one-comment@909842216bc8e8658364c572ec52100f4c2cc50a  # v3.3.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          number: ${{ steps.read.outputs.pr_number }}
+          body-include: '<!-- semver-check-comment -->'
+          body: |
+            <!-- semver-check-comment -->
+            Thank you for opening this pull request!
+
+            Reviewer note: [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported the current version number is not SemVer-compatible with the changes in this pull request (compared against the base branch).
+
+            <details>
+            <summary>Details</summary>
+
+            ```
+            ${{ steps.read.outputs.logs }}
+            ```
+
+            </details>
+
+      - name: Delete sticky comment
+        if: steps.read.outputs.result == 'success'
+        uses: actions-cool/maintain-one-comment@909842216bc8e8658364c572ec52100f4c2cc50a  # v3.3.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          number: ${{ steps.read.outputs.pr_number }}
+          body-include: '<!-- semver-check-comment -->'
+          delete: true

@@ -347,7 +347,7 @@ fn general_replace<O: OffsetSizeTrait>(
         let mut counter = 0;
 
         // All elements are false, no need to replace, just copy original data
-        if eq_array.false_count() == eq_array.len() {
+        if !eq_array.has_true() {
             mutable.extend(
                 original_idx.to_usize().unwrap(),
                 start.to_usize().unwrap(),
