@@ -16,9 +16,12 @@
 // under the License.
 
 use arrow::array::StructArray;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::utils::struct_inner_fields_from;
 use datafusion_common::{Result, exec_err, internal_err};
-use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -114,6 +117,25 @@ impl ScalarUDFImpl for StructFunc {
         Ok(DataType::Struct(fields))
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.is_empty() {
+            return exec_err!("struct requires at least one argument, got 0 instead");
+        }
+        // Preserve each input field's metadata on the corresponding struct
+        // member field so Arrow extension types survive `struct(...)` calls.
+        let fields = struct_inner_fields_from(
+            args.arg_fields
+                .iter()
+                .enumerate()
+                .map(|(pos, f)| (format!("c{pos}"), f.as_ref())),
+        );
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Struct(fields),
+            true,
+        )))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let DataType::Struct(fields) = args.return_type() else {
             return internal_err!("incorrect struct return type");
@@ -135,5 +157,44 @@ impl ScalarUDFImpl for StructFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Regression test for #21982: `struct(...)` must propagate each input
+    /// field's metadata onto the corresponding member of the output struct.
+    #[test]
+    fn struct_preserves_member_metadata() -> Result<()> {
+        let with_meta = |k: &str, v: &str, dt: DataType| -> FieldRef {
+            let metadata = HashMap::from([(k.to_string(), v.to_string())]);
+            Arc::new(Field::new("c", dt, true).with_metadata(metadata))
+        };
+        let a = with_meta("ARROW:extension:name", "arrow.uuid", DataType::Int64);
+        let b = with_meta("ARROW:extension:name", "arrow.json", DataType::Utf8);
+        let arg_fields = vec![a, b];
+        let scalar_args: Vec<Option<&datafusion_common::ScalarValue>> = vec![None, None];
+
+        let rf = StructFunc::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_args,
+        })?;
+        let DataType::Struct(fields) = rf.data_type() else {
+            panic!("expected Struct return type");
+        };
+        assert_eq!(fields[0].name(), "c0");
+        assert_eq!(
+            fields[0].metadata().get("ARROW:extension:name"),
+            Some(&"arrow.uuid".to_string())
+        );
+        assert_eq!(fields[1].name(), "c1");
+        assert_eq!(
+            fields[1].metadata().get("ARROW:extension:name"),
+            Some(&"arrow.json".to_string())
+        );
+        Ok(())
     }
 }

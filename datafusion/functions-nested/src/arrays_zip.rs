@@ -24,14 +24,15 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
+use datafusion_common::utils::struct_inner_fields_from;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -139,8 +140,45 @@ impl ScalarUDFImpl for ArraysZip {
         ))))
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.is_empty() {
+            return exec_err!("arrays_zip requires at least one argument");
+        }
+
+        // For each input list-typed argument, take its element field
+        // (preserving metadata). For Null-typed inputs, fall back to a
+        // metadata-less Null field.
+        let mut zipped: Vec<(String, Field)> = Vec::with_capacity(args.arg_fields.len());
+        for (i, arg_field) in args.arg_fields.iter().enumerate() {
+            let element_field: Field = match arg_field.data_type() {
+                List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                    field.as_ref().clone()
+                }
+                Null => Field::new(format!("{}", i + 1), Null, true),
+                dt => {
+                    return exec_err!("arrays_zip expects array arguments, got {dt}");
+                }
+            };
+            zipped.push((format!("{}", i + 1), element_field));
+        }
+
+        let struct_fields =
+            struct_inner_fields_from(zipped.iter().map(|(name, f)| (name.clone(), f)));
+        let struct_dt = DataType::Struct(struct_fields);
+        let inner = Arc::new(Field::new(Field::LIST_FIELD_DEFAULT_NAME, struct_dt, true));
+        Ok(Arc::new(Field::new(self.name(), List(inner), true)))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(arrays_zip_inner)(&args.args)
+        let inner_field = match args.return_field.data_type() {
+            List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                Some(Arc::clone(field))
+            }
+            _ => None,
+        };
+        make_scalar_function(move |arrays: &[ArrayRef]| {
+            arrays_zip_inner_with_field(arrays, inner_field.clone())
+        })(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -158,7 +196,10 @@ impl ScalarUDFImpl for ArraysZip {
 /// has one field per input array. If arrays within a row have different
 /// lengths, shorter arrays are padded with NULLs.
 /// Supports List, LargeList, and Null input types.
-fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn arrays_zip_inner_with_field(
+    args: &[ArrayRef],
+    inner_field: Option<FieldRef>,
+) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("arrays_zip requires at least one argument");
     }
@@ -223,12 +264,17 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|v| v.as_ref().map(|view| view.values.to_data()))
         .collect();
 
-    let struct_fields: Fields = element_types
-        .iter()
-        .enumerate()
-        .map(|(i, dt)| Field::new(format!("{}", i + 1), dt.clone(), true))
-        .collect::<Vec<_>>()
-        .into();
+    // Prefer the planning-time struct fields (which preserve input metadata)
+    // when available; fall back to building bare fields from element types.
+    let struct_fields: Fields = match inner_field.as_ref().map(|f| f.data_type()) {
+        Some(DataType::Struct(fields)) => fields.clone(),
+        _ => element_types
+            .iter()
+            .enumerate()
+            .map(|(i, dt)| Field::new(format!("{}", i + 1), dt.clone(), true))
+            .collect::<Vec<_>>()
+            .into(),
+    };
 
     // Create a MutableArrayData builder per column. For None (Null-typed)
     // args we only need extend_nulls, so we track them separately.
@@ -315,15 +361,60 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let null_buffer = null_builder.finish();
 
-    let result = ListArray::try_new(
+    let list_inner = inner_field.unwrap_or_else(|| {
         Arc::new(Field::new_list_field(
             struct_array.data_type().clone(),
             true,
-        )),
+        ))
+    });
+    let result = ListArray::try_new(
+        list_inner,
         OffsetBuffer::new(offsets.into()),
         Arc::new(struct_array),
         null_buffer,
     )?;
 
     Ok(Arc::new(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Regression test for #21982: `arrays_zip` must propagate each input
+    /// list's element-field metadata onto the corresponding struct member.
+    #[test]
+    fn arrays_zip_preserves_struct_member_metadata() -> Result<()> {
+        let with_meta = |k: &str, v: &str, dt: DataType| -> FieldRef {
+            let metadata = HashMap::from([(k.to_string(), v.to_string())]);
+            Arc::new(Field::new("e", dt, true).with_metadata(metadata))
+        };
+        let a_inner = with_meta("ARROW:extension:name", "arrow.uuid", DataType::Int64);
+        let b_inner = with_meta("ARROW:extension:name", "arrow.json", DataType::Utf8);
+        let a: FieldRef = Arc::new(Field::new("a", List(Arc::clone(&a_inner)), true));
+        let b: FieldRef = Arc::new(Field::new("b", List(Arc::clone(&b_inner)), true));
+        let arg_fields = vec![a, b];
+        let scalar_args: Vec<Option<&datafusion_common::ScalarValue>> = vec![None, None];
+
+        let rf = ArraysZip::default().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_args,
+        })?;
+        let List(list_inner) = rf.data_type() else {
+            panic!("expected List<Struct<...>>");
+        };
+        let DataType::Struct(fields) = list_inner.data_type() else {
+            panic!("expected struct inner");
+        };
+        assert_eq!(
+            fields[0].metadata().get("ARROW:extension:name"),
+            Some(&"arrow.uuid".to_string())
+        );
+        assert_eq!(
+            fields[1].metadata().get("ARROW:extension:name"),
+            Some(&"arrow.json".to_string())
+        );
+        Ok(())
+    }
 }

@@ -40,13 +40,13 @@ use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{
-    ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
+    ArrowNativeType, DataType, Field, FieldRef, Fields, Int32Type, Int64Type, SchemaRef,
 };
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, min};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::iter::repeat_n;
 use std::num::NonZero;
 use std::ops::Range;
@@ -425,6 +425,8 @@ pub struct SingleRowListArrayBuilder {
     /// Specify the field name for the resulting array. Defaults to value used in
     /// [`Field::new_list_field`]
     field_name: Option<String>,
+    /// Optional Arrow field metadata to attach to the resulting list's inner field.
+    field_metadata: Option<HashMap<String, String>>,
 }
 
 impl SingleRowListArrayBuilder {
@@ -434,6 +436,7 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable: true,
             field_name: None,
+            field_metadata: None,
         }
     }
 
@@ -449,10 +452,17 @@ impl SingleRowListArrayBuilder {
         self
     }
 
-    /// Copies field name and nullable from the specified field
-    pub fn with_field(self, field: &Field) -> Self {
-        self.with_field_name(Some(field.name().to_owned()))
-            .with_nullable(field.is_nullable())
+    /// Copies field name, nullable, and metadata from the specified field.
+    ///
+    /// Propagating metadata is required for Arrow extension types
+    /// (`ARROW:extension:name` / `ARROW:extension:metadata`) to round-trip
+    /// through SQL list constructors (e.g. `make_array`, `array_agg`).
+    pub fn with_field(mut self, field: &Field) -> Self {
+        self.field_name = Some(field.name().to_owned());
+        self.nullable = field.is_nullable();
+        let metadata = field.metadata();
+        self.field_metadata = (!metadata.is_empty()).then(|| metadata.clone());
+        self
     }
 
     /// Build a single element [`ListArray`]
@@ -524,14 +534,64 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable,
             field_name,
+            field_metadata,
         } = self;
         let data_type = arr.data_type().to_owned();
-        let field = match field_name {
+        let mut field = match field_name {
             Some(name) => Field::new(name, data_type, nullable),
             None => Field::new_list_field(data_type, nullable),
         };
+        if let Some(metadata) = field_metadata {
+            field = field.with_metadata(metadata);
+        }
         (Arc::new(field), arr)
     }
+}
+
+/// Build the inner field for a list-of-`inner` (`List`/`LargeList`/
+/// `FixedSizeList`/`ListView`).
+///
+/// The returned field uses [`Field::LIST_FIELD_DEFAULT_NAME`] as the name,
+/// preserves `inner`'s data type and metadata, and is always nullable.
+///
+/// Preserving metadata is what lets Arrow extension types
+/// (`ARROW:extension:name` / `ARROW:extension:metadata`) round-trip through
+/// SQL list constructors (e.g. `make_array`, `array_agg`, `repeat`).
+pub fn list_inner_field_from(inner: &Field) -> FieldRef {
+    let mut field = Field::new(
+        Field::LIST_FIELD_DEFAULT_NAME,
+        inner.data_type().clone(),
+        true,
+    );
+    let metadata = inner.metadata();
+    if !metadata.is_empty() {
+        field = field.with_metadata(metadata.clone());
+    }
+    Arc::new(field)
+}
+
+/// Build a struct field (the inner-field shape used by `arrays_zip`'s
+/// element struct, `struct(...)`, etc.) from a sequence of `(name, inner)`
+/// pairs, preserving each inner field's metadata.
+///
+/// The output fields are constructed with the supplied names, the data type
+/// and metadata of each `inner`, and `nullable = true`.
+pub fn struct_inner_fields_from<'a, I, S>(named_inners: I) -> Fields
+where
+    I: IntoIterator<Item = (S, &'a Field)>,
+    S: Into<String>,
+{
+    named_inners
+        .into_iter()
+        .map(|(name, inner)| {
+            let mut f = Field::new(name.into(), inner.data_type().clone(), true);
+            let metadata = inner.metadata();
+            if !metadata.is_empty() {
+                f = f.with_metadata(metadata.clone());
+            }
+            Arc::new(f)
+        })
+        .collect()
 }
 
 /// Wrap arrays into a single element `ListArray`.

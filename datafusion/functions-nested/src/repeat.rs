@@ -27,14 +27,15 @@ use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{
     DataType::{LargeList, List},
-    Field,
+    Field, FieldRef,
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::types::{NativeType, logical_int64};
+use datafusion_common::utils::list_inner_field_from;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -129,8 +130,26 @@ impl ScalarUDFImpl for ArrayRepeat {
         }
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let element = &args.arg_fields[0];
+        let inner = list_inner_field_from(element);
+        let data_type = match element.data_type() {
+            LargeList(_) => LargeList(inner),
+            _ => List(inner),
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(array_repeat_inner)(&args.args)
+        let inner_field = match args.return_field.data_type() {
+            List(field) | LargeList(field) | DataType::FixedSizeList(field, _) => {
+                Some(Arc::clone(field))
+            }
+            _ => None,
+        };
+        make_scalar_function(move |arrays: &[ArrayRef]| {
+            array_repeat_inner_with_field(arrays, inner_field.clone())
+        })(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -142,20 +161,23 @@ impl ScalarUDFImpl for ArrayRepeat {
     }
 }
 
-fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_repeat_inner_with_field(
+    args: &[ArrayRef],
+    inner_field: Option<FieldRef>,
+) -> Result<ArrayRef> {
     let element = &args[0];
     let count_array = as_int64_array(&args[1])?;
 
     match element.data_type() {
         List(_) => {
             let list_array = as_list_array(element)?;
-            general_list_repeat::<i32>(list_array, count_array)
+            general_list_repeat::<i32>(list_array, count_array, inner_field)
         }
         LargeList(_) => {
             let list_array = as_large_list_array(element)?;
-            general_list_repeat::<i64>(list_array, count_array)
+            general_list_repeat::<i64>(list_array, count_array, inner_field)
         }
-        _ => general_repeat::<i32>(element, count_array),
+        _ => general_repeat::<i32>(element, count_array, inner_field),
     }
 }
 
@@ -174,6 +196,7 @@ fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn general_repeat<O: OffsetSizeTrait>(
     array: &ArrayRef,
     count_array: &Int64Array,
+    inner_field: Option<FieldRef>,
 ) -> Result<ArrayRef> {
     let total_repeated_values: usize = (0..count_array.len())
         .map(|i| get_count_with_validity(count_array, i))
@@ -208,8 +231,11 @@ fn general_repeat<O: OffsetSizeTrait>(
     )?;
 
     // Construct final ListArray
+    let field = inner_field.unwrap_or_else(|| {
+        Arc::new(Field::new_list_field(array.data_type().to_owned(), true))
+    });
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(array.data_type().to_owned(), true)),
+        field,
         OffsetBuffer::new(offsets.into()),
         repeated_values,
         count_array.nulls().cloned(),
@@ -229,6 +255,7 @@ fn general_repeat<O: OffsetSizeTrait>(
 fn general_list_repeat<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     count_array: &Int64Array,
+    inner_field: Option<FieldRef>,
 ) -> Result<ArrayRef> {
     let list_offsets = list_array.value_offsets();
 
@@ -280,25 +307,34 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         }
     }
 
-    // Build inner ListArray
+    // Build inner ListArray. Reuse the input list's element field directly so
+    // its metadata (e.g. Arrow extension type) is preserved.
+    let element_field = match list_array.data_type() {
+        List(f) | LargeList(f) => Arc::clone(f),
+        _ => Arc::new(Field::new_list_field(list_array.value_type().clone(), true)),
+    };
     let inner_values = compute::take(
         list_array.values().as_ref(),
         &UInt64Array::from_iter_values(take_indices),
         None,
     )?;
     let inner_list = GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type().clone(), true)),
+        element_field,
         OffsetBuffer::new(inner_offsets.into()),
         inner_values,
         Some(NullBuffer::new(inner_nulls.finish())),
     )?;
 
-    // Build outer ListArray
-    Ok(Arc::new(GenericListArray::<O>::try_new(
+    // Build outer ListArray. Use the planning-time inner field if supplied so
+    // metadata flows through.
+    let outer_inner_field = inner_field.unwrap_or_else(|| {
         Arc::new(Field::new_list_field(
             list_array.data_type().to_owned(),
             true,
-        )),
+        ))
+    });
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        outer_inner_field,
         OffsetBuffer::<O>::from_lengths(
             count_array
                 .iter()
@@ -318,5 +354,41 @@ fn get_count_with_validity(count_array: &Int64Array, idx: usize) -> usize {
     } else {
         let c = count_array.value(idx);
         if c > 0 { c as usize } else { 0 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_expr::ReturnFieldArgs;
+    use std::collections::HashMap;
+
+    /// Regression test for #21982: `array_repeat` must propagate the input
+    /// field's metadata onto the resulting list's inner field.
+    #[test]
+    fn array_repeat_preserves_inner_field_metadata() -> Result<()> {
+        let metadata = HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "arrow.uuid".to_string(),
+        )]);
+        let element: FieldRef =
+            Arc::new(Field::new("v", DataType::Int64, true).with_metadata(metadata));
+        let count: FieldRef = Arc::new(Field::new("n", DataType::Int64, true));
+        let scalar_args: Vec<Option<&datafusion_common::ScalarValue>> = vec![None, None];
+        let arg_fields = vec![Arc::clone(&element), Arc::clone(&count)];
+
+        let return_field =
+            ArrayRepeat::default().return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &scalar_args,
+            })?;
+        let List(inner) = return_field.data_type() else {
+            panic!("expected List return type");
+        };
+        assert_eq!(
+            inner.metadata().get("ARROW:extension:name"),
+            Some(&"arrow.uuid".to_string())
+        );
+        Ok(())
     }
 }

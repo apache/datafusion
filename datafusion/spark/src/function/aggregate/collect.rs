@@ -85,7 +85,7 @@ impl AggregateUDFImpl for SparkCollectList {
         let data_type = field.data_type().clone();
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
-            ArrayAggAccumulator::try_new(&data_type, ignore_nulls)?,
+            ArrayAggAccumulator::try_new(field, ignore_nulls)?,
             data_type,
         )))
     }
@@ -143,7 +143,7 @@ impl AggregateUDFImpl for SparkCollectSet {
         let data_type = field.data_type().clone();
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
-            DistinctArrayAggAccumulator::try_new(&data_type, None, ignore_nulls)?,
+            DistinctArrayAggAccumulator::try_new(field, None, ignore_nulls)?,
             data_type,
         )))
     }
