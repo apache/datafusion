@@ -2892,7 +2892,7 @@ impl TryFrom<ConfigFileEncryptionProperties> for FileEncryptionProperties {
             let key_metadata = encryption_props
                 .column_metadata_as_hex
                 .as_ref()
-                .map(|x| hex::decode(x))
+                .map(hex::decode)
                 .transpose()
                 .map_err(|e| {
                     DataFusionError::Configuration(format!("Unable to decode hex column metadata for column {column_name}: {e}"))
@@ -3723,27 +3723,36 @@ mod tests {
         use crate::config::ColumnEncryptionProperties;
         use crate::config::ConfigFileEncryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
+        use std::collections::HashMap;
+
+        let valid_footer_key_as_hex = hex::encode(b"0123456789012345");
+
+        let mut enc = ConfigFileEncryptionProperties {
+            encrypt_footer: true,
+            footer_key_as_hex: valid_footer_key_as_hex.clone(),
+            footer_key_metadata_as_hex: String::new(),
+            column_encryption_properties: HashMap::new(),
+            aad_prefix_as_hex: String::new(),
+            store_aad_prefix: false,
+        };
 
         // Encryption: invalid footer key hex
-        let mut enc = ConfigFileEncryptionProperties::default();
         enc.footer_key_as_hex = "not_hex".to_string();
-        let err = FileEncryptionProperties::try_from(enc)
+        let err = FileEncryptionProperties::try_from(enc.clone())
             .unwrap_err()
             .to_string();
         assert!(err.contains("Unable to decode hex footer key"));
+        enc.footer_key_as_hex = valid_footer_key_as_hex.clone();
 
         // Encryption: invalid footer key metadata hex
-        let mut enc = ConfigFileEncryptionProperties::default();
-        enc.footer_key_as_hex = hex::encode(b"0123456789012345");
         enc.footer_key_metadata_as_hex = "zz".to_string();
-        let err = FileEncryptionProperties::try_from(enc)
+        let err = FileEncryptionProperties::try_from(enc.clone())
             .unwrap_err()
             .to_string();
         assert!(err.contains("Unable to decode hex footer key metadata"));
+        enc.footer_key_metadata_as_hex = String::new();
 
         // Encryption: invalid column key hex
-        let mut enc = ConfigFileEncryptionProperties::default();
-        enc.footer_key_as_hex = hex::encode(b"0123456789012345");
         enc.column_encryption_properties.insert(
             "col1".to_string(),
             ColumnEncryptionProperties {
@@ -3757,10 +3766,9 @@ mod tests {
         assert!(
             err.contains("Unable to decode hex encryption key metadata for column col1")
         );
+        enc.column_encryption_properties.clear();
 
         // Encryption: invalid column metadata hex
-        let mut enc = ConfigFileEncryptionProperties::default();
-        enc.footer_key_as_hex = hex::encode(b"0123456789012345");
         enc.column_encryption_properties.insert(
             "col1".to_string(),
             ColumnEncryptionProperties {
@@ -3772,10 +3780,9 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("Unable to decode hex column metadata for column col1"));
+        enc.column_encryption_properties.clear();
 
         // Encryption: invalid AAD prefix hex
-        let mut enc = ConfigFileEncryptionProperties::default();
-        enc.footer_key_as_hex = hex::encode(b"0123456789012345");
         enc.aad_prefix_as_hex = "zz".to_string();
         let err = FileEncryptionProperties::try_from(enc)
             .unwrap_err()
@@ -3789,10 +3796,18 @@ mod tests {
         use crate::config::ColumnDecryptionProperties;
         use crate::config::ConfigFileDecryptionProperties;
         use parquet::encryption::decrypt::FileDecryptionProperties;
+        use std::collections::HashMap;
+
+        let valid_footer_key_as_hex = hex::encode(b"0123456789012345");
+
+        let mut dec = ConfigFileDecryptionProperties {
+            footer_key_as_hex: valid_footer_key_as_hex.clone(),
+            column_decryption_properties: HashMap::new(),
+            aad_prefix_as_hex: String::new(),
+            footer_signature_verification: true,
+        };
 
         // Decryption: invalid column key hex
-        let mut dec = ConfigFileDecryptionProperties::default();
-        dec.footer_key_as_hex = hex::encode(b"0123456789012345");
         dec.column_decryption_properties.insert(
             "col1".to_string(),
             ColumnDecryptionProperties {
@@ -3804,18 +3819,17 @@ mod tests {
             .to_string();
         assert!(err.contains("Could not decode hex column key"));
         assert!(err.contains("col1"));
+        dec.column_decryption_properties.clear();
 
         // Decryption: invalid footer key hex
-        let mut dec = ConfigFileDecryptionProperties::default();
         dec.footer_key_as_hex = "bad".to_string();
         let err = FileDecryptionProperties::try_from(dec)
             .unwrap_err()
             .to_string();
         assert!(err.contains("Could not decode hex footer key"));
+        dec.footer_key_as_hex = valid_footer_key_as_hex;
 
         // Decryption: invalid AAD prefix hex
-        let mut dec = ConfigFileDecryptionProperties::default();
-        dec.footer_key_as_hex = hex::encode(b"0123456789012345");
         dec.aad_prefix_as_hex = "zz".to_string();
         let err = FileDecryptionProperties::try_from(dec)
             .unwrap_err()
