@@ -84,9 +84,10 @@ SELECT
 ----
 false false false false
 
-# Untyped NULL literal: relies on DataFusion coercing Null -> Float64 to satisfy
-# the Exact(Float32)/Exact(Float64) signature. Without that coercion, planning
-# would fail and we'd diverge from Spark, which returns false here.
+# Untyped NULL literal: relies on DataFusion accepting Null as castable to a
+# float type to satisfy the Exact(Float32)/Exact(Float64) signature (the first
+# OneOf variant wins, so currently Float32). Without that, planning would fail
+# and we'd diverge from Spark, which returns false here.
 query B
 SELECT isnan(NULL);
 ----
