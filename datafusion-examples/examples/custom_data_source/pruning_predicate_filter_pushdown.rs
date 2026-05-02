@@ -288,7 +288,10 @@ impl TableProvider for CustomTableProvider {
             self.partitions.clone()
         };
 
-        Ok(Arc::new(CustomExecutionPlan::new(partitions_to_scan, projection)))
+        Ok(Arc::new(CustomExecutionPlan::new(
+            partitions_to_scan,
+            projection,
+        )))
     }
 
     fn supports_filters_pushdown(

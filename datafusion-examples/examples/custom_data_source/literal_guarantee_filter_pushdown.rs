@@ -265,7 +265,11 @@ impl TableProvider for CustomTableProvider {
             })
         });
 
-        Ok(Arc::new(CustomExecutionPlan::new(self.clone(), projection, filter)))
+        Ok(Arc::new(CustomExecutionPlan::new(
+            self.clone(),
+            projection,
+            filter,
+        )))
     }
 }
 
