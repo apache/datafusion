@@ -32,8 +32,8 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{
-    SingleRowListArrayBuilder, compare_rows, get_row_at_idx, list_inner_field_from,
-    take_function_args,
+    SingleRowListArrayBuilder, compare_rows, get_row_at_idx,
+    nullable_list_item_field_from, take_function_args,
 };
 use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err, exec_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -116,7 +116,7 @@ impl AggregateUDFImpl for ArrayAgg {
         // Preserve the input field's metadata on the list's inner field so
         // Arrow extension types (`ARROW:extension:*`) round-trip through
         // `array_agg`.
-        let inner = list_inner_field_from(&arg_fields[0]);
+        let inner = nullable_list_item_field_from(&arg_fields[0]);
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::List(inner),
@@ -125,7 +125,7 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let inner = list_inner_field_from(&args.input_fields[0]);
+        let inner = nullable_list_item_field_from(&args.input_fields[0]);
 
         if args.is_distinct {
             return Ok(vec![
@@ -436,7 +436,7 @@ impl Accumulator for ArrayAggAccumulator {
 
         let concated_array = arrow::compute::concat(&element_refs)?;
 
-        let inner = list_inner_field_from(&self.value_field);
+        let inner = nullable_list_item_field_from(&self.value_field);
         Ok(SingleRowListArrayBuilder::new(concated_array)
             .with_field(&inner)
             .build_list_scalar())
@@ -733,7 +733,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         }
 
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
-        let field = list_inner_field_from(&self.value_field);
+        let field = nullable_list_item_field_from(&self.value_field);
         let result = ListArray::new(field, offsets, flat_values, nulls_builder.finish());
 
         Ok(Arc::new(result))
@@ -804,7 +804,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             filter_nulls
         };
 
-        let field = list_inner_field_from(&self.value_field);
+        let field = nullable_list_item_field_from(&self.value_field);
         let list_array = ListArray::new(field, offsets, Arc::clone(input), nulls);
 
         Ok(vec![Arc::new(list_array)])
@@ -1209,7 +1209,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 /// Build a single-element `ScalarValue::List` containing one null entry
 /// whose inner field carries `value_field`'s data type and metadata.
 fn empty_list_scalar(value_field: &FieldRef) -> ScalarValue {
-    let inner = list_inner_field_from(value_field);
+    let inner = nullable_list_item_field_from(value_field);
     let data_type = DataType::List(inner);
     ScalarValue::List(Arc::new(ListArray::from(
         arrow::array::ArrayData::new_null(&data_type, 1),
@@ -1229,7 +1229,7 @@ fn values_to_list_scalar(
     } else {
         ScalarValue::iter_to_array(values.iter().cloned())?
     };
-    let inner = list_inner_field_from(value_field);
+    let inner = nullable_list_item_field_from(value_field);
     Ok(SingleRowListArrayBuilder::new(arr)
         .with_field(&inner)
         .with_nullable(nullable)

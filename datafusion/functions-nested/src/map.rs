@@ -427,19 +427,20 @@ impl ScalarUDFImpl for MapFunc {
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [keys_arg, values_arg] = take_function_args(self.name(), args.arg_fields)?;
 
-        let key_inner = get_element_field(keys_arg)?;
-        let value_inner = get_element_field(values_arg)?;
-
-        let mut key_field = Field::new("key", key_inner.data_type().clone(), false);
-        let key_meta = key_inner.metadata();
-        if !key_meta.is_empty() {
-            key_field = key_field.with_metadata(key_meta.clone());
-        }
-        let mut value_field = Field::new("value", value_inner.data_type().clone(), true);
-        let value_meta = value_inner.metadata();
-        if !value_meta.is_empty() {
-            value_field = value_field.with_metadata(value_meta.clone());
-        }
+        // Element fields preserve the input lists' element-field metadata
+        // (e.g. Arrow extension types). Override only the name and nullable
+        // flag to match the canonical map entries schema (key non-null,
+        // value nullable).
+        let key_field = get_element_field(keys_arg)?
+            .as_ref()
+            .clone()
+            .with_name("key")
+            .with_nullable(false);
+        let value_field = get_element_field(values_arg)?
+            .as_ref()
+            .clone()
+            .with_name("value")
+            .with_nullable(true);
 
         let mut builder = SchemaBuilder::new();
         builder.push(key_field);

@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::StructArray;
-use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::utils::struct_inner_fields_from;
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion_common::utils::nullable_inner_field_from;
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
@@ -123,12 +123,12 @@ impl ScalarUDFImpl for StructFunc {
         }
         // Preserve each input field's metadata on the corresponding struct
         // member field so Arrow extension types survive `struct(...)` calls.
-        let fields = struct_inner_fields_from(
-            args.arg_fields
-                .iter()
-                .enumerate()
-                .map(|(pos, f)| (format!("c{pos}"), f.as_ref())),
-        );
+        let fields: Fields = args
+            .arg_fields
+            .iter()
+            .enumerate()
+            .map(|(pos, f)| nullable_inner_field_from(f, &format!("c{pos}")))
+            .collect();
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Struct(fields),

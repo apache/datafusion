@@ -31,7 +31,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::types::{NativeType, logical_int64};
-use datafusion_common::utils::list_inner_field_from;
+use datafusion_common::utils::nullable_list_item_field_from;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
@@ -132,7 +132,7 @@ impl ScalarUDFImpl for ArrayRepeat {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let element = &args.arg_fields[0];
-        let inner = list_inner_field_from(element);
+        let inner = nullable_list_item_field_from(element);
         let data_type = match element.data_type() {
             LargeList(_) => LargeList(inner),
             _ => List(inner),

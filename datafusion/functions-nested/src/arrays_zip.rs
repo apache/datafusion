@@ -28,7 +28,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::utils::struct_inner_fields_from;
+use datafusion_common::utils::nullable_inner_field_from;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
@@ -145,25 +145,25 @@ impl ScalarUDFImpl for ArraysZip {
             return exec_err!("arrays_zip requires at least one argument");
         }
 
-        // For each input list-typed argument, take its element field
-        // (preserving metadata). For Null-typed inputs, fall back to a
-        // metadata-less Null field.
-        let mut zipped: Vec<(String, Field)> = Vec::with_capacity(args.arg_fields.len());
-        for (i, arg_field) in args.arg_fields.iter().enumerate() {
-            let element_field: Field = match arg_field.data_type() {
-                List(field) | LargeList(field) | FixedSizeList(field, _) => {
-                    field.as_ref().clone()
+        // For each input list-typed argument, take its element field and
+        // rename it to the positional struct member name (1-based), preserving
+        // metadata. For Null-typed inputs, build a bare Null field.
+        let struct_fields: Fields = args
+            .arg_fields
+            .iter()
+            .enumerate()
+            .map(|(i, arg_field)| {
+                let name = format!("{}", i + 1);
+                match arg_field.data_type() {
+                    List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                        Ok(nullable_inner_field_from(field, &name))
+                    }
+                    Null => Ok(Arc::new(Field::new(name, Null, true))),
+                    dt => exec_err!("arrays_zip expects array arguments, got {dt}"),
                 }
-                Null => Field::new(format!("{}", i + 1), Null, true),
-                dt => {
-                    return exec_err!("arrays_zip expects array arguments, got {dt}");
-                }
-            };
-            zipped.push((format!("{}", i + 1), element_field));
-        }
-
-        let struct_fields =
-            struct_inner_fields_from(zipped.iter().map(|(name, f)| (name.clone(), f)));
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into();
         let struct_dt = DataType::Struct(struct_fields);
         let inner = Arc::new(Field::new(Field::LIST_FIELD_DEFAULT_NAME, struct_dt, true));
         Ok(Arc::new(Field::new(self.name(), List(inner), true)))

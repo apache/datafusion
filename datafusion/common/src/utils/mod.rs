@@ -40,7 +40,7 @@ use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{
-    ArrowNativeType, DataType, Field, FieldRef, Fields, Int32Type, Int64Type, SchemaRef,
+    ArrowNativeType, DataType, Field, FieldRef, Int32Type, Int64Type, SchemaRef,
 };
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
@@ -548,50 +548,36 @@ impl SingleRowListArrayBuilder {
     }
 }
 
-/// Build the inner field for a list-of-`inner` (`List`/`LargeList`/
-/// `FixedSizeList`/`ListView`).
+/// Rename `inner` to `name` and force `nullable = true`, preserving its data
+/// type and metadata.
 ///
-/// The returned field uses [`Field::LIST_FIELD_DEFAULT_NAME`] as the name,
-/// preserves `inner`'s data type and metadata, and is always nullable.
+/// This is the canonical shape needed for the inner field of a composite
+/// SQL output (the "item" field of a list, a `cN` member of a struct, the
+/// `key`/`value` of a map, etc.). Preserving metadata is what lets Arrow
+/// extension types (`ARROW:extension:name` / `ARROW:extension:metadata`)
+/// round-trip through SQL list/struct/map constructors.
 ///
-/// Preserving metadata is what lets Arrow extension types
-/// (`ARROW:extension:name` / `ARROW:extension:metadata`) round-trip through
-/// SQL list constructors (e.g. `make_array`, `array_agg`, `repeat`).
-pub fn list_inner_field_from(inner: &Field) -> FieldRef {
-    let mut field = Field::new(
-        Field::LIST_FIELD_DEFAULT_NAME,
-        inner.data_type().clone(),
-        true,
-    );
-    let metadata = inner.metadata();
-    if !metadata.is_empty() {
-        field = field.with_metadata(metadata.clone());
+/// Differs from [`FieldExt::renamed`] in that this function also forces
+/// nullability (the trait method preserves it).
+///
+/// [`FieldExt::renamed`]: crate::datatype::FieldExt::renamed
+pub fn nullable_inner_field_from(inner: &FieldRef, name: &str) -> FieldRef {
+    let mut f = Arc::clone(inner);
+    let m = Arc::make_mut(&mut f);
+    if m.name() != name {
+        m.set_name(name);
     }
-    Arc::new(field)
+    if !m.is_nullable() {
+        m.set_nullable(true);
+    }
+    f
 }
 
-/// Build a struct field (the inner-field shape used by `arrays_zip`'s
-/// element struct, `struct(...)`, etc.) from a sequence of `(name, inner)`
-/// pairs, preserving each inner field's metadata.
-///
-/// The output fields are constructed with the supplied names, the data type
-/// and metadata of each `inner`, and `nullable = true`.
-pub fn struct_inner_fields_from<'a, I, S>(named_inners: I) -> Fields
-where
-    I: IntoIterator<Item = (S, &'a Field)>,
-    S: Into<String>,
-{
-    named_inners
-        .into_iter()
-        .map(|(name, inner)| {
-            let mut f = Field::new(name.into(), inner.data_type().clone(), true);
-            let metadata = inner.metadata();
-            if !metadata.is_empty() {
-                f = f.with_metadata(metadata.clone());
-            }
-            Arc::new(f)
-        })
-        .collect()
+/// Build the canonical inner field of a list-shaped output (`List`/
+/// `LargeList`/`FixedSizeList`/`ListView`) from `inner`. Sugar for
+/// [`nullable_inner_field_from`] with [`Field::LIST_FIELD_DEFAULT_NAME`].
+pub fn nullable_list_item_field_from(inner: &FieldRef) -> FieldRef {
+    nullable_inner_field_from(inner, Field::LIST_FIELD_DEFAULT_NAME)
 }
 
 /// Wrap arrays into a single element `ListArray`.

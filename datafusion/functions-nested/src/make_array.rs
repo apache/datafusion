@@ -28,7 +28,9 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType::Null, Field, FieldRef};
-use datafusion_common::utils::{SingleRowListArrayBuilder, list_inner_field_from};
+use datafusion_common::utils::{
+    SingleRowListArrayBuilder, nullable_list_item_field_from,
+};
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
@@ -114,7 +116,7 @@ impl ScalarUDFImpl for MakeArray {
             .arg_fields
             .iter()
             .find(|f| !f.data_type().is_null())
-            .map(|f| list_inner_field_from(f))
+            .map(nullable_list_item_field_from)
             .unwrap_or_else(|| Arc::new(Field::new_list_field(Null, true)));
         Ok(Arc::new(Field::new(
             self.name(),
