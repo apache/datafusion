@@ -55,13 +55,13 @@ use datafusion_expr::TableProviderFilterPushDown;
 use datafusion_expr::utils::conjunction;
 
 pub async fn literal_guarantee_filter_pushdown() -> Result<()> {
-    let db = CustomDataSource::default();
+    let db = CustomTableProvider::default();
     db.populate_users();
 
     let ctx = SessionContext::new();
     ctx.register_table("accounts", Arc::new(db))?;
 
-    // No filter — returns all 3 rows.
+    // No filter: returns all 3 rows.
     let all = ctx.sql("SELECT * FROM accounts").await?.collect().await?;
     assert_eq!(all.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
     println!("All rows:");
@@ -69,7 +69,7 @@ pub async fn literal_guarantee_filter_pushdown() -> Result<()> {
         println!("{batch:?}");
     }
 
-    // Equality filter — the index resolves exactly one row.
+    // Equality filter: the index resolves exactly one row.
     let one = ctx
         .sql("SELECT * FROM accounts WHERE bank_account = 9000")
         .await?
@@ -81,7 +81,7 @@ pub async fn literal_guarantee_filter_pushdown() -> Result<()> {
         println!("{batch:?}");
     }
 
-    // IN-list filter — the index resolves two rows.
+    // IN-list filter: the index resolves two rows.
     let two = ctx
         .sql("SELECT * FROM accounts WHERE bank_account IN (100, 1000)")
         .await?
@@ -93,7 +93,7 @@ pub async fn literal_guarantee_filter_pushdown() -> Result<()> {
         println!("{batch:?}");
     }
 
-    // NOT-IN filter — the index excludes one row, returning the other two.
+    // NOT-IN filter: the index excludes one row, returning the other two.
     let not_in = ctx
         .sql("SELECT * FROM accounts WHERE bank_account != 9000")
         .await?
@@ -105,7 +105,7 @@ pub async fn literal_guarantee_filter_pushdown() -> Result<()> {
         println!("{batch:?}");
     }
 
-    // Inexact pushdown — the filter references bank_account (indexed) AND id
+    // Inexact pushdown: the filter references bank_account (indexed) AND id
     // (not indexed). The index narrows the scan to bank_account IN (100, 1000),
     // but DataFusion must re-check "id > 2" since we can't handle that part.
     let inexact = ctx
@@ -131,7 +131,7 @@ struct User {
 
 /// A custom datasource with a `BTreeMap` index on `bank_account`
 #[derive(Clone)]
-struct CustomDataSource {
+struct CustomTableProvider {
     inner: Arc<Mutex<CustomDataSourceInner>>,
 }
 
@@ -140,13 +140,13 @@ struct CustomDataSourceInner {
     bank_account_index: BTreeMap<u64, u8>,
 }
 
-impl Debug for CustomDataSource {
+impl Debug for CustomTableProvider {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str("custom_db")
     }
 }
 
-impl Default for CustomDataSource {
+impl Default for CustomTableProvider {
     fn default() -> Self {
         Self {
             inner: Arc::new(Mutex::new(CustomDataSourceInner {
@@ -157,7 +157,7 @@ impl Default for CustomDataSource {
     }
 }
 
-impl CustomDataSource {
+impl CustomTableProvider {
     fn populate_users(&self) {
         for user in [
             User {
@@ -188,7 +188,7 @@ fn schema() -> SchemaRef {
 }
 
 #[async_trait]
-impl TableProvider for CustomDataSource {
+impl TableProvider for CustomTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -209,18 +209,19 @@ impl TableProvider for CustomDataSource {
             .iter()
             .map(|f| {
                 let columns = f.column_refs();
-                let has_bank_account = columns.iter().any(|c| c.name == "bank_account");
-                let all_bank_account =
-                    has_bank_account && columns.iter().all(|c| c.name == "bank_account");
-                if all_bank_account {
-                    // Only bank_account — fully handled via the index.
+                let filter_has_bank_account =
+                    columns.iter().any(|c| c.name == "bank_account");
+                let filter_only_on_bank_account = filter_has_bank_account
+                    && columns.iter().all(|c| c.name == "bank_account");
+                if filter_only_on_bank_account {
+                    // Only bank_account: fully handled via the index.
                     TableProviderFilterPushDown::Exact
-                } else if has_bank_account {
-                    // Mixed columns — index narrows the scan, but DataFusion
+                } else if filter_has_bank_account {
+                    // Mixed columns: index narrows the scan, but DataFusion
                     // must re-check the parts we can't handle.
                     TableProviderFilterPushDown::Inexact
                 } else {
-                    // No indexed columns — we can't help with this filter.
+                    // No indexed columns: we can't help with this filter.
                     TableProviderFilterPushDown::Unsupported
                 }
             })
@@ -264,11 +265,12 @@ impl TableProvider for CustomDataSource {
             })
         });
 
-        Ok(Arc::new(CustomExec::new(self.clone(), projection, filter)))
+        Ok(Arc::new(CustomExecutionPlan::new(self.clone(), projection, filter)))
     }
 }
 
-/// Result of resolving a `LiteralGuarantee` against the index.
+/// Result of resolving a `LiteralGuarantee` against the index.  This is created at plan-time, then
+/// used at scan-time.
 #[derive(Debug, Clone)]
 struct IndexFilter {
     ids: Vec<u8>,
@@ -276,17 +278,17 @@ struct IndexFilter {
 }
 
 #[derive(Debug, Clone)]
-struct CustomExec {
-    db: CustomDataSource,
+struct CustomExecutionPlan {
+    db: CustomTableProvider,
     projected_schema: SchemaRef,
     /// When Some, filters users by including (In) or excluding (NotIn) IDs.
     filter: Option<IndexFilter>,
     cache: Arc<PlanProperties>,
 }
 
-impl CustomExec {
+impl CustomExecutionPlan {
     fn new(
-        db: CustomDataSource,
+        db: CustomTableProvider,
         projections: Option<&Vec<usize>>,
         filter: Option<IndexFilter>,
     ) -> Self {
@@ -307,13 +309,13 @@ impl CustomExec {
     }
 }
 
-impl DisplayAs for CustomExec {
+impl DisplayAs for CustomExecutionPlan {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(f, "CustomExec(filter={:?})", self.filter)
     }
 }
 
-impl ExecutionPlan for CustomExec {
+impl ExecutionPlan for CustomExecutionPlan {
     fn name(&self) -> &'static str {
         "CustomExec"
     }
@@ -353,7 +355,7 @@ impl ExecutionPlan for CustomExec {
     ) -> Result<SendableRecordBatchStream> {
         let inner = self.db.inner.lock().unwrap();
 
-        // Collect the users to return based on the index filter.
+        // Collect the users to return based on the index filter, if it exists.
         let users: Vec<&User> = match &self.filter {
             Some(IndexFilter {
                 ids,

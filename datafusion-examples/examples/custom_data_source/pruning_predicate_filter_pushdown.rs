@@ -23,6 +23,8 @@
 //! A [`TableProvider`] with multiple in-memory partitions uses
 //! [`PruningPredicate::prune`] to determine which partitions could contain
 //! matching rows and only scans those.
+//!
+//! See `parquet_index.rs` for examples
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -56,7 +58,7 @@ use datafusion_expr::TableProviderFilterPushDown;
 use datafusion_expr::utils::conjunction;
 
 pub async fn pruning_predicate_filter_pushdown() -> Result<()> {
-    let db = CustomDataSource::new(vec![
+    let db = CustomTableProvider::new(vec![
         Partition::new(
             vec![
                 User {
@@ -185,11 +187,11 @@ impl Partition {
 
 /// A custom datasource with partitions that have known min/max statistics
 #[derive(Clone, Debug)]
-struct CustomDataSource {
+struct CustomTableProvider {
     partitions: Vec<Partition>,
 }
 
-impl CustomDataSource {
+impl CustomTableProvider {
     fn new(partitions: Vec<Partition>) -> Self {
         Self { partitions }
     }
@@ -249,7 +251,7 @@ impl PruningStatistics for PartitionStats<'_> {
 }
 
 #[async_trait]
-impl TableProvider for CustomDataSource {
+impl TableProvider for CustomTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -260,15 +262,6 @@ impl TableProvider for CustomDataSource {
 
     fn table_type(&self) -> TableType {
         TableType::Base
-    }
-
-    fn supports_filters_pushdown(
-        &self,
-        filters: &[&Expr],
-    ) -> Result<Vec<TableProviderFilterPushDown>> {
-        // Pruning narrows which partitions to scan but doesn't guarantee
-        // every row in a scanned partition matches, so Inexact is correct.
-        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
     }
 
     async fn scan(
@@ -295,24 +288,33 @@ impl TableProvider for CustomDataSource {
             self.partitions.clone()
         };
 
-        Ok(Arc::new(CustomExec::new(partitions_to_scan, projection)))
+        Ok(Arc::new(CustomExecutionPlan::new(partitions_to_scan, projection)))
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        // Pruning narrows which partitions to scan but doesn't guarantee
+        // every row in a scanned partition matches, so Inexact is correct.
+        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
     }
 }
 
 #[derive(Debug, Clone)]
-struct CustomExec {
+struct CustomExecutionPlan {
     partitions: Vec<Partition>,
     projected_schema: SchemaRef,
     cache: Arc<PlanProperties>,
 }
 
-impl CustomExec {
+impl CustomExecutionPlan {
     fn new(partitions: Vec<Partition>, projections: Option<&Vec<usize>>) -> Self {
         let projected_schema =
             datafusion::physical_plan::project_schema(&schema(), projections).unwrap();
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&projected_schema)),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(partitions.len()),
             EmissionType::Incremental,
             Boundedness::Bounded,
         ));
@@ -324,13 +326,13 @@ impl CustomExec {
     }
 }
 
-impl DisplayAs for CustomExec {
+impl DisplayAs for CustomExecutionPlan {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(f, "CustomExec(partitions={})", self.partitions.len())
     }
 }
 
-impl ExecutionPlan for CustomExec {
+impl ExecutionPlan for CustomExecutionPlan {
     fn name(&self) -> &'static str {
         "CustomExec"
     }
@@ -365,10 +367,10 @@ impl ExecutionPlan for CustomExec {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let users: Vec<&User> = self.partitions.iter().flat_map(|p| &p.users).collect();
+        let users: Vec<&User> = self.partitions[partition].users.iter().collect();
 
         let mut id_array = UInt8Builder::with_capacity(users.len());
         let mut account_array = UInt64Builder::with_capacity(users.len());
