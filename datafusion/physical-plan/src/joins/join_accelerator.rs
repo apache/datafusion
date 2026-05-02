@@ -18,9 +18,7 @@
 //! Join accelerator interfaces used by [`crate::joins::NestedLoopJoinExec`], see
 //! comments in [`JoinAccelerator`] for details.
 
-use std::cmp::min;
 use std::fmt::Debug;
-use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
@@ -219,19 +217,16 @@ pub(crate) trait JoinAccelerator: Debug + Send + Sync {
     /// # Default implementation
     ///
     /// The default implementation is the nested-loop fallback: it returns the
-    /// probe batch unchanged and emits every build-side row as a candidate for
-    /// each probe row. Implementations that only provide dynamic filtering
-    /// should reuse this default.
+    /// probe batch unchanged and emits one buffered build-side row at a time.
+    /// The caller joins that row against the current probe batch.
     fn init_prober(
         &self,
         probe_batch: RecordBatch,
-        batch_size: usize,
+        _batch_size: usize,
     ) -> Result<(RecordBatch, Box<dyn JoinAcceleratorProber>)> {
         let prober = Box::new(FallbackNestedLoopJoinProber {
-            batch_size: batch_size.max(1),
             build_batch_size: self.num_build_rows(),
-            probe_batch_size: probe_batch.num_rows(),
-            cur_probe_offset: 0,
+            has_probe_rows: probe_batch.num_rows() > 0,
             cur_build_offset: 0,
         });
 
@@ -268,16 +263,10 @@ pub(crate) trait JoinAcceleratorProber: Debug + Send {
 ///   produced from [`JoinAccelerator::init_prober`].
 /// - Build-side indices are relative to the concatenated build-side batch from
 ///   [`JoinAccelerator::build_batch`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum JoinProbeCandidates {
-    /// Consecutive build rows for one probe row, represented as a range for
-    /// efficiency in NLJ.
-    BuildRange {
-        probe_row: usize,
-        build_range: Range<usize>,
-    },
-    // Specialized joins will need more general representation like (build_index, probe_index)
-    // , so keep it a enum now.
+    /// One buffered build row joined with the current probe batch.
+    BuildRow { build_row: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -368,50 +357,30 @@ impl JoinAccelerator for FallbackNestedLoopJoinAccelerator {
 
 #[derive(Debug)]
 struct FallbackNestedLoopJoinProber {
-    /// From configuration that controls the max output chunk size.
-    batch_size: usize,
     /// Row count from the concatenated build side batch.
     build_batch_size: usize,
     /// Current index on the build side.
     cur_build_offset: usize,
-    /// Row count from the current probe batch.
-    probe_batch_size: usize,
-    /// Current index on the probe side.
-    cur_probe_offset: usize,
+    /// Whether the current probe batch has rows.
+    has_probe_rows: bool,
 }
 
 impl JoinAcceleratorProber for FallbackNestedLoopJoinProber {
     /// Each time returns candidates like:
     ///
     /// ```text
-    /// for probe_row in probe_batch:
-    ///    for batch_slice in build_batch:
-    ///      output(build_slice] x probe_row)
+    /// for build_row in build_batch:
+    ///   output(build_row x probe_batch)
     /// ```
-    ///
-    /// Each output batch is chunked to `batch_size` rows.
     fn probe(&mut self) -> Result<Option<JoinProbeCandidates>> {
-        if self.cur_probe_offset >= self.probe_batch_size || self.build_batch_size == 0 {
+        if !self.has_probe_rows || self.cur_build_offset >= self.build_batch_size {
             return Ok(None);
         }
 
-        let end = min(
-            self.cur_build_offset + self.batch_size,
-            self.build_batch_size,
-        );
-        let build_range = self.cur_build_offset..end;
-        let probe_row = self.cur_probe_offset;
-        self.cur_build_offset = end;
+        let build_row = self.cur_build_offset;
+        self.cur_build_offset += 1;
 
-        if self.cur_build_offset >= self.build_batch_size {
-            self.cur_probe_offset += 1;
-            self.cur_build_offset = 0;
-        }
-
-        Ok(Some(JoinProbeCandidates::BuildRange {
-            probe_row,
-            build_range,
-        }))
+        Ok(Some(JoinProbeCandidates::BuildRow { build_row }))
     }
 }
 
@@ -424,7 +393,7 @@ mod tests {
     use datafusion_expr::JoinType;
 
     #[test]
-    fn naive_join_accelerator_chunks_build_rows() -> Result<()> {
+    fn naive_join_accelerator_emits_build_rows() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -451,21 +420,15 @@ mod tests {
         let (_probe_batch, mut prober) = runtime.init_prober(probe_batch, 2)?;
         let first = prober.probe()?.unwrap();
         let second = prober.probe()?.unwrap();
-        let third = prober.probe()?.unwrap();
-        let fourth = prober.probe()?.unwrap();
 
-        assert!(
-            matches!(first, JoinProbeCandidates::BuildRange { probe_row: 0, ref build_range } if build_range == &(0..2))
-        );
-        assert!(
-            matches!(second, JoinProbeCandidates::BuildRange { probe_row: 0, ref build_range } if build_range == &(2..4))
-        );
-        assert!(
-            matches!(third, JoinProbeCandidates::BuildRange { probe_row: 0, ref build_range } if build_range == &(4..5))
-        );
-        assert!(
-            matches!(fourth, JoinProbeCandidates::BuildRange { probe_row: 1, ref build_range } if build_range == &(0..2))
-        );
+        assert!(matches!(
+            first,
+            JoinProbeCandidates::BuildRow { build_row: 0 }
+        ));
+        assert!(matches!(
+            second,
+            JoinProbeCandidates::BuildRow { build_row: 1 }
+        ));
 
         Ok(())
     }

@@ -18,7 +18,7 @@
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
 use std::fmt::Formatter;
-use std::ops::{ControlFlow, Range};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
@@ -1275,56 +1275,6 @@ impl RecordBatchStream for NestedLoopJoinStream {
     }
 }
 
-/// Intermediate result for joining one left batch slice and a right row
-enum FilteredProbeCandidates {
-    Range {
-        probe_row: usize,
-        build_range: Range<usize>,
-        build_filter: Option<BooleanArray>,
-    },
-}
-
-impl FilteredProbeCandidates {
-    fn has_matches(&self) -> bool {
-        match self {
-            Self::Range {
-                build_range,
-                build_filter,
-                ..
-            } => build_filter
-                .as_ref()
-                .map_or(!build_range.is_empty(), |filter| filter.true_count() > 0),
-        }
-    }
-
-    fn mark_probe_matches(
-        &self,
-        bitmap: &mut BooleanBufferBuilder,
-        probe_batch_rows: usize,
-    ) -> Result<()> {
-        match self {
-            Self::Range {
-                probe_row,
-                build_range,
-                build_filter,
-            } => {
-                let has_match = build_filter
-                    .as_ref()
-                    .map_or(!build_range.is_empty(), |filter| filter.true_count() > 0);
-                if has_match {
-                    if *probe_row >= probe_batch_rows {
-                        return internal_err!(
-                            "Probe row index {probe_row} is out of bounds for a batch of {probe_batch_rows} rows"
-                        );
-                    }
-                    bitmap.set_bit(*probe_row, true);
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
 impl NestedLoopJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -1938,30 +1888,44 @@ impl NestedLoopJoinStream {
         Ok(true)
     }
 
-    /// Process one candidate chunk for `ALL_LEFT x right_batch`.
-    ///
-    /// TODO: According to the `JoinAccelerator` contract, each time candidates
-    /// is output has batch size <= `batch_size` (from config), and we apply filter
-    /// eagerly. Batch candidates to `batch_size` to vectorize filter evaluation.
+    /// Process one candidate chunk for `build_row x right_batch`.
     fn process_probe_candidates(
         &mut self,
         left_data: &JoinLeftData,
         right_batch: &RecordBatch,
         candidates: JoinProbeCandidates,
     ) -> Result<Option<RecordBatch>> {
-        let filtered_candidates = match candidates {
-            JoinProbeCandidates::BuildRange {
-                probe_row,
-                build_range,
-            } => self.filter_probe_range_candidates(
-                left_data,
-                right_batch,
-                probe_row,
-                build_range,
-            )?,
+        match candidates {
+            JoinProbeCandidates::BuildRow { build_row } => {
+                self.process_single_left_row_join(left_data, right_batch, build_row)
+            }
+        }
+    }
+
+    /// Process a single build-side row against the current probe batch.
+    ///
+    /// This keeps the fallback NLJ hot path in the same orientation as before
+    /// the accelerator abstraction: filter the probe batch first, then broadcast
+    /// the single build row to the surviving probe rows.
+    fn process_single_left_row_join(
+        &mut self,
+        left_data: &JoinLeftData,
+        right_batch: &RecordBatch,
+        l_index: usize,
+    ) -> Result<Option<RecordBatch>> {
+        let right_row_count = right_batch.num_rows();
+        if right_row_count == 0 {
+            return Ok(None);
+        }
+
+        let left_batch = left_data.batch();
+        let cur_right_bitmap = if let Some(filter) = &self.join_filter {
+            apply_filter_to_row_join_batch(left_batch, l_index, right_batch, filter)?
+        } else {
+            BooleanArray::from(vec![true; right_row_count])
         };
 
-        self.record_probe_matches(left_data, right_batch, &filtered_candidates)?;
+        self.update_matched_bitmap(l_index, &cur_right_bitmap)?;
 
         if matches!(
             self.join_type,
@@ -1971,119 +1935,44 @@ impl NestedLoopJoinStream {
                 | JoinType::RightAnti
                 | JoinType::RightMark
                 | JoinType::RightSemi
-        ) || !filtered_candidates.has_matches()
-        {
+        ) {
             return Ok(None);
         }
 
-        self.build_probe_output_batch(left_data, right_batch, filtered_candidates)
-    }
-
-    fn filter_probe_range_candidates(
-        &self,
-        left_data: &JoinLeftData,
-        right_batch: &RecordBatch,
-        probe_row: usize,
-        build_range: Range<usize>,
-    ) -> Result<FilteredProbeCandidates> {
-        if probe_row >= right_batch.num_rows() {
-            return internal_err!(
-                "Probe row index {probe_row} is out of bounds for a batch of {} rows",
-                right_batch.num_rows()
-            );
-        }
-
-        if build_range.is_empty() {
-            return Ok(FilteredProbeCandidates::Range {
-                probe_row,
-                build_range,
-                build_filter: None,
-            });
-        }
-
-        let build_filter = if let Some(filter) = &self.join_filter {
-            let build_batch = left_data
-                .batch()
-                .slice(build_range.start, build_range.len());
-            Some(apply_filter_to_probe_row_join_batch(
-                &build_batch,
-                right_batch,
-                probe_row,
-                filter,
-            )?)
+        if cur_right_bitmap.true_count() == 0 {
+            Ok(None)
         } else {
-            None
-        };
-
-        Ok(FilteredProbeCandidates::Range {
-            probe_row,
-            build_range,
-            build_filter,
-        })
-    }
-
-    fn build_probe_output_batch(
-        &self,
-        left_data: &JoinLeftData,
-        right_batch: &RecordBatch,
-        filtered_candidates: FilteredProbeCandidates,
-    ) -> Result<Option<RecordBatch>> {
-        match filtered_candidates {
-            FilteredProbeCandidates::Range {
-                probe_row,
-                build_range,
-                build_filter,
-            } => {
-                let build_batch = left_data
-                    .batch()
-                    .slice(build_range.start, build_range.len());
-                build_row_join_batch(
-                    &self.output_schema,
-                    right_batch,
-                    probe_row,
-                    &build_batch,
-                    build_filter,
-                    &self.column_indices,
-                    JoinSide::Right,
-                )
-            }
+            build_row_join_batch(
+                &self.output_schema,
+                left_batch,
+                l_index,
+                right_batch,
+                Some(cur_right_bitmap),
+                &self.column_indices,
+                JoinSide::Left,
+            )
         }
     }
 
-    /// Update matched build and probe row state after residual filtering.
-    fn record_probe_matches(
+    fn update_matched_bitmap(
         &mut self,
-        left_data: &JoinLeftData,
-        right_batch: &RecordBatch,
-        filtered_candidates: &FilteredProbeCandidates,
+        l_index: usize,
+        r_matched_bitmap: &BooleanArray,
     ) -> Result<()> {
-        if !filtered_candidates.has_matches() {
-            return Ok(());
-        }
+        let joined_len = r_matched_bitmap.true_count();
 
-        if need_produce_result_in_final(self.join_type) {
+        if need_produce_result_in_final(self.join_type) && joined_len > 0 {
+            let left_data = self.get_left_data()?;
             let mut bitmap = left_data.bitmap().lock();
-            match filtered_candidates {
-                FilteredProbeCandidates::Range {
-                    build_range,
-                    build_filter,
-                    ..
-                } => match build_filter {
-                    Some(filter) => {
-                        or_filter_into_bitmap(&mut bitmap, build_range.start, filter)?;
-                    }
-                    None => {
-                        set_bitmap_range(&mut bitmap, build_range.clone())?;
-                    }
-                },
-            }
+            bitmap.set_bit(l_index, true);
         }
 
         if self.should_track_unmatched_right {
-            let bitmap = self.current_right_batch_matched.as_mut().ok_or_else(|| {
-                internal_datafusion_err!("right batch's bitmap should be present")
-            })?;
-            filtered_candidates.mark_probe_matches(bitmap, right_batch.num_rows())?;
+            let right_bitmap =
+                self.current_right_batch_matched.as_mut().ok_or_else(|| {
+                    internal_datafusion_err!("right batch's bitmap should be present")
+                })?;
+            or_filter_into_bitmap(right_bitmap, 0, r_matched_bitmap)?;
         }
 
         Ok(())
@@ -2243,36 +2132,35 @@ impl NestedLoopJoinStream {
 
 // ==== Utilities ====
 
-/// Apply the filter to `build_batch x probe_batch[probe_row_idx]`
-///
-/// The returned mask does not have null mask for its inner physical represnetation,
-/// it's already combined with boolean array to make later processing easier.
-fn apply_filter_to_probe_row_join_batch(
-    build_batch: &RecordBatch,
-    probe_batch: &RecordBatch,
-    probe_row_idx: usize,
+/// Apply the join filter between:
+/// (l_index th row in left buffer) x (right batch)
+/// Returns a bitmap, with successfully joined indices set to true
+fn apply_filter_to_row_join_batch(
+    left_batch: &RecordBatch,
+    l_index: usize,
+    right_batch: &RecordBatch,
     filter: &JoinFilter,
 ) -> Result<BooleanArray> {
-    debug_assert!(build_batch.num_rows() != 0 && probe_row_idx < probe_batch.num_rows());
+    debug_assert!(left_batch.num_rows() != 0 && right_batch.num_rows() != 0);
 
     let intermediate_batch = if filter.schema.fields().is_empty() {
         create_record_batch_with_empty_schema(
             Arc::new((*filter.schema).clone()),
-            build_batch.num_rows(),
+            right_batch.num_rows(),
         )?
     } else {
         build_row_join_batch(
             &filter.schema,
-            probe_batch,
-            probe_row_idx,
-            build_batch,
+            left_batch,
+            l_index,
+            right_batch,
             None,
             &filter.column_indices,
-            JoinSide::Right,
+            JoinSide::Left,
         )?
         .ok_or_else(|| {
             internal_datafusion_err!(
-                "Build-range filter evaluation expects a non-empty intermediate batch"
+                "Row filter evaluation expects a non-empty intermediate batch"
             )
         })?
     };
@@ -2308,7 +2196,7 @@ fn or_filter_into_bitmap(
 
     if offset + len > bitmap.len() {
         return internal_err!(
-            "Build-side match bitmap range [{}..{}) is out of bounds for {} rows",
+            "Match bitmap range [{}..{}) is out of bounds for {} rows",
             offset,
             offset + len,
             bitmap.len()
@@ -2324,44 +2212,6 @@ fn or_filter_into_bitmap(
         len,
         |a, b| a | b,
     );
-    Ok(())
-}
-
-fn set_bitmap_range(
-    bitmap: &mut BooleanBufferBuilder,
-    range: Range<usize>,
-) -> Result<()> {
-    if range.is_empty() {
-        return Ok(());
-    }
-
-    if range.end > bitmap.len() {
-        return internal_err!(
-            "Build-side match bitmap range {:?} is out of bounds for {} rows",
-            range,
-            bitmap.len()
-        );
-    }
-
-    let bytes = bitmap.as_slice_mut();
-    let start_byte = range.start / 8;
-    let end_byte = (range.end - 1) / 8;
-    let start_mask = u8::MAX << (range.start % 8);
-    let end_remainder = range.end % 8;
-    let end_mask = if end_remainder == 0 {
-        u8::MAX
-    } else {
-        (1_u8 << end_remainder) - 1
-    };
-
-    if start_byte == end_byte {
-        bytes[start_byte] |= start_mask & end_mask;
-    } else {
-        bytes[start_byte] |= start_mask;
-        bytes[start_byte + 1..end_byte].fill(u8::MAX);
-        bytes[end_byte] |= end_mask;
-    }
-
     Ok(())
 }
 
@@ -2760,27 +2610,6 @@ pub(crate) mod tests {
     use insta::allow_duplicates;
     use insta::assert_snapshot;
     use rstest::rstest;
-
-    #[test]
-    fn set_bitmap_range_marks_unaligned_ranges() -> Result<()> {
-        let mut bitmap = BooleanBufferBuilder::new(20);
-        bitmap.append_n(20, false);
-
-        set_bitmap_range(&mut bitmap, 3..17)?;
-        for i in 0..20 {
-            assert_eq!(bitmap.get_bit(i), (3..17).contains(&i), "index {i}");
-        }
-
-        set_bitmap_range(&mut bitmap, 0..2)?;
-        set_bitmap_range(&mut bitmap, 18..20)?;
-        for i in 0..20 {
-            let expected =
-                (0..2).contains(&i) || (3..17).contains(&i) || (18..20).contains(&i);
-            assert_eq!(bitmap.get_bit(i), expected, "index {i}");
-        }
-
-        Ok(())
-    }
 
     #[test]
     fn or_filter_into_bitmap_marks_filter_bits_at_offset() -> Result<()> {
