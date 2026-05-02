@@ -543,7 +543,8 @@ impl FileSource for ParquetSource {
             .crypto
             .file_decryption
             .clone()
-            .map(FileDecryptionProperties::from)
+            .map(FileDecryptionProperties::try_from)
+            .transpose()?
             .map(Arc::new);
 
         let coerce_int96 = self
