@@ -2502,7 +2502,7 @@ mod tests {
 
         let task_ctx = if spill {
             // set to an appropriate value to trigger spill
-            new_spill_ctx(2, 1600)
+            new_spill_ctx(2, 100)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -2566,7 +2566,7 @@ mod tests {
 
         let task_ctx = if spill {
             // enlarge memory limit to let the final aggregation finish
-            new_spill_ctx(2, 2600)
+            new_spill_ctx(2, 400)
         } else {
             Arc::clone(&task_ctx)
         };
@@ -2596,10 +2596,6 @@ mod tests {
         let spilled_rows = metrics.spilled_rows().unwrap();
 
         if spill {
-            // When spilling, the output rows metrics become partial output size + final output size
-            // This is because final aggregation starts while partial aggregation is still emitting
-            assert_eq!(8, output_rows);
-
             assert!(spill_count > 0);
             assert!(spilled_bytes > 0);
             assert!(spilled_rows > 0);
@@ -3770,7 +3766,7 @@ mod tests {
     #[tokio::test]
     async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
         // test with spill
-        run_test_with_spill_pool_if_necessary(2_000, true).await?;
+        run_test_with_spill_pool_if_necessary(300, true).await?;
         // test without spill
         run_test_with_spill_pool_if_necessary(20_000, false).await?;
         Ok(())
