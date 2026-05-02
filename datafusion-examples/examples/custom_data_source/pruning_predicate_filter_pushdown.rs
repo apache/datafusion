@@ -26,7 +26,6 @@
 //!
 //! See `parquet_index.rs` for examples
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -237,7 +236,7 @@ impl PruningStatistics for PartitionStats<'_> {
         None
     }
 
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         None
     }
 
@@ -252,10 +251,6 @@ impl PruningStatistics for PartitionStats<'_> {
 
 #[async_trait]
 impl TableProvider for CustomTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         schema()
     }
@@ -338,10 +333,6 @@ impl DisplayAs for CustomExecutionPlan {
 impl ExecutionPlan for CustomExecutionPlan {
     fn name(&self) -> &'static str {
         "CustomExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

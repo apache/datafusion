@@ -25,7 +25,6 @@
 //! from pushed-down filter predicates and resolves them via the index,
 //! returning only the matching rows.
 
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
@@ -189,10 +188,6 @@ fn schema() -> SchemaRef {
 
 #[async_trait]
 impl TableProvider for CustomTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         schema()
     }
@@ -322,10 +317,6 @@ impl DisplayAs for CustomExecutionPlan {
 impl ExecutionPlan for CustomExecutionPlan {
     fn name(&self) -> &'static str {
         "CustomExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
