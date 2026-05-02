@@ -33,6 +33,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 const DENSE_LOOKUP_MAX_BYTES: usize = 2 * 1024 * 1024;
+const DENSE_LOOKUP_FILL_EXEMPT_BYTES: usize = 8 * 1024;
 const DENSE_LOOKUP_MIN_FILL_NUMERATOR: usize = 1;
 const DENSE_LOOKUP_MIN_FILL_DENOMINATOR: usize = 5;
 const DENSE_EMPTY_GROUP: usize = usize::MAX;
@@ -172,9 +173,13 @@ where
         key.to_dense_i128()?.checked_sub(min)?.try_into().ok()
     }
 
+    fn dense_lookup_bytes(range_len: usize) -> Option<usize> {
+        range_len.checked_mul(size_of::<usize>())
+    }
+
     fn dense_range_len(min: i128, max: i128) -> Option<usize> {
         let len: usize = max.checked_sub(min)?.checked_add(1)?.try_into().ok()?;
-        let bytes = len.checked_mul(size_of::<usize>())?;
+        let bytes = Self::dense_lookup_bytes(len)?;
         (bytes <= DENSE_LOOKUP_MAX_BYTES).then_some(len)
     }
 
@@ -202,18 +207,27 @@ where
         }
     }
 
-    fn dense_has_minimum_fill(dense: &DenseGroupValues<T::Native>) -> bool {
-        if dense.group_ids.is_empty() {
+    fn dense_is_eligible(occupied_slots: usize, range_len: usize) -> bool {
+        if range_len == 0 {
             return false;
         }
 
-        dense.occupied_slots * DENSE_LOOKUP_MIN_FILL_DENOMINATOR
-            > dense.group_ids.len() * DENSE_LOOKUP_MIN_FILL_NUMERATOR
+        if Self::dense_lookup_bytes(range_len)
+            .is_some_and(|bytes| bytes <= DENSE_LOOKUP_FILL_EXEMPT_BYTES)
+        {
+            return true;
+        }
+
+        occupied_slots * DENSE_LOOKUP_MIN_FILL_DENOMINATOR
+            > range_len * DENSE_LOOKUP_MIN_FILL_NUMERATOR
+    }
+
+    fn dense_has_minimum_fill(dense: &DenseGroupValues<T::Native>) -> bool {
+        Self::dense_is_eligible(dense.occupied_slots, dense.group_ids.len())
     }
 
     fn dense_can_have_minimum_fill(occupied_slots: usize, range_len: usize) -> bool {
-        occupied_slots * DENSE_LOOKUP_MIN_FILL_DENOMINATOR
-            > range_len * DENSE_LOOKUP_MIN_FILL_NUMERATOR
+        Self::dense_is_eligible(occupied_slots, range_len)
     }
 
     fn try_expand_dense_for_values(
@@ -781,13 +795,26 @@ mod tests {
 
     #[test]
     fn primitive_dense_lookup_rejected_for_low_fill_rate() -> Result<()> {
-        let input = Arc::new(UInt64Array::from(vec![Some(0), Some(999)])) as ArrayRef;
+        let input = Arc::new(UInt64Array::from(vec![Some(0), Some(2_000)])) as ArrayRef;
         let mut group_values = GroupValuesPrimitive::<UInt64Type>::new(DataType::UInt64);
         let mut groups = vec![];
 
         group_values.intern(&[input], &mut groups)?;
         assert_eq!(groups, vec![0, 1]);
         assert!(!is_dense(&group_values));
+
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_dense_lookup_used_for_small_sparse_range() -> Result<()> {
+        let input = Arc::new(UInt64Array::from(vec![Some(0), Some(999)])) as ArrayRef;
+        let mut group_values = GroupValuesPrimitive::<UInt64Type>::new(DataType::UInt64);
+        let mut groups = vec![];
+
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![0, 1]);
+        assert!(is_dense(&group_values));
 
         Ok(())
     }
@@ -833,18 +860,39 @@ mod tests {
     }
 
     #[test]
-    fn primitive_dense_lookup_converts_to_hash_when_emit_makes_range_sparse() -> Result<()>
-    {
-        let input = Arc::new(UInt64Array::from_iter_values(0..10)) as ArrayRef;
+    fn primitive_dense_lookup_expands_for_small_sparse_range() -> Result<()> {
+        let input = Arc::new(UInt64Array::from(vec![Some(0), Some(1)])) as ArrayRef;
         let mut group_values = GroupValuesPrimitive::<UInt64Type>::new(DataType::UInt64);
         let mut groups = vec![];
 
         group_values.intern(&[input], &mut groups)?;
-        assert_eq!(groups, (0..10).collect::<Vec<_>>());
+        assert_eq!(groups, vec![0, 1]);
         assert!(is_dense(&group_values));
 
-        let output = group_values.emit(EmitTo::First(9))?;
-        assert_eq!(values(&output[0]), (0..9).map(Some).collect::<Vec<_>>());
+        let input = Arc::new(UInt64Array::from(vec![Some(999)])) as ArrayRef;
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![2]);
+        assert!(is_dense(&group_values));
+
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_dense_lookup_converts_to_hash_when_emit_makes_range_sparse() -> Result<()>
+    {
+        let input = Arc::new(UInt64Array::from_iter_values(0..1101)) as ArrayRef;
+        let mut group_values = GroupValuesPrimitive::<UInt64Type>::new(DataType::UInt64);
+        let mut groups = vec![];
+
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, (0..1101).collect::<Vec<_>>());
+        assert!(is_dense(&group_values));
+
+        let output = group_values.emit(EmitTo::First(1100))?;
+        let output_values = values(&output[0]);
+        assert_eq!(output_values.len(), 1100);
+        assert_eq!(output_values[0], Some(0));
+        assert_eq!(output_values[1099], Some(1099));
         assert_eq!(group_values.len(), 1);
         assert!(!is_dense(&group_values));
 
