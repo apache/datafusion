@@ -24,7 +24,7 @@ use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::DFParquetWriterVersion;
-use crate::parsers::CompressionTypeVariant;
+use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
@@ -2042,6 +2042,17 @@ impl ConfigField for CompressionTypeVariant {
     }
 }
 
+impl ConfigField for CsvQuoteStyle {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = CsvQuoteStyle::from_str(value)?;
+        Ok(())
+    }
+}
+
 /// An implementation trait used to recursively walk configuration
 pub trait Visit {
     fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str);
@@ -3042,8 +3053,18 @@ impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
-    fn from(f: &Arc<FileDecryptionProperties>) -> Self {
+impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(f: &Arc<FileDecryptionProperties>) -> Result<Self> {
+        let footer_key = f.footer_key(None).map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not retrieve footer key from FileDecryptionProperties. \
+                Note that conversion to ConfigFileDecryptionProperties is not supported \
+                when using a key retriever: {e}"
+            ))
+        })?;
+
         let (column_names_vec, column_keys_vec) = f.column_keys();
         let mut column_decryption_properties: HashMap<
             String,
@@ -3057,14 +3078,12 @@ impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
         }
 
         let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
-        ConfigFileDecryptionProperties {
-            footer_key_as_hex: hex::encode(
-                f.footer_key(None).unwrap_or_default().as_ref(),
-            ),
+        Ok(ConfigFileDecryptionProperties {
+            footer_key_as_hex: hex::encode(footer_key.as_ref()),
             column_decryption_properties,
             aad_prefix_as_hex: hex::encode(aad_prefix),
             footer_signature_verification: f.check_plaintext_footer_integrity(),
-        }
+        })
     }
 }
 
@@ -3114,6 +3133,15 @@ config_namespace! {
         pub terminator: Option<u8>, default = None
         pub escape: Option<u8>, default = None
         pub double_quote: Option<bool>, default = None
+        /// Quote style for CSV writing.
+        /// One of: "Always", "Necessary", "NonNumeric", "Never"
+        pub quote_style: CsvQuoteStyle, default = CsvQuoteStyle::Necessary
+        /// Whether to ignore leading whitespace in string values when writing CSV.
+        /// Defaults to `false` when `None`.
+        pub ignore_leading_whitespace: Option<bool>, default = None
+        /// Whether to ignore trailing whitespace in string values when writing CSV.
+        /// Defaults to `false` when `None`.
+        pub ignore_trailing_whitespace: Option<bool>, default = None
         /// Specifies whether newlines in (quoted) values are supported.
         ///
         /// Parsing newlines in quoted values may be affected by execution behaviour such as
@@ -3219,6 +3247,30 @@ impl CsvOptions {
     /// - default to true
     pub fn with_double_quote(mut self, double_quote: bool) -> Self {
         self.double_quote = Some(double_quote);
+        self
+    }
+
+    /// Set the quote style for CSV writing.
+    pub fn with_quote_style(mut self, quote_style: CsvQuoteStyle) -> Self {
+        self.quote_style = quote_style;
+        self
+    }
+
+    /// Set whether to ignore leading whitespace in string values when writing CSV.
+    pub fn with_ignore_leading_whitespace(
+        mut self,
+        ignore_leading_whitespace: bool,
+    ) -> Self {
+        self.ignore_leading_whitespace = Some(ignore_leading_whitespace);
+        self
+    }
+
+    /// Set whether to ignore trailing whitespace in string values when writing CSV.
+    pub fn with_ignore_trailing_whitespace(
+        mut self,
+        ignore_trailing_whitespace: bool,
+    ) -> Self {
+        self.ignore_trailing_whitespace = Some(ignore_trailing_whitespace);
         self
     }
 
@@ -3537,7 +3589,8 @@ mod tests {
             Arc::new(FileEncryptionProperties::from(config_encrypt.clone()));
         assert_eq!(file_encryption_properties, encryption_properties_built);
 
-        let config_decrypt = ConfigFileDecryptionProperties::from(&decryption_properties);
+        let config_decrypt =
+            ConfigFileDecryptionProperties::try_from(&decryption_properties).unwrap();
         let decryption_properties_built =
             Arc::new(FileDecryptionProperties::from(config_decrypt.clone()));
         assert_eq!(decryption_properties, decryption_properties_built);
@@ -3653,6 +3706,42 @@ mod tests {
         assert_eq!(factory_options.len(), 2);
         assert_eq!(factory_options.get("key1"), Some(&"value 1".to_string()));
         assert_eq!(factory_options.get("key2"), Some(&"value 2".to_string()));
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    struct ParquetEncryptionKeyRetriever {}
+
+    #[cfg(feature = "parquet_encryption")]
+    impl parquet::encryption::decrypt::KeyRetriever for ParquetEncryptionKeyRetriever {
+        fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
+            if !key_metadata.is_empty() {
+                Ok(b"1234567890123450".to_vec())
+            } else {
+                Err(parquet::errors::ParquetError::General(
+                    "Key metadata not provided".to_string(),
+                ))
+            }
+        }
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn conversion_from_key_retriever_to_config_file_decryption_properties() {
+        use crate::Result;
+        use crate::config::ConfigFileDecryptionProperties;
+        use crate::encryption::FileDecryptionProperties;
+
+        let retriever = std::sync::Arc::new(ParquetEncryptionKeyRetriever {});
+        let decryption_properties =
+            FileDecryptionProperties::with_key_retriever(retriever)
+                .build()
+                .unwrap();
+        let config_file_decryption_properties: Result<ConfigFileDecryptionProperties> =
+            (&decryption_properties).try_into();
+        assert!(config_file_decryption_properties.is_err());
+        let err = config_file_decryption_properties.unwrap_err().to_string();
+        assert!(err.contains("key retriever"));
+        assert!(err.contains("Key metadata not provided"));
     }
 
     #[cfg(feature = "parquet")]

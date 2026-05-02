@@ -25,6 +25,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 rust-version = { workspace = true }
+publish = false
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
@@ -42,7 +43,8 @@ mimalloc_extended = ["libmimalloc-sys/extended"]
 arrow = { workspace = true }
 async-trait = "0.1"
 bytes = { workspace = true }
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive", "env"] }
+criterion = { workspace = true, features = ["html_reports"] }
 datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
@@ -62,3 +64,8 @@ tokio-util = { version = "0.7.17" }
 
 [dev-dependencies]
 datafusion-proto = { workspace = true }
+tempfile = { workspace = true }
+
+[[bench]]
+harness = false
+name = "sql"

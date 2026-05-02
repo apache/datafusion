@@ -294,9 +294,12 @@ pub enum LogicalPlan {
 
 impl Default for LogicalPlan {
     fn default() -> Self {
+        // `Default` is used as a transient placeholder on hot paths (e.g.
+        // `Box`/`Arc` `map_elements`), so use a shared empty schema to avoid
+        // allocating.
         LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::empty()),
+            schema: Arc::clone(DFSchema::empty_ref()),
         })
     }
 }
@@ -3622,7 +3625,6 @@ impl Aggregate {
     ///
     /// This method should only be called when you are absolutely sure that the schema being
     /// provided is correct for the aggregate. If in doubt, call [try_new](Self::try_new) instead.
-    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
@@ -3648,7 +3650,7 @@ impl Aggregate {
 
         let aggregate_func_dependencies =
             calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
-        let new_schema = schema.as_ref().clone();
+        let new_schema = Arc::unwrap_or_clone(schema);
         let schema = Arc::new(
             new_schema.with_functional_dependencies(aggregate_func_dependencies)?,
         );
@@ -3768,6 +3770,7 @@ impl PartialOrd for Aggregate {
 /// index among identical entries. For example, if the same set appears three
 /// times, the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
         let mut counts: HashMap<&[Expr], usize> = HashMap::new();

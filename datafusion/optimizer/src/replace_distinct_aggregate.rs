@@ -109,7 +109,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                             .enumerate()
                             .all(|(idx, f_idx)| idx == *f_idx)
                     {
-                        return Ok(Transformed::yes(input.as_ref().clone()));
+                        return Ok(Transformed::yes(Arc::unwrap_or_clone(input)));
                     }
                 }
 

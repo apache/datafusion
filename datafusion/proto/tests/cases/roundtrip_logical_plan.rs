@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
+    ArrayRef, FixedSizeListArray, Int32Builder, LargeListViewArray, ListViewArray,
+    MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DataType, Field, FieldRef, Fields, Int32Type,
@@ -133,7 +134,8 @@ fn roundtrip_expr_test_with_codec(
 ) {
     let proto: protobuf::LogicalExprNode = serialize_expr(&initial_struct, codec)
         .unwrap_or_else(|e| panic!("Error serializing expression: {e:?}"));
-    let round_trip: Expr = from_proto::parse_expr(&proto, &ctx, codec).unwrap();
+    let round_trip: Expr =
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), codec).unwrap();
 
     assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
 
@@ -1534,263 +1536,277 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
 
 #[test]
 fn round_trip_scalar_values_and_data_types() {
-    let should_pass: Vec<ScalarValue> = vec![
-        ScalarValue::Boolean(None),
-        ScalarValue::Float32(None),
-        ScalarValue::Float64(None),
-        ScalarValue::Int8(None),
-        ScalarValue::Int16(None),
-        ScalarValue::Int32(None),
-        ScalarValue::Int64(None),
-        ScalarValue::UInt8(None),
-        ScalarValue::UInt16(None),
-        ScalarValue::UInt32(None),
-        ScalarValue::UInt64(None),
-        ScalarValue::Utf8(None),
-        ScalarValue::LargeUtf8(None),
-        ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Boolean)),
-        ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
-        ScalarValue::Date32(None),
-        ScalarValue::Boolean(Some(true)),
-        ScalarValue::Boolean(Some(false)),
-        ScalarValue::Float32(Some(1.0)),
-        ScalarValue::Float32(Some(f32::MAX)),
-        ScalarValue::Float32(Some(f32::MIN)),
-        ScalarValue::Float32(Some(-2000.0)),
-        ScalarValue::Float64(Some(1.0)),
-        ScalarValue::Float64(Some(f64::MAX)),
-        ScalarValue::Float64(Some(f64::MIN)),
-        ScalarValue::Float64(Some(-2000.0)),
-        ScalarValue::Int8(Some(i8::MIN)),
-        ScalarValue::Int8(Some(i8::MAX)),
-        ScalarValue::Int8(Some(0)),
-        ScalarValue::Int8(Some(-15)),
-        ScalarValue::Int16(Some(i16::MIN)),
-        ScalarValue::Int16(Some(i16::MAX)),
-        ScalarValue::Int16(Some(0)),
-        ScalarValue::Int16(Some(-15)),
-        ScalarValue::Int32(Some(i32::MIN)),
-        ScalarValue::Int32(Some(i32::MAX)),
-        ScalarValue::Int32(Some(0)),
-        ScalarValue::Int32(Some(-15)),
-        ScalarValue::Int64(Some(i64::MIN)),
-        ScalarValue::Int64(Some(i64::MAX)),
-        ScalarValue::Int64(Some(0)),
-        ScalarValue::Int64(Some(-15)),
-        ScalarValue::UInt8(Some(u8::MAX)),
-        ScalarValue::UInt8(Some(0)),
-        ScalarValue::UInt16(Some(u16::MAX)),
-        ScalarValue::UInt16(Some(0)),
-        ScalarValue::UInt32(Some(u32::MAX)),
-        ScalarValue::UInt32(Some(0)),
-        ScalarValue::UInt64(Some(u64::MAX)),
-        ScalarValue::UInt64(Some(0)),
-        ScalarValue::Utf8(Some(String::from("Test string   "))),
-        ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
-        ScalarValue::Utf8View(Some(String::from("Test stringview"))),
-        ScalarValue::BinaryView(Some(b"binaryview".to_vec())),
-        ScalarValue::Date32(Some(0)),
-        ScalarValue::Date32(Some(i32::MAX)),
-        ScalarValue::Date32(None),
-        ScalarValue::Date64(Some(0)),
-        ScalarValue::Date64(Some(i64::MAX)),
-        ScalarValue::Date64(None),
-        ScalarValue::Time32Second(Some(0)),
-        ScalarValue::Time32Second(Some(i32::MAX)),
-        ScalarValue::Time32Second(None),
-        ScalarValue::Time32Millisecond(Some(0)),
-        ScalarValue::Time32Millisecond(Some(i32::MAX)),
-        ScalarValue::Time32Millisecond(None),
-        ScalarValue::Time64Microsecond(Some(0)),
-        ScalarValue::Time64Microsecond(Some(i64::MAX)),
-        ScalarValue::Time64Microsecond(None),
-        ScalarValue::Time64Nanosecond(Some(0)),
-        ScalarValue::Time64Nanosecond(Some(i64::MAX)),
-        ScalarValue::Time64Nanosecond(None),
-        ScalarValue::TimestampNanosecond(Some(0), None),
-        ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
-        ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into())),
-        ScalarValue::TimestampNanosecond(None, None),
-        ScalarValue::TimestampMicrosecond(Some(0), None),
-        ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
-        ScalarValue::TimestampMicrosecond(Some(0), Some("UTC".into())),
-        ScalarValue::TimestampMicrosecond(None, None),
-        ScalarValue::TimestampMillisecond(Some(0), None),
-        ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
-        ScalarValue::TimestampMillisecond(Some(0), Some("UTC".into())),
-        ScalarValue::TimestampMillisecond(None, None),
-        ScalarValue::TimestampSecond(Some(0), None),
-        ScalarValue::TimestampSecond(Some(i64::MAX), None),
-        ScalarValue::TimestampSecond(Some(0), Some("UTC".into())),
-        ScalarValue::TimestampSecond(None, None),
-        ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
-        ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(1, 2))),
-        ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-            i32::MAX,
-            i32::MAX,
-        ))),
-        ScalarValue::IntervalDayTime(None),
-        ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-            0, 0, 0,
-        ))),
-        ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-            1, 2, 3,
-        ))),
-        ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-            i32::MAX,
-            i32::MAX,
-            i64::MAX,
-        ))),
-        ScalarValue::IntervalMonthDayNano(None),
-        ScalarValue::List(ScalarValue::new_list_nullable(
-            &[
-                ScalarValue::Float32(Some(-213.1)),
-                ScalarValue::Float32(None),
-                ScalarValue::Float32(Some(5.5)),
-                ScalarValue::Float32(Some(2.0)),
-                ScalarValue::Float32(Some(1.0)),
-            ],
-            &DataType::Float32,
-        )),
-        ScalarValue::LargeList(ScalarValue::new_large_list(
-            &[
-                ScalarValue::Float32(Some(-213.1)),
-                ScalarValue::Float32(None),
-                ScalarValue::Float32(Some(5.5)),
-                ScalarValue::Float32(Some(2.0)),
-                ScalarValue::Float32(Some(1.0)),
-            ],
-            &DataType::Float32,
-        )),
-        ScalarValue::List(ScalarValue::new_list_nullable(
-            &[
-                ScalarValue::List(ScalarValue::new_list_nullable(
-                    &[],
-                    &DataType::Float32,
-                )),
-                ScalarValue::List(ScalarValue::new_list_nullable(
-                    &[
-                        ScalarValue::Float32(Some(-213.1)),
-                        ScalarValue::Float32(None),
-                        ScalarValue::Float32(Some(5.5)),
-                        ScalarValue::Float32(Some(2.0)),
-                        ScalarValue::Float32(Some(1.0)),
-                    ],
-                    &DataType::Float32,
-                )),
-            ],
-            &DataType::List(new_arc_field("item", DataType::Float32, true)),
-        )),
-        ScalarValue::LargeList(ScalarValue::new_large_list(
-            &[
-                ScalarValue::LargeList(ScalarValue::new_large_list(
-                    &[],
-                    &DataType::Float32,
-                )),
-                ScalarValue::LargeList(ScalarValue::new_large_list(
-                    &[
-                        ScalarValue::Float32(Some(-213.1)),
-                        ScalarValue::Float32(None),
-                        ScalarValue::Float32(Some(5.5)),
-                        ScalarValue::Float32(Some(2.0)),
-                        ScalarValue::Float32(Some(1.0)),
-                    ],
-                    &DataType::Float32,
-                )),
-            ],
-            &DataType::LargeList(new_arc_field("item", DataType::Float32, true)),
-        )),
-        ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::from_iter_primitive::<
-            Int32Type,
-            _,
-            _,
-        >(
-            vec![Some(vec![Some(1), Some(2), Some(3)])],
-            3,
-        ))),
-        ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::from("foo")),
-        ),
-        ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::Utf8(None)),
-        ),
-        ScalarValue::RunEndEncoded(
-            Field::new("run_ends", DataType::Int32, false).into(),
-            Field::new("values", DataType::Utf8, true).into(),
-            Box::new(ScalarValue::from("foo")),
-        ),
-        ScalarValue::RunEndEncoded(
-            Field::new("run_ends", DataType::Int32, false).into(),
-            Field::new("values", DataType::Utf8, true).into(),
-            Box::new(ScalarValue::Utf8(None)),
-        ),
-        ScalarValue::Binary(Some(b"bar".to_vec())),
-        ScalarValue::Binary(None),
-        ScalarValue::LargeBinary(Some(b"bar".to_vec())),
-        ScalarValue::LargeBinary(None),
-        ScalarStructBuilder::new()
-            .with_scalar(
-                Field::new("a", DataType::Int32, true),
-                ScalarValue::from(23i32),
-            )
-            .with_scalar(
-                Field::new("b", DataType::Boolean, false),
-                ScalarValue::from(false),
-            )
-            .build()
-            .unwrap(),
-        ScalarStructBuilder::new()
-            .with_scalar(
-                Field::new("a", DataType::Int32, true),
-                ScalarValue::from(23i32),
-            )
-            .with_scalar(
-                Field::new("b", DataType::Boolean, false),
-                ScalarValue::from(false),
-            )
-            .build()
-            .unwrap(),
-        ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Boolean, false),
-        ])))
-        .unwrap(),
-        ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Boolean, false),
-        ])))
-        .unwrap(),
-        ScalarValue::try_from(&DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Int32, true),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
+    let should_pass: Vec<ScalarValue> =
+        vec![
+            ScalarValue::Boolean(None),
+            ScalarValue::Float32(None),
+            ScalarValue::Float64(None),
+            ScalarValue::Int8(None),
+            ScalarValue::Int16(None),
+            ScalarValue::Int32(None),
+            ScalarValue::Int64(None),
+            ScalarValue::UInt8(None),
+            ScalarValue::UInt16(None),
+            ScalarValue::UInt32(None),
+            ScalarValue::UInt64(None),
+            ScalarValue::Utf8(None),
+            ScalarValue::LargeUtf8(None),
+            ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Boolean)),
+            ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
+            ScalarValue::Date32(None),
+            ScalarValue::Boolean(Some(true)),
+            ScalarValue::Boolean(Some(false)),
+            ScalarValue::Float32(Some(1.0)),
+            ScalarValue::Float32(Some(f32::MAX)),
+            ScalarValue::Float32(Some(f32::MIN)),
+            ScalarValue::Float32(Some(-2000.0)),
+            ScalarValue::Float64(Some(1.0)),
+            ScalarValue::Float64(Some(f64::MAX)),
+            ScalarValue::Float64(Some(f64::MIN)),
+            ScalarValue::Float64(Some(-2000.0)),
+            ScalarValue::Int8(Some(i8::MIN)),
+            ScalarValue::Int8(Some(i8::MAX)),
+            ScalarValue::Int8(Some(0)),
+            ScalarValue::Int8(Some(-15)),
+            ScalarValue::Int16(Some(i16::MIN)),
+            ScalarValue::Int16(Some(i16::MAX)),
+            ScalarValue::Int16(Some(0)),
+            ScalarValue::Int16(Some(-15)),
+            ScalarValue::Int32(Some(i32::MIN)),
+            ScalarValue::Int32(Some(i32::MAX)),
+            ScalarValue::Int32(Some(0)),
+            ScalarValue::Int32(Some(-15)),
+            ScalarValue::Int64(Some(i64::MIN)),
+            ScalarValue::Int64(Some(i64::MAX)),
+            ScalarValue::Int64(Some(0)),
+            ScalarValue::Int64(Some(-15)),
+            ScalarValue::UInt8(Some(u8::MAX)),
+            ScalarValue::UInt8(Some(0)),
+            ScalarValue::UInt16(Some(u16::MAX)),
+            ScalarValue::UInt16(Some(0)),
+            ScalarValue::UInt32(Some(u32::MAX)),
+            ScalarValue::UInt32(Some(0)),
+            ScalarValue::UInt64(Some(u64::MAX)),
+            ScalarValue::UInt64(Some(0)),
+            ScalarValue::Utf8(Some(String::from("Test string   "))),
+            ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
+            ScalarValue::Utf8View(Some(String::from("Test stringview"))),
+            ScalarValue::BinaryView(Some(b"binaryview".to_vec())),
+            ScalarValue::Date32(Some(0)),
+            ScalarValue::Date32(Some(i32::MAX)),
+            ScalarValue::Date32(None),
+            ScalarValue::Date64(Some(0)),
+            ScalarValue::Date64(Some(i64::MAX)),
+            ScalarValue::Date64(None),
+            ScalarValue::Time32Second(Some(0)),
+            ScalarValue::Time32Second(Some(i32::MAX)),
+            ScalarValue::Time32Second(None),
+            ScalarValue::Time32Millisecond(Some(0)),
+            ScalarValue::Time32Millisecond(Some(i32::MAX)),
+            ScalarValue::Time32Millisecond(None),
+            ScalarValue::Time64Microsecond(Some(0)),
+            ScalarValue::Time64Microsecond(Some(i64::MAX)),
+            ScalarValue::Time64Microsecond(None),
+            ScalarValue::Time64Nanosecond(Some(0)),
+            ScalarValue::Time64Nanosecond(Some(i64::MAX)),
+            ScalarValue::Time64Nanosecond(None),
+            ScalarValue::TimestampNanosecond(Some(0), None),
+            ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
+            ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into())),
+            ScalarValue::TimestampNanosecond(None, None),
+            ScalarValue::TimestampMicrosecond(Some(0), None),
+            ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
+            ScalarValue::TimestampMicrosecond(Some(0), Some("UTC".into())),
+            ScalarValue::TimestampMicrosecond(None, None),
+            ScalarValue::TimestampMillisecond(Some(0), None),
+            ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
+            ScalarValue::TimestampMillisecond(Some(0), Some("UTC".into())),
+            ScalarValue::TimestampMillisecond(None, None),
+            ScalarValue::TimestampSecond(Some(0), None),
+            ScalarValue::TimestampSecond(Some(i64::MAX), None),
+            ScalarValue::TimestampSecond(Some(0), Some("UTC".into())),
+            ScalarValue::TimestampSecond(None, None),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(1, 2))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                i32::MAX,
+                i32::MAX,
+            ))),
+            ScalarValue::IntervalDayTime(None),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(0, 0, 0),
             )),
-            false,
-        ))
-        .unwrap(),
-        ScalarValue::try_from(&DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Int32, true),
-                    Field::new("value", DataType::Utf8, true),
-                ])),
-                false,
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
             )),
-            true,
-        ))
-        .unwrap(),
-        ScalarValue::Map(Arc::new(create_map_array_test_case())),
-        ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
-        ScalarValue::FixedSizeBinary(0, None),
-        ScalarValue::FixedSizeBinary(5, None),
-    ];
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(i32::MAX, i32::MAX, i64::MAX),
+            )),
+            ScalarValue::IntervalMonthDayNano(None),
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::Float32(Some(-213.1)),
+                    ScalarValue::Float32(None),
+                    ScalarValue::Float32(Some(5.5)),
+                    ScalarValue::Float32(Some(2.0)),
+                    ScalarValue::Float32(Some(1.0)),
+                ],
+                &DataType::Float32,
+            )),
+            ScalarValue::LargeList(ScalarValue::new_large_list(
+                &[
+                    ScalarValue::Float32(Some(-213.1)),
+                    ScalarValue::Float32(None),
+                    ScalarValue::Float32(Some(5.5)),
+                    ScalarValue::Float32(Some(2.0)),
+                    ScalarValue::Float32(Some(1.0)),
+                ],
+                &DataType::Float32,
+            )),
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[],
+                        &DataType::Float32,
+                    )),
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[
+                            ScalarValue::Float32(Some(-213.1)),
+                            ScalarValue::Float32(None),
+                            ScalarValue::Float32(Some(5.5)),
+                            ScalarValue::Float32(Some(2.0)),
+                            ScalarValue::Float32(Some(1.0)),
+                        ],
+                        &DataType::Float32,
+                    )),
+                ],
+                &DataType::List(new_arc_field("item", DataType::Float32, true)),
+            )),
+            ScalarValue::LargeList(ScalarValue::new_large_list(
+                &[
+                    ScalarValue::LargeList(ScalarValue::new_large_list(
+                        &[],
+                        &DataType::Float32,
+                    )),
+                    ScalarValue::LargeList(ScalarValue::new_large_list(
+                        &[
+                            ScalarValue::Float32(Some(-213.1)),
+                            ScalarValue::Float32(None),
+                            ScalarValue::Float32(Some(5.5)),
+                            ScalarValue::Float32(Some(2.0)),
+                            ScalarValue::Float32(Some(1.0)),
+                        ],
+                        &DataType::Float32,
+                    )),
+                ],
+                &DataType::LargeList(new_arc_field("item", DataType::Float32, true)),
+            )),
+            ScalarValue::FixedSizeList(Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    vec![Some(vec![Some(1), Some(2), Some(3)])],
+                    3,
+                ),
+            )),
+            ScalarValue::ListView(Arc::new(ListViewArray::from_iter_primitive::<
+                Int32Type,
+                _,
+                _,
+            >(vec![Some(vec![
+                Some(1),
+                None,
+                Some(3),
+            ])]))),
+            ScalarValue::LargeListView(Arc::new(
+                LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(
+                    vec![Some(1), None, Some(3)],
+                )]),
+            )),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Utf8(None)),
+            ),
+            ScalarValue::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", DataType::Utf8, true).into(),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            ScalarValue::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", DataType::Utf8, true).into(),
+                Box::new(ScalarValue::Utf8(None)),
+            ),
+            ScalarValue::Binary(Some(b"bar".to_vec())),
+            ScalarValue::Binary(None),
+            ScalarValue::LargeBinary(Some(b"bar".to_vec())),
+            ScalarValue::LargeBinary(None),
+            ScalarStructBuilder::new()
+                .with_scalar(
+                    Field::new("a", DataType::Int32, true),
+                    ScalarValue::from(23i32),
+                )
+                .with_scalar(
+                    Field::new("b", DataType::Boolean, false),
+                    ScalarValue::from(false),
+                )
+                .build()
+                .unwrap(),
+            ScalarStructBuilder::new()
+                .with_scalar(
+                    Field::new("a", DataType::Int32, true),
+                    ScalarValue::from(23i32),
+                )
+                .with_scalar(
+                    Field::new("b", DataType::Boolean, false),
+                    ScalarValue::from(false),
+                )
+                .build()
+                .unwrap(),
+            ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Boolean, false),
+            ])))
+            .unwrap(),
+            ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Boolean, false),
+            ])))
+            .unwrap(),
+            ScalarValue::try_from(&DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int32, true),
+                        Field::new("value", DataType::Utf8, false),
+                    ])),
+                    false,
+                )),
+                false,
+            ))
+            .unwrap(),
+            ScalarValue::try_from(&DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int32, true),
+                        Field::new("value", DataType::Utf8, true),
+                    ])),
+                    false,
+                )),
+                true,
+            ))
+            .unwrap(),
+            ScalarValue::Map(Arc::new(create_map_array_test_case())),
+            ScalarValue::FixedSizeBinary(
+                b"bar".to_vec().len() as i32,
+                Some(b"bar".to_vec()),
+            ),
+            ScalarValue::FixedSizeBinary(0, None),
+            ScalarValue::FixedSizeBinary(5, None),
+        ];
 
     // ScalarValue directly
     for test_case in should_pass.iter() {
@@ -2556,7 +2572,8 @@ fn roundtrip_scalar_udf_extension_codec() {
     let ctx = SessionContext::new();
     let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
     let round_trip =
-        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
+            .expect("parse expr");
 
     assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
@@ -2569,7 +2586,8 @@ fn roundtrip_aggregate_udf_extension_codec() {
     let ctx = SessionContext::new();
     let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
     let round_trip =
-        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
+            .expect("parse expr");
 
     assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
@@ -3079,5 +3097,57 @@ async fn roundtrip_mixed_case_table_reference() -> Result<()> {
         format!("{}", server_logical_plan.display_indent_schema())
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_empty_table_scan() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
+        &schema,
+    )));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", restored.display_indent_schema()),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
+        &schema,
+    )));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let plan = ctx
+        .table("empty")
+        .await?
+        .select_columns(&["name"])?
+        .into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", restored.display_indent_schema()),
+    );
     Ok(())
 }

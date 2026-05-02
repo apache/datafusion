@@ -35,8 +35,9 @@ use datafusion_common::{
     plan_err,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
-    InSubquery, Like, ScalarFunction, SetComparison, Sort, WindowFunction,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists,
+    HigherOrderFunction, InList, InSubquery, Like, ScalarFunction, SetComparison, Sort,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -44,7 +45,9 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, like_coercion, type_union_coercion,
 };
-use datafusion_expr::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use datafusion_expr::type_coercion::functions::{
+    UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
+};
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_case_when,
     get_coerce_type_for_list,
@@ -55,8 +58,8 @@ use datafusion_expr::type_coercion::{
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, is_false, is_not_false, is_not_true,
-    is_not_unknown, is_true, is_unknown, lit, not,
+    ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, is_false,
+    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -763,6 +766,35 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 });
                 Ok(Transformed::yes(new_expr))
             }
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                let current_fields = args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lambda(lambda) => Ok(ValueOrLambda::Lambda(
+                            lambda.body.to_field(self.schema)?.1,
+                        )),
+                        _ => Ok(ValueOrLambda::Value(arg.to_field(self.schema)?.1)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+                    &current_fields,
+                    func.as_ref(),
+                )?;
+
+                let new_args = std::iter::zip(args, new_fields)
+                    .map(|(arg, new_field)| match (&arg, new_field) {
+                        (Expr::Lambda(_lambda), ValueOrLambda::Lambda(_)) => Ok(arg),
+                        (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => internal_err!("value_fields_with_higher_order_udf returned a value for a lambda argument"),
+                        (_, ValueOrLambda::Value(new_field)) => arg.cast_to(new_field.data_type(), self.schema),
+                        (_, ValueOrLambda::Lambda(_)) => internal_err!("value_fields_with_higher_order_udf returned a lambda for a value argument"),
+                    })
+                    .collect::<Result<_>>()?;
+
+                Ok(Transformed::yes(Expr::HigherOrderFunction(
+                    HigherOrderFunction::new(func, new_args),
+                )))
+            }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
             Expr::Alias(_)
@@ -777,7 +809,9 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::OuterReferenceColumn(_, _) => Ok(Transformed::no(expr)),
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => Ok(Transformed::no(expr)),
         }
     }
 }
