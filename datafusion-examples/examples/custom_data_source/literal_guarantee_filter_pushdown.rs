@@ -17,13 +17,16 @@
 
 //! See `main.rs` for how to run it.
 //!
-//! Example demonstrating filter pushdown using [`LiteralGuarantee`] with a
+//! This example demonstrates filter pushdown using [`LiteralGuarantee`] with a
 //! custom index.
 //!
 //! A [`TableProvider`] with a `BTreeMap` index on `bank_account` uses
 //! [`LiteralGuarantee::analyze`] to extract equality / IN-list constraints
 //! from pushed-down filter predicates and resolves them via the index,
 //! returning only the matching rows.
+//!
+//! See [`pruning_predicate_filter_pushdown.rs`] for a similar filter pushdown example
+//! that uses the higher level [`PruningPredicate`] API.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Formatter};

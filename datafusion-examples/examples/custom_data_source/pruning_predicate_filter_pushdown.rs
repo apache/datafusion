@@ -17,14 +17,16 @@
 
 //! See `main.rs` for how to run it.
 //!
-//! Example demonstrating filter pushdown using [`PruningPredicate`] to skip
+//! This example demonstrating filter pushdown using [`PruningPredicate`] to skip
 //! entire partitions based on min/max statistics.
 //!
 //! A [`TableProvider`] with multiple in-memory partitions uses
 //! [`PruningPredicate::prune`] to determine which partitions could contain
 //! matching rows and only scans those.
 //!
-//! See `parquet_index.rs` for examples
+//! See [`parquet_index.rs`] for a similar example of filter pushdown using parquet specifically.
+//! See [`literal_guarantee_filter_pushdown`] for a lower level example of filter pushdown that
+//! uses [`LiteralGuarantee`] directly.
 
 use std::collections::HashSet;
 use std::fmt::{self, Debug, Formatter};
