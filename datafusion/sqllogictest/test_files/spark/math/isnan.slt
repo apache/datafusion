@@ -70,3 +70,24 @@ true
 false
 false
 false
+
+# Spark's isnan accepts any numeric type by implicitly casting to double, so
+# integers, bigints, and decimals all return false (they can never be NaN).
+# This test guards against the signature being accidentally narrowed in a way
+# that would diverge from Spark.
+query BBBB
+SELECT
+  isnan(1) AS int_lit,
+  isnan(CAST(1 AS BIGINT)) AS bigint,
+  isnan(CAST(1 AS DECIMAL(10, 2))) AS dec,
+  isnan(CAST(NULL AS INT)) AS null_int;
+----
+false false false false
+
+# Untyped NULL literal: relies on DataFusion coercing Null -> Float64 to satisfy
+# the Exact(Float32)/Exact(Float64) signature. Without that coercion, planning
+# would fail and we'd diverge from Spark, which returns false here.
+query B
+SELECT isnan(NULL);
+----
+false

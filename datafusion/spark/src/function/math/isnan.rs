@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BooleanArray, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{Array, ArrayRef, BooleanArray, PrimitiveArray};
+use arrow::datatypes::{ArrowPrimitiveType, DataType, Float32Type, Float64Type};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
+use num_traits::Float;
 
 /// Spark-compatible `isnan` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#isnan>
@@ -60,10 +60,6 @@ impl SparkIsNaN {
 }
 
 impl ScalarUDFImpl for SparkIsNaN {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "isnan"
     }
@@ -82,37 +78,23 @@ impl ScalarUDFImpl for SparkIsNaN {
 }
 
 fn spark_isnan(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let [value] = take_function_args("isnan", args)?;
+    let [array] = take_function_args("isnan", ColumnarValue::values_to_arrays(args)?)?;
 
-    match value {
-        ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Float32 => {
-                let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-                Ok(ColumnarValue::Array(nulls_to_false(
-                    BooleanArray::from_unary(array, |x| x.is_nan()),
-                )))
-            }
-            DataType::Float64 => {
-                let array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-                Ok(ColumnarValue::Array(nulls_to_false(
-                    BooleanArray::from_unary(array, |x| x.is_nan()),
-                )))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function isnan"),
-        },
-        ColumnarValue::Scalar(sv) => match sv {
-            ScalarValue::Float32(v) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
-                Some(v.is_some_and(|x| x.is_nan())),
-            ))),
-            ScalarValue::Float64(v) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
-                Some(v.is_some_and(|x| x.is_nan())),
-            ))),
-            _ => exec_err!(
-                "Unsupported data type {:?} for function isnan",
-                sv.data_type()
-            ),
-        },
-    }
+    let result = match array.data_type() {
+        DataType::Float32 => isnan_array::<Float32Type>(&array),
+        DataType::Float64 => isnan_array::<Float64Type>(&array),
+        other => return exec_err!("Unsupported data type {other:?} for function isnan"),
+    };
+    Ok(ColumnarValue::Array(result))
+}
+
+fn isnan_array<T>(array: &ArrayRef) -> ArrayRef
+where
+    T: ArrowPrimitiveType,
+    T::Native: Float,
+{
+    let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+    nulls_to_false(BooleanArray::from_unary(array, |x| x.is_nan()))
 }
 
 /// Replaces null values with false in a BooleanArray.
@@ -131,6 +113,8 @@ fn nulls_to_false(is_nan: BooleanArray) -> ArrayRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Float32Array, Float64Array};
+    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_isnan_float64() {
