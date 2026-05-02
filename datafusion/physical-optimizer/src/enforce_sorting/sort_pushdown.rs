@@ -19,7 +19,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::utils::{
-    add_sort_above, is_sort, is_sort_preserving_merge, is_union, is_window,
+    add_sort_above_with_distribution, is_sort, is_sort_preserving_merge, is_union,
+    is_window,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -29,7 +30,7 @@ use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    EquivalenceProperties, add_offset_to_physical_sort_exprs,
+    Distribution, EquivalenceProperties, add_offset_to_physical_sort_exprs,
 };
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
@@ -55,10 +56,24 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// of the parent node as its data.
 ///
 /// [`EnforceSorting`]: crate::enforce_sorting::EnforceSorting
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct ParentRequirements {
     ordering_requirement: Option<OrderingRequirements>,
     fetch: Option<usize>,
+    /// The distribution required by the consumer above any SortExec we insert.
+    /// When this is `SinglePartition` and the input has multiple partitions,
+    /// `add_sort_above_with_distribution` wraps the sort in `SortPreservingMergeExec`.
+    distribution_requirement: Distribution,
+}
+
+impl Default for ParentRequirements {
+    fn default() -> Self {
+        Self {
+            ordering_requirement: None,
+            fetch: None,
+            distribution_requirement: Distribution::UnspecifiedDistribution,
+        }
+    }
 }
 
 pub type SortPushDown = PlanContext<ParentRequirements>;
@@ -66,12 +81,17 @@ pub type SortPushDown = PlanContext<ParentRequirements>;
 /// Assigns the ordering requirement of the root node to the its children.
 pub fn assign_initial_requirements(sort_push_down: &mut SortPushDown) {
     let reqs = sort_push_down.plan.required_input_ordering();
-    for (child, requirement) in sort_push_down.children.iter_mut().zip(reqs) {
+    let dists = sort_push_down.plan.required_input_distribution();
+    for (idx, (child, requirement)) in
+        sort_push_down.children.iter_mut().zip(reqs).enumerate()
+    {
         child.data = ParentRequirements {
             ordering_requirement: requirement,
-            // If the parent has a fetch value, assign it to the children
-            // Or use the fetch value of the child.
             fetch: child.plan.fetch(),
+            distribution_requirement: dists
+                .get(idx)
+                .cloned()
+                .unwrap_or(Distribution::UnspecifiedDistribution),
         };
     }
 }
@@ -92,11 +112,25 @@ fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
     }
 }
 
+/// Returns the stricter of two distribution requirements.
+/// `SinglePartition` is the strictest.
+fn stronger_distribution(a: &Distribution, b: &Distribution) -> Distribution {
+    match (a, b) {
+        (Distribution::SinglePartition, _) | (_, Distribution::SinglePartition) => {
+            Distribution::SinglePartition
+        }
+        (Distribution::HashPartitioned(_), _) => a.clone(),
+        (_, Distribution::HashPartitioned(_)) => b.clone(),
+        _ => Distribution::UnspecifiedDistribution,
+    }
+}
+
 fn pushdown_sorts_helper(
     mut sort_push_down: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = sort_push_down.plan;
     let parent_fetch = sort_push_down.data.fetch;
+    let parent_distribution = sort_push_down.data.distribution_requirement.clone();
 
     let Some(parent_requirement) = sort_push_down.data.ordering_requirement.clone()
     else {
@@ -121,6 +155,14 @@ fn pushdown_sorts_helper(
             return pushdown_sorts_helper(sort_push_down);
         }
         sort_push_down.plan = plan;
+        // No ordering is being pushed; use each child's own distribution requirement
+        let dists = sort_push_down.plan.required_input_distribution();
+        for (idx, child) in sort_push_down.children.iter_mut().enumerate() {
+            child.data.distribution_requirement = dists
+                .get(idx)
+                .cloned()
+                .unwrap_or(Distribution::UnspecifiedDistribution);
+        }
         return Ok(Transformed::no(sort_push_down));
     };
 
@@ -149,22 +191,29 @@ fn pushdown_sorts_helper(
             // The sort was imposing a different ordering than the one being
             // pushed down. Replace it with a sort that matches the pushed-down
             // ordering, and continue the pushdown.
-            // Add back the sort:
-            sort_push_down = add_sort_above(
+            // Add back the sort (distribution-aware):
+            sort_push_down = add_sort_above_with_distribution(
                 sort_push_down,
                 parent_requirement.into_single(),
                 parent_fetch,
+                &parent_distribution,
             );
             // Update pushdown requirements:
             sort_push_down.children[0].data = ParentRequirements {
                 ordering_requirement: Some(OrderingRequirements::from(sort_ordering)),
                 fetch: sort_fetch,
+                distribution_requirement: Distribution::UnspecifiedDistribution,
             };
             return Ok(Transformed::yes(sort_push_down));
         } else {
             // Sort was unnecessary, just propagate the stricter fetch and
-            // ordering requirements:
+            // ordering requirements. Reset distribution to Unspecified
+            // because the sort we're removing may have been below a
+            // partition-merging node (like SortPreservingMergeExec) that
+            // already satisfies SinglePartition.
             sort_push_down.data.fetch = min_fetch(sort_fetch, parent_fetch);
+            sort_push_down.data.distribution_requirement =
+                Distribution::UnspecifiedDistribution;
             let current_is_stricter = eqp.requirements_compatible(
                 sort_ordering.clone().into(),
                 parent_requirement.first().clone(),
@@ -184,10 +233,28 @@ fn pushdown_sorts_helper(
     if satisfy_parent {
         // For non-sort operators which satisfy ordering:
         let reqs = sort_push_down.plan.required_input_ordering();
+        let dists = sort_push_down.plan.required_input_distribution();
 
-        for (child, order) in sort_push_down.children.iter_mut().zip(reqs) {
+        // If this node already outputs single partition, don't push SinglePartition
+        // requirement to children (they're below the merge point).
+        let effective_parent_dist =
+            if sort_push_down.plan.output_partitioning().partition_count() == 1 {
+                Distribution::UnspecifiedDistribution
+            } else {
+                parent_distribution.clone()
+            };
+
+        for (idx, (child, order)) in
+            sort_push_down.children.iter_mut().zip(reqs).enumerate()
+        {
             child.data.ordering_requirement = order;
             child.data.fetch = min_fetch(parent_fetch, child.data.fetch);
+            child.data.distribution_requirement = stronger_distribution(
+                &effective_parent_dist,
+                dists
+                    .get(idx)
+                    .unwrap_or(&Distribution::UnspecifiedDistribution),
+            );
         }
     } else if let Some(adjusted) = pushdown_requirement_to_children(
         &sort_push_down.plan,
@@ -195,19 +262,36 @@ fn pushdown_sorts_helper(
         parent_fetch,
     )? {
         // For operators that can take a sort pushdown, continue with updated
-        // requirements:
+        // requirements. If this node already outputs single partition (e.g. SPM),
+        // don't push SinglePartition to children.
         let current_fetch = sort_push_down.plan.fetch();
-        for (child, order) in sort_push_down.children.iter_mut().zip(adjusted) {
+        let dists = sort_push_down.plan.required_input_distribution();
+        let effective_dist =
+            if sort_push_down.plan.output_partitioning().partition_count() == 1 {
+                Distribution::UnspecifiedDistribution
+            } else {
+                parent_distribution.clone()
+            };
+        for (idx, (child, order)) in
+            sort_push_down.children.iter_mut().zip(adjusted).enumerate()
+        {
             child.data.ordering_requirement = order;
             child.data.fetch = min_fetch(current_fetch, parent_fetch);
+            child.data.distribution_requirement = stronger_distribution(
+                &effective_dist,
+                dists
+                    .get(idx)
+                    .unwrap_or(&Distribution::UnspecifiedDistribution),
+            );
         }
         sort_push_down.data.ordering_requirement = None;
     } else {
-        // Can not push down requirements, add new `SortExec`:
-        sort_push_down = add_sort_above(
+        // Can not push down requirements, add new `SortExec` (distribution-aware):
+        sort_push_down = add_sort_above_with_distribution(
             sort_push_down,
             parent_requirement.into_single(),
             parent_fetch,
+            &parent_distribution,
         );
         assign_initial_requirements(&mut sort_push_down);
     }

@@ -30,6 +30,7 @@ pub mod combine_partial_final_agg;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod ensure_coop;
+pub mod ensure_requirements;
 pub mod filter_pushdown;
 pub mod join_selection;
 pub mod limit_pushdown;

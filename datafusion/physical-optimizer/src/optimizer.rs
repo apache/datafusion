@@ -22,9 +22,8 @@ use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
-use crate::enforce_distribution::EnforceDistribution;
-use crate::enforce_sorting::EnforceSorting;
 use crate::ensure_coop::EnsureCooperative;
+use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
@@ -170,18 +169,12 @@ impl PhysicalOptimizer {
             // those are handled by the later `FilterPushdown` rule.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new()),
-            // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
-            // requirements. Please make sure that the whole plan tree is determined before this rule.
-            // This rule increases parallelism if doing so is beneficial to the physical plan; i.e. at
-            // least one of the operators in the plan benefits from increased parallelism.
-            Arc::new(EnforceDistribution::new()),
-            // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution rule
+            // EnsureRequirements: merged EnforceDistribution + EnforceSorting into a
+            // single idempotent rule with distribution-aware pushdown_sorts.
+            // See https://github.com/apache/datafusion/issues/21973
+            Arc::new(EnsureRequirements::new()),
+            // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
-            // The EnforceSorting rule is for adding essential local sorting to satisfy the required
-            // ordering. Please make sure that the whole plan tree is determined before this rule.
-            // Note that one should always run this rule after running the EnforceDistribution rule
-            // as the latter may break local sorting requirements.
-            Arc::new(EnforceSorting::new()),
             // Run once after the local sorting requirement is changed
             Arc::new(OptimizeAggregateOrder::new()),
             // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER) → Sort

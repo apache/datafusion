@@ -262,7 +262,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
 /// If the plan is not a [`SortExec`] or its child is not unbounded, returns the original plan.
 /// Otherwise, by checking the requirement satisfaction searches for a replacement chance.
 /// If there's one replaces the [`SortExec`] plan with a [`PartialSortExec`]
-fn replace_with_partial_sort(
+pub fn replace_with_partial_sort(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let Some(sort_plan) = plan.downcast_ref::<SortExec>() else {
