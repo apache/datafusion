@@ -18,8 +18,8 @@
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
-    cast::AsArray,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
+    PrimitiveArray, cast::AsArray,
 };
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
@@ -112,35 +112,60 @@ where
         assert_eq!(cols.len(), 1);
         groups.clear();
 
-        for v in cols[0].as_primitive::<T>() {
-            let group_id = match v {
-                None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.num_groups;
-                    self.num_groups += 1;
-                    group_id
-                }),
-                Some(key) => {
-                    let state = &self.random_state;
-                    let hash = key.hash(state);
-                    let insert = self.map.entry(
-                        hash,
-                        |&(_, value)| value.is_eq(key),
-                        |&(_, value)| value.hash(state),
-                    );
+        let values = cols[0].as_primitive::<T>();
 
-                    match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
-                        hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.num_groups;
-                            v.insert((g, key));
-                            self.num_groups += 1;
-                            g
-                        }
+        if values.null_count() == 0 {
+            let state = &self.random_state;
+            groups.extend(values.values().iter().map(|&key| {
+                let hash = key.hash(state);
+                let insert = self.map.entry(
+                    hash,
+                    |&(_, value)| value.is_eq(key),
+                    |&(_, value)| value.hash(state),
+                );
+
+                match insert {
+                    hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
+                    hashbrown::hash_table::Entry::Vacant(v) => {
+                        let g = self.num_groups;
+                        v.insert((g, key));
+                        self.num_groups += 1;
+                        g
                     }
                 }
-            };
-            groups.push(group_id)
+            }));
+        } else {
+            for v in values {
+                let group_id = match v {
+                    None => *self.null_group.get_or_insert_with(|| {
+                        let group_id = self.num_groups;
+                        self.num_groups += 1;
+                        group_id
+                    }),
+                    Some(key) => {
+                        let state = &self.random_state;
+                        let hash = key.hash(state);
+                        let insert = self.map.entry(
+                            hash,
+                            |&(_, value)| value.is_eq(key),
+                            |&(_, value)| value.hash(state),
+                        );
+
+                        match insert {
+                            hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
+                            hashbrown::hash_table::Entry::Vacant(v) => {
+                                let g = self.num_groups;
+                                v.insert((g, key));
+                                self.num_groups += 1;
+                                g
+                            }
+                        }
+                    }
+                };
+                groups.push(group_id)
+            }
         }
+
         Ok(())
     }
 
