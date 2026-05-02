@@ -146,7 +146,7 @@ ark SQL
 (empty)
 (empty)
 (empty)
-Spa
+(empty)
 NULL
 NULL
 NULL
@@ -197,7 +197,14 @@ ark SQL
 (empty)
 (empty)
 (empty)
-Spa
+(empty)
 NULL
 NULL
 NULL
+
+query T
+SELECT substr(column1, -10, 3)
+FROM VALUES
+('abc'::string)
+----
+(empty)

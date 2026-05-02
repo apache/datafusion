@@ -3053,8 +3053,18 @@ impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
-    fn from(f: &Arc<FileDecryptionProperties>) -> Self {
+impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(f: &Arc<FileDecryptionProperties>) -> Result<Self> {
+        let footer_key = f.footer_key(None).map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not retrieve footer key from FileDecryptionProperties. \
+                Note that conversion to ConfigFileDecryptionProperties is not supported \
+                when using a key retriever: {e}"
+            ))
+        })?;
+
         let (column_names_vec, column_keys_vec) = f.column_keys();
         let mut column_decryption_properties: HashMap<
             String,
@@ -3068,14 +3078,12 @@ impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
         }
 
         let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
-        ConfigFileDecryptionProperties {
-            footer_key_as_hex: hex::encode(
-                f.footer_key(None).unwrap_or_default().as_ref(),
-            ),
+        Ok(ConfigFileDecryptionProperties {
+            footer_key_as_hex: hex::encode(footer_key.as_ref()),
             column_decryption_properties,
             aad_prefix_as_hex: hex::encode(aad_prefix),
             footer_signature_verification: f.check_plaintext_footer_integrity(),
-        }
+        })
     }
 }
 
@@ -3581,7 +3589,8 @@ mod tests {
             Arc::new(FileEncryptionProperties::from(config_encrypt.clone()));
         assert_eq!(file_encryption_properties, encryption_properties_built);
 
-        let config_decrypt = ConfigFileDecryptionProperties::from(&decryption_properties);
+        let config_decrypt =
+            ConfigFileDecryptionProperties::try_from(&decryption_properties).unwrap();
         let decryption_properties_built =
             Arc::new(FileDecryptionProperties::from(config_decrypt.clone()));
         assert_eq!(decryption_properties, decryption_properties_built);
@@ -3697,6 +3706,42 @@ mod tests {
         assert_eq!(factory_options.len(), 2);
         assert_eq!(factory_options.get("key1"), Some(&"value 1".to_string()));
         assert_eq!(factory_options.get("key2"), Some(&"value 2".to_string()));
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    struct ParquetEncryptionKeyRetriever {}
+
+    #[cfg(feature = "parquet_encryption")]
+    impl parquet::encryption::decrypt::KeyRetriever for ParquetEncryptionKeyRetriever {
+        fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
+            if !key_metadata.is_empty() {
+                Ok(b"1234567890123450".to_vec())
+            } else {
+                Err(parquet::errors::ParquetError::General(
+                    "Key metadata not provided".to_string(),
+                ))
+            }
+        }
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn conversion_from_key_retriever_to_config_file_decryption_properties() {
+        use crate::Result;
+        use crate::config::ConfigFileDecryptionProperties;
+        use crate::encryption::FileDecryptionProperties;
+
+        let retriever = std::sync::Arc::new(ParquetEncryptionKeyRetriever {});
+        let decryption_properties =
+            FileDecryptionProperties::with_key_retriever(retriever)
+                .build()
+                .unwrap();
+        let config_file_decryption_properties: Result<ConfigFileDecryptionProperties> =
+            (&decryption_properties).try_into();
+        assert!(config_file_decryption_properties.is_err());
+        let err = config_file_decryption_properties.unwrap_err().to_string();
+        assert!(err.contains("key retriever"));
+        assert!(err.contains("Key metadata not provided"));
     }
 
     #[cfg(feature = "parquet")]

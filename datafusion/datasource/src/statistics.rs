@@ -29,7 +29,7 @@ use arrow::array::RecordBatch;
 use arrow::compute::SortColumn;
 use arrow::datatypes::SchemaRef;
 use arrow::row::{Row, Rows};
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{NdvFallback, Precision};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
 };
@@ -479,7 +479,11 @@ pub fn compute_file_group_statistics(
         let stats = file.statistics.as_ref()?;
         Some(stats.as_ref())
     });
-    let statistics = Statistics::try_merge_iter(file_group_stats, &file_schema)?;
+    let statistics = Statistics::try_merge_iter_with_ndv_fallback(
+        file_group_stats,
+        &file_schema,
+        NdvFallback::Max,
+    )?;
 
     Ok(file_group.with_statistics(Arc::new(statistics)))
 }
@@ -524,8 +528,11 @@ pub fn compute_all_files_statistics(
         .iter()
         .filter_map(|file_group| file_group.file_statistics(None));
 
-    let mut statistics =
-        Statistics::try_merge_iter(file_groups_statistics, &table_schema)?;
+    let mut statistics = Statistics::try_merge_iter_with_ndv_fallback(
+        file_groups_statistics,
+        &table_schema,
+        NdvFallback::Max,
+    )?;
 
     if inexact_stats {
         statistics = statistics.to_inexact()
@@ -546,6 +553,7 @@ pub fn add_row_stats(
 mod tests {
     use super::*;
     use crate::PartitionedFile;
+    use crate::file_groups::FileGroup;
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::stream;
 
@@ -597,6 +605,24 @@ mod tests {
         }
     }
 
+    fn utf8_file_stats(ndv: usize, min: &str, max: &str) -> Statistics {
+        Statistics {
+            num_rows: Precision::Exact(1),
+            total_byte_size: Precision::Exact(16),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Utf8(Some(max.to_string()))),
+                min_value: Precision::Exact(ScalarValue::Utf8(Some(min.to_string()))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Exact(ndv),
+                byte_size: Precision::Exact(16),
+            }],
+        }
+    }
+
+    fn file_with_stats(path: &str, stats: Statistics) -> PartitionedFile {
+        PartitionedFile::new(path, 1).with_statistics(Arc::new(stats))
+    }
     #[tokio::test]
     #[expect(deprecated)]
     async fn test_get_statistics_with_limit_casts_first_file_sum_to_sum_type()
@@ -794,5 +820,74 @@ mod tests {
             statistics.column_statistics[0].byte_size,
             Precision::Inexact(128)
         );
+    }
+
+    #[test]
+    fn test_compute_file_group_statistics_uses_max_ndv_fallback() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
+        let file_group = FileGroup::new(vec![
+            file_with_stats("f1.parquet", utf8_file_stats(5, "a", "x")),
+            file_with_stats("f2.parquet", utf8_file_stats(8, "b", "z")),
+        ]);
+
+        let file_group =
+            compute_file_group_statistics(file_group, Arc::clone(&schema), true)?;
+        let stats = file_group.file_statistics(None).unwrap();
+
+        assert_eq!(
+            stats.column_statistics[0].distinct_count,
+            Precision::Inexact(8)
+        );
+        assert_eq!(
+            stats.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("a".to_string())))
+        );
+        assert_eq!(
+            stats.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("z".to_string())))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_compute_all_files_statistics_uses_max_ndv_fallback() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
+        let file_groups = vec![
+            FileGroup::new(vec![
+                file_with_stats("f1.parquet", utf8_file_stats(5, "a", "x")),
+                file_with_stats("f2.parquet", utf8_file_stats(8, "b", "z")),
+            ]),
+            FileGroup::new(vec![
+                file_with_stats("f3.parquet", utf8_file_stats(3, "c", "w")),
+                file_with_stats("f4.parquet", utf8_file_stats(6, "d", "y")),
+            ]),
+        ];
+
+        let (file_groups, stats) =
+            compute_all_files_statistics(file_groups, schema, true, false)?;
+
+        assert_eq!(
+            file_groups[0]
+                .file_statistics(None)
+                .unwrap()
+                .column_statistics[0]
+                .distinct_count,
+            Precision::Inexact(8)
+        );
+        assert_eq!(
+            file_groups[1]
+                .file_statistics(None)
+                .unwrap()
+                .column_statistics[0]
+                .distinct_count,
+            Precision::Inexact(6)
+        );
+        assert_eq!(
+            stats.column_statistics[0].distinct_count,
+            Precision::Inexact(8)
+        );
+
+        Ok(())
     }
 }
