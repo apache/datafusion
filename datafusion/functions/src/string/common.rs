@@ -461,10 +461,11 @@ fn case_conversion_utf8view_ascii(
     }
 }
 
-/// Walks the views once: inline rows (length ≤ 12) convert their inline bytes
-/// in place; long rows copy their referenced bytes into a single packed output
-/// buffer while converting, then rewrite the view (`buffer_index = 0`, new
-/// offset, new 4-byte prefix) to point at it.
+/// Walks the views once and produces a new `StringViewArray` with
+/// case-converted bytes. Inline strings (<= 12 bytes) are converted in-place;
+/// long strings copy-and-convert into output buffers and have their view fields
+/// rewritten to address the new bytes. ASCII case conversion preserves is byte
+/// length, so no row migrates between the inline and long layouts.
 fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
     array: &StringViewArray,
     convert: F,
@@ -475,16 +476,22 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
     let nulls = array.nulls();
 
     let mut new_views: Vec<u128> = Vec::with_capacity(item_len);
+    // Long values are packed into `in_progress`; when full it is sealed into
+    // `completed` and a new, larger block is started — same block-doubling
+    // scheme as Arrow's `GenericByteViewBuilder`.
     let mut in_progress: Vec<u8> = Vec::new();
     let mut completed: Vec<Buffer> = Vec::new();
     let mut block_size: u32 = STRING_VIEW_INIT_BLOCK_SIZE;
 
     for i in 0..item_len {
         if nulls.is_some_and(|n| n.is_null(i)) {
+            // Zero view = empty, no buffer reference; the null buffer is what
+            // marks the row null, so the view's value is irrelevant.
             new_views.push(0);
             continue;
         }
         let view = views[i];
+        // Length is the low 32 bits; `as u32` discards the rest of the view.
         let len = view as u32 as usize;
         if len == 0 {
             new_views.push(0);
@@ -492,14 +499,18 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
         }
         let mut bytes = view.to_le_bytes();
         if len <= 12 {
-            // Inline row: convert the inline data bytes; layout unchanged.
+            // Inline: value is in bytes[4..4+len], no buffer reference. Convert
+            // in place; nothing else in the view needs to change.
             for b in &mut bytes[4..4 + len] {
                 *b = convert(b);
             }
             new_views.push(u128::from_le_bytes(bytes));
         } else {
-            // Make sure the current data block has room for this value;
-            // otherwise flush and start a new, larger block.
+            // Long: input view points into shared `data_buffers` we can't
+            // mutate, so copy-convert into our own buffer and rewrite the
+            // view's prefix/buffer_index/offset (length is preserved).
+
+            // Ensure the current block has room; otherwise flush and grow.
             let required_cap = in_progress.len() + len;
             if in_progress.capacity() < required_cap {
                 if !in_progress.is_empty() {
@@ -512,12 +523,16 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
                 in_progress.reserve(to_reserve);
             }
 
+            // The in-progress block will be sealed at index `completed.len()`,
+            // and our value starts at the current write position within it.
             let buffer_index: u32 = i32::try_from(completed.len())
                 .expect("buffer count exceeds i32::MAX")
                 as u32;
             let new_offset: u32 =
                 i32::try_from(in_progress.len()).expect("offset exceeds i32::MAX") as u32;
 
+            // Source location from the input view: bytes 8..12 are buffer
+            // index, bytes 12..16 are the offset within it.
             let src_buffer_index =
                 u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
             let src_offset =
@@ -528,7 +543,9 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
             let prefix_start = in_progress.len();
             in_progress.extend(src.iter().map(&convert));
 
-            // Prefix is the first 4 bytes of the converted data we just wrote.
+            // Rewrite the three long-view fields; bytes[0..4] (length) is
+            // left untouched. The prefix is read back from the bytes we just
+            // wrote so the converted value has a single source of truth.
             let prefix: [u8; 4] = in_progress[prefix_start..prefix_start + 4]
                 .try_into()
                 .unwrap();
