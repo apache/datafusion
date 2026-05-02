@@ -303,6 +303,55 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         build_size: "100K_(20%_dups)",
         probe_size: "60M",
     },
+    // Q16: RightSemi — 100% hit rate, unique build keys
+    // Plans as RightSemi HashJoin (supplier IN lineitem via semi join)
+    HashJoinQuery {
+        sql: r###"SELECT s_suppkey FROM supplier WHERE EXISTS (SELECT 1 FROM lineitem WHERE l_suppkey = s_suppkey)"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "60M",
+        probe_size: "100K",
+    },
+    // Q17: RightSemi — 10% hit rate, unique build keys
+    HashJoinQuery {
+        sql: r###"SELECT s_suppkey FROM supplier WHERE EXISTS (SELECT 1 FROM lineitem WHERE l_suppkey = s_suppkey AND l_suppkey % 10 = 0)"###,
+        density: 1.0,
+        prob_hit: 0.1,
+        build_size: "60M",
+        probe_size: "100K",
+    },
+    // Q18: RightSemi — ~1K:1 build-side duplicates per key
+    HashJoinQuery {
+        sql: r###"SELECT s_suppkey FROM supplier WHERE EXISTS (SELECT 1 FROM lineitem WHERE l_suppkey % 60000 = s_suppkey % 60000)"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "60M_(~1K:1_dup)",
+        probe_size: "100K",
+    },
+    // Q19: RightAnti — 100% hit rate (most probe rows eliminated)
+    HashJoinQuery {
+        sql: r###"SELECT s_suppkey FROM supplier WHERE NOT EXISTS (SELECT 1 FROM lineitem WHERE l_suppkey = s_suppkey)"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "60M",
+        probe_size: "100K",
+    },
+    // Q20: RightAnti — 10% hit rate (most probe rows survive)
+    HashJoinQuery {
+        sql: r###"SELECT s_suppkey FROM supplier WHERE NOT EXISTS (SELECT 1 FROM lineitem WHERE l_suppkey = s_suppkey AND l_suppkey % 10 = 0)"###,
+        density: 1.0,
+        prob_hit: 0.1,
+        build_size: "60M",
+        probe_size: "100K",
+    },
+    // Q21: RightAnti — ~1K:1 build-side duplicates per key
+    HashJoinQuery {
+        sql: r###"SELECT s_suppkey FROM supplier WHERE NOT EXISTS (SELECT 1 FROM lineitem WHERE l_suppkey % 60000 = s_suppkey % 60000)"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "60M_(~1K:1_dup)",
+        probe_size: "100K",
+    },
 ];
 
 impl RunOpt {

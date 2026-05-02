@@ -413,7 +413,7 @@ fn process_probe_batch_right_semi_anti(
     null_equality: NullEquality,
     output_schema: &Schema,
     column_indices: &[ColumnIndex],
-) -> Result<RecordBatch> {
+) -> Result<(RecordBatch, usize)> {
     let num_probe_rows = probe_batch.num_rows();
     let is_semi = join_type == JoinType::RightSemi;
 
@@ -422,15 +422,18 @@ fn process_probe_batch_right_semi_anti(
         JoinKeyComparator::new(build_values, probe_values, &sort_options, null_equality)?;
 
     let mut matched_probe_indices: Vec<u32> = Vec::new();
+    let mut probe_rows_with_hash_match: usize = 0;
 
     for (probe_row, &hash) in hashes_buffer.iter().enumerate().take(num_probe_rows) {
-        let found = map
-            .get_first_match(hash, &mut |build_row| {
-                comparator.is_equal(build_row as usize, probe_row)
-            })
-            .is_some();
+        let found = map.get_first_match(hash, &mut |build_row| {
+            comparator.is_equal(build_row as usize, probe_row)
+        });
 
-        if found == is_semi {
+        if found.is_some() {
+            probe_rows_with_hash_match += 1;
+        }
+
+        if found.is_some() == is_semi {
             matched_probe_indices.push(probe_row as u32);
         }
     }
@@ -440,7 +443,7 @@ fn process_probe_batch_right_semi_anti(
     // but build_batch_from_indices requires them.
     let build_indices = UInt64Array::from(vec![0u64; probe_indices.len()]);
 
-    build_batch_from_indices(
+    let batch = build_batch_from_indices(
         output_schema,
         build_batch,
         probe_batch,
@@ -449,7 +452,9 @@ fn process_probe_batch_right_semi_anti(
         column_indices,
         JoinSide::Left,
         join_type,
-    )
+    )?;
+
+    Ok((batch, probe_rows_with_hash_match))
 }
 
 impl HashJoinStream {
@@ -786,7 +791,7 @@ impl HashJoinStream {
             && !self.null_aware
             && let Map::HashMap(map) = build_side.left_data.map()
         {
-            let result = process_probe_batch_right_semi_anti(
+            let (result, probe_hits) = process_probe_batch_right_semi_anti(
                 &state.batch,
                 &state.values,
                 &self.hashes_buffer,
@@ -799,6 +804,12 @@ impl HashJoinStream {
                 &self.column_indices,
             )?;
             timer.done();
+
+            self.join_metrics.probe_hit_rate.add_part(probe_hits);
+            // First-match only: fanout is 1 for every matched probe row
+            self.join_metrics.avg_fanout.add_part(probe_hits);
+            self.join_metrics.avg_fanout.add_total(probe_hits);
+
             self.output_buffer.push_batch(result)?;
             self.state = HashJoinStreamState::FetchProbeBatch;
             return Ok(StatefulStreamResult::Continue);
