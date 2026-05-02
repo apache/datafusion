@@ -59,6 +59,7 @@ Notes:
 | Andrew Grove            | agrove           | [andygrove](https://github.com/andygrove)               | Apple          | PMC       |
 | Mustafa Akur            | akurmustafa      | [akurmustafa](https://github.com/akurmustafa)           | OHSU           | PMC       |
 | Berkay Şahin            | berkay           | [berkaysynnada](https://github.com/berkaysynnada)       | Synnada        | PMC       |
+| Bhargava Vadlamani      | bhargava         | [coderfender](https://github.com/coderfender)           |                | Committer |
 | Oleksandr Voievodin     | comphead         | [comphead](https://github.com/comphead)                 | Apple          | PMC       |
 | Daniël Heres            | dheres           | [Dandandan](https://github.com/Dandandan)               |                | PMC       |
 | QP Hou                  | houqp            | [houqp](https://github.com/houqp)                       |                | PMC       |
@@ -88,6 +89,7 @@ Notes:
 | Kazuyuki Tanimura       | kazuyukitanimura | [kazuyukitanimura](https://github.com/kazuyukitanimura) |                | Committer |
 | Eduard Karacharov       | korowa           | [korowa](https://github.com/korowa)                     |                | Committer |
 | Siew Kam Onn            | kosiew           | [kosiew](https://github.com/kosiew)                     |                | Committer |
+| Kumar Ujjawal           | kumarujjawal     | [kumarUjjawal](https://github.com/kumarUjjawal)         |                | Committer |
 | Lewis Zhang             | linwei           | [lewiszlw](https://github.com/lewiszlw)                 | diit.cn        | Committer |
 | Matt Butrovich          | mbutrovich       | [mbutrovich](https://github.com/mbutrovich)             | Apple          | Committer |
 | Metehan Yildirim        | mete             | [metegenez](https://github.com/metegenez)               |                | Committer |
