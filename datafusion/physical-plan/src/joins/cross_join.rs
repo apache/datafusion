@@ -18,7 +18,7 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
-use std::{any::Any, sync::Arc, task::Poll};
+use std::{sync::Arc, task::Poll};
 
 use super::utils::{
     BatchSplitter, BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer,
@@ -269,10 +269,6 @@ impl DisplayAs for CrossJoinExec {
 impl ExecutionPlan for CrossJoinExec {
     fn name(&self) -> &'static str {
         "CrossJoinExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

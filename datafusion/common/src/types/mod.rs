@@ -23,6 +23,7 @@ mod logical;
 mod native;
 
 pub use builtin::*;
+pub use canonical_extensions::*;
 pub use extension::*;
 pub use field::*;
 pub use logical::*;

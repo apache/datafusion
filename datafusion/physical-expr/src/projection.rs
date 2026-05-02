@@ -22,10 +22,11 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 use crate::expressions::{Column, Literal};
+use crate::scalar_function::ScalarFunctionExpr;
 use crate::utils::collect_columns;
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
@@ -433,7 +434,6 @@ impl ProjectionExprs {
             .iter()
             .map(|e| {
                 e.expr
-                    .as_any()
                     .downcast_ref::<Column>()
                     .expect("Expected column reference in projection")
                     .index()
@@ -656,13 +656,13 @@ impl ProjectionExprs {
         mut stats: Statistics,
         output_schema: &Schema,
     ) -> Result<Statistics> {
-        let mut column_statistics = vec![];
+        let mut column_statistics = Vec::with_capacity(self.exprs.len());
 
         for proj_expr in self.exprs.iter() {
             let expr = &proj_expr.expr;
-            let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            let col_stats = if let Some(col) = expr.downcast_ref::<Column>() {
                 std::mem::take(&mut stats.column_statistics[col.index()])
-            } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+            } else if let Some(literal) = expr.downcast_ref::<Literal>() {
                 // Handle literal expressions (constants) by calculating proper statistics
                 let data_type = expr.data_type(output_schema)?;
 
@@ -925,7 +925,7 @@ pub fn update_expr(
                 return Ok(Transformed::no(expr));
             }
 
-            let Some(column) = expr.as_any().downcast_ref::<Column>() else {
+            let Some(column) = expr.downcast_ref::<Column>() else {
                 return Ok(Transformed::no(expr));
             };
             if unproject {
@@ -947,7 +947,7 @@ pub fn update_expr(
                     .iter()
                     .enumerate()
                     .find_map(|(index, proj_expr)| {
-                        proj_expr.expr.as_any().downcast_ref::<Column>().and_then(
+                        proj_expr.expr.downcast_ref::<Column>().and_then(
                             |projected_column| {
                                 (column.name().eq(projected_column.name())
                                     && column.index() == projected_column.index())
@@ -1043,7 +1043,7 @@ impl ProjectionMapping {
         let mut map = IndexMap::<_, ProjectionTargets>::new();
         for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
             let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
-            let source_expr = expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+            let source_expr = expr.transform_down(|e| match e.downcast_ref::<Column>() {
                 Some(col) => {
                     // Sometimes, an expression and its name in the input_schema
                     // doesn't match. This can cause problems, so we make sure
@@ -1063,9 +1063,66 @@ impl ProjectionMapping {
                 None => Ok(Transformed::no(e)),
             })
             .data()?;
-            map.entry(source_expr)
+            map.entry(Arc::clone(&source_expr))
                 .or_default()
-                .push((target_expr, expr_idx));
+                .push((Arc::clone(&target_expr), expr_idx));
+
+            // For struct-producing functions (e.g. named_struct), decompose
+            // into field-level mapping entries so that orderings propagate
+            // through struct projections. For example, if the projection has
+            // `named_struct('ticker', p.ticker, ...) AS details`, this adds:
+            //   p.ticker → get_field(col("details"), "ticker")
+            // enabling the optimizer to know that sorting by
+            // `details.ticker` is equivalent to sorting by `p.ticker`.
+            if let Some(func_expr) = source_expr.downcast_ref::<ScalarFunctionExpr>() {
+                let literal_args: Vec<Option<ScalarValue>> = func_expr
+                    .args()
+                    .iter()
+                    .map(|arg| arg.downcast_ref::<Literal>().map(|l| l.value().clone()))
+                    .collect();
+
+                if let Some(field_mapping) =
+                    func_expr.fun().struct_field_mapping(&literal_args)
+                    && let DataType::Struct(struct_fields) = func_expr.return_type()
+                {
+                    for (accessor_args, source_arg_idx) in &field_mapping.fields {
+                        let value_expr = Arc::clone(&func_expr.args()[*source_arg_idx]);
+
+                        // Build accessor args: [target_col, ...field_name_literals]
+                        let mut accessor_fn_args: Vec<Arc<dyn PhysicalExpr>> =
+                            vec![Arc::clone(&target_expr)];
+                        accessor_fn_args.extend(accessor_args.iter().map(|sv| {
+                            Arc::new(Literal::new(sv.clone())) as Arc<dyn PhysicalExpr>
+                        }));
+
+                        // Look up the field's return type from the struct schema
+                        let return_field = accessor_args
+                            .first()
+                            .and_then(|sv| sv.try_as_str().flatten())
+                            .and_then(|field_name| {
+                                struct_fields
+                                    .iter()
+                                    .find(|f| f.name() == field_name)
+                                    .cloned()
+                            });
+
+                        if let Some(return_field) = return_field {
+                            let field_access_expr = Arc::new(ScalarFunctionExpr::new(
+                                field_mapping.field_accessor.name(),
+                                Arc::clone(&field_mapping.field_accessor),
+                                accessor_fn_args,
+                                return_field,
+                                Arc::new(func_expr.config_options().clone()),
+                            ))
+                                as Arc<dyn PhysicalExpr>;
+
+                            map.entry(value_expr)
+                                .or_default()
+                                .push((field_access_expr, expr_idx));
+                        }
+                    }
+                }
+            }
         }
         Ok(Self { map })
     }
@@ -1163,7 +1220,7 @@ pub fn project_ordering(
     let mut projected_exprs = vec![];
     for PhysicalSortExpr { expr, options } in ordering.iter() {
         let transformed = Arc::clone(expr).transform_up(|expr| {
-            let Some(col) = expr.as_any().downcast_ref::<Column>() else {
+            let Some(col) = expr.downcast_ref::<Column>() else {
                 return Ok(Transformed::no(expr));
             };
 
@@ -1219,8 +1276,10 @@ pub(crate) mod tests {
             let data_type = source.data_type(input_schema)?;
             let nullable = source.nullable(input_schema)?;
             for (target, _) in targets.iter() {
-                let Some(column) = target.as_any().downcast_ref::<Column>() else {
-                    return plan_err!("Expects to have column");
+                // Skip non-Column targets (e.g. struct field decomposition
+                // entries which are ScalarFunctionExpr targets).
+                let Some(column) = target.downcast_ref::<Column>() else {
+                    continue;
                 };
                 fields.push(Field::new(column.name(), data_type.clone(), nullable));
             }
@@ -2483,11 +2542,7 @@ pub(crate) mod tests {
 
         let result_expr = result.unwrap();
         assert_eq!(
-            result_expr
-                .as_any()
-                .downcast_ref::<Literal>()
-                .unwrap()
-                .value(),
+            result_expr.downcast_ref::<Literal>().unwrap().value(),
             &ScalarValue::Int64(Some(42))
         );
 
@@ -2516,17 +2571,15 @@ pub(crate) mod tests {
 
         let result_expr = result.unwrap();
         let binary = result_expr
-            .as_any()
             .downcast_ref::<BinaryExpr>()
             .expect("Should be a BinaryExpr");
 
         // Left side should still be the literal
-        assert!(binary.left().as_any().downcast_ref::<Literal>().is_some());
+        assert!(binary.left().downcast_ref::<Literal>().is_some());
 
         // Right side should be updated to reference column at index 5
         let right_col = binary
             .right()
-            .as_any()
             .downcast_ref::<Column>()
             .expect("Right should be a Column");
         assert_eq!(right_col.index(), 5);

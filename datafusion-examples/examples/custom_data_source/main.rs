@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example custom_data_source -- [all|csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|default_column_values|file_stream_provider|literal_guarantee_filter_pushdown]
+//! cargo run --example custom_data_source -- [all|adapter_serialization|csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|default_column_values|file_stream_provider|literal_guarantee_filter_pushdown|pruning_predicate_filter_pushdown]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:

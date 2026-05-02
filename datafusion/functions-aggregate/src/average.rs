@@ -50,7 +50,6 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use datafusion_macros::user_doc;
 use log::debug;
-use std::any::Any;
 use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -127,10 +126,6 @@ impl Default for Avg {
 }
 
 impl AggregateUDFImpl for Avg {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "avg"
     }

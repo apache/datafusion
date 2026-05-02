@@ -28,6 +28,7 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::hash_table::HashTable;
+#[cfg(not(feature = "force_hash_collisions"))]
 use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::sync::Arc;

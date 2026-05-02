@@ -83,6 +83,7 @@ use datafusion_execution::disk_manager::{
     DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
 };
 use datafusion_execution::registry::SerializerRegistry;
+use datafusion_expr::HigherOrderUDF;
 pub use datafusion_expr::execution_props::ExecutionProps;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::RelationPlanner;
@@ -254,7 +255,7 @@ where
 /// let state = SessionStateBuilder::new()
 ///     .with_config(config)
 ///     .with_runtime_env(runtime_env)
-///     // include support for built in functions and configurations
+///     // include support for built-in functions and configurations
 ///     .with_default_features()
 ///     .build();
 ///
@@ -320,7 +321,7 @@ impl SessionContext {
                 let schema = cat
                     .schema(schema_name.as_str())
                     .ok_or_else(|| internal_datafusion_err!("Schema not found!"))?;
-                let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
+                let lister = schema.downcast_ref::<ListingSchemaProvider>();
                 if let Some(lister) = lister {
                     lister.refresh(&self.state()).await?;
                 }
@@ -950,13 +951,13 @@ impl SessionContext {
         match (or_replace, view) {
             (true, Ok(_)) => {
                 self.deregister_table(name.clone())?;
-                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
-                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
@@ -1087,8 +1088,8 @@ impl SessionContext {
         }
     }
 
-    fn schema_doesnt_exist_err(&self, schemaref: &SchemaReference) -> Result<DataFrame> {
-        exec_err!("Schema '{schemaref}' doesn't exist.")
+    fn schema_doesnt_exist_err(&self, schema_ref: &SchemaReference) -> Result<DataFrame> {
+        exec_err!("Schema '{schema_ref}' doesn't exist.")
     }
 
     async fn set_variable(&self, stmt: SetVariable) -> Result<()> {
@@ -1977,6 +1978,10 @@ impl FunctionRegistry for SessionContext {
         self.state.read().udf(name)
     }
 
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+        self.state.read().higher_order_function(name)
+    }
+
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         self.state.read().udaf(name)
     }
@@ -1987,6 +1992,13 @@ impl FunctionRegistry for SessionContext {
 
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         self.state.write().register_udf(udf)
+    }
+
+    fn register_higher_order_function(
+        &mut self,
+        function: Arc<dyn HigherOrderUDF>,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        self.state.write().register_higher_order_function(function)
     }
 
     fn register_udaf(
@@ -2016,6 +2028,10 @@ impl FunctionRegistry for SessionContext {
         expr_planner: Arc<dyn ExprPlanner>,
     ) -> Result<()> {
         self.state.write().register_expr_planner(expr_planner)
+    }
+
+    fn higher_order_function_names(&self) -> HashSet<String> {
+        self.state.read().higher_order_function_names()
     }
 
     fn udafs(&self) -> HashSet<String> {

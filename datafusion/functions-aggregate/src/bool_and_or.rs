@@ -17,7 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
 use std::mem::size_of_val;
 
 use arrow::array::ArrayRef;
@@ -126,10 +125,6 @@ impl Default for BoolAnd {
 }
 
 impl AggregateUDFImpl for BoolAnd {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bool_and"
     }
@@ -259,10 +254,6 @@ impl Default for BoolOr {
 }
 
 impl AggregateUDFImpl for BoolOr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bool_or"
     }

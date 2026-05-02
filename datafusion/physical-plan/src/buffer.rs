@@ -43,7 +43,6 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
-use std::any::Any;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -151,10 +150,6 @@ impl DisplayAs for BufferExec {
 impl ExecutionPlan for BufferExec {
     fn name(&self) -> &str {
         "BufferExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

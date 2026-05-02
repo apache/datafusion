@@ -60,7 +60,7 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::task::{Context, Poll};
-use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
+use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use arrow::array::{Array, ArrayRef, StringViewArray};
 use arrow::{
@@ -706,10 +706,6 @@ impl ExecutionPlan for TopKExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }

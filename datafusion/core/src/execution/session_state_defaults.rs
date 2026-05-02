@@ -37,7 +37,7 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::ExtensionTypeRegistrationRef;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -111,6 +111,15 @@ impl SessionStateDefaults {
         functions.append(&mut functions_nested::all_default_nested_functions());
 
         functions
+    }
+
+    /// returns the list of default [`HigherOrderUDF`]s
+    pub fn default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
+        #[cfg(feature = "nested_expressions")]
+        return functions_nested::all_default_higher_order_functions();
+
+        #[cfg(not(feature = "nested_expressions"))]
+        return Vec::new();
     }
 
     /// returns the list of default [`AggregateUDF`]s

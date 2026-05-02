@@ -1704,7 +1704,7 @@ mod tests {
         let state = session_ctx.state();
         let location = Path::from_filesystem_path(".")
             .unwrap()
-            .child("invalid.parquet");
+            .join("invalid.parquet");
 
         let partitioned_file = PartitionedFile::new_from_meta(ObjectMeta {
             location,

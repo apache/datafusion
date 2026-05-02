@@ -33,7 +33,6 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::hash::Hash;
@@ -237,10 +236,6 @@ fn get_lead_doc() -> &'static Documentation {
 }
 
 impl WindowUDFImpl for WindowShift {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.kind.name()
     }
@@ -319,8 +314,7 @@ impl WindowUDFImpl for WindowShift {
         }
         match args {
             [_, expr, ..] => {
-                let Some(lit) = expr.as_any().downcast_ref::<expressions::Literal>()
-                else {
+                let Some(lit) = expr.downcast_ref::<expressions::Literal>() else {
                     return LimitEffect::Unknown;
                 };
                 let ScalarValue::Int64(Some(amount)) = lit.value() else {

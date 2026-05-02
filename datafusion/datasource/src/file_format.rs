@@ -77,11 +77,7 @@ impl FileMeta {
 ///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 #[async_trait]
-pub trait FileFormat: Send + Sync + fmt::Debug {
-    /// Returns the table provider as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     /// Returns the extension for this FileFormat, e.g. "file.csv" -> csv
     fn get_ext(&self) -> String;
 
@@ -193,10 +189,20 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     fn file_source(&self, table_schema: crate::TableSchema) -> Arc<dyn FileSource>;
 }
 
+impl dyn FileFormat {
+    pub fn is<T: FileFormat>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    pub fn downcast_ref<T: FileFormat>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// Factory for creating [`FileFormat`] instances based on session and command level options
 ///
 /// Users can provide their own `FileFormatFactory` to support arbitrary file formats
-pub trait FileFormatFactory: Sync + Send + GetExt + fmt::Debug {
+pub trait FileFormatFactory: Any + Sync + Send + GetExt + fmt::Debug {
     /// Initialize a [FileFormat] and configure based on session and command level options
     fn create(
         &self,
@@ -206,10 +212,16 @@ pub trait FileFormatFactory: Sync + Send + GetExt + fmt::Debug {
 
     /// Initialize a [FileFormat] with all options set to default values
     fn default(&self) -> Arc<dyn FileFormat>;
+}
 
-    /// Returns the table source as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
+impl dyn FileFormatFactory {
+    pub fn is<T: FileFormatFactory>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    pub fn downcast_ref<T: FileFormatFactory>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }
 
 /// A container of [FileFormatFactory] which also implements [FileType].
