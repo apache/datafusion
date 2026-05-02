@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -90,10 +89,6 @@ impl DataSource for MemorySourceConfig {
             )?
             .with_fetch(self.fetch),
         )))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
@@ -243,13 +238,22 @@ impl DataSource for MemorySourceConfig {
                     &exprs,
                     self.projection().as_ref().unwrap_or(&all_projections),
                 );
+                let projected_schema =
+                    project_schema(&self.schema, Some(&new_projections));
 
-                MemorySourceConfig::try_new(
-                    self.partitions(),
-                    self.original_schema(),
-                    Some(new_projections),
-                )
-                .map(|s| Arc::new(s) as Arc<dyn DataSource>)
+                projected_schema.map(|projected_schema| {
+                    // Clone self to preserve all metadata (fetch, sort_information,
+                    // show_sizes, etc.) then update only the projection-related fields.
+                    let mut new_source = self.clone();
+                    new_source.projection = Some(new_projections);
+                    new_source.projected_schema = projected_schema;
+                    // Project sort information to match the new projection
+                    new_source.sort_information = project_orderings(
+                        &new_source.sort_information,
+                        &new_source.projected_schema,
+                    );
+                    Arc::new(new_source) as Arc<dyn DataSource>
+                })
             })
             .transpose()
     }
@@ -763,10 +767,6 @@ impl MemSink {
 
 #[async_trait]
 impl DataSink for MemSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
@@ -870,7 +870,6 @@ mod tests {
     use datafusion_physical_plan::expressions::lit;
 
     use datafusion_physical_plan::ExecutionPlan;
-    use futures::StreamExt;
 
     #[tokio::test]
     async fn exec_with_limit() -> Result<()> {
@@ -896,6 +895,39 @@ mod tests {
         ];
         assert_batches_eq!(expected, &results);
         Ok(())
+    }
+
+    /// Test that `try_swapping_with_projection` preserves the `fetch` limit.
+    /// Regression test for <https://github.com/apache/datafusion/issues/21176>
+    #[test]
+    fn try_swapping_with_projection_preserves_fetch() {
+        use datafusion_physical_expr::projection::ProjectionExprs;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Int64, false),
+        ]));
+        let partitions: Vec<Vec<RecordBatch>> = vec![vec![batch(10)]];
+        let source = MemorySourceConfig::try_new(&partitions, schema.clone(), None)
+            .unwrap()
+            .with_limit(Some(5));
+
+        assert_eq!(source.fetch, Some(5));
+
+        // Create a projection that reorders columns: [c, a] (indices 2, 0)
+        let projection = ProjectionExprs::from_indices(&[2, 0], &schema);
+        let swapped = source
+            .try_swapping_with_projection(&projection)
+            .unwrap()
+            .unwrap();
+        let new_source = swapped.downcast_ref::<MemorySourceConfig>().unwrap();
+
+        assert_eq!(
+            new_source.fetch,
+            Some(5),
+            "fetch limit must be preserved after projection pushdown"
+        );
     }
 
     #[tokio::test]
@@ -1217,9 +1249,8 @@ mod tests {
         // Starting = batch(100_000), batch(10_000), batch(100), batch(1).
         // It should have split as p1=batch(100_000), p2=[batch(10_000), batch(100), batch(1)]
         let partitioned_datasrc = partitioned_datasrc.unwrap();
-        let Some(mem_src_config) = partitioned_datasrc
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
+        let Some(mem_src_config) =
+            partitioned_datasrc.downcast_ref::<MemorySourceConfig>()
         else {
             unreachable!()
         };
@@ -1416,9 +1447,8 @@ mod tests {
         // Starting = batch(100_000), batch(1), batch(100), batch(10_000).
         // It should have split as p1=batch(100_000), p2=[batch(1), batch(100), batch(10_000)]
         let partitioned_datasrc = partitioned_datasrc.unwrap();
-        let Some(mem_src_config) = partitioned_datasrc
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
+        let Some(mem_src_config) =
+            partitioned_datasrc.downcast_ref::<MemorySourceConfig>()
         else {
             unreachable!()
         };

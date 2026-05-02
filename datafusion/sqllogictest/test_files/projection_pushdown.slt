@@ -635,7 +635,10 @@ SELECT id, s['value'] + 1 FROM simple_struct WHERE id > 1 ORDER BY id LIMIT 2;
 # Section 7: Multi-Partition Tests
 #####################
 
-# Set target_partitions = 4 for parallel execution
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
@@ -1530,8 +1533,8 @@ logical_plan
 05)----Projection: get_field(join_right.s, Utf8("role")) AS __datafusion_extracted_2, join_right.id
 06)------TableScan: join_right projection=[id, s]
 physical_plan
-01)ProjectionExec: expr=[id@1 as id, __datafusion_extracted_1@0 as simple_struct.s[label], __datafusion_extracted_2@2 as join_right.s[role]]
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@1, id@1)], projection=[__datafusion_extracted_1@0, id@1, __datafusion_extracted_2@2]
+01)ProjectionExec: expr=[id@0 as id, __datafusion_extracted_1@1 as simple_struct.s[label], __datafusion_extracted_2@2 as join_right.s[role]]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@1, id@1)], projection=[id@1, __datafusion_extracted_1@0, __datafusion_extracted_2@2]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, label) as __datafusion_extracted_1, id], file_type=parquet
 04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[get_field(s@1, role) as __datafusion_extracted_2, id], file_type=parquet, predicate=DynamicFilter [ empty ]
 
@@ -1600,8 +1603,8 @@ logical_plan
 07)--------Projection: get_field(join_right.s, Utf8("level")) AS __datafusion_extracted_1, join_right.id, get_field(join_right.s, Utf8("level")) AS __datafusion_extracted_3
 08)----------TableScan: join_right projection=[id, s], partial_filters=[get_field(join_right.s, Utf8("level")) > Int64(5)]
 physical_plan
-01)ProjectionExec: expr=[id@1 as id, __datafusion_extracted_2@0 as simple_struct.s[value], __datafusion_extracted_3@2 as join_right.s[level]]
-02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@1, id@0)], projection=[__datafusion_extracted_2@0, id@1, __datafusion_extracted_3@3]
+01)ProjectionExec: expr=[id@0 as id, __datafusion_extracted_2@1 as simple_struct.s[value], __datafusion_extracted_3@2 as join_right.s[level]]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@1, id@0)], projection=[id@1, __datafusion_extracted_2@0, __datafusion_extracted_3@3]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_2, id], file_type=parquet
 04)----FilterExec: __datafusion_extracted_1@0 > 5, projection=[id@1, __datafusion_extracted_3@2]
 05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[get_field(s@1, level) as __datafusion_extracted_1, id, get_field(s@1, level) as __datafusion_extracted_3], file_type=parquet, predicate=get_field(s@1, level) > 5 AND DynamicFilter [ empty ]
@@ -1893,8 +1896,8 @@ logical_plan
 07)------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_1, get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_3, simple_struct.id
 08)--------TableScan: simple_struct projection=[id, s]
 physical_plan
-01)ProjectionExec: expr=[__datafusion_extracted_3@1 as s.s[value], __datafusion_extracted_4@0 as j.s[role]]
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@2, id@2)], filter=__datafusion_extracted_1@1 > __datafusion_extracted_2@0, projection=[__datafusion_extracted_4@1, __datafusion_extracted_3@4]
+01)ProjectionExec: expr=[__datafusion_extracted_3@0 as s.s[value], __datafusion_extracted_4@1 as j.s[role]]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@2, id@2)], filter=__datafusion_extracted_1@1 > __datafusion_extracted_2@0, projection=[__datafusion_extracted_3@4, __datafusion_extracted_4@1]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/join_right.parquet]]}, projection=[get_field(s@1, level) as __datafusion_extracted_2, get_field(s@1, role) as __datafusion_extracted_4, id], file_type=parquet
 04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, get_field(s@1, value) as __datafusion_extracted_3, id], file_type=parquet, predicate=DynamicFilter [ empty ]
 
@@ -1990,3 +1993,84 @@ FROM t
 WHERE COALESCE(get_field(s, 'f1'), get_field(s, 'f2')) = 1;
 ----
 1
+
+#####################
+# Section 8: SELECT * with struct field filter
+#####################
+
+# When SELECT * includes the full struct but the filter only accesses a
+# sub-field (e.g. s['id']), the leaf-level projection must not narrow the
+# struct schema in the output. Previously build_projection_read_plan would
+# produce a schema with Struct("id": Int32) while the data still contained
+# Struct("id": Int32, "value": Utf8), causing an ArrowError.
+
+# 8.1: SELECT * with equality filter on struct sub-field
+query I?
+SELECT * FROM simple_struct WHERE s['value'] = 100;
+----
+1 {value: 100, label: alpha}
+
+# 8.2: Explicit SELECT of whole struct with struct sub-field filter
+query ?
+SELECT s FROM simple_struct WHERE s['value'] = 100;
+----
+{value: 100, label: alpha}
+
+# 8.3: Whole struct + sub-field projection + sub-field filter
+query I?I
+SELECT s['value'], s, id FROM simple_struct WHERE s['value'] = 100;
+----
+100 {value: 100, label: alpha} 1
+
+# 8.4: Whole struct in output, filter on a different sub-field than projected
+query ?T
+SELECT s, s['label'] FROM simple_struct WHERE s['value'] > 200;
+----
+{value: 300, label: delta} delta
+{value: 250, label: epsilon} epsilon
+
+# 8.5: Filter references both sub-fields, output includes whole struct
+query I?
+SELECT id, s FROM simple_struct WHERE s['value'] > 100 AND s['label'] = 'beta';
+----
+2 {value: 200, label: beta}
+
+# 8.6: Only sub-field projection with sub-field filter (no whole struct — should prune)
+query II
+SELECT id, s['value'] FROM simple_struct WHERE s['value'] = 100;
+----
+1 100
+
+# 8.7: Nested struct — whole struct output with deeply nested field filter
+query I?
+SELECT * FROM nested_struct WHERE nested['outer']['inner'] > 15;
+----
+2 {outer: {inner: 20, name: two}, extra: y}
+3 {outer: {inner: 30, name: three}, extra: z}
+
+# 8.8: Nested struct — explicit whole struct select with sibling field filter
+query ?
+SELECT nested FROM nested_struct WHERE nested['extra'] = 'y';
+----
+{outer: {inner: 20, name: two}, extra: y}
+
+# 8.9: Nullable struct — whole struct output with sub-field filter
+query ?
+SELECT s FROM nullable_struct WHERE s['value'] > 100;
+----
+{value: 150, label: gamma}
+{value: 250, label: epsilon}
+
+# 8.10: Struct sub-field filter combined with top-level column filter
+query ?I
+SELECT s, id FROM simple_struct WHERE s['value'] > 100 AND id < 4;
+----
+{value: 200, label: beta} 2
+{value: 150, label: gamma} 3
+
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# reset it explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4;

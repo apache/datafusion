@@ -17,7 +17,6 @@
 
 //! Benchmarks for `with_hashes` function
 
-use ahash::RandomState;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, GenericStringArray, Int32Array,
     Int64Array, ListArray, MapArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray,
@@ -28,6 +27,7 @@ use arrow::datatypes::{
     ArrowDictionaryKeyType, DataType, Field, Fields, Int32Type, Int64Type, UnionFields,
 };
 use criterion::{Bencher, Criterion, criterion_group, criterion_main};
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::with_hashes;
 use rand::Rng;
 use rand::SeedableRng;
@@ -143,7 +143,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 }
 
 fn do_hash_test(b: &mut Bencher, arrays: &[ArrayRef]) {
-    let state = RandomState::new();
+    let state = RandomState::default();
     b.iter(|| {
         with_hashes(arrays, &state, |hashes| {
             assert_eq!(hashes.len(), BATCH_SIZE); // make sure the result is used
@@ -358,7 +358,7 @@ fn sliced_array_benchmark(c: &mut Criterion) {
 }
 
 fn do_hash_test_with_len(b: &mut Bencher, arrays: &[ArrayRef], expected_len: usize) {
-    let state = RandomState::new();
+    let state = RandomState::default();
     b.iter(|| {
         with_hashes(arrays, &state, |hashes| {
             assert_eq!(hashes.len(), expected_len);

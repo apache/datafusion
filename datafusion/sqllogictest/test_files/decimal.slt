@@ -804,7 +804,7 @@ select log(arrow_cast(100, 'Decimal32(9, 2)'));
 query R
 select log(2.0, arrow_cast(12345.67, 'Decimal32(9, 2)'));
 ----
-13
+13.591717513272
 
 # log for small decimal64
 query R
@@ -820,7 +820,7 @@ select log(arrow_cast(100, 'Decimal64(18, 2)'));
 query R
 select log(2.0, arrow_cast(12345.6789, 'Decimal64(15, 4)'));
 ----
-13
+13.591718553311
 
 
 # log for small decimal128
@@ -896,15 +896,13 @@ select log(10::decimal(38, 0), 100000000000000000000000000000000000::decimal(38,
 query R
 select log(2, 100000000000000000000000000000000000::decimal(38,0));
 ----
-116
+116.267483321058
 
 # log(10^35) for decimal128 with another base
-# TODO: this should be 116.267483321058, error with native decimal log impl
-#       https://github.com/apache/datafusion/issues/18524
 query R
 select log(2.0, 100000000000000000000000000000000000::decimal(38,0));
 ----
-116
+116.267483321058
 
 # log with non-integer base (fallback to f64)
 query R
@@ -1036,7 +1034,7 @@ from (values (10.0), (2.0), (3.0)) as t(base);
 query R
 SELECT log(10, arrow_cast(0.5, 'Decimal32(5, 1)'))
 ----
-NaN
+-0.301029995664
 
 query R
 SELECT log(10, arrow_cast(1 , 'Decimal32(5, 1)'))
@@ -1195,18 +1193,18 @@ select 100000000000000000000000000000000000::decimal(38,0)
 99999999999999996863366107917975552
 
 # log(10^35) for decimal128 with explicit decimal base
-# Float parsing is rounding down
+# Float parsing is rounding down, but log uses float computation so result rounds to 35
 query R
 select log(10, 100000000000000000000000000000000000::decimal(38,0));
 ----
-34
+35
 
 # log(10^35) for large decimal128 if parsed as float
-# Float parsing is rounding down
+# Float parsing is rounding down, but log uses float computation so result rounds to 35
 query R
 select log(100000000000000000000000000000000000::decimal(38,0))
 ----
-34
+35
 
 # Result is decimal since argument is decimal regardless decimals-as-floats parsing
 query R

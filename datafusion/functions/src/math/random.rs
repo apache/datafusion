@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::Float64Array;
@@ -62,10 +61,6 @@ impl RandomFunc {
 }
 
 impl ScalarUDFImpl for RandomFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "random"
     }

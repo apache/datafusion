@@ -857,3 +857,87 @@ query RT
 SELECT log(2.5, 10.9::double), arrow_typeof(log(2.5, 10.9::double));
 ----
 2.606992198152 Float64
+
+# lcm with array and scalar
+
+query I
+SELECT lcm(column1, 5) FROM (VALUES (0), (3), (25), (-16));
+----
+0
+15
+25
+80
+
+query I
+SELECT lcm(6, column1) FROM (VALUES (4), (9), (0));
+----
+12
+18
+0
+
+# lcm array and scalar with nulls in the array
+query I
+SELECT lcm(column1, 5) FROM (VALUES (0), (NULL), (25));
+----
+0
+NULL
+25
+
+query I
+SELECT lcm(6, column1) FROM (VALUES (4), (NULL), (0));
+----
+12
+NULL
+0
+
+# lcm scalar edge values
+query I
+SELECT lcm(9223372036854775807, 1);
+----
+9223372036854775807
+
+query I
+SELECT lcm(9223372036854775807, 9223372036854775807);
+----
+9223372036854775807
+
+# gcd with array and scalar
+
+query I
+SELECT gcd(column1, 12) FROM (VALUES (8), (18), (0), (-36));
+----
+4
+6
+12
+12
+
+query I
+SELECT gcd(15, column1) FROM (VALUES (10), (25), (0));
+----
+5
+5
+15
+
+# gcd array and scalar with nulls in the array
+query I
+SELECT gcd(column1, 12) FROM (VALUES (8), (NULL), (0), (-36));
+----
+4
+NULL
+12
+12
+
+query I
+SELECT gcd(15, column1) FROM (VALUES (NULL), (25), (0));
+----
+NULL
+5
+15
+
+# gcd array and scalar=0
+query I
+SELECT gcd(column1, 0) FROM (VALUES (7), (-3), (0));
+----
+7
+3
+0

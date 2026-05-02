@@ -15,13 +15,567 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
 # This file is part of the implementation of the datafusion-spark function library.
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT round(2.5, 0);
-## PySpark 3.5.5 Result: {'round(2.5, 0)': Decimal('3'), 'typeof(round(2.5, 0))': 'decimal(2,0)', 'typeof(2.5)': 'decimal(2,1)', 'typeof(0)': 'int'}
-#query
-#SELECT round(2.5::decimal(2,1), 0::int);
+# -------------------------------------------------------------------
+# Float / Double tests (HALF_UP rounding: .5 rounds away from zero)
+# -------------------------------------------------------------------
+
+# round(double) default scale = 0
+query R
+SELECT round(2.5::double);
+----
+3
+
+query R
+SELECT round(3.5::double);
+----
+4
+
+query R
+SELECT round(-2.5::double);
+----
+-3
+
+query R
+SELECT round(-3.5::double);
+----
+-4
+
+query R
+SELECT round(1.4::double);
+----
+1
+
+query R
+SELECT round(1.6::double);
+----
+2
+
+# round(double, scale)
+query R
+SELECT round(2.345::double, 2::int);
+----
+2.35
+
+query R
+SELECT round(2.355::double, 2::int);
+----
+2.36
+
+query R
+SELECT round(123.456::double, 1::int);
+----
+123.5
+
+# round(float)
+query R
+SELECT round(arrow_cast(2.5, 'Float32'));
+----
+3
+
+query R
+SELECT round(arrow_cast(-2.5, 'Float32'));
+----
+-3
+
+# round(float) with scale
+query R
+SELECT round(arrow_cast(2.345, 'Float32'), 2::int);
+----
+2.35
+
+# round(float32) with negative scale
+query R
+SELECT round(arrow_cast(125.0, 'Float32'), -1::int);
+----
+130
+
+# -------------------------------------------------------------------
+# Float16 tests
+# -------------------------------------------------------------------
+
+# round(float16) default scale = 0
+query R
+SELECT round(arrow_cast(2.5, 'Float16'));
+----
+3
+
+query R
+SELECT round(arrow_cast(-2.5, 'Float16'));
+----
+-3
+
+# round(float16) with negative scale
+query R
+SELECT round(arrow_cast(125, 'Float16'), -1::int);
+----
+130
+
+# round(double) with negative scale
+query R
+SELECT round(125.0::double, -1::int);
+----
+130
+
+query R
+SELECT round(125.0::double, -2::int);
+----
+100
+
+query R
+SELECT round(0.0::double);
+----
+0
+
+# round(double) with Infinity and NaN
+query R
+SELECT round('Infinity'::double);
+----
+Infinity
+
+query R
+SELECT round('-Infinity'::double);
+----
+-Infinity
+
+query R
+SELECT round('NaN'::double);
+----
+NaN
+
+query R
+SELECT round('Infinity'::double, 2::int);
+----
+Infinity
+
+query R
+SELECT round('NaN'::double, 2::int);
+----
+NaN
+
+# round(double) with extreme negative scale — should return 0, not NaN
+query R
+SELECT round(42.0::double, -400::int);
+----
+0
+
+# round(double) with extreme positive scale — should return value as-is
+query R
+SELECT round(2.5::double, 400::int);
+----
+2.5
+
+# -------------------------------------------------------------------
+# Integer tests (negative scale rounds to tens, hundreds, etc.)
+# -------------------------------------------------------------------
+
+# round(int, -1) — round to nearest 10
+query I
+SELECT round(25::int, -1::int);
+----
+30
+
+query I
+SELECT round(24::int, -1::int);
+----
+20
+
+query I
+SELECT round(-25::int, -1::int);
+----
+-30
+
+query I
+SELECT round(123::int, -1::int);
+----
+120
+
+# round(int, -2) — round to nearest 100
+query I
+SELECT round(150::int, -2::int);
+----
+200
+
+query I
+SELECT round(149::int, -2::int);
+----
+100
+
+# round(int, positive scale) — no-op for integers
+query I
+SELECT round(42::int, 2::int);
+----
+42
+
+# round(int) default scale = 0 — returns unchanged
+query I
+SELECT round(42::int);
+----
+42
+
+# round(bigint, -1)
+query I
+SELECT round(25::bigint, -1::int);
+----
+30
+
+# round(smallint, -1)
+query I
+SELECT round(25::smallint, -1::int);
+----
+30
+
+# round(tinyint, -1)
+query I
+SELECT round(arrow_cast(25, 'Int8'), -1::int);
+----
+30
+
+# round(int) with very large negative scale — should return 0
+query I
+SELECT round(42::int, -10::int);
+----
+0
+
+# -------------------------------------------------------------------
+# Unsigned integer tests
+# -------------------------------------------------------------------
+
+# round(uint8, -1)
+query I
+SELECT round(arrow_cast(25, 'UInt8'), -1::int);
+----
+30
+
+# round(uint16, -1)
+query I
+SELECT round(arrow_cast(25, 'UInt16'), -1::int);
+----
+30
+
+# round(uint32, -1)
+query I
+SELECT round(arrow_cast(150, 'UInt32'), -2::int);
+----
+200
+
+# round(uint64, -1)
+query I
+SELECT round(arrow_cast(25, 'UInt64'), -1::int);
+----
+30
+
+# round(uint32, positive scale) — no-op for integers
+query I
+SELECT round(arrow_cast(42, 'UInt32'), 2::int);
+----
+42
+
+# -------------------------------------------------------------------
+# Decimal tests (HALF_UP rounding)
+# -------------------------------------------------------------------
+
+# --- Decimal32 ---
+
+# round(decimal32, 0) — round to integer
+query ?
+SELECT round(arrow_cast(2.5, 'Decimal32(9, 1)'), 0::int);
+----
+3.0
+
+query ?
+SELECT round(arrow_cast(-2.5, 'Decimal32(9, 1)'), 0::int);
+----
+-3.0
+
+# round(decimal32, 2)
+query ?
+SELECT round(arrow_cast(2.345, 'Decimal32(9, 3)'), 2::int);
+----
+2.350
+
+# round(decimal32) default scale = 0
+query ?
+SELECT round(arrow_cast(3.5, 'Decimal32(9, 1)'));
+----
+4.0
+
+# --- Decimal64 ---
+
+# round(decimal64, 0) — round to integer
+query ?
+SELECT round(arrow_cast(2.5, 'Decimal64(18, 1)'), 0::int);
+----
+3.0
+
+query ?
+SELECT round(arrow_cast(-2.5, 'Decimal64(18, 1)'), 0::int);
+----
+-3.0
+
+# round(decimal64, 2)
+query ?
+SELECT round(arrow_cast(2.345, 'Decimal64(18, 3)'), 2::int);
+----
+2.350
+
+# round(decimal64) default scale = 0
+query ?
+SELECT round(arrow_cast(3.5, 'Decimal64(18, 1)'));
+----
+4.0
+
+# --- Decimal128 ---
+
+# round(decimal, 0) — round to integer
+query R
+SELECT round(2.5::decimal(2,1), 0::int);
+----
+3
+
+query R
+SELECT round(3.5::decimal(2,1), 0::int);
+----
+4
+
+query R
+SELECT round(-2.5::decimal(2,1), 0::int);
+----
+-3
+
+# round(decimal) default scale = 0
+query R
+SELECT round(2.5::decimal(2,1));
+----
+3
+
+# round(decimal, 2) — keep 2 decimal places
+query R
+SELECT round(2.345::decimal(10,3), 2::int);
+----
+2.35
+
+query R
+SELECT round(2.355::decimal(10,3), 2::int);
+----
+2.36
+
+# round(decimal, scale larger than input scale) — no change
+query R
+SELECT round(2.5::decimal(2,1), 5::int);
+----
+2.5
+
+# round(decimal, 1)
+query R
+SELECT round(123.456::decimal(10,3), 1::int);
+----
+123.5
+
+# round(decimal, negative scale) — round to tens
+query R
+SELECT round(125.0::decimal(10,1), -1::int);
+----
+130
+
+# round(decimal, extreme negative scale) — should return 0, not error
+query R
+SELECT round(2.5::decimal(10,1), -400::int);
+----
+0
+
+# --- Decimal256 ---
+
+# round(decimal256, 0) — round to integer
+query R
+SELECT round(arrow_cast(2.5, 'Decimal256(38, 1)'), 0::int);
+----
+3
+
+query R
+SELECT round(arrow_cast(-2.5, 'Decimal256(38, 1)'), 0::int);
+----
+-3
+
+# round(decimal256, 2)
+query R
+SELECT round(arrow_cast(2.345, 'Decimal256(38, 3)'), 2::int);
+----
+2.35
+
+# round(decimal256) default scale = 0
+query R
+SELECT round(arrow_cast(3.5, 'Decimal256(38, 1)'));
+----
+4
+
+# -------------------------------------------------------------------
+# NULL handling
+# -------------------------------------------------------------------
+
+query I
+SELECT round(NULL::int);
+----
+NULL
+
+query R
+SELECT round(NULL::double);
+----
+NULL
+
+query R
+SELECT round(NULL::decimal(10,2));
+----
+NULL
+
+# round with NULL scale — Spark returns NULL
+query I
+SELECT round(42::int, NULL::int);
+----
+NULL
+
+query R
+SELECT round(2.5::double, NULL::int);
+----
+NULL
+
+# -------------------------------------------------------------------
+# Column-based tests
+# -------------------------------------------------------------------
+
+statement ok
+CREATE TABLE test_round (id int, int_val int, float_val double, dec_val decimal(10,3)) AS VALUES
+  (1, 25, 2.5, 2.345),
+  (2, 35, 3.5, 3.555),
+  (3, -25, -2.5, -2.345),
+  (4, 123, 1.4, 1.005),
+  (5, NULL, NULL, NULL);
+
+query IIRR rowsort
+SELECT id, round(int_val, -1::int), round(float_val), round(dec_val, 2::int) FROM test_round;
+----
+1 30 3 2.35
+2 40 4 3.56
+3 -30 -3 -2.35
+4 120 1 1.01
+5 NULL NULL NULL
+
+statement ok
+DROP TABLE test_round;
+
+# -------------------------------------------------------------------
+# Expression tests
+# -------------------------------------------------------------------
+
+query R
+SELECT round(3.14159::double, 2::int) + 1.0;
+----
+4.140000000000001
+
+# -------------------------------------------------------------------
+# Non-ANSI wrapping behavior
+# When ANSI mode is off, integer overflow wraps silently.
+# -------------------------------------------------------------------
+
+# round(127::tinyint, -1) → 130, wraps as i8 → -126
+query I
+SELECT round(arrow_cast(127, 'Int8'), -1::int);
+----
+-126
+
+# round(32767::smallint, -1) → 32770, wraps as i16 → -32766
+query I
+SELECT round(arrow_cast(32767, 'Int16'), -1::int);
+----
+-32766
+
+# round(2147483647::int, -1) → 2147483650, wraps as i32 → -2147483646
+query I
+SELECT round(2147483647::int, -1::int);
+----
+-2147483646
+
+# round(i64::MAX, -1) wraps as i64 → -9223372036854775806
+query I
+SELECT round(9223372036854775807::bigint, -1::int);
+----
+-9223372036854775806
+
+# -------------------------------------------------------------------
+# ANSI mode tests: overflow detection for integer rounding
+# -------------------------------------------------------------------
+
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+# ANSI mode: normal rounding should still work
+query I
+SELECT round(25::int, -1::int);
+----
+30
+
+query I
+SELECT round(-25::int, -1::int);
+----
+-30
+
+query I
+SELECT round(150::int, -2::int);
+----
+200
+
+# ANSI mode: positive scale on integers — no-op, no overflow
+query I
+SELECT round(42::int, 2::int);
+----
+42
+
+# ANSI mode: floats and decimals should work normally
+query R
+SELECT round(2.5::double);
+----
+3
+
+query R
+SELECT round(2.5::decimal(2,1), 0::int);
+----
+3
+
+# ANSI mode: integer overflow should error
+query error DataFusion error: Execution error: Int64 overflow on round
+SELECT round(9223372036854775807::bigint, -1::int);
+
+# ANSI mode: Int32 overflow should error
+query error DataFusion error: Execution error: Int32 overflow on round
+SELECT round(2147483647::int, -1::int);
+
+# ANSI mode: Int16 overflow should error
+query error DataFusion error: Execution error: Int16 overflow on round
+SELECT round(arrow_cast(32767, 'Int16'), -1::int);
+
+# ANSI mode: Int8 overflow should error
+query error DataFusion error: Execution error: Int8 overflow on round
+SELECT round(arrow_cast(127, 'Int8'), -1::int);
+
+# Reset ANSI mode
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
+
+# -------------------------------------------------------------------
+# Negative tests: unsupported data types
+# -------------------------------------------------------------------
+
+# round(string) should fail
+query error Error during planning: Internal error: Function 'round' failed to match any signature
+SELECT round('hello'::varchar);
+
+# round(boolean) should fail
+query error Error during planning: Internal error: Function 'round' failed to match any signature
+SELECT round(true);
+
+# round(timestamp) should fail
+query error Error during planning: Internal error: Function 'round' failed to match any signature
+SELECT round('2023-01-01T00:00:00'::timestamp);

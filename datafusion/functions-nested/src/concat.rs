@@ -17,7 +17,6 @@
 
 //! [`ScalarUDFImpl`] definitions for `array_append`, `array_prepend` and `array_concat` functions.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::make_array::make_array_inner;
@@ -39,7 +38,8 @@ use datafusion_common::{
 };
 use datafusion_expr::binary::type_union_resolution;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -96,10 +96,6 @@ impl ArrayAppend {
 }
 
 impl ScalarUDFImpl for ArrayAppend {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_append"
     }
@@ -117,10 +113,7 @@ impl ScalarUDFImpl for ArrayAppend {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_append_inner)(&args.args)
     }
 
@@ -185,10 +178,6 @@ impl ArrayPrepend {
 }
 
 impl ScalarUDFImpl for ArrayPrepend {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_prepend"
     }
@@ -206,10 +195,7 @@ impl ScalarUDFImpl for ArrayPrepend {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_prepend_inner)(&args.args)
     }
 
@@ -276,10 +262,6 @@ impl ArrayConcat {
 }
 
 impl ScalarUDFImpl for ArrayConcat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_concat"
     }
@@ -326,10 +308,7 @@ impl ScalarUDFImpl for ArrayConcat {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_concat_inner)(&args.args)
     }
 
@@ -338,10 +317,23 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let base_type = base_type(&self.return_type(arg_types)?);
+        let return_type = self.return_type(arg_types)?;
+        let base_type = base_type(&return_type);
         let coercion = Some(&ListCoercion::FixedSizedListToList);
+        // When the return type is a `LargeList`, the outer container of every
+        // input must be widened to `LargeList` as well. Otherwise
+        // `array_concat_inner` would later try to downcast a `List` argument
+        // to `GenericListArray<i64>` and fail.
+        let promote_to_large_list = matches!(return_type, DataType::LargeList(_));
         let arg_types = arg_types.iter().map(|arg_type| {
-            coerced_type_with_base_type_only(arg_type, &base_type, coercion)
+            let coerced =
+                coerced_type_with_base_type_only(arg_type, &base_type, coercion);
+            match coerced {
+                DataType::List(field) if promote_to_large_list => {
+                    DataType::LargeList(field)
+                }
+                other => other,
+            }
         });
 
         Ok(arg_types.collect())

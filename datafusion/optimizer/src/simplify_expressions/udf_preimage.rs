@@ -68,7 +68,7 @@ pub(super) fn rewrite_with_preimage(
 
 #[cfg(test)]
 mod test {
-    use std::any::Any;
+
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field};
@@ -120,10 +120,6 @@ mod test {
     }
 
     impl ScalarUDFImpl for PreimageUdf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "preimage_func"
         }
@@ -179,7 +175,9 @@ mod test {
     }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
-        let simplify_context = SimplifyContext::default().with_schema(Arc::clone(schema));
+        let simplify_context = SimplifyContext::builder()
+            .with_schema(Arc::clone(schema))
+            .build();
         ExprSimplifier::new(simplify_context)
             .simplify(expr)
             .unwrap()

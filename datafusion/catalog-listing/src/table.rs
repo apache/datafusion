@@ -47,7 +47,6 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -449,10 +448,6 @@ fn can_be_evaluated_for_partition_pruning(
 
 #[async_trait]
 impl TableProvider for ListingTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
     }
@@ -920,7 +915,6 @@ mod tests {
     use arrow::compute::SortOptions;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-    use std::sync::Arc;
 
     /// Helper to create a PhysicalSortExpr
     fn sort_expr(

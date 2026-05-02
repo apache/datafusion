@@ -33,7 +33,6 @@ use datafusion_expr::{
 };
 use datafusion_functions::unicode::substr::{enable_ascii_fast_path, get_true_start_end};
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `substring` expression
@@ -86,10 +85,6 @@ impl SparkSubstring {
 }
 
 impl ScalarUDFImpl for SparkSubstring {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "substring"
     }
@@ -164,15 +159,17 @@ fn spark_substring(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// - Zero start: treated as 1
 /// - Negative start: counts from end of string
 ///
-/// Returns the converted 1-based start position for use with `get_true_start_end`.
+/// The result may be `<= 0` when a negative start lands before the string
+/// (e.g. `start=-10` on a 3-char string gives `-6`). Such values are passed
+/// through to `get_true_start_end`, which clamps them and yields an empty
+/// slice — matching Spark's behavior for out-of-range negative positions.
 #[inline]
 fn spark_start_to_datafusion_start(start: i64, len: usize) -> i64 {
     if start >= 0 {
         start.max(1)
     } else {
         let len_i64 = i64::try_from(len).unwrap_or(i64::MAX);
-        let start = start.saturating_add(len_i64).saturating_add(1);
-        start.max(1)
+        start + len_i64 + 1
     }
 }
 
@@ -244,12 +241,8 @@ where
 
         let adjusted_start = spark_start_to_datafusion_start(start, string_len);
 
-        let (byte_start, byte_end) = get_true_start_end(
-            string,
-            adjusted_start,
-            len_opt.map(|l| l as u64),
-            is_ascii,
-        );
+        let (byte_start, byte_end) =
+            get_true_start_end(string, adjusted_start, len_opt, is_ascii)?;
         let substr = &string[byte_start..byte_end];
         builder.append_value(substr);
     }

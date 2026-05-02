@@ -36,11 +36,13 @@ use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
-    Operator, TryCast, lit,
+    Operator, TryCast, lit, when,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_functions_nested::expr_fn::array_has;
+use datafusion_functions_nested::expr_fn::{
+    array_has, array_max, array_min, array_position, cardinality,
+};
 
 mod binary_op;
 mod function;
@@ -306,10 +308,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 data_type,
                 value,
                 uses_odbc_syntax: _,
-            }) => Ok(Expr::Cast(Cast::new_from_field(
-                Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type_to_field(&data_type)?,
-            ))),
+            }) => {
+                let value = match value.into_string() {
+                    Some(value) => value,
+                    None => {
+                        return plan_err!("Typed literal requires a string payload");
+                    }
+                };
+
+                Ok(Expr::Cast(Cast::new_from_field(
+                    Box::new(lit(value)),
+                    self.convert_data_type_to_field(&data_type)?,
+                )))
+            }
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
@@ -608,17 +619,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                 ),
                 _ => {
-                    if compare_op != BinaryOperator::Eq {
-                        plan_err!(
-                            "Unsupported AnyOp: '{compare_op}', only '=' is supported"
-                        )
-                    } else {
-                        let left_expr =
-                            self.sql_to_expr(*left, schema, planner_context)?;
-                        let right_expr =
-                            self.sql_to_expr(*right, schema, planner_context)?;
-                        Ok(array_has(right_expr, left_expr))
-                    }
+                    let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
+                    let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
+                    plan_quantified_op(
+                        &left_expr,
+                        &right_expr,
+                        &compare_op,
+                        SetQuantifier::Any,
+                    )
                 }
             },
             SQLExpr::AllOp {
@@ -634,7 +642,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     schema,
                     planner_context,
                 ),
-                _ => not_impl_err!("ALL only supports subquery comparison currently"),
+                _ => {
+                    let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
+                    let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
+                    plan_quantified_op(
+                        &left_expr,
+                        &right_expr,
+                        &compare_op,
+                        SetQuantifier::All,
+                    )
+                }
             },
             #[expect(deprecated)]
             SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
@@ -1242,6 +1259,86 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
+/// Plans `needle <compare_op> ANY/ALL(haystack)` with proper SQL NULL semantics.
+///
+/// CASE/WHEN structure:
+///   WHEN arr IS NULL        → NULL
+///   WHEN empty              → vacuous_result (ANY:false, ALL:true)
+///   WHEN lhs IS NULL        → NULL
+///   WHEN decisive_condition → decisive_result (ANY:true match found, ALL:false violation found)
+///   WHEN has_nulls          → NULL
+///   ELSE                    → vacuous_result
+fn plan_quantified_op(
+    needle: &Expr,
+    haystack: &Expr,
+    compare_op: &BinaryOperator,
+    quantifier: SetQuantifier,
+) -> Result<Expr> {
+    let null_arr_check = haystack.clone().is_null();
+    let empty_check = cardinality(haystack.clone()).eq(lit(0u64));
+    let null_lhs_check = needle.clone().is_null();
+    // DataFusion's array_position uses is_null() checks internally (not equality),
+    // so it can locate NULL elements even though NULL = NULL is NULL in standard SQL.
+    let has_nulls =
+        array_position(haystack.clone(), lit(ScalarValue::Null), lit(1i64)).is_not_null();
+
+    let decisive_condition = match (compare_op, quantifier) {
+        (BinaryOperator::Eq, SetQuantifier::Any)
+        | (BinaryOperator::NotEq, SetQuantifier::All) => {
+            array_has(haystack.clone(), needle.clone())
+        }
+        (BinaryOperator::Eq, SetQuantifier::All)
+        | (BinaryOperator::NotEq, SetQuantifier::Any) => {
+            let all_equal = array_min(haystack.clone())
+                .eq(needle.clone())
+                .and(array_max(haystack.clone()).eq(needle.clone()));
+            Expr::Not(Box::new(all_equal))
+        }
+        (BinaryOperator::Gt, SetQuantifier::Any) => {
+            needle.clone().gt(array_min(haystack.clone()))
+        }
+        (BinaryOperator::Gt, SetQuantifier::All) => {
+            Expr::Not(Box::new(needle.clone().gt(array_max(haystack.clone()))))
+        }
+        (BinaryOperator::Lt, SetQuantifier::Any) => {
+            needle.clone().lt(array_max(haystack.clone()))
+        }
+        (BinaryOperator::Lt, SetQuantifier::All) => {
+            Expr::Not(Box::new(needle.clone().lt(array_min(haystack.clone()))))
+        }
+        (BinaryOperator::GtEq, SetQuantifier::Any) => {
+            needle.clone().gt_eq(array_min(haystack.clone()))
+        }
+        (BinaryOperator::GtEq, SetQuantifier::All) => {
+            Expr::Not(Box::new(needle.clone().gt_eq(array_max(haystack.clone()))))
+        }
+        (BinaryOperator::LtEq, SetQuantifier::Any) => {
+            needle.clone().lt_eq(array_max(haystack.clone()))
+        }
+        (BinaryOperator::LtEq, SetQuantifier::All) => {
+            Expr::Not(Box::new(needle.clone().lt_eq(array_min(haystack.clone()))))
+        }
+        _ => {
+            return plan_err!(
+                "Unsupported {quantifier}Op: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
+            );
+        }
+    };
+
+    let (vacuous_result, decisive_result) = match quantifier {
+        SetQuantifier::Any => (false, true),
+        SetQuantifier::All => (true, false),
+    };
+
+    let null_bool = lit(ScalarValue::Boolean(None));
+    when(null_arr_check, null_bool.clone())
+        .when(empty_check, lit(vacuous_result))
+        .when(null_lhs_check, null_bool.clone())
+        .when(decisive_condition, lit(decisive_result))
+        .when(has_nulls, null_bool)
+        .otherwise(lit(vacuous_result))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1254,7 +1351,9 @@ mod tests {
     use datafusion_common::TableReference;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+    use datafusion_expr::{
+        AggregateUDF, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
+    };
 
     use super::*;
 
@@ -1294,6 +1393,10 @@ mod tests {
             None
         }
 
+        fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+            None
+        }
+
         fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
             match name {
                 "sum" => Some(datafusion_functions_aggregate::sum::sum_udaf()),
@@ -1317,6 +1420,10 @@ mod tests {
             Vec::new()
         }
 
+        fn higher_order_function_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
         fn udaf_names(&self) -> Vec<String> {
             vec!["sum".to_string()]
         }
@@ -1333,46 +1440,42 @@ mod tests {
     }
 
     macro_rules! test_stack_overflow {
-        ($num_expr:expr) => {
-            paste::item! {
-                #[test]
-                fn [<test_stack_overflow_ $num_expr>]() {
-                    let schema = DFSchema::empty();
-                    let mut planner_context = PlannerContext::default();
+        ($name:ident, $num_expr:expr) => {
+            #[test]
+            fn $name() {
+                let schema = DFSchema::empty();
+                let mut planner_context = PlannerContext::default();
 
-                    let expr_str = (0..$num_expr)
-                        .map(|i| format!("column1 = 'value{:?}'", i))
-                        .collect::<Vec<String>>()
-                        .join(" OR ");
+                let expr_str = (0..$num_expr)
+                    .map(|i| format!("column1 = 'value{:?}'", i))
+                    .collect::<Vec<String>>()
+                    .join(" OR ");
 
-                    let dialect = GenericDialect{};
-                    let mut parser = Parser::new(&dialect)
-                        .try_with_sql(expr_str.as_str())
-                        .unwrap();
-                    let sql_expr = parser.parse_expr().unwrap();
+                let dialect = GenericDialect {};
+                let mut parser = Parser::new(&dialect)
+                    .try_with_sql(expr_str.as_str())
+                    .unwrap();
+                let sql_expr = parser.parse_expr().unwrap();
 
-                    let context_provider = TestContextProvider::new();
-                    let sql_to_rel = SqlToRel::new(&context_provider);
+                let context_provider = TestContextProvider::new();
+                let sql_to_rel = SqlToRel::new(&context_provider);
 
-                    // Should not stack overflow
-                    sql_to_rel.sql_expr_to_logical_expr(
-                        sql_expr,
-                        &schema,
-                        &mut planner_context,
-                    ).unwrap();
-                }
+                // Should not stack overflow
+                sql_to_rel
+                    .sql_expr_to_logical_expr(sql_expr, &schema, &mut planner_context)
+                    .unwrap();
             }
         };
     }
 
-    test_stack_overflow!(64);
-    test_stack_overflow!(128);
-    test_stack_overflow!(256);
-    test_stack_overflow!(512);
-    test_stack_overflow!(1024);
-    test_stack_overflow!(2048);
-    test_stack_overflow!(4096);
-    test_stack_overflow!(8192);
+    test_stack_overflow!(test_stack_overflow_64, 64);
+    test_stack_overflow!(test_stack_overflow_128, 128);
+    test_stack_overflow!(test_stack_overflow_256, 256);
+    test_stack_overflow!(test_stack_overflow_512, 512);
+    test_stack_overflow!(test_stack_overflow_1024, 1024);
+    test_stack_overflow!(test_stack_overflow_2048, 2048);
+    test_stack_overflow!(test_stack_overflow_4096, 4096);
+    test_stack_overflow!(test_stack_overflow_8192, 8192);
     #[test]
     fn test_sql_to_expr_with_alias() {
         let schema = DFSchema::empty();

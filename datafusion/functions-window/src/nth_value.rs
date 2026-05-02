@@ -34,7 +34,6 @@ use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
-use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -45,6 +44,7 @@ define_udwf_and_expr!(
     First,
     first_value,
     [arg],
+    first_value_udwf,
     "Returns the first value in the window frame",
     NthValue::first
 );
@@ -52,12 +52,14 @@ define_udwf_and_expr!(
     Last,
     last_value,
     [arg],
+    last_value_udwf,
     "Returns the last value in the window frame",
     NthValue::last
 );
 get_or_init_udwf!(
     NthValue,
     nth_value,
+    nth_value_udwf,
     "Returns the nth value in the window frame",
     NthValue::nth
 );
@@ -248,10 +250,6 @@ fn get_nth_value_doc() -> &'static Documentation {
 }
 
 impl WindowUDFImpl for NthValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.kind.name()
     }
@@ -543,8 +541,6 @@ mod tests {
     use arrow::array::*;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr::expressions::{Column, Literal};
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use std::sync::Arc;
 
     fn test_i32_result(
         expr: NthValue,

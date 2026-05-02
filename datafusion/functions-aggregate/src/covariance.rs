@@ -88,10 +88,6 @@ impl CovarianceSample {
 }
 
 impl AggregateUDFImpl for CovarianceSample {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "covar_samp"
     }
@@ -172,10 +168,6 @@ impl CovariancePopulation {
 }
 
 impl AggregateUDFImpl for CovariancePopulation {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "covar_pop"
     }

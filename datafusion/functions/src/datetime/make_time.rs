@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::types::Int32Type;
 use arrow::array::{Array, PrimitiveArray};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType::Time32;
 use arrow::datatypes::{DataType, Time32SecondType, TimeUnit};
 use chrono::prelude::*;
@@ -29,7 +28,8 @@ use chrono::prelude::*;
 use datafusion_common::types::{NativeType, logical_int32, logical_string};
 use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -96,10 +96,6 @@ impl MakeTimeFunc {
 }
 
 impl ScalarUDFImpl for MakeTimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "make_time"
     }
@@ -112,10 +108,7 @@ impl ScalarUDFImpl for MakeTimeFunc {
         Ok(Time32(TimeUnit::Second))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [hours, minutes, seconds] = take_function_args(self.name(), args.args)?;
 
         match (hours, minutes, seconds) {
@@ -149,24 +142,31 @@ impl ScalarUDFImpl for MakeTimeFunc {
                 let minutes = minutes.as_primitive::<Int32Type>();
                 let seconds = seconds.as_primitive::<Int32Type>();
 
-                let mut builder: PrimitiveBuilder<Time32SecondType> =
-                    PrimitiveArray::builder(len);
+                let nulls = NullBuffer::union(
+                    NullBuffer::union(hours.nulls(), minutes.nulls()).as_ref(),
+                    seconds.nulls(),
+                );
 
+                let mut values = Vec::with_capacity(len);
                 for i in 0..len {
-                    // match postgresql behaviour which returns null for any null input
-                    if hours.is_null(i) || minutes.is_null(i) || seconds.is_null(i) {
-                        builder.append_null();
+                    // Match Postgres behaviour which returns null for any null input
+                    if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                        values.push(0);
                     } else {
                         make_time_inner(
                             hours.value(i),
                             minutes.value(i),
                             seconds.value(i),
-                            |seconds: i32| builder.append_value(seconds),
+                            |seconds: i32| values.push(seconds),
                         )?;
                     }
                 }
 
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+                Ok(ColumnarValue::Array(Arc::new(PrimitiveArray::<
+                    Time32SecondType,
+                >::new(
+                    values.into(), nulls
+                ))))
             }
         }
     }
@@ -213,7 +213,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::DataFusionError;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     fn invoke_make_time_with_args(
@@ -224,7 +224,7 @@ mod tests {
             .iter()
             .map(|arg| Field::new("a", arg.data_type(), true).into())
             .collect::<Vec<_>>();
-        let args = datafusion_expr::ScalarFunctionArgs {
+        let args = ScalarFunctionArgs {
             args,
             arg_fields,
             number_rows,

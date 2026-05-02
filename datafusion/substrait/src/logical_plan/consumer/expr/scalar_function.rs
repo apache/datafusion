@@ -30,6 +30,7 @@ pub async fn from_scalar_function(
     f: &ScalarFunction,
     input_schema: &DFSchema,
 ) -> Result<Expr> {
+    //TODO: handle higher order functions, as they are also encoded as scalar functions
     let Some(fn_signature) = consumer
         .get_extensions()
         .functions

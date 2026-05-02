@@ -41,7 +41,6 @@ use crate::physical_plan::{
     execute_stream, execute_stream_partitioned,
 };
 use crate::prelude::SessionContext;
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -71,6 +70,7 @@ use datafusion_functions_aggregate::expr_fn::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::extension_types::DFArrayFormatterFactory;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -294,8 +294,11 @@ impl DataFrame {
         self.session_state.create_logical_expr(sql, df_schema)
     }
 
-    /// Consume the DataFrame and produce a physical plan
-    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
+    /// Create a physical plan from this DataFrame.
+    ///
+    /// The `DataFrame` remains accessible after this call, so you can inspect
+    /// the plan and still call [`DataFrame::collect`] or other execution methods.
+    pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -1516,6 +1519,11 @@ impl DataFrame {
         let options = self.session_state.config().options().format.clone();
         let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
 
+        let registry = self.session_state.extension_type_registry();
+        let formatter_factory = DFArrayFormatterFactory::new(Arc::clone(registry));
+        let arrow_options =
+            arrow_options.with_formatter_factory(Some(&formatter_factory));
+
         let results = self.collect().await?;
         Ok(
             pretty::pretty_format_batches_with_options(&results, &arrow_options)?
@@ -2392,7 +2400,7 @@ impl DataFrame {
         } else {
             let context = SessionContext::new_with_state((*self.session_state).clone());
             // The schema is consistent with the output
-            let plan = self.clone().create_physical_plan().await?;
+            let plan = self.create_physical_plan().await?;
             let schema = plan.schema();
             let task_ctx = Arc::new(self.task_ctx());
             let partitions = collect_partitioned(plan, task_ctx).await?;
@@ -2639,10 +2647,6 @@ struct DataFrameTableProvider {
 
 #[async_trait]
 impl TableProvider for DataFrameTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.plan))
     }

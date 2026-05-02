@@ -24,7 +24,6 @@ use datafusion_expr::{
     TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -67,10 +66,6 @@ impl UpperFunc {
 }
 
 impl ScalarUDFImpl for UpperFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "upper"
     }

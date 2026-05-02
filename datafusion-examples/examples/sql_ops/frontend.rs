@@ -22,8 +22,8 @@ use datafusion::common::{TableReference, plan_err};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::logical_expr::{
-    AggregateUDF, Expr, LogicalPlan, ScalarUDF, TableProviderFilterPushDown, TableSource,
-    WindowUDF,
+    AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF,
+    TableProviderFilterPushDown, TableSource, WindowUDF,
 };
 use datafusion::optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
@@ -31,7 +31,6 @@ use datafusion::optimizer::{
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion::sql::sqlparser::parser::Parser;
-use std::any::Any;
 use std::sync::Arc;
 
 /// This example shows how to use DataFusion's SQL planner to parse SQL text and
@@ -155,6 +154,10 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
+    fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+        None
+    }
+
     fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
         None
     }
@@ -175,6 +178,10 @@ impl ContextProvider for MyContextProvider {
         Vec::new()
     }
 
+    fn higher_order_function_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn udaf_names(&self) -> Vec<String> {
         Vec::new()
     }
@@ -190,10 +197,6 @@ struct MyTableSource {
 }
 
 impl TableSource for MyTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

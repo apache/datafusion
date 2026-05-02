@@ -209,10 +209,10 @@ impl RunOpt {
     /// Benchmark query `query_id` in `SORT_QUERIES`
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let config = self.common.config()?;
-        let rt_builder = self.common.runtime_env_builder()?;
+        let rt = self.common.build_runtime()?;
         let state = SessionStateBuilder::new()
             .with_config(config)
-            .with_runtime_env(rt_builder.build_arc()?)
+            .with_runtime_env(rt)
             .with_default_features()
             .build();
         let ctx = SessionContext::from(state);

@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::sort::reverse_row_selection;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
-use parquet::file::metadata::RowGroupMetaData;
+use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 
 /// A selection of rows and row groups within a ParquetFile to decode.
 ///
@@ -336,6 +337,64 @@ impl ParquetAccessPlan {
     /// Covert into the inner row group accesses
     pub fn into_inner(self) -> Vec<RowGroupAccess> {
         self.row_groups
+    }
+
+    /// Prepare this plan and resolve to the final `PreparedAccessPlan`
+    pub(crate) fn prepare(
+        self,
+        row_group_meta_data: &[RowGroupMetaData],
+    ) -> Result<PreparedAccessPlan> {
+        let row_group_indexes = self.row_group_indexes();
+        let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
+
+        PreparedAccessPlan::new(row_group_indexes, row_selection)
+    }
+}
+
+/// Represents a prepared, fully resolved [`ParquetAccessPlan`]
+///
+/// The [`RowSelection`] represents the result of applying all pruning such as
+/// user provided scans, Row Group statistics, DataPage statistics, and Bloom
+/// Filters.
+///
+/// This plan is what is passed to the parquet reader
+pub(crate) struct PreparedAccessPlan {
+    /// Row group indexes to read
+    pub(crate) row_group_indexes: Vec<usize>,
+    /// Optional row selection for filtering within row groups
+    pub(crate) row_selection: Option<RowSelection>,
+}
+
+impl PreparedAccessPlan {
+    /// Create a new prepared access plan
+    fn new(
+        row_group_indexes: Vec<usize>,
+        row_selection: Option<RowSelection>,
+    ) -> Result<Self> {
+        Ok(Self {
+            row_group_indexes,
+            row_selection,
+        })
+    }
+
+    /// Reverse the access plan for reverse scanning
+    pub(crate) fn reverse(mut self, file_metadata: &ParquetMetaData) -> Result<Self> {
+        // Get the row group indexes before reversing
+        let row_groups_to_scan = self.row_group_indexes.clone();
+
+        // Reverse the row group indexes
+        self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
+
+        // If we have a row selection, reverse it to match the new row group order
+        if let Some(row_selection) = self.row_selection {
+            self.row_selection = Some(reverse_row_selection(
+                &row_selection,
+                file_metadata,
+                &row_groups_to_scan, // Pass the original (non-reversed) row group indexes
+            )?);
+        }
+
+        Ok(self)
     }
 }
 

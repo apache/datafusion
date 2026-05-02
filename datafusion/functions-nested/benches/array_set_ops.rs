@@ -23,6 +23,7 @@ use criterion::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_functions_nested::except::ArrayExcept;
 use datafusion_functions_nested::set_ops::{ArrayDistinct, ArrayIntersect, ArrayUnion};
 use rand::SeedableRng;
 use rand::prelude::SliceRandom;
@@ -34,11 +35,19 @@ use std::sync::Arc;
 const NUM_ROWS: usize = 1000;
 const ARRAY_SIZES: &[usize] = &[10, 50, 100];
 const SEED: u64 = 42;
+/// Extra rows on each side when building sliced arrays, so the underlying
+/// values buffer is much larger than the visible portion.
+const SLICE_PADDING: usize = 5000;
 
 fn criterion_benchmark(c: &mut Criterion) {
     bench_array_union(c);
     bench_array_intersect(c);
+    bench_array_except(c);
     bench_array_distinct(c);
+    bench_array_union_sliced(c);
+    bench_array_intersect_sliced(c);
+    bench_array_distinct_sliced(c);
+    bench_array_except_sliced(c);
 }
 
 fn invoke_udf(udf: &impl ScalarUDFImpl, array1: &ArrayRef, array2: &ArrayRef) {
@@ -82,6 +91,25 @@ fn bench_array_union(c: &mut Criterion) {
 fn bench_array_intersect(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_intersect");
     let udf = ArrayIntersect::new();
+
+    for (overlap_label, overlap_ratio) in &[("high_overlap", 0.8), ("low_overlap", 0.2)] {
+        for &array_size in ARRAY_SIZES {
+            let (array1, array2) =
+                create_arrays_with_overlap(NUM_ROWS, array_size, *overlap_ratio);
+            group.bench_with_input(
+                BenchmarkId::new(*overlap_label, array_size),
+                &array_size,
+                |b, _| b.iter(|| invoke_udf(&udf, &array1, &array2)),
+            );
+        }
+    }
+
+    group.finish();
+}
+
+fn bench_array_except(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_except");
+    let udf = ArrayExcept::new();
 
     for (overlap_label, overlap_ratio) in &[("high_overlap", 0.8), ("low_overlap", 0.2)] {
         for &array_size in ARRAY_SIZES {
@@ -253,6 +281,108 @@ fn create_array_with_duplicates(
         )
         .unwrap(),
     )
+}
+
+/// Slice a pair of arrays to the middle `NUM_ROWS` rows from a larger array.
+fn slice_pair(arrays: &(ArrayRef, ArrayRef)) -> (ArrayRef, ArrayRef) {
+    let a1 = arrays.0.slice(SLICE_PADDING, NUM_ROWS);
+    let a2 = arrays.1.slice(SLICE_PADDING, NUM_ROWS);
+    (a1, a2)
+}
+
+fn bench_array_union_sliced(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_union_sliced");
+    let udf = ArrayUnion::new();
+
+    for &array_size in ARRAY_SIZES {
+        let (a1, a2) = slice_pair(&create_arrays_with_overlap(
+            NUM_ROWS + 2 * SLICE_PADDING,
+            array_size,
+            0.5,
+        ));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(array_size),
+            &array_size,
+            |b, _| b.iter(|| invoke_udf(&udf, &a1, &a2)),
+        );
+    }
+    group.finish();
+}
+
+fn bench_array_intersect_sliced(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_intersect_sliced");
+    let udf = ArrayIntersect::new();
+
+    for &array_size in ARRAY_SIZES {
+        let (a1, a2) = slice_pair(&create_arrays_with_overlap(
+            NUM_ROWS + 2 * SLICE_PADDING,
+            array_size,
+            0.5,
+        ));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(array_size),
+            &array_size,
+            |b, _| b.iter(|| invoke_udf(&udf, &a1, &a2)),
+        );
+    }
+    group.finish();
+}
+
+fn bench_array_except_sliced(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_except_sliced");
+    let udf = ArrayExcept::new();
+
+    for &array_size in ARRAY_SIZES {
+        let (a1, a2) = slice_pair(&create_arrays_with_overlap(
+            NUM_ROWS + 2 * SLICE_PADDING,
+            array_size,
+            0.5,
+        ));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(array_size),
+            &array_size,
+            |b, _| b.iter(|| invoke_udf(&udf, &a1, &a2)),
+        );
+    }
+    group.finish();
+}
+
+fn bench_array_distinct_sliced(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_distinct_sliced");
+    let udf = ArrayDistinct::new();
+
+    for &array_size in ARRAY_SIZES {
+        let array =
+            create_array_with_duplicates(NUM_ROWS + 2 * SLICE_PADDING, array_size, 0.5)
+                .slice(SLICE_PADDING, NUM_ROWS);
+        group.bench_with_input(
+            BenchmarkId::from_parameter(array_size),
+            &array_size,
+            |b, _| {
+                b.iter(|| {
+                    black_box(
+                        udf.invoke_with_args(ScalarFunctionArgs {
+                            args: vec![ColumnarValue::Array(array.clone())],
+                            arg_fields: vec![
+                                Field::new("arr", array.data_type().clone(), false)
+                                    .into(),
+                            ],
+                            number_rows: NUM_ROWS,
+                            return_field: Field::new(
+                                "result",
+                                array.data_type().clone(),
+                                false,
+                            )
+                            .into(),
+                            config_options: Arc::new(ConfigOptions::default()),
+                        })
+                        .unwrap(),
+                    )
+                })
+            },
+        );
+    }
+    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);

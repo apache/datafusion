@@ -19,7 +19,7 @@ under the License.
 
 # Roadmap and Improvement Proposals
 
-The [project introduction](../user-guide/introduction) explains the
+The [project introduction](../user-guide/introduction.md) explains the
 overview and goals of DataFusion, and our development efforts largely
 align to that vision.
 

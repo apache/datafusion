@@ -693,3 +693,10 @@ CREATE EXTERNAL TABLE test_column_defaults(
   b int default a+1
 ) STORED AS parquet
 LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q7/';
+
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;

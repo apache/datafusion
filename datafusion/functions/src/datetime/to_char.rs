@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::builder::StringBuilder;
@@ -31,7 +30,8 @@ use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TIMEZONE_WILDCARD, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TIMEZONE_WILDCARD, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -119,10 +119,6 @@ impl ToCharFunc {
 }
 
 impl ScalarUDFImpl for ToCharFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_char"
     }
@@ -135,10 +131,7 @@ impl ScalarUDFImpl for ToCharFunc {
         Ok(Utf8)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         let [date_time, format] = take_function_args(self.name(), &args)?;
 
@@ -309,7 +302,7 @@ mod tests {
     use chrono::{NaiveDateTime, Timelike};
     use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
@@ -325,7 +318,7 @@ mod tests {
             let value_data_type = value.data_type().clone();
             let format_data_type = format.data_type().clone();
 
-            let args = datafusion_expr::ScalarFunctionArgs {
+            let args = ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Array(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
@@ -436,7 +429,7 @@ mod tests {
                 Field::new("a", value.data_type(), false).into(),
                 Field::new("a", format.data_type(), false).into(),
             ];
-            let args = datafusion_expr::ScalarFunctionArgs {
+            let args = ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
                 arg_fields,
                 number_rows: 1,
@@ -527,7 +520,7 @@ mod tests {
                 Field::new("a", value.data_type(), false).into(),
                 Field::new("a", format.data_type().to_owned(), false).into(),
             ];
-            let args = datafusion_expr::ScalarFunctionArgs {
+            let args = ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
@@ -691,7 +684,7 @@ mod tests {
                 Field::new("a", value.data_type().clone(), false).into(),
                 Field::new("a", format.data_type(), false).into(),
             ];
-            let args = datafusion_expr::ScalarFunctionArgs {
+            let args = ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Array(value as ArrayRef),
                     ColumnarValue::Scalar(format),
@@ -719,7 +712,7 @@ mod tests {
                 Field::new("a", value.data_type().clone(), false).into(),
                 Field::new("a", format.data_type().clone(), false).into(),
             ];
-            let args = datafusion_expr::ScalarFunctionArgs {
+            let args = ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Array(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
@@ -747,7 +740,7 @@ mod tests {
 
         // invalid number of arguments
         let arg_field = Field::new("a", DataType::Int32, true).into();
-        let args = datafusion_expr::ScalarFunctionArgs {
+        let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
             arg_fields: vec![arg_field],
             number_rows: 1,
@@ -765,7 +758,7 @@ mod tests {
             Field::new("a", DataType::Utf8, true).into(),
             Field::new("a", DataType::Timestamp(TimeUnit::Nanosecond, None), true).into(),
         ];
-        let args = datafusion_expr::ScalarFunctionArgs {
+        let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),

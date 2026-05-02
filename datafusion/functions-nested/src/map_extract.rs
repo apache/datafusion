@@ -26,10 +26,10 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, cast::as_map_array, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 use std::vec;
 
@@ -56,6 +56,11 @@ SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
 ['two']
 
 SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
+----
+[NULL]
+
+-- non-existing key
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'a');
 ----
 []
 ```"#,
@@ -90,9 +95,6 @@ impl MapExtract {
 }
 
 impl ScalarUDFImpl for MapExtract {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "map_extract"
     }
@@ -110,10 +112,7 @@ impl ScalarUDFImpl for MapExtract {
         ))))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(map_extract_inner)(&args.args)
     }
 

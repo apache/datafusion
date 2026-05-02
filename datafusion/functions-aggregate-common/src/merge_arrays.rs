@@ -209,13 +209,12 @@ pub fn merge_ordered_arrays(
 mod tests {
     use super::*;
 
-    use std::collections::VecDeque;
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int64Array};
 
+    use datafusion_common::Result;
     use datafusion_common::utils::get_row_at_idx;
-    use datafusion_common::{Result, ScalarValue};
 
     #[test]
     fn test_merge_asc() -> Result<()> {

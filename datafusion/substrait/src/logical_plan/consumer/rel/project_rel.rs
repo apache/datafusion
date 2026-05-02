@@ -50,6 +50,8 @@ pub async fn from_project_rel(
         // For WindowFunctions, we need to wrap them in a Window relation. If there are duplicates,
         // we can do the window'ing only once, then the project will duplicate the result.
         // Order here doesn't matter since LPB::window_plan sorts the expressions.
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+        // Expr contains Arc with interior mutability but is intentionally used as hash key
         let mut window_exprs: HashSet<Expr> = HashSet::new();
         for expr in &p.expressions {
             let e = consumer

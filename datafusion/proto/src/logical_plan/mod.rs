@@ -35,6 +35,7 @@ use crate::{
 use crate::protobuf::{ToProtoError, proto_error};
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_catalog::cte_worktable::CteWorkTable;
+use datafusion_catalog::empty::EmptyTable;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     Result, TableReference, ToDFSchema, assert_or_internal_err, context,
@@ -54,7 +55,8 @@ use datafusion_datasource_json::file_format::{
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RecursiveQuery, SkipType,
+    TableSource, Unnest,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
@@ -106,7 +108,7 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
-pub trait LogicalExtensionCodec: Debug + Send + Sync {
+pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
     fn try_decode(
         &self,
         buf: &[u8],
@@ -152,6 +154,24 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
     }
 
     fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        _buf: &[u8],
+    ) -> Result<Arc<dyn HigherOrderUDF>> {
+        not_impl_err!(
+            "LogicalExtensionCodec is not provided for higher order function {name}"
+        )
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        _node: &dyn HigherOrderUDF,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -254,26 +274,22 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     ) -> Result<()> {
         let mut encoded_file_format = Vec::new();
 
-        let kind = if node.as_any().downcast_ref::<CsvFormatFactory>().is_some() {
+        let kind = if node.downcast_ref::<CsvFormatFactory>().is_some() {
             file_formats::CsvLogicalExtensionCodec
                 .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Csv
-        } else if node.as_any().downcast_ref::<JsonFormatFactory>().is_some() {
+        } else if node.downcast_ref::<JsonFormatFactory>().is_some() {
             file_formats::JsonLogicalExtensionCodec
                 .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Json
-        } else if node.as_any().downcast_ref::<ArrowFormatFactory>().is_some() {
+        } else if node.downcast_ref::<ArrowFormatFactory>().is_some() {
             file_formats::ArrowLogicalExtensionCodec
                 .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Arrow
         } else {
             #[cfg(feature = "parquet")]
             {
-                if node
-                    .as_any()
-                    .downcast_ref::<ParquetFormatFactory>()
-                    .is_some()
-                {
+                if node.downcast_ref::<ParquetFormatFactory>().is_some() {
                     file_formats::ParquetLogicalExtensionCodec.try_encode_file_format(
                         &mut encoded_file_format,
                         Arc::clone(&node),
@@ -1069,6 +1085,35 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
+            LogicalPlanType::EmptyTableScan(scan) => {
+                let schema: Schema = convert_required!(scan.schema)?;
+                let schema = Arc::new(schema);
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| schema.index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
+
+                let filters =
+                    from_proto::parse_exprs(&scan.filters, ctx, extension_codec)?;
+
+                let table_name =
+                    from_table_reference(scan.table_name.as_ref(), "EmptyTableScan")?;
+
+                let provider = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+                LogicalPlanBuilder::scan_with_filters(
+                    table_name,
+                    provider_as_source(provider),
+                    projection,
+                    filters,
+                )?
+                .build()
+            }
             LogicalPlanType::Dml(dml_node) => {
                 Ok(LogicalPlan::Dml(datafusion_expr::DmlStatement::new(
                     from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
@@ -1114,7 +1159,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => {
                 let provider = source_as_provider(source)?;
                 let schema = provider.schema();
-                let source = provider.as_any();
 
                 let projection = match projection {
                     None => None,
@@ -1132,13 +1176,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let filters: Vec<protobuf::LogicalExprNode> =
                     serialize_exprs(filters, extension_codec)?;
 
-                if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
-                    let any = listing_table.options().format.as_any();
+                if let Some(listing_table) = provider.downcast_ref::<ListingTable>() {
+                    let format = listing_table.options().format.as_ref();
                     let file_format_type = {
                         let mut maybe_some_type = None;
 
                         #[cfg(feature = "parquet")]
-                        if let Some(parquet) = any.downcast_ref::<ParquetFormat>() {
+                        if let Some(parquet) = format.downcast_ref::<ParquetFormat>() {
                             let options = parquet.options();
                             maybe_some_type =
                                 Some(FileFormatType::Parquet(protobuf::ParquetFormat {
@@ -1146,7 +1190,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 }));
                         };
 
-                        if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+                        if let Some(csv) = format.downcast_ref::<CsvFormat>() {
                             let options = csv.options();
                             maybe_some_type =
                                 Some(FileFormatType::Csv(protobuf::CsvFormat {
@@ -1154,7 +1198,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 }));
                         }
 
-                        if let Some(json) = any.downcast_ref::<OtherNdJsonFormat>() {
+                        if let Some(json) = format.downcast_ref::<OtherNdJsonFormat>() {
                             let options = json.options();
                             maybe_some_type =
                                 Some(FileFormatType::Json(protobuf::NdJsonFormat {
@@ -1163,12 +1207,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }
 
                         #[cfg(feature = "avro")]
-                        if any.is::<AvroFormat>() {
+                        if format.is::<AvroFormat>() {
                             maybe_some_type =
                                 Some(FileFormatType::Avro(protobuf::AvroFormat {}))
                         }
 
-                        if any.is::<ArrowFormat>() {
+                        if format.is::<ArrowFormat>() {
                             maybe_some_type =
                                 Some(FileFormatType::Arrow(protobuf::ArrowFormat {}))
                         }
@@ -1246,7 +1290,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         )),
                     })
-                } else if let Some(view_table) = source.downcast_ref::<ViewTable>() {
+                } else if let Some(view_table) = provider.downcast_ref::<ViewTable>() {
                     let schema: protobuf::Schema = schema.as_ref().try_into()?;
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
@@ -1267,7 +1311,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         ))),
                     })
-                } else if let Some(cte_work_table) = source.downcast_ref::<CteWorkTable>()
+                } else if let Some(cte_work_table) =
+                    provider.downcast_ref::<CteWorkTable>()
                 {
                     let name = cte_work_table.name().to_string();
                     let schema = cte_work_table.schema();
@@ -1278,6 +1323,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                             protobuf::CteWorkTableScanNode {
                                 name,
                                 schema: Some(schema),
+                            },
+                        )),
+                    })
+                } else if provider.downcast_ref::<EmptyTable>().is_some() {
+                    let schema: protobuf::Schema = schema.as_ref().try_into()?;
+
+                    Ok(LogicalPlanNode {
+                        logical_plan_type: Some(LogicalPlanType::EmptyTableScan(
+                            protobuf::EmptyTableScanNode {
+                                table_name: Some(table_name.clone().into()),
+                                schema: Some(schema),
+                                projection,
+                                filters,
                             },
                         )),
                     })
@@ -1325,10 +1383,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(serialize_expr(
+                            expr: Some(Box::new(serialize_expr(
                                 &filter.predicate,
                                 extension_codec,
-                            )?),
+                            )?)),
                         },
                     ))),
                 })
@@ -1444,7 +1502,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     null_equality.to_owned().into();
                 let filter = filter
                     .as_ref()
-                    .map(|e| serialize_expr(e, extension_codec))
+                    .map(|e| serialize_expr(e, extension_codec).map(Box::new))
                     .map_or(Ok(None), |v| v.map(Some))?;
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
@@ -1461,8 +1519,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Subquery(_) => {
-                not_impl_err!("LogicalPlan serde is not yet implemented for subqueries")
+            LogicalPlan::Subquery(subquery) => {
+                // Serialize the inner subquery plan directly — the
+                // LogicalPlan::Subquery wrapper is reconstructed during
+                // expression deserialization.
+                LogicalPlanNode::try_from_logical_plan(
+                    &subquery.subquery,
+                    extension_codec,
+                )
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(

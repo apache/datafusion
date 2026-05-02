@@ -83,8 +83,6 @@ mod tests {
     use arrow::array::{
         DictionaryArray, Int8Array, Int32Array, StringArray, StringDictionaryBuilder,
     };
-    use arrow_schema::DataType;
-    use std::sync::Arc;
 
     #[test]
     fn test_build_single_column_inlist_array() {

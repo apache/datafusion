@@ -17,17 +17,16 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use crate::hyperloglog::HyperLogLog;
-use arrow::array::{BinaryArray, StringViewArray};
+use crate::hyperloglog::{HLL_HASH_STATE, HyperLogLog};
+use arrow::array::{Array, BinaryArray, StringViewArray};
 use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{
-    ArrowPrimitiveType, Date32Type, Date64Type, FieldRef, Int8Type, Int16Type, Int32Type,
-    Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
-    UInt64Type,
+    ArrowPrimitiveType, Date32Type, Date64Type, FieldRef, Int32Type, Int64Type,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt32Type, UInt64Type,
 };
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
@@ -40,11 +39,14 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
+use datafusion_functions_aggregate_common::aggregate::count_distinct::{
+    Bitmap65536DistinctCountAccumulator, Bitmap65536DistinctCountAccumulatorI16,
+    BoolArray256DistinctCountAccumulator, BoolArray256DistinctCountAccumulatorI8,
+};
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 
 make_udaf_expr_and_func!(
@@ -55,14 +57,14 @@ make_udaf_expr_and_func!(
     approx_distinct_udaf
 );
 
-impl<T: Hash> From<&HyperLogLog<T>> for ScalarValue {
+impl<T: Hash + ?Sized> From<&HyperLogLog<T>> for ScalarValue {
     fn from(v: &HyperLogLog<T>) -> ScalarValue {
         let values = v.as_ref().to_vec();
         ScalarValue::Binary(Some(values))
     }
 }
 
-impl<T: Hash> TryFrom<&[u8]> for HyperLogLog<T> {
+impl<T: Hash + ?Sized> TryFrom<&[u8]> for HyperLogLog<T> {
     type Error = DataFusionError;
     fn try_from(v: &[u8]) -> Result<HyperLogLog<T>> {
         let arr: [u8; 16384] = v.try_into().map_err(|_| {
@@ -72,7 +74,7 @@ impl<T: Hash> TryFrom<&[u8]> for HyperLogLog<T> {
     }
 }
 
-impl<T: Hash> TryFrom<&ScalarValue> for HyperLogLog<T> {
+impl<T: Hash + ?Sized> TryFrom<&ScalarValue> for HyperLogLog<T> {
     type Error = DataFusionError;
     fn try_from(v: &ScalarValue) -> Result<HyperLogLog<T>> {
         if let ScalarValue::Binary(Some(slice)) = v {
@@ -82,6 +84,36 @@ impl<T: Hash> TryFrom<&ScalarValue> for HyperLogLog<T> {
                 "Impossibly got invalid scalar value while converting to HyperLogLog"
             )
         }
+    }
+}
+
+#[derive(Debug)]
+struct ApproxDistinctBitmapWrapper<A: Accumulator> {
+    inner: A,
+}
+
+impl<A: Accumulator> Accumulator for ApproxDistinctBitmapWrapper<A> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.inner.update_batch(values)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        match self.inner.evaluate()? {
+            ScalarValue::Int64(Some(v)) => Ok(ScalarValue::UInt64(Some(v as u64))),
+            other => internal_err!("unexpected: {other}"),
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.inner.state()
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.inner.merge_batch(states)
     }
 }
 
@@ -99,7 +131,6 @@ where
     T: ArrowPrimitiveType,
     T::Native: Hash,
 {
-    /// new approx_distinct accumulator
     pub fn new() -> Self {
         Self {
             hll: HyperLogLog::new(),
@@ -112,7 +143,7 @@ struct StringHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
 {
-    hll: HyperLogLog<String>,
+    hll: HyperLogLog<str>,
     phantom_data: PhantomData<T>,
 }
 
@@ -120,7 +151,6 @@ impl<T> StringHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
 {
-    /// new approx_distinct accumulator
     pub fn new() -> Self {
         Self {
             hll: HyperLogLog::new(),
@@ -130,22 +160,14 @@ where
 }
 
 #[derive(Debug)]
-struct StringViewHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
-    hll: HyperLogLog<String>,
-    phantom_data: PhantomData<T>,
+struct StringViewHLLAccumulator {
+    hll: HyperLogLog<str>,
 }
 
-impl<T> StringViewHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
+impl StringViewHLLAccumulator {
     pub fn new() -> Self {
         Self {
             hll: HyperLogLog::new(),
-            phantom_data: PhantomData,
         }
     }
 }
@@ -155,7 +177,7 @@ struct BinaryHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
 {
-    hll: HyperLogLog<Vec<u8>>,
+    hll: HyperLogLog<[u8]>,
     phantom_data: PhantomData<T>,
 }
 
@@ -163,7 +185,6 @@ impl<T> BinaryHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
 {
-    /// new approx_distinct accumulator
     pub fn new() -> Self {
         Self {
             hll: HyperLogLog::new(),
@@ -213,23 +234,29 @@ where
         let array: &GenericBinaryArray<T> =
             downcast_value!(values[0], GenericBinaryArray, T);
         // flatten because we would skip nulls
-        self.hll
-            .extend(array.into_iter().flatten().map(|v| v.to_vec()));
+        self.hll.extend(array.into_iter().flatten());
         Ok(())
     }
 
     default_accumulator_impl!();
 }
 
-impl<T> Accumulator for StringViewHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
+impl Accumulator for StringViewHLLAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array: &StringViewArray = downcast_value!(values[0], StringViewArray);
-        // flatten because we would skip nulls
-        self.hll
-            .extend(array.iter().flatten().map(|s| s.to_string()));
+
+        // When all strings are stored inline in the StringView (≤ 12 bytes),
+        // hash the raw u128 view directly instead of materializing a &str.
+        if array.data_buffers().is_empty() {
+            for (i, &view) in array.views().iter().enumerate() {
+                if !array.is_null(i) {
+                    self.hll.add_hashed(HLL_HASH_STATE.hash_one(view));
+                }
+            }
+        } else {
+            self.hll.extend(array.iter().flatten());
+        }
+
         Ok(())
     }
 
@@ -244,8 +271,7 @@ where
         let array: &GenericStringArray<T> =
             downcast_value!(values[0], GenericStringArray, T);
         // flatten because we would skip nulls
-        self.hll
-            .extend(array.into_iter().flatten().map(|i| i.to_string()));
+        self.hll.extend(array.into_iter().flatten());
         Ok(())
     }
 
@@ -309,11 +335,40 @@ impl ApproxDistinct {
     }
 }
 
-impl AggregateUDFImpl for ApproxDistinct {
-    fn as_any(&self) -> &dyn Any {
-        self
+#[cold]
+fn get_small_int_approx_accumulator(
+    data_type: &DataType,
+) -> Result<Box<dyn Accumulator>> {
+    match data_type {
+        DataType::UInt8 => Ok(Box::new(ApproxDistinctBitmapWrapper {
+            inner: BoolArray256DistinctCountAccumulator::new(),
+        })),
+        DataType::Int8 => Ok(Box::new(ApproxDistinctBitmapWrapper {
+            inner: BoolArray256DistinctCountAccumulatorI8::new(),
+        })),
+        DataType::UInt16 => Ok(Box::new(ApproxDistinctBitmapWrapper {
+            inner: Bitmap65536DistinctCountAccumulator::new(),
+        })),
+        DataType::Int16 => Ok(Box::new(ApproxDistinctBitmapWrapper {
+            inner: Bitmap65536DistinctCountAccumulatorI16::new(),
+        })),
+        _ => internal_err!("unsupported small int type: {}", data_type),
     }
+}
 
+#[cold]
+fn get_small_int_state_field(name: &str, data_type: &DataType) -> Result<Vec<FieldRef>> {
+    Ok(vec![
+        Field::new_list(
+            format_state_name(name, "approx_distinct"),
+            Field::new_list_field(data_type.clone(), true),
+            false,
+        )
+        .into(),
+    ])
+}
+
+impl AggregateUDFImpl for ApproxDistinct {
     fn name(&self) -> &str {
         "approx_distinct"
     }
@@ -327,24 +382,27 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        if args.input_fields[0].data_type().is_null() {
-            Ok(vec![
+        let data_type = args.input_fields[0].data_type();
+        match data_type {
+            DataType::Null => Ok(vec![
                 Field::new(
                     format_state_name(args.name, self.name()),
                     DataType::Null,
                     true,
                 )
                 .into(),
-            ])
-        } else {
-            Ok(vec![
+            ]),
+            DataType::UInt8 | DataType::Int8 | DataType::UInt16 | DataType::Int16 => {
+                get_small_int_state_field(args.name, data_type)
+            }
+            _ => Ok(vec![
                 Field::new(
                     format_state_name(args.name, "hll_registers"),
                     DataType::Binary,
                     false,
                 )
                 .into(),
-            ])
+            ]),
         }
     }
 
@@ -352,15 +410,11 @@ impl AggregateUDFImpl for ApproxDistinct {
         let data_type = acc_args.expr_fields[0].data_type();
 
         let accumulator: Box<dyn Accumulator> = match data_type {
-            // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL
-            // TODO support for boolean (trivial case)
-            // https://github.com/apache/datafusion/issues/1109
-            DataType::UInt8 => Box::new(NumericHLLAccumulator::<UInt8Type>::new()),
-            DataType::UInt16 => Box::new(NumericHLLAccumulator::<UInt16Type>::new()),
+            DataType::UInt8 | DataType::Int8 | DataType::UInt16 | DataType::Int16 => {
+                return get_small_int_approx_accumulator(data_type);
+            }
             DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
             DataType::UInt64 => Box::new(NumericHLLAccumulator::<UInt64Type>::new()),
-            DataType::Int8 => Box::new(NumericHLLAccumulator::<Int8Type>::new()),
-            DataType::Int16 => Box::new(NumericHLLAccumulator::<Int16Type>::new()),
             DataType::Int32 => Box::new(NumericHLLAccumulator::<Int32Type>::new()),
             DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
             DataType::Date32 => Box::new(NumericHLLAccumulator::<Date32Type>::new()),
@@ -391,7 +445,7 @@ impl AggregateUDFImpl for ApproxDistinct {
             }
             DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
             DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
-            DataType::Utf8View => Box::new(StringViewHLLAccumulator::<i32>::new()),
+            DataType::Utf8View => Box::new(StringViewHLLAccumulator::new()),
             DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
             DataType::Null => {

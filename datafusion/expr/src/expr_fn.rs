@@ -18,8 +18,9 @@
 //! Functions for creating logical expressions
 
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery, Lambda,
+    LambdaVariable, NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions,
+    WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -43,7 +44,6 @@ use datafusion_common::{Column, Result, ScalarValue, Spans, TableReference, plan
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -478,10 +478,6 @@ impl SimpleScalarUDF {
 }
 
 impl ScalarUDFImpl for SimpleScalarUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -592,10 +588,6 @@ impl SimpleAggregateUDF {
 }
 
 impl AggregateUDFImpl for SimpleAggregateUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -685,10 +677,6 @@ impl SimpleWindowUDF {
 }
 
 impl WindowUDFImpl for SimpleWindowUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -730,6 +718,21 @@ pub fn interval_datetime_lit(value: &str) -> Expr {
 pub fn interval_month_day_nano_lit(value: &str) -> Expr {
     let interval = parse_interval_month_day_nano(value).ok();
     Expr::Literal(ScalarValue::IntervalMonthDayNano(interval), None)
+}
+
+/// Create a lambda expression
+pub fn lambda(params: impl IntoIterator<Item = impl Into<String>>, body: Expr) -> Expr {
+    Expr::Lambda(Lambda::new(
+        params.into_iter().map(Into::into).collect(),
+        body,
+    ))
+}
+
+/// Create a lambda variable expression
+// todo: make this pub when support for optional field lands
+#[expect(unused)]
+fn lambda_var(name: impl Into<String>) -> Expr {
+    Expr::LambdaVariable(LambdaVariable::new(name.into(), None))
 }
 
 /// Extensions for configuring [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]

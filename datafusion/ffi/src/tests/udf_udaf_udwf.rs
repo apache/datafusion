@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow_schema::DataType;
@@ -49,10 +48,6 @@ pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
 struct WrappedAbs(Arc<ScalarUDF>);
 
 impl ScalarUDFImpl for WrappedAbs {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "ffi_abs"
     }
@@ -85,9 +80,6 @@ struct TimeZoneUDF {
 }
 
 impl ScalarUDFImpl for TimeZoneUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "TimeZoneUDF"
     }

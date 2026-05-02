@@ -16,18 +16,22 @@
 // under the License.
 
 use super::{Between, Expr, Like, predicate_bounds};
+use crate::ValueOrLambda;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
-    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
+use crate::expr::{FieldMetadata, LambdaVariable};
+use crate::higher_order_function::HigherOrderReturnFieldArgs;
+use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::FieldRef;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
@@ -63,6 +67,24 @@ pub trait ExprSchemable {
     )]
     fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
     -> Result<(DataType, bool)>;
+}
+
+/// Derives the output field for a cast expression from the source field.
+/// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
+fn cast_output_field(
+    source_field: &FieldRef,
+    target_type: &DataType,
+    force_nullable: bool,
+) -> Arc<Field> {
+    let mut f = source_field
+        .as_ref()
+        .clone()
+        .with_data_type(target_type.clone())
+        .with_metadata(source_field.metadata().clone());
+    if force_nullable {
+        f = f.with_nullable(true);
+    }
+    Arc::new(f)
 }
 
 impl ExprSchemable for Expr {
@@ -141,7 +163,9 @@ impl ExprSchemable for Expr {
                 match arg_data_type {
                     DataType::List(field)
                     | DataType::LargeList(field)
-                    | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
+                    | DataType::FixedSizeList(field, _)
+                    | DataType::ListView(field)
+                    | DataType::LargeListView(field) => Ok(field.data_type().clone()),
                     DataType::Struct(_) => Ok(arg_data_type),
                     DataType::Null => {
                         not_impl_err!("unnest() does not support null yet")
@@ -197,6 +221,16 @@ impl ExprSchemable for Expr {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
+            Expr::HigherOrderFunction(_func) => {
+                Ok(self.to_field(schema)?.1.data_type().clone())
+            }
+            Expr::Lambda(_lambda) => Ok(DataType::Null),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => match field {
+                Some(f) => Ok(f.data_type().clone()),
+                // If the lambda variable's field hasn't been specified, treat it as
+                // null (unspecified lambda variables generate an error during planning)
+                None => Ok(DataType::Null),
+            },
         }
     }
 
@@ -350,6 +384,16 @@ impl ExprSchemable for Expr {
                 // in projections
                 Ok(true)
             }
+            Expr::HigherOrderFunction(_func) => {
+                Ok(self.to_field(input_schema)?.1.is_nullable())
+            }
+            Expr::Lambda(_lambda) => Ok(true),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => match field {
+                Some(f) => Ok(f.is_nullable()),
+                // If the lambda variable's field hasn't been specified, treat it as
+                // null (unspecified lambda variables generate an error during planning)
+                None => Ok(true),
+            },
         }
     }
 
@@ -551,44 +595,79 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, field }) => expr
-                .to_field(schema)
-                .map(|(_table_ref, destination_field)| {
-                    // This propagates the nullability of the input rather than
-                    // force the nullability of the destination field. This is
-                    // usually the desired behaviour (i.e., specifying a cast
-                    // destination type usually does not force a user to pick
-                    // nullability, and assuming `true` would prevent the non-nullability
-                    // of the parent expression to make the result eligible for
-                    // optimizations that only apply to non-nullable values).
-                    destination_field
-                        .as_ref()
-                        .clone()
-                        .with_data_type(field.data_type().clone())
-                        .with_metadata(destination_field.metadata().clone())
+            Expr::Cast(Cast { expr, field }) => {
+                expr.to_field(schema).map(|(_table_ref, src)| {
+                    cast_output_field(&src, field.data_type(), false)
                 })
-                .map(Arc::new),
+            }
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
+            }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::TryCast(TryCast { expr, field }) => {
+                expr.to_field(schema).map(|(_table_ref, src)| {
+                    cast_output_field(&src, field.data_type(), true)
+                })
+            }
+            Expr::LambdaVariable(LambdaVariable {
+                field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
             | Expr::Case(_)
-            | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_) => Ok(Arc::new(Field::new(
+            | Expr::Unnest(_)
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => Ok(Arc::new(Field::new(
                 &schema_name,
                 self.get_type(schema)?,
                 self.nullable(schema)?,
             ))),
+            Expr::HigherOrderFunction(func) => {
+                let arg_fields = func
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lambda(Lambda { params: _, body }) => {
+                            // use the name of the lambda instead of just the body to help with debugging
+                            Ok(ValueOrLambda::Lambda(Arc::new(Field::new(
+                                arg.qualified_name().1,
+                                body.get_type(schema)?,
+                                body.nullable(schema)?,
+                            ))))
+                        }
+                        _ => Ok(ValueOrLambda::Value(arg.to_field(schema)?.1)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+                    &arg_fields,
+                    func.func.as_ref(),
+                )?;
+
+                let arguments = func
+                    .args
+                    .iter()
+                    .map(|e| match e {
+                        Expr::Literal(sv, _) => Some(sv),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+
+                let args = HigherOrderReturnFieldArgs {
+                    arg_fields: &new_fields,
+                    scalar_arguments: &arguments,
+                };
+
+                func.func.return_field_from_args(args)
+            }
         }?;
 
         Ok((
@@ -719,8 +798,7 @@ mod tests {
     use super::*;
     use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
 
-    use arrow::datatypes::FieldRef;
-    use datafusion_common::{DFSchema, ScalarValue, assert_or_internal_err};
+    use datafusion_common::{DFSchema, assert_or_internal_err};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{

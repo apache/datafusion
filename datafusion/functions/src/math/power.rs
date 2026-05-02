@@ -16,8 +16,6 @@
 // under the License.
 
 //! Math function: `power()`.
-use std::any::Any;
-
 use super::log::LogFunc;
 
 use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
@@ -392,10 +390,6 @@ fn pow_decimal_with_float_fallback(
 }
 
 impl ScalarUDFImpl for PowerFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "power"
     }
@@ -605,7 +599,7 @@ impl ScalarUDFImpl for PowerFunc {
 
 /// Return true if this function call is a call to `Log`
 fn is_log(func: &ScalarUDF) -> bool {
-    func.inner().as_any().downcast_ref::<LogFunc>().is_some()
+    func.inner().is::<LogFunc>()
 }
 
 #[cfg(test)]
