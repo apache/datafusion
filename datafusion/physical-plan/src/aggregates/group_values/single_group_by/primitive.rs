@@ -37,6 +37,10 @@ use std::sync::Arc;
 
 const DENSE_LOOKUP_FILL_EXEMPT_BYTES: usize = 8 * 1024;
 const DENSE_EMPTY_GROUP: usize = usize::MAX;
+const HASH_TABLE_MIN_FILL_NUMERATOR: usize = 3;
+const HASH_TABLE_MIN_FILL_DENOMINATOR: usize = 4;
+const HASH_TABLE_CONTROL_BYTES_PER_BUCKET: usize = size_of::<u8>();
+const HASH_TABLE_ENTRY_BYTES: usize = size_of::<(usize, u64)>();
 
 /// A trait to allow hashing of floating point numbers
 pub(crate) trait HashValue {
@@ -210,10 +214,16 @@ where
         range_len.checked_mul(size_of::<usize>())
     }
 
-    fn dense_range_len(min: i128, max: i128) -> Option<usize> {
-        let len: usize = max.checked_sub(min)?.checked_add(1)?.try_into().ok()?;
-        let bytes = Self::dense_lookup_bytes(len)?;
-        (bytes <= DENSE_LOOKUP_MAX_BYTES).then_some(len)
+    fn dense_range_len_unbounded(min: i128, max: i128) -> Option<usize> {
+        max.checked_sub(min)?.checked_add(1)?.try_into().ok()
+    }
+
+    fn hash_table_bytes_at_min_fill(occupied_slots: usize) -> Option<usize> {
+        let buckets = occupied_slots
+            .checked_mul(HASH_TABLE_MIN_FILL_DENOMINATOR)?
+            .checked_add(HASH_TABLE_MIN_FILL_NUMERATOR - 1)?
+            / HASH_TABLE_MIN_FILL_NUMERATOR;
+        buckets.checked_mul(HASH_TABLE_ENTRY_BYTES + HASH_TABLE_CONTROL_BYTES_PER_BUCKET)
     }
 
     fn intern_hash_key(
@@ -251,8 +261,20 @@ where
             return true;
         }
 
-        occupied_slots * DENSE_LOOKUP_MIN_FILL_DENOMINATOR
-            > range_len * DENSE_LOOKUP_MIN_FILL_NUMERATOR
+        let Some(bytes) = Self::dense_lookup_bytes(range_len) else {
+            return false;
+        };
+
+        if bytes <= DENSE_LOOKUP_MAX_BYTES {
+            return occupied_slots * DENSE_LOOKUP_MIN_FILL_DENOMINATOR
+                > range_len * DENSE_LOOKUP_MIN_FILL_NUMERATOR;
+        }
+
+        let Some(hash_table_bytes) = Self::hash_table_bytes_at_min_fill(occupied_slots)
+        else {
+            return true;
+        };
+        bytes <= hash_table_bytes
     }
 
     fn dense_has_minimum_fill(dense: &DenseGroupValues<T::Native>) -> bool {
@@ -292,7 +314,8 @@ where
             return true;
         }
 
-        let Some(new_range_len) = Self::dense_range_len(new_min, new_max) else {
+        let Some(new_range_len) = Self::dense_range_len_unbounded(new_min, new_max)
+        else {
             return false;
         };
 
@@ -441,7 +464,13 @@ where
         }
 
         let min = min?;
-        let range_len = Self::dense_range_len(min, max?)?;
+        let range_len = Self::dense_range_len_unbounded(min, max?)?;
+        let non_null_group_upper_bound =
+            self.num_groups - usize::from(self.null_group.is_some()) + values.len()
+                - values.null_count();
+        if !Self::dense_can_have_minimum_fill(non_null_group_upper_bound, range_len) {
+            return None;
+        }
         let mut dense = DenseGroupValues {
             min,
             group_ids: vec![DENSE_EMPTY_GROUP; range_len],
@@ -884,6 +913,21 @@ mod tests {
         group_values.intern(&[input], &mut groups)?;
         assert_eq!(groups, vec![0, 1]);
         assert!(!is_dense(&group_values));
+
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_dense_lookup_used_for_hash_memory_equivalent_range() -> Result<()> {
+        let input = Arc::new(UInt64Array::from_iter_values(
+            (0..150_000).map(|value| value * 2),
+        )) as ArrayRef;
+        let mut group_values = GroupValuesPrimitive::<UInt64Type>::new(DataType::UInt64);
+        let mut groups = vec![];
+
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups.len(), 150_000);
+        assert!(is_dense(&group_values));
 
         Ok(())
     }
