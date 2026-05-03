@@ -26,6 +26,7 @@ use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
 use crate::ensure_coop::EnsureCooperative;
 use crate::filter_pushdown::FilterPushdown;
+use crate::group_join::GroupJoinOptimizer;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
@@ -177,6 +178,11 @@ impl PhysicalOptimizer {
             Arc::new(EnforceDistribution::new()),
             // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution rule
             Arc::new(CombinePartialFinalAggregate::new()),
+            // GroupJoinOptimizer fuses Aggregate+HashJoin into GroupJoinExec
+            // when GROUP BY keys match join keys. Runs after
+            // CombinePartialFinalAggregate (which creates SinglePartitioned
+            // aggregates) and JoinSelection (which decides build/probe sides).
+            Arc::new(GroupJoinOptimizer::new()),
             // The EnforceSorting rule is for adding essential local sorting to satisfy the required
             // ordering. Please make sure that the whole plan tree is determined before this rule.
             // Note that one should always run this rule after running the EnforceDistribution rule
