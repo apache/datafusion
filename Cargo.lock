@@ -2479,7 +2479,6 @@ dependencies = [
  "pbjson 0.9.0",
  "pretty_assertions",
  "prost",
- "rand 0.9.4",
  "serde",
  "serde_json",
  "tokio",

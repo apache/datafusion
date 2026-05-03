@@ -2105,7 +2105,7 @@ impl NestedLoopJoinStream {
             return Ok(None);
         }
 
-        if cur_right_bitmap.true_count() == 0 {
+        if !cur_right_bitmap.has_true() {
             // If none of the pairs has passed the join predicate/filter
             Ok(None)
         } else {
@@ -2300,11 +2300,8 @@ impl NestedLoopJoinStream {
     ) -> Result<()> {
         let left_data = self.get_left_data()?;
 
-        // number of successfully joined pairs from (l_index x cur_right_batch)
-        let joined_len = r_matched_bitmap.true_count();
-
         // 1. Maybe update the left bitmap
-        if need_produce_result_in_final(self.join_type) && (joined_len > 0) {
+        if need_produce_result_in_final(self.join_type) && r_matched_bitmap.has_true() {
             let mut bitmap = left_data.bitmap().lock();
             bitmap.set_bit(l_index, true);
         }
@@ -2696,7 +2693,7 @@ fn build_unmatched_batch(
                 not(&batch_bitmap)?
             };
 
-            if bitmap.true_count() == 0 {
+            if !bitmap.has_true() {
                 return Ok(None);
             }
 
