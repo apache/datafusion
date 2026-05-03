@@ -41,3 +41,7 @@ mod relation_planner;
 
 /// Tests for insert operations
 mod insert_operation;
+
+/// End-to-end tests for `StatisticsRequest`s flowing from the optimizer
+/// rule through the physical planner into a custom `TableProvider`.
+mod statistics_requests;

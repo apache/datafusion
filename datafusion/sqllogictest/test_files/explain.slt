@@ -200,6 +200,7 @@ logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after extract_leaf_expressions SAME TEXT AS ABOVE
 logical_plan after push_down_leaf_projections SAME TEXT AS ABOVE
 logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
+logical_plan after request_statistics SAME TEXT AS ABOVE
 logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
@@ -224,6 +225,7 @@ logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after extract_leaf_expressions SAME TEXT AS ABOVE
 logical_plan after push_down_leaf_projections SAME TEXT AS ABOVE
 logical_plan after optimize_projections SAME TEXT AS ABOVE
+logical_plan after request_statistics SAME TEXT AS ABOVE
 logical_plan TableScan: simple_explain_test projection=[a, b, c]
 initial_physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true
 initial_physical_plan_with_stats DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
@@ -575,6 +577,7 @@ logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after extract_leaf_expressions SAME TEXT AS ABOVE
 logical_plan after push_down_leaf_projections SAME TEXT AS ABOVE
 logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
+logical_plan after request_statistics SAME TEXT AS ABOVE
 logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
@@ -599,6 +602,7 @@ logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after extract_leaf_expressions SAME TEXT AS ABOVE
 logical_plan after push_down_leaf_projections SAME TEXT AS ABOVE
 logical_plan after optimize_projections SAME TEXT AS ABOVE
+logical_plan after request_statistics SAME TEXT AS ABOVE
 logical_plan TableScan: simple_explain_test projection=[a, b, c]
 initial_physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true
 initial_physical_plan_with_stats DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]

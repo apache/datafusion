@@ -276,6 +276,7 @@ fn optimize_projections(
                 filters,
                 fetch,
                 projected_schema: _,
+                statistics_requests,
             } = table_scan;
 
             // Get indices referred to in the original (schema with all fields)
@@ -285,7 +286,8 @@ fn optimize_projections(
                 None => indices.into_inner(),
             };
             let new_scan =
-                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?
+                    .with_statistics_requests(statistics_requests);
 
             return Transformed::yes(LogicalPlan::TableScan(new_scan))
                 .transform_data(|plan| optimize_subqueries(plan, config));
