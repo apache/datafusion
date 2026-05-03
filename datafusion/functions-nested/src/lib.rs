@@ -40,6 +40,7 @@ pub mod macros;
 #[macro_use]
 pub mod macros_lambda;
 
+pub mod array_any_match;
 pub mod array_compact;
 pub mod array_has;
 pub mod array_transform;
@@ -83,6 +84,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::array_any_match::array_any_match;
     pub use super::array_compact::array_compact;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
@@ -190,7 +192,10 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
 }
 
 pub fn all_default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
-    vec![array_transform::array_transform_higher_order_function()]
+    vec![
+        array_any_match::array_any_match_higher_order_function(),
+        array_transform::array_transform_higher_order_function(),
+    ]
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]

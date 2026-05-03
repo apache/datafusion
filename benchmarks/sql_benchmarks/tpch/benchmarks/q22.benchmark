@@ -1,0 +1,55 @@
+name Q22
+group tpch
+subgroup sf${BENCH_SIZE:-1}
+
+init sql_benchmarks/tpch/init/set_config.sql
+
+load sql_benchmarks/tpch/init/load_${TPCH_FILE_TYPE:-parquet}.sql
+
+assert I
+SELECT COUNT(*) > 0 from lineitem;
+----
+true
+
+run
+select
+    cntrycode,
+    count(*) as numcust,
+    sum(c_acctbal) as totacctbal
+from
+    (
+        select
+            substring(c_phone from 1 for 2) as cntrycode,
+            c_acctbal
+        from
+            customer
+        where
+                substring(c_phone from 1 for 2) in
+                ('13', '31', '23', '29', '30', '18', '17')
+          and c_acctbal > (
+            select
+                avg(c_acctbal)
+            from
+                customer
+            where
+                    c_acctbal > 0.00
+              and substring(c_phone from 1 for 2) in
+                  ('13', '31', '23', '29', '30', '18', '17')
+        )
+          and not exists (
+                select
+                    *
+                from
+                    orders
+                where
+                        o_custkey = c_custkey
+            )
+    ) as custsale
+group by
+    cntrycode
+order by
+    cntrycode;
+
+result sql_benchmarks/tpch/results/sf${BENCH_SIZE:-1}/q22.csv
+
+cleanup sql_benchmarks/tpch/init/cleanup.sql
