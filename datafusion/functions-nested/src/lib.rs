@@ -55,6 +55,7 @@ pub mod except;
 pub mod expr_ext;
 pub mod extract;
 pub mod flatten;
+pub mod inner_product;
 pub mod length;
 pub mod make_array;
 pub mod map;
@@ -107,6 +108,7 @@ pub mod expr_fn {
     pub use super::extract::array_pop_front;
     pub use super::extract::array_slice;
     pub use super::flatten::flatten;
+    pub use super::inner_product::inner_product;
     pub use super::length::array_length;
     pub use super::make_array::make_array;
     pub use super::map_entries::map_entries;
@@ -163,6 +165,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         empty::array_empty_udf(),
         length::array_length_udf(),
         cosine_distance::cosine_distance_udf(),
+        inner_product::inner_product_udf(),
         distance::array_distance_udf(),
         flatten::flatten_udf(),
         min_max::array_max_udf(),
