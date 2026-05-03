@@ -46,11 +46,11 @@ pub struct Blocks<B: Block> {
     /// Index of the first active block. All blocks before this index have been
     /// popped and replaced with empty placeholders.
     start: usize,
-    block_size: Option<usize>,
+    block_size: usize,
 }
 
 impl<B: Block> Blocks<B> {
-    pub fn new(block_size: Option<usize>) -> Self {
+    pub fn new(block_size: usize) -> Self {
         Self {
             inner: Vec::new(),
             start: 0,
@@ -66,7 +66,7 @@ impl<B: Block> Blocks<B> {
     ) where
         F: Fn(Option<usize>) -> B,
     {
-        let block_size = self.block_size.unwrap_or(usize::MAX);
+        let block_size = self.block_size;
         // For resize, we need to:
         //   1. Ensure the blks are enough first
         //   2. and then ensure slots in blks are enough
@@ -90,7 +90,7 @@ impl<B: Block> Blocks<B> {
         let new_blks_num = total_num_groups.div_ceil(block_size) - active_len;
         if new_blks_num > 0 {
             for _ in 0..new_blks_num {
-                let block = new_block(self.block_size);
+                let block = new_block(Some(self.block_size));
                 self.inner.push(block);
             }
         }
@@ -161,6 +161,22 @@ impl<B: Block> Blocks<B> {
     pub fn clear(&mut self) {
         self.inner.clear();
         self.start = 0;
+    }
+
+    /// Ensure there is an active block with available capacity for one more value.
+    pub fn reserve_blocks<F>(&mut self, new_block: F)
+    where
+        F: Fn(Option<usize>) -> B,
+    {
+        let block_size = self.block_size;
+        if self.is_empty()
+            || self
+                .inner
+                .last()
+                .is_some_and(|block| block.len() == block_size)
+        {
+            self.inner.push(new_block(Some(self.block_size)));
+        }
     }
 
     /// Push a new block to the end of the blocks.
@@ -245,20 +261,12 @@ impl<Ty: Clone + Debug> Block for Vec<Ty> {
 impl<T: Clone + Debug> VecBlocks<T> {
     pub fn emit(&mut self, emit_to: EmitTo) -> Vec<T> {
         if matches!(emit_to, EmitTo::NextBlock) {
-            assert!(
-                self.block_size.is_some(),
-                "only support emit next block in blocked groups"
-            );
             self.pop_block()
                 .expect("should not call emit for empty blocks")
         } else {
             // TODO: maybe remove `EmitTo::take_needed` and move the
             // pattern matching codes here after supporting blocked approach
             // for all exist accumulators, to avoid matching twice
-            assert!(
-                self.block_size.is_none(),
-                "only support emit all/first in flat groups"
-            );
             emit_to.take_needed(&mut self[0])
         }
     }
@@ -270,14 +278,13 @@ mod test {
 
     type TestBlocks = Blocks<Vec<u32>>;
 
-    #[test]
-    fn test_single_block_resize() {
-        let new_block = |block_size: Option<usize>| {
-            let cap = block_size.unwrap_or(0);
-            Vec::with_capacity(cap)
-        };
+    fn new_block(block_size: Option<usize>) -> Vec<u32> {
+        Vec::with_capacity(block_size.expect("blocked blocks should pass block size"))
+    }
 
-        let mut blocks = TestBlocks::new(None);
+    #[test]
+    fn test_resize_within_one_block() {
+        let mut blocks = TestBlocks::new(10);
         assert_eq!(blocks.num_blocks(), 0);
 
         for _ in 0..2 {
@@ -287,7 +294,7 @@ mod test {
             assert_eq!(blocks[0].len(), 5);
             blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
 
-            // Resize to a larger block
+            // Resize up to the block size
             // Should still have single block, 10 block len, all data are 42
             blocks.resize(10, new_block, 42);
             assert_eq!(blocks.num_blocks(), 1);
@@ -305,12 +312,7 @@ mod test {
 
     #[test]
     fn test_multi_blocks_resize() {
-        let new_block = |block_size: Option<usize>| {
-            let cap = block_size.unwrap_or(0);
-            Vec::with_capacity(cap)
-        };
-
-        let mut blocks = TestBlocks::new(Some(3));
+        let mut blocks = TestBlocks::new(3);
         assert_eq!(blocks.num_blocks(), 0);
 
         for _ in 0..2 {
@@ -356,12 +358,7 @@ mod test {
 
     #[test]
     fn test_pop_block() {
-        let new_block = |block_size: Option<usize>| {
-            let cap = block_size.unwrap_or(0);
-            Vec::with_capacity(cap)
-        };
-
-        let mut blocks = TestBlocks::new(Some(3));
+        let mut blocks = TestBlocks::new(3);
         blocks.resize(7, new_block, 42);
         // 3 blocks: [42,42,42], [42,42,42], [42]
         assert_eq!(blocks.num_blocks(), 3);

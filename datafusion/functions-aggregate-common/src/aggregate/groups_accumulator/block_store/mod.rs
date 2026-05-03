@@ -44,6 +44,11 @@ pub trait BlockStore<B: Block>:
     /// storage.
     fn new(block_size: Option<usize>) -> Self;
 
+    /// Ensure the store has a block available for pushing a new value.
+    fn reserve_blocks<F>(&mut self, new_block: F)
+    where
+        F: Fn(Option<usize>) -> B;
+
     /// Ensure the store can hold `total_num_groups` values.
     fn resize<F>(&mut self, total_num_groups: usize, new_block: F, default_value: B::T)
     where

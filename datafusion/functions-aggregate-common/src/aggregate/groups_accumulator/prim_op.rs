@@ -208,7 +208,7 @@ impl<V: Clone + Debug + Send> PrimitiveGroupsStateAdapter<V> {
 
     fn new_blocked(block_size: usize) -> Self {
         Self::Blocked(PrimitiveGroupsState::new(
-            Blocks::new(Some(block_size)),
+            Blocks::new(block_size),
             BlockedNullState::new(Some(block_size)),
         ))
     }

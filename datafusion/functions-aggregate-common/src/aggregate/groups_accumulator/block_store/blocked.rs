@@ -28,7 +28,14 @@ pub type BlockedBlockStore<B> = Blocks<B>;
 
 impl<B: Block> BlockStore<B> for Blocks<B> {
     fn new(block_size: Option<usize>) -> Self {
-        Self::new(block_size)
+        Self::new(block_size.expect("blocked block store should have block size"))
+    }
+
+    fn reserve_blocks<F>(&mut self, new_block: F)
+    where
+        F: Fn(Option<usize>) -> B,
+    {
+        Self::reserve_blocks(self, new_block)
     }
 
     fn resize<F>(&mut self, total_num_groups: usize, new_block: F, default_value: B::T)
@@ -63,11 +70,26 @@ mod tests {
 
     #[test]
     fn existing_blocks_implements_block_store() {
-        let mut store = Blocks::<TestBlock>::new(Some(2));
+        let mut store = Blocks::<TestBlock>::new(2);
         store.resize(5, new_block, 42);
         assert_eq!(BlockStore::num_blocks(&store), 3);
         assert_eq!(store[0], vec![42, 42]);
         assert_eq!(store[1], vec![42, 42]);
         assert_eq!(store[2], vec![42]);
+    }
+
+    #[test]
+    fn blocked_block_store_reserves_new_block_when_full() {
+        let mut store = Blocks::<TestBlock>::new(2);
+        store.reserve_blocks(new_block);
+        assert_eq!(BlockStore::num_blocks(&store), 1);
+
+        store[0].push(1);
+        store.reserve_blocks(new_block);
+        assert_eq!(BlockStore::num_blocks(&store), 1);
+
+        store[0].push(2);
+        store.reserve_blocks(new_block);
+        assert_eq!(BlockStore::num_blocks(&store), 2);
     }
 }

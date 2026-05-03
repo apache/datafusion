@@ -67,6 +67,12 @@ impl<B: Block> BlockStore<B> for FlatBlockStore<B> {
         Self::new()
     }
 
+    fn reserve_blocks<F>(&mut self, _new_block: F)
+    where
+        F: Fn(Option<usize>) -> B,
+    {
+    }
+
     fn resize<F>(&mut self, total_num_groups: usize, new_block: F, default_value: B::T)
     where
         F: Fn(Option<usize>) -> B,
@@ -153,5 +159,17 @@ mod tests {
 
         store[0][1] = 7;
         assert_eq!(store[0], vec![42, 7]);
+    }
+
+    #[test]
+    fn flat_block_store_reserve_blocks_is_noop() {
+        let mut store = FlatBlockStore::<TestBlock>::new();
+        store.reserve_blocks(new_block);
+        assert_eq!(store.num_blocks(), 0);
+
+        store.resize(1, new_block, 42);
+        store.reserve_blocks(new_block);
+        assert_eq!(store.num_blocks(), 1);
+        assert_eq!(store[0], vec![42]);
     }
 }
