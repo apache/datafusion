@@ -3234,6 +3234,8 @@ _Alias of [current_date](#current_date)._
 
 ## Array Functions
 
+- [any_match](#any_match)
+- [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
 - [array_cat](#array_cat)
@@ -3286,7 +3288,11 @@ _Alias of [current_date](#current_date)._
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
+<<<<<<< HEAD
 - [inner_product](#inner_product)
+=======
+- [list_any_match](#list_any_match)
+>>>>>>> apache/main
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
@@ -3336,6 +3342,39 @@ _Alias of [current_date](#current_date)._
 - [range](#range)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
+
+### `any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
+### `array_any_match`
+
+Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others.
+
+```sql
+any_match(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean
+
+#### Example
+
+```sql
+> select any_match([1, 2, 3], x -> x > 2);
++----------------------------------+
+| any_match([1, 2, 3], x -> x > 2) |
++----------------------------------+
+| true                             |
++----------------------------------+
+```
+
+#### Aliases
+
+- any_match
+- list_any_match
 
 ### `array_any_value`
 
@@ -4613,6 +4652,7 @@ generate_series(start, stop[, step])
 +------------------------------------+
 ```
 
+<<<<<<< HEAD
 ### `inner_product`
 
 Returns the inner product (dot product) of two input arrays of equal length, computed as `sum(array1[i] * array2[i])`. Returns NULL if either array is NULL or contains NULL elements. Returns 0.0 for two empty arrays.
@@ -4640,6 +4680,11 @@ inner_product(array1, array2)
 #### Aliases
 
 - dot_product
+=======
+### `list_any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+>>>>>>> apache/main
 
 ### `list_any_value`
 
