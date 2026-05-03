@@ -30,8 +30,8 @@ use datafusion_common::{JoinType, Result};
 use datafusion_physical_expr::physical_exprs_equal;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode};
-use datafusion_physical_plan::joins::HashJoinExec;
 use datafusion_physical_plan::joins::group_join::GroupJoinExec;
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
 
 use crate::PhysicalOptimizerRule;
@@ -116,6 +116,12 @@ impl PhysicalOptimizerRule for GroupJoinOptimizer {
 
             // No residual join filter (equi-join only)
             if hash_join.filter().is_some() {
+                return Ok(Transformed::no(plan));
+            }
+
+            // GroupJoinExec requires partitioned inputs keyed by the join
+            // expressions. CollectLeft hash joins do not provide that shape.
+            if *hash_join.partition_mode() != PartitionMode::Partitioned {
                 return Ok(Transformed::no(plan));
             }
 
@@ -226,7 +232,11 @@ mod tests {
         ]))
     }
 
-    fn join(join_type: JoinType, left_key: &str) -> Result<Arc<HashJoinExec>> {
+    fn join(
+        join_type: JoinType,
+        left_key: &str,
+        partition_mode: PartitionMode,
+    ) -> Result<Arc<HashJoinExec>> {
         let left_schema = left_schema();
         let right_schema = right_schema();
         let left = Arc::new(EmptyExec::new(Arc::clone(&left_schema)));
@@ -239,10 +249,17 @@ mod tests {
             None,
             &join_type,
             None,
-            PartitionMode::CollectLeft,
+            partition_mode,
             NullEquality::NullEqualsNull,
             false,
         )?))
+    }
+
+    fn partitioned_join(
+        join_type: JoinType,
+        left_key: &str,
+    ) -> Result<Arc<HashJoinExec>> {
+        join(join_type, left_key, PartitionMode::Partitioned)
     }
 
     fn aggregate(
@@ -279,7 +296,7 @@ mod tests {
 
     #[test]
     fn rewrites_aggregate_above_inner_hash_join() -> Result<()> {
-        let join = join(JoinType::Inner, "l_key")?;
+        let join = partitioned_join(JoinType::Inner, "l_key")?;
         let join_schema = join.schema();
         let plan = aggregate(
             join,
@@ -297,7 +314,7 @@ mod tests {
 
     #[test]
     fn rewrites_through_projection() -> Result<()> {
-        let join = join(JoinType::Left, "l_key")?;
+        let join = partitioned_join(JoinType::Left, "l_key")?;
         let join_schema = join.schema();
         let projection = Arc::new(ProjectionExec::try_new(
             vec![
@@ -323,7 +340,7 @@ mod tests {
 
     #[test]
     fn does_not_rewrite_when_group_by_does_not_match_join_key() -> Result<()> {
-        let join = join(JoinType::Inner, "l_key")?;
+        let join = partitioned_join(JoinType::Inner, "l_key")?;
         let join_schema = join.schema();
         let plan = aggregate(
             join,
@@ -333,7 +350,7 @@ mod tests {
 
         assert_snapshot!(optimize(plan)?, @r"
         AggregateExec: mode=Single, gby=[l_value@1 as l_key], aggr=[count_values]
-          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(l_key@0, r_key@0)], NullsEqual: true
+          HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_key@0, r_key@0)], NullsEqual: true
             EmptyExec
             EmptyExec
         ");
@@ -342,7 +359,7 @@ mod tests {
 
     #[test]
     fn does_not_rewrite_unsupported_join_type() -> Result<()> {
-        let join = join(JoinType::Right, "l_key")?;
+        let join = partitioned_join(JoinType::Right, "l_key")?;
         let join_schema = join.schema();
         let plan = aggregate(
             join,
@@ -352,7 +369,7 @@ mod tests {
 
         assert_snapshot!(optimize(plan)?, @r"
         AggregateExec: mode=Single, gby=[l_key@0 as l_key], aggr=[count_values]
-          HashJoinExec: mode=CollectLeft, join_type=Right, on=[(l_key@0, r_key@0)], NullsEqual: true
+          HashJoinExec: mode=Partitioned, join_type=Right, on=[(l_key@0, r_key@0)], NullsEqual: true
             EmptyExec
             EmptyExec
         ");
@@ -361,13 +378,32 @@ mod tests {
 
     #[test]
     fn does_not_rewrite_inner_join_with_literal_aggregate_argument() -> Result<()> {
-        let join = join(JoinType::Inner, "l_key")?;
+        let join = partitioned_join(JoinType::Inner, "l_key")?;
         let join_schema = join.schema();
         let plan = aggregate(join, col("l_key", &join_schema)?, lit(1i64))?;
 
         assert_snapshot!(optimize(plan)?, @r"
         AggregateExec: mode=Single, gby=[l_key@0 as l_key], aggr=[count_values]
-          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(l_key@0, r_key@0)], NullsEqual: true
+          HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_key@0, r_key@0)], NullsEqual: true
+            EmptyExec
+            EmptyExec
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_rewrite_collect_left_hash_join() -> Result<()> {
+        let join = join(JoinType::Left, "l_key", PartitionMode::CollectLeft)?;
+        let join_schema = join.schema();
+        let plan = aggregate(
+            join,
+            col("l_key", &join_schema)?,
+            col("r_value", &join_schema)?,
+        )?;
+
+        assert_snapshot!(optimize(plan)?, @r"
+        AggregateExec: mode=Single, gby=[l_key@0 as l_key], aggr=[count_values]
+          HashJoinExec: mode=CollectLeft, join_type=Left, on=[(l_key@0, r_key@0)], NullsEqual: true
             EmptyExec
             EmptyExec
         ");
