@@ -2887,7 +2887,7 @@ impl TryFrom<ConfigFileEncryptionProperties> for FileEncryptionProperties {
         for (column_name, encryption_props) in val.column_encryption_properties.iter() {
             let encryption_key = hex::decode(&encryption_props.column_key_as_hex)
                 .map_err(|e| {
-                    DataFusionError::Configuration(format!("Unable to decode hex encryption key metadata for column {column_name}: {e}"))
+                    DataFusionError::Configuration(format!("Unable to decode hex encryption key for column {column_name}: {e}"))
                 })?;
             let key_metadata = encryption_props
                 .column_metadata_as_hex
@@ -3763,9 +3763,7 @@ mod tests {
         let err = FileEncryptionProperties::try_from(enc.clone())
             .unwrap_err()
             .to_string();
-        assert!(
-            err.contains("Unable to decode hex encryption key metadata for column col1")
-        );
+        assert!(err.contains("Unable to decode hex encryption key for column col1"));
         enc.column_encryption_properties.clear();
 
         // Encryption: invalid column metadata hex
