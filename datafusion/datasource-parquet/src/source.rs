@@ -25,6 +25,7 @@ use crate::ParquetFileReaderFactory;
 use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
+use crate::sampling::ParquetSampling;
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -294,7 +295,16 @@ pub struct ParquetSource {
     /// so we still need to sort them after reading, so the reverse scan is inexact.
     /// Used to optimize ORDER BY ... DESC on sorted data.
     reverse_row_groups: bool,
+    /// Optional sampling config. The fractions are deferred — the actual
+    /// "which row groups" / "which rows" decision is made inside the
+    /// opener once the parquet metadata is available.
+    pub(crate) sampling: ParquetSampling,
 }
+
+// `ParquetSampling` lives in `crate::sampling` so the helpers that
+// consume it (`apply_row_group_sampling`, `apply_row_fraction_sampling`)
+// can be defined alongside the struct as methods rather than free
+// functions in `opener.rs`.
 
 impl ParquetSource {
     /// Create a new ParquetSource to read the data specified in the file scan
@@ -319,7 +329,51 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            sampling: ParquetSampling::default(),
         }
+    }
+
+    /// Sample only this fraction of row groups in each scanned file.
+    ///
+    /// `fraction` is in `(0.0, 1.0]`. The actual *which* row groups are
+    /// chosen is deferred until the opener has loaded the parquet footer
+    /// (so we can sample by real row-group index). Selection is
+    /// deterministic per `(file_name, row_group_count, fraction)`.
+    ///
+    /// All collected values from a sampled scan should be treated as
+    /// `Precision::Inexact` since the sample is not the full data.
+    pub fn with_row_group_sampling(mut self, fraction: f64) -> Self {
+        self.sampling.row_group_fraction = Some(fraction);
+        self
+    }
+
+    /// Sample only this fraction of rows in each scanned row group, via
+    /// a `RowSelection` of K contiguous windows spread across the row
+    /// group.
+    ///
+    /// Pages aren't aligned across columns in parquet, so true "page
+    /// sampling" doesn't have a coherent table-level meaning. This
+    /// row-range form gives the same IO savings (the parquet reader
+    /// uses the page index to read only the data pages covering the
+    /// selected rows) but remains aligned across columns.
+    ///
+    /// Selection is deterministic-but-random per
+    /// `(file_name, row_group_index, fraction, cluster_size)`.
+    pub fn with_row_fraction(mut self, fraction: f64) -> Self {
+        self.sampling.row_fraction = Some(fraction);
+        self
+    }
+
+    /// Override the per-row-group cluster size used by
+    /// [`Self::with_row_fraction`]. See [`ParquetSampling::row_cluster_size`].
+    pub fn with_row_cluster_size(mut self, rows: usize) -> Self {
+        self.sampling.row_cluster_size = rows;
+        self
+    }
+
+    /// Returns the current sampling config (mostly for introspection).
+    pub fn sampling(&self) -> &ParquetSampling {
+        &self.sampling
     }
 
     /// Set the `TableParquetOptions` for this ParquetSource.
@@ -580,6 +634,7 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
+            sampling: self.sampling.clone(),
         }))
     }
 
