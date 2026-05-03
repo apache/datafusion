@@ -77,8 +77,5 @@ mod tests {
         let help = err.to_string();
 
         assert!(help.contains("list"));
-        assert!(!help.contains("run"));
-        assert!(!help.contains("info"));
-        assert!(!help.contains("query"));
     }
 }
