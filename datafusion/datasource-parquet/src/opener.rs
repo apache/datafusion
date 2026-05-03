@@ -43,8 +43,10 @@ use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
+    tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -597,7 +599,11 @@ impl ParquetMorselizer {
         ));
 
         let mut projection = self.projection.clone();
-        let mut predicate = self.predicate.clone();
+        let mut predicate = self
+            .predicate
+            .clone()
+            .map(|p| rewrite_partition_index_dynamic_filters(p, self.partition_index))
+            .transpose()?;
         if !literal_columns.is_empty() {
             projection = projection.try_map_exprs(|expr| {
                 replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
@@ -1589,6 +1595,27 @@ pub(crate) fn build_pruning_predicates(
     )
 }
 
+/// Replaces partition-index dynamic filters with the filter for the parquet
+/// execution partition currently opening a file.
+fn rewrite_partition_index_dynamic_filters(
+    predicate: Arc<dyn PhysicalExpr>,
+    partition_index: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    predicate
+        .transform_up(|expr| {
+            let Some(dynamic_filter) = expr.downcast_ref::<DynamicFilterPhysicalExpr>()
+            else {
+                return Ok(Transformed::no(expr));
+            };
+
+            match dynamic_filter.partition_filter(partition_index)? {
+                Some(partition_expr) => Ok(Transformed::yes(partition_expr)),
+                None => Ok(Transformed::no(expr)),
+            }
+        })
+        .data()
+}
+
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
 /// it from the underlying `AsyncFileReader` if necessary.
 async fn load_page_index<T: AsyncFileReader>(
@@ -1637,7 +1664,7 @@ mod test {
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
-        expressions::{Column, DynamicFilterPhysicalExpr, Literal},
+        expressions::{Column, DynamicFilterPhysicalExpr, Literal, lit as physical_lit},
         planner::logical2physical,
         projection::ProjectionExprs,
     };
@@ -2009,6 +2036,41 @@ mod test {
             expr.children().into_iter().map(Arc::clone).collect(),
             expr,
         ))
+    }
+
+    #[test]
+    fn test_rewrite_partition_index_dynamic_filters() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let initial = logical2physical(&col("a").gt(lit(0)), &schema);
+        let partition_0 = logical2physical(&col("a").gt(lit(10)), &schema);
+
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            initial.children().into_iter().map(Arc::clone).collect(),
+            initial,
+        ));
+        dynamic_filter
+            .update_partitioned(physical_lit(true), vec![Some(partition_0), None])
+            .unwrap();
+
+        let rewritten_0 = rewrite_partition_index_dynamic_filters(
+            Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{rewritten_0:?}"),
+            r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Gt, right: Literal { value: Int32(10), field: Field { name: "lit", data_type: Int32 } }, fail_on_overflow: false }"#
+        );
+
+        let rewritten_1 = rewrite_partition_index_dynamic_filters(
+            dynamic_filter as Arc<dyn PhysicalExpr>,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{rewritten_1:?}"),
+            r#"Literal { value: Boolean(false), field: Field { name: "lit", data_type: Boolean } }"#
+        );
     }
 
     #[tokio::test]

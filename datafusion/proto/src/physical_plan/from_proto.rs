@@ -558,6 +558,7 @@ pub fn parse_physical_expr_with_converter(
                         expression_id,
                         generation: dynamic_filter.generation,
                         expr: inner_expr,
+                        partitioned_exprs: None,
                         is_complete: dynamic_filter.is_complete,
                     },
                 ));
