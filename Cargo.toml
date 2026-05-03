@@ -289,21 +289,3 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
-
-
-## Temporary arrow-rs patch until 58.2.0 is released
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-avro = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "acc0cf45e02898301ad0dee1bb1c725236792d82" }
