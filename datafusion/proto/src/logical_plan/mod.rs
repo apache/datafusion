@@ -55,7 +55,8 @@ use datafusion_datasource_json::file_format::{
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RecursiveQuery, SkipType,
+    TableSource, Unnest,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
@@ -153,6 +154,24 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
     }
 
     fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        _buf: &[u8],
+    ) -> Result<Arc<dyn HigherOrderUDF>> {
+        not_impl_err!(
+            "LogicalExtensionCodec is not provided for higher order function {name}"
+        )
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        _node: &dyn HigherOrderUDF,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
         Ok(())
     }
 
