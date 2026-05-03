@@ -59,21 +59,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      # For fork PRs, `origin` points to the fork, not the upstream repo.
-      # Explicitly fetch the base branch from the upstream repo so we have
-      # a valid baseline ref for both diff and semver-checks.
+      # `origin` may point at a fork (when a contributor runs this locally) or
+      # at a stale ref. Fetch the base branch from the PR's upstream repo into
+      # a dedicated `apache/<base>` ref so the baseline is unambiguous and the
+      # same ref name works locally (`git remote add apache ...`) and in CI.
       - name: Fetch base branch
         env:
           BASE_REF: ${{ github.base_ref }}
           REPO: ${{ github.repository }}
-        run: git fetch "https://github.com/${REPO}.git" "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+        run: git fetch "https://github.com/${REPO}.git" "${BASE_REF}:refs/remotes/apache/${BASE_REF}"
 
       - name: Determine changed crates
         id: changed_crates
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          PACKAGES=$(ci/scripts/changed_crates.sh changed-crates "origin/${BASE_REF}")
+          PACKAGES=$(ci/scripts/changed_crates.sh changed-crates "apache/${BASE_REF}")
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           echo "Changed crates: $PACKAGES"
 
@@ -102,7 +103,8 @@ jobs:
           set +e
           # `tee` lets cargo's output stream live into the Actions log
           # while we also keep a copy for the PR comment.
-          ci/scripts/changed_crates.sh semver-check "origin/${BASE_REF}" $PACKAGES \
+          # Using `apache` remote here to point to the repository the pull request is against
+          ci/scripts/changed_crates.sh semver-check "apache/${BASE_REF}" $PACKAGES \
             2>&1 | tee /tmp/semver-output.txt
           EXIT_CODE=${PIPESTATUS[0]}
           # Pass the result through an output instead of failing the job:
