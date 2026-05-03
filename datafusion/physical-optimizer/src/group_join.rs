@@ -170,13 +170,14 @@ impl PhysicalOptimizerRule for GroupJoinOptimizer {
                 .map(|(expr, name)| (Arc::clone(expr), name.clone()))
                 .collect();
 
-            let group_join = GroupJoinExec::try_new(
+            let group_join = GroupJoinExec::try_new_with_aggr_input_schema(
                 Arc::clone(hash_join.left()),
                 Arc::clone(hash_join.right()),
                 join_on.to_vec(),
                 *hash_join.join_type(),
                 group_by_with_names,
                 aggr_exprs.to_vec(),
+                agg_exec.input_schema(),
             )?;
 
             Ok(Transformed::yes(

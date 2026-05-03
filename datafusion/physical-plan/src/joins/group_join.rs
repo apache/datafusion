@@ -89,6 +89,8 @@ pub struct GroupJoinExec {
     group_by_exprs: Vec<(PhysicalExprRef, String)>,
     /// Aggregate function expressions (e.g., COUNT, SUM)
     aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+    /// Input schema used to build aggregate expressions
+    aggr_input_schema: SchemaRef,
     /// Output schema: group-by columns + aggregate outputs
     schema: SchemaRef,
     /// Execution metrics
@@ -108,6 +110,29 @@ impl GroupJoinExec {
         join_type: JoinType,
         group_by_exprs: Vec<(PhysicalExprRef, String)>,
         aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+    ) -> Result<Self> {
+        let aggr_input_schema = right.schema();
+        Self::try_new_with_aggr_input_schema(
+            left,
+            right,
+            on,
+            join_type,
+            group_by_exprs,
+            aggr_expr,
+            aggr_input_schema,
+        )
+    }
+
+    /// Create a new `GroupJoinExec` with the schema used to build aggregate
+    /// expressions.
+    pub fn try_new_with_aggr_input_schema(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+        join_type: JoinType,
+        group_by_exprs: Vec<(PhysicalExprRef, String)>,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+        aggr_input_schema: SchemaRef,
     ) -> Result<Self> {
         if !matches!(join_type, JoinType::Inner | JoinType::Left) {
             return internal_err!(
@@ -146,10 +171,46 @@ impl GroupJoinExec {
             join_type,
             group_by_exprs,
             aggr_expr,
+            aggr_input_schema,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
+    }
+
+    /// Build side input.
+    pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.left
+    }
+
+    /// Probe side input.
+    pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.right
+    }
+
+    /// Equi-join key expressions.
+    pub fn on(&self) -> &[(PhysicalExprRef, PhysicalExprRef)] {
+        &self.on
+    }
+
+    /// Join type.
+    pub fn join_type(&self) -> &JoinType {
+        &self.join_type
+    }
+
+    /// GROUP BY expressions with output aliases.
+    pub fn group_by_exprs(&self) -> &[(PhysicalExprRef, String)] {
+        &self.group_by_exprs
+    }
+
+    /// Aggregate expressions.
+    pub fn aggr_expr(&self) -> &[Arc<AggregateFunctionExpr>] {
+        &self.aggr_expr
+    }
+
+    /// Input schema used to build aggregate expressions.
+    pub fn aggr_input_schema(&self) -> &SchemaRef {
+        &self.aggr_input_schema
     }
 }
 
@@ -200,16 +261,16 @@ impl ExecutionPlan for GroupJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(GroupJoinExec::try_new(
+        Ok(Arc::new(GroupJoinExec::try_new_with_aggr_input_schema(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
             self.on.clone(),
             self.join_type,
             self.group_by_exprs.clone(),
             self.aggr_expr.clone(),
+            Arc::clone(&self.aggr_input_schema),
         )?))
     }
-
     fn required_input_distribution(&self) -> Vec<Distribution> {
         let left_exprs: Vec<PhysicalExprRef> =
             self.on.iter().map(|(l, _)| Arc::clone(l)).collect();
