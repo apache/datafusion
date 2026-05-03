@@ -5,7 +5,7 @@ CREATE EXTERNAL TABLE nation
     n_regionkey INT,
     n_comment   VARCHAR(152),
     PRIMARY KEY (n_nationkey)
-) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/nation/nation.1.csv';
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/csv/nation/nation.1.csv';
 
 CREATE EXTERNAL TABLE region
 (
@@ -13,7 +13,7 @@ CREATE EXTERNAL TABLE region
     r_name      CHAR(25),
     r_comment   VARCHAR(152),
     PRIMARY KEY (r_regionkey)
-) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/region/region.1.csv';
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/csv/region/region.1.csv';
 
 CREATE EXTERNAL TABLE supplier
 (
@@ -25,7 +25,7 @@ CREATE EXTERNAL TABLE supplier
     s_acctbal   DECIMAL(15, 2),
     s_comment   VARCHAR(101),
     PRIMARY KEY (s_suppkey)
-) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/supplier/supplier.1.csv';
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/csv/supplier/supplier.1.csv';
 
 CREATE EXTERNAL TABLE customer
 (
@@ -38,7 +38,7 @@ CREATE EXTERNAL TABLE customer
     c_mktsegment CHAR(10),
     c_comment    VARCHAR(117),
     PRIMARY KEY (c_custkey)
-) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/customer/customer.1.csv';
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/csv/customer/customer.1.csv';
 
 CREATE EXTERNAL TABLE part
 (
@@ -52,7 +52,7 @@ CREATE EXTERNAL TABLE part
     p_retailprice DECIMAL(15, 2),
     p_comment     VARCHAR(23),
     PRIMARY KEY (p_partkey)
-) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/part/part.1.csv';
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/csv/part/part.1.csv';
 
 CREATE EXTERNAL TABLE partsupp
 (
@@ -62,7 +62,7 @@ CREATE EXTERNAL TABLE partsupp
     ps_supplycost DECIMAL(15, 2),
     ps_comment    VARCHAR(199),
     PRIMARY KEY (ps_partkey)
-) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/partsupp/partsupp.1.csv';
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/csv/partsupp/partsupp.1.csv';
 
 CREATE EXTERNAL TABLE orders
 (
@@ -76,7 +76,7 @@ CREATE EXTERNAL TABLE orders
     o_shippriority  INT,
     o_comment       VARCHAR(79),
     PRIMARY KEY (o_orderkey)
-) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/orders/orders.1.csv';
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/csv/orders/orders.1.csv';
 
 CREATE EXTERNAL TABLE lineitem
 (
@@ -96,4 +96,4 @@ CREATE EXTERNAL TABLE lineitem
     l_shipinstruct  CHAR(25),
     l_shipmode      CHAR(10),
     l_comment       VARCHAR(44)
-) STORED AS CSV LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/csv/lineitem/lineitem.1.csv';
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/csv/lineitem/lineitem.1.csv';

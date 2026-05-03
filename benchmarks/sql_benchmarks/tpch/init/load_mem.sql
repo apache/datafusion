@@ -1,18 +1,18 @@
-CREATE EXTERNAL TABLE nation_raw STORED AS PARQUET LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/nation/nation.1.parquet';
+CREATE EXTERNAL TABLE nation_raw STORED AS PARQUET LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/nation/nation.1.parquet';
 
-CREATE EXTERNAL TABLE region_raw STORED AS PARQUET LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/region/region.1.parquet';
+CREATE EXTERNAL TABLE region_raw STORED AS PARQUET LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/region/region.1.parquet';
 
-CREATE EXTERNAL TABLE supplier_raw STORED AS PARQUET LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/supplier/supplier.1.parquet';
+CREATE EXTERNAL TABLE supplier_raw STORED AS PARQUET LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/supplier/supplier.1.parquet';
 
-CREATE EXTERNAL TABLE customer_raw STORED AS PARQUET LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/customer/customer.1.parquet';
+CREATE EXTERNAL TABLE customer_raw STORED AS PARQUET LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/customer/customer.1.parquet';
 
-CREATE EXTERNAL TABLE part_raw STORED AS PARQUET LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/part/part.1.parquet';
+CREATE EXTERNAL TABLE part_raw STORED AS PARQUET LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/part/part.1.parquet';
 
-CREATE EXTERNAL TABLE partsupp_raw STORED AS PARQUET LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/partsupp/partsupp.1.parquet';
+CREATE EXTERNAL TABLE partsupp_raw STORED AS PARQUET LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/partsupp/partsupp.1.parquet';
 
-CREATE EXTERNAL TABLE orders_raw STORED AS PARQUET LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/orders/orders.1.parquet';
+CREATE EXTERNAL TABLE orders_raw STORED AS PARQUET LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/orders/orders.1.parquet';
 
-CREATE EXTERNAL TABLE lineitem_raw STORED AS PARQUET LOCATION 'data/tpch_sf${BENCH_SIZE:-1}/lineitem/lineitem.1.parquet';
+CREATE EXTERNAL TABLE lineitem_raw STORED AS PARQUET LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/lineitem/lineitem.1.parquet';
 
 CREATE TABLE nation as SELECT * FROM nation_raw;
 
