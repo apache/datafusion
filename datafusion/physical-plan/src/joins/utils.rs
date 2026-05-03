@@ -33,7 +33,8 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
-    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
+    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    RangePartitioning, Statistics,
 };
 // compatibility
 pub use super::join_filter::JoinFilter;
@@ -143,6 +144,18 @@ pub fn adjust_right_output_partitioning(
                 .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len as _))
                 .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
+        }
+        _ if right_partitioning.as_range().is_some() => {
+            let range = right_partitioning.as_range().expect("checked above");
+            let new_exprs = range
+                .exprs()
+                .iter()
+                .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len as _))
+                .collect::<Result<_>>()?;
+            Partitioning::range(RangePartitioning::try_new(
+                new_exprs,
+                range.ranges().to_vec(),
+            )?)
         }
         result => result.clone(),
     };

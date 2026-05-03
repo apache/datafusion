@@ -532,12 +532,20 @@ C 1 300
 D 1 400
 E 1 500
 
-# Now with optimization - verify plan shows SinglePartitioned mode and no RepartitionExec
+# Now with optimization. Since multiple distinct partition values are merged
+# into each file group, DataFusion cannot truthfully represent this as range
+# partitioning and falls back to repartitioning.
+#
+# Future work could avoid this repartition either by:
+# 1. extending range partitioning to support multiple disjoint ranges per partition
+#    (for example p0 = [A, A] union [D, D]), or
+# 2. adding a separate custom partitioning implementation for disjoint value sets.
 statement ok
 set datafusion.optimizer.preserve_file_partitions = 1;
 
-# Verify the plan uses SinglePartitioned mode with no RepartitionExec
-# The 5 partitions are merged into 3 file groups using round-robin assignment
+# Verify the plan repartitions after the partial aggregate.
+# The 5 partitions are merged into 3 file groups using round-robin assignment,
+# so each file group can contain non-contiguous partition values.
 query TT
 EXPLAIN SELECT f_dkey, count(*), sum(value) FROM high_cardinality_table GROUP BY f_dkey;
 ----
@@ -547,8 +555,10 @@ logical_plan
 03)----TableScan: high_cardinality_table projection=[value, f_dkey]
 physical_plan
 01)ProjectionExec: expr=[f_dkey@0 as f_dkey, count(Int64(1))@1 as count(*), sum(high_cardinality_table.value)@2 as sum(high_cardinality_table.value)]
-02)--AggregateExec: mode=SinglePartitioned, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), sum(high_cardinality_table.value)]
-03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=A/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=D/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=B/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=E/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], file_type=parquet
+02)--AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey], aggr=[count(Int64(1)), sum(high_cardinality_table.value)]
+03)----RepartitionExec: partitioning=Hash([f_dkey@0], 3), input_partitions=3
+04)------AggregateExec: mode=Partial, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), sum(high_cardinality_table.value)]
+05)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=A/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=D/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=B/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=E/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], file_type=parquet
 
 # Verify results with optimization match results without optimization
 query TIR rowsort
