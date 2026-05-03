@@ -617,11 +617,19 @@ pub fn serialize_partitioning(
                 )),
             }
         }
-        Partitioning::Range(range) => protobuf::Partitioning {
-            partition_method: Some(protobuf::partitioning::PartitionMethod::Range(
-                serialize_range_partitioning(range, codec, proto_converter)?,
-            )),
-        },
+        Partitioning::Custom(custom) => {
+            let Some(range) = custom.as_any().downcast_ref::<RangePartitioning>() else {
+                return not_impl_err!(
+                    "Serializing custom partitioning '{}' is not supported",
+                    custom.name()
+                );
+            };
+            protobuf::Partitioning {
+                partition_method: Some(protobuf::partitioning::PartitionMethod::Range(
+                    serialize_range_partitioning(range, codec, proto_converter)?,
+                )),
+            }
+        }
         Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
             partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
                 *partition_count as u64,

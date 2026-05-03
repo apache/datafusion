@@ -1805,7 +1805,7 @@ fn roundtrip_repartition_preserve_order() -> Result<()> {
 #[test]
 fn roundtrip_range_partitioning() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
-    let range_partitioning = Partitioning::Range(RangePartitioning::try_new(
+    let range_partitioning = Partitioning::range(RangePartitioning::try_new(
         vec![col("a", &schema)?],
         vec![
             PartitionRange::new(

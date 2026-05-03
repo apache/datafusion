@@ -38,7 +38,7 @@ use datafusion_physical_expr::PhysicalSortExpr;
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     Distribution, PartitionRange, Partitioning, PartitioningCompatibility, PhysicalExpr,
-    RangeBound, RangePartitioning, expressions,
+    PhysicalPartitioning, RangeBound, RangePartitioning, expressions,
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};

@@ -668,7 +668,7 @@ fn parse_protobuf_range_partitioning(
         .map(parse_partition_range)
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(Partitioning::Range(RangePartitioning::try_new(
+    Ok(Partitioning::range(RangePartitioning::try_new(
         exprs, ranges,
     )?))
 }

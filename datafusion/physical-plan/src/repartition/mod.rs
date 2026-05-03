@@ -1318,7 +1318,7 @@ impl ExecutionPlan for RepartitionExec {
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
-            Range(range) => Range(range),
+            Custom(custom) => Custom(custom),
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
         };
         Ok(Some(Arc::new(Self {
@@ -1339,8 +1339,8 @@ impl RepartitionExec {
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
     ) -> Result<Self> {
-        if matches!(partitioning, Partitioning::Range(_)) {
-            return plan_err!("RepartitionExec does not support range repartitioning");
+        if matches!(partitioning, Partitioning::Custom(_)) {
+            return plan_err!("RepartitionExec does not support custom repartitioning");
         }
 
         let preserve_order = false;

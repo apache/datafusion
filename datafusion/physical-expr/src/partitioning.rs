@@ -23,6 +23,7 @@ use crate::{
 };
 use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use std::any::Any;
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -118,14 +119,48 @@ pub enum Partitioning {
     /// Allocate rows based on a hash of one of more expressions and the specified number of
     /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
-    /// Allocate rows based on disjoint ordered ranges of one or more expressions.
-    ///
-    /// This variant describes partitioning that already exists in an input source.
-    /// It does not imply DataFusion can repartition arbitrary input into these
-    /// ranges.
-    Range(RangePartitioning),
+    /// Custom partitioning scheme backed by a trait object.
+    Custom(Arc<dyn PhysicalPartitioning>),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
+}
+
+/// Extensible physical partitioning contract.
+///
+/// This is a POC shape for partitioning schemes that are not built in to the
+/// [`Partitioning`] enum. It intentionally mirrors the operations DataFusion
+/// already asks of partitioning metadata.
+pub trait PhysicalPartitioning: fmt::Debug + Display + Send + Sync {
+    /// Used for display and downcasting-friendly diagnostics.
+    fn name(&self) -> &str;
+
+    /// Number of output partitions.
+    fn partition_count(&self) -> usize;
+
+    /// Returns how this partitioning satisfies a required [`Distribution`].
+    fn satisfaction(
+        &self,
+        required: &Distribution,
+        eq_properties: &EquivalenceProperties,
+        allow_subset: bool,
+    ) -> PartitioningSatisfaction;
+
+    /// Returns whether this partitioning describes the same logical partition
+    /// map as `other`.
+    fn compatibility(
+        &self,
+        other: &dyn PhysicalPartitioning,
+    ) -> PartitioningCompatibility;
+
+    /// Calculate the output partitioning after applying a projection.
+    fn project(
+        &self,
+        mapping: &ProjectionMapping,
+        input_eq_properties: &EquivalenceProperties,
+    ) -> Arc<dyn PhysicalPartitioning>;
+
+    /// Downcast hook for implementations that understand each other.
+    fn as_any(&self) -> &dyn Any;
 }
 
 impl Display for Partitioning {
@@ -140,7 +175,7 @@ impl Display for Partitioning {
                     .join(", ");
                 write!(f, "Hash([{phy_exprs_str}], {size})")
             }
-            Partitioning::Range(range) => write!(f, "{range}"),
+            Partitioning::Custom(custom) => write!(f, "{custom}"),
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
             }
@@ -204,7 +239,7 @@ impl RangePartitioning {
     /// the required expressions are colocated in one partition. The routing is
     /// range-based rather than hash-based, but the distribution property is the
     /// same property hash joins and grouped aggregations require.
-    pub fn satisfaction(
+    pub fn hash_distribution_satisfaction(
         &self,
         required_exprs: &[Arc<dyn PhysicalExpr>],
         eq_properties: &EquivalenceProperties,
@@ -220,7 +255,7 @@ impl RangePartitioning {
 
     /// Returns whether this range partitioning has the same partition map as
     /// another range partitioning.
-    pub fn compatibility(&self, other: &Self) -> PartitioningCompatibility {
+    pub fn compatibility_with_range(&self, other: &Self) -> PartitioningCompatibility {
         if !physical_exprs_equal(&self.exprs, &other.exprs) {
             return PartitioningCompatibility::Incompatible;
         }
@@ -232,7 +267,7 @@ impl RangePartitioning {
         }
     }
 
-    fn project(
+    fn project_with_mapping(
         &self,
         mapping: &ProjectionMapping,
         input_eq_properties: &EquivalenceProperties,
@@ -266,6 +301,69 @@ impl Display for RangePartitioning {
             .collect::<Vec<_>>()
             .join(", ");
         write!(f, "Range([{exprs}], [{ranges}])")
+    }
+}
+
+impl PhysicalPartitioning for RangePartitioning {
+    fn name(&self) -> &str {
+        "range"
+    }
+
+    fn partition_count(&self) -> usize {
+        self.ranges.len()
+    }
+
+    fn satisfaction(
+        &self,
+        required: &Distribution,
+        eq_properties: &EquivalenceProperties,
+        allow_subset: bool,
+    ) -> PartitioningSatisfaction {
+        match required {
+            Distribution::UnspecifiedDistribution => PartitioningSatisfaction::Exact,
+            Distribution::SinglePartition if self.partition_count() == 1 => {
+                PartitioningSatisfaction::Exact
+            }
+            Distribution::HashPartitioned(_) if self.partition_count() == 1 => {
+                PartitioningSatisfaction::Exact
+            }
+            Distribution::HashPartitioned(required_exprs) => {
+                RangePartitioning::hash_distribution_satisfaction(
+                    self,
+                    required_exprs,
+                    eq_properties,
+                    allow_subset,
+                )
+            }
+            _ => PartitioningSatisfaction::NotSatisfied,
+        }
+    }
+
+    fn compatibility(
+        &self,
+        other: &dyn PhysicalPartitioning,
+    ) -> PartitioningCompatibility {
+        other
+            .as_any()
+            .downcast_ref::<RangePartitioning>()
+            .map(|other| self.compatibility_with_range(other))
+            .unwrap_or(PartitioningCompatibility::Incompatible)
+    }
+
+    fn project(
+        &self,
+        mapping: &ProjectionMapping,
+        input_eq_properties: &EquivalenceProperties,
+    ) -> Arc<dyn PhysicalPartitioning> {
+        Arc::new(RangePartitioning::project_with_mapping(
+            self,
+            mapping,
+            input_eq_properties,
+        ))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -420,12 +518,38 @@ impl PartitioningSatisfaction {
 }
 
 impl Partitioning {
+    /// Create a [`Partitioning`] from a custom partitioning implementation.
+    pub fn custom(partitioning: Arc<dyn PhysicalPartitioning>) -> Self {
+        Self::Custom(partitioning)
+    }
+
+    /// Create a [`Partitioning`] from range partitioning metadata.
+    pub fn range(range: RangePartitioning) -> Self {
+        Self::Custom(Arc::new(range))
+    }
+
+    /// Returns the custom partitioning implementation, if this partitioning is
+    /// backed by one.
+    pub fn as_custom(&self) -> Option<&Arc<dyn PhysicalPartitioning>> {
+        match self {
+            Self::Custom(custom) => Some(custom),
+            _ => None,
+        }
+    }
+
+    /// Returns range partitioning metadata when this custom partitioning is a
+    /// [`RangePartitioning`].
+    pub fn as_range(&self) -> Option<&RangePartitioning> {
+        self.as_custom()
+            .and_then(|custom| custom.as_any().downcast_ref::<RangePartitioning>())
+    }
+
     /// Returns the number of partitions in this partitioning scheme
     pub fn partition_count(&self) -> usize {
         use Partitioning::*;
         match self {
             RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
-            Range(range) => range.partition_count(),
+            Custom(custom) => custom.partition_count(),
         }
     }
 
@@ -466,11 +590,8 @@ impl Partitioning {
                     eq_properties,
                     allow_subset,
                 ),
-                // Range partitioning satisfies hash distribution requirements
-                // because the requirement only needs equal key values to be
-                // colocated in a partition. It does not require hash routing.
-                Partitioning::Range(range) => {
-                    range.satisfaction(required_exprs, eq_properties, allow_subset)
+                Partitioning::Custom(custom) => {
+                    custom.satisfaction(required, eq_properties, allow_subset)
                 }
                 _ => PartitioningSatisfaction::NotSatisfied,
             },
@@ -489,8 +610,8 @@ impl Partitioning {
                 project_partition_exprs(exprs, mapping, input_eq_properties),
                 *part,
             ),
-            Partitioning::Range(range) => {
-                Partitioning::Range(range.project(mapping, input_eq_properties))
+            Partitioning::Custom(custom) => {
+                Partitioning::Custom(custom.project(mapping, input_eq_properties))
             }
             _ => self.clone(),
         }
@@ -508,8 +629,8 @@ impl Partitioning {
             {
                 PartitioningCompatibility::SamePartitionMap
             }
-            (Partitioning::Range(left), Partitioning::Range(right)) => {
-                left.compatibility(right)
+            (Partitioning::Custom(left), Partitioning::Custom(right)) => {
+                left.compatibility(right.as_ref())
             }
             (Partitioning::UnknownPartitioning(_), _)
             | (_, Partitioning::UnknownPartitioning(_)) => {
@@ -608,8 +729,9 @@ impl PartialEq for Partitioning {
             {
                 true
             }
-            (Partitioning::Range(range1), Partitioning::Range(range2))
-                if range1 == range2 =>
+            (Partitioning::Custom(left), Partitioning::Custom(right))
+                if left.compatibility(right.as_ref())
+                    == PartitioningCompatibility::SamePartitionMap =>
             {
                 true
             }
@@ -797,7 +919,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b", &schema)?);
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
-        let range = Partitioning::Range(RangePartitioning::try_new(
+        let range = Partitioning::range(RangePartitioning::try_new(
             vec![Arc::clone(&col_a)],
             vec![
                 PartitionRange::new(
@@ -867,7 +989,7 @@ mod tests {
 
         let col_b: Arc<dyn PhysicalExpr> =
             Arc::new(Column::new_with_schema("b", &schema)?);
-        let range = Partitioning::Range(RangePartitioning::try_new(
+        let range = Partitioning::range(RangePartitioning::try_new(
             vec![Arc::clone(&col_b)],
             vec![PartitionRange::unbounded()],
         )?);
@@ -878,7 +1000,7 @@ mod tests {
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         let projected = range.project(&projection, &eq_properties);
-        let expected = Partitioning::Range(RangePartitioning::try_new(
+        let expected = Partitioning::range(RangePartitioning::try_new(
             vec![Arc::new(Column::new("b", 0))],
             vec![PartitionRange::unbounded()],
         )?);
@@ -931,19 +1053,19 @@ mod tests {
             RangePartitioning::try_new(vec![col_b], vec![PartitionRange::unbounded()])?;
 
         assert_eq!(
-            range_a_10.compatibility(&range_a_10_again),
+            range_a_10.compatibility_with_range(&range_a_10_again),
             PartitioningCompatibility::SamePartitionMap,
         );
         assert_eq!(
-            range_a_10.compatibility(&range_a_20),
+            range_a_10.compatibility_with_range(&range_a_20),
             PartitioningCompatibility::SameExpressionsDifferentBounds,
         );
         assert_eq!(
-            range_a_10.compatibility(&range_b_10),
+            range_a_10.compatibility_with_range(&range_b_10),
             PartitioningCompatibility::Incompatible,
         );
         assert_eq!(
-            Partitioning::Range(range_a_10)
+            Partitioning::range(range_a_10)
                 .compatibility(&Partitioning::UnknownPartitioning(2)),
             PartitioningCompatibility::Unknown,
         );
