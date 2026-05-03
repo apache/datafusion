@@ -3288,11 +3288,8 @@ _Alias of [current_date](#current_date)._
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
-<<<<<<< HEAD
 - [inner_product](#inner_product)
-=======
 - [list_any_match](#list_any_match)
->>>>>>> apache/main
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
@@ -4652,7 +4649,6 @@ generate_series(start, stop[, step])
 +------------------------------------+
 ```
 
-<<<<<<< HEAD
 ### `inner_product`
 
 Returns the inner product (dot product) of two input arrays of equal length, computed as `sum(array1[i] * array2[i])`. Returns NULL if either array is NULL or contains NULL elements. Returns 0.0 for two empty arrays.
@@ -4680,11 +4676,10 @@ inner_product(array1, array2)
 #### Aliases
 
 - dot_product
-=======
+
 ### `list_any_match`
 
 _Alias of [array_any_match](#array_any_match)._
->>>>>>> apache/main
 
 ### `list_any_value`
 
