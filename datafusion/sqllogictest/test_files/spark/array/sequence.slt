@@ -136,6 +136,11 @@ SELECT sequence(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00'
 [2023-01-03T00:00:00, 2023-01-02T00:00:00, 2023-01-01T00:00:00]
 
 query ?
+SELECT sequence(DATE '2018-01-04', DATE '2018-01-01', INTERVAL '-1' DAY);
+----
+[2018-01-04, 2018-01-03, 2018-01-02, 2018-01-01]
+
+query ?
 SELECT sequence(DATE '2018-01-01', DATE '2018-01-04');
 ----
 [2018-01-01, 2018-01-02, 2018-01-03, 2018-01-04]
@@ -231,3 +236,22 @@ SELECT sequence(1, 5, 0);
 
 query error DataFusion error: Execution error: Step cannot be 0 for sequence when start and stop are different
 SELECT sequence(5, 1, 0);
+
+# INTERVAL '0' TESTS
+query error DataFusion error: Execution error: Interval argument to generate_series must not be 0
+SELECT sequence(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00', INTERVAL '0' DAY);
+
+query error DataFusion error: Execution error: Interval argument to generate_series must not be 0
+SELECT sequence(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-03T00:00:00', INTERVAL '0' DAY);
+
+query error DataFusion error: Execution error: Interval argument to generate_series must not be 0
+SELECT sequence(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-01T00:00:00', INTERVAL '0' DAY);
+
+query error DataFusion error: Execution error: Cannot generate date range less than 1 day.
+SELECT sequence(DATE '2018-01-01', DATE '2018-01-04', INTERVAL '0' DAY);
+
+query error DataFusion error: Execution error: Cannot generate date range less than 1 day.
+SELECT sequence(DATE '2018-01-04', DATE '2018-01-01', INTERVAL '0' DAY);
+
+query error DataFusion error: Execution error: Cannot generate date range less than 1 day.
+SELECT sequence(DATE '2018-01-01', DATE '2018-01-01', INTERVAL '0' DAY);
