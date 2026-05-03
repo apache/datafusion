@@ -274,21 +274,27 @@ impl PartitionedFile {
     ///
     /// This can be used to pass reader-specific information (e.g. a
     /// `ParquetAccessPlan`, or a custom index entry).
-    pub fn with_extension<T: Any + Send + Sync>(mut self, value: T) -> Self {
+    pub fn with_extension<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
         self.extensions.insert(value);
-        self
-    }
-
-    /// Like [`Self::with_extension`] but accepts an already-`Arc`ed value,
-    /// avoiding an extra allocation.
-    pub fn with_extension_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
-        self.extensions.insert_arc(value);
         self
     }
 
     /// Borrow the extension of type `T`, if one is attached.
     pub fn extension<T: Any + Send + Sync>(&self) -> Option<&T> {
         self.extensions.get::<T>()
+    }
+
+    /// Attach a type-erased extension to this file.
+    ///
+    /// Kept as a backwards-compatible shim; prefer [`Self::with_extension`]
+    /// which keys the extension by its concrete Rust type at the call site.
+    #[deprecated(
+        since = "54.0.0",
+        note = "use `with_extension`; the extension is keyed by its concrete type"
+    )]
+    pub fn with_extensions(mut self, extensions: Arc<dyn Any + Send + Sync>) -> Self {
+        self.extensions.insert_dyn(extensions);
+        self
     }
 
     /// Update the statistics for this file.

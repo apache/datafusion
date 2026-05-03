@@ -163,7 +163,7 @@ impl ExtendedStatistics {
     }
 
     /// Set a custom statistics extension.
-    pub fn set_extension<T: 'static + Send + Sync>(&mut self, value: T) {
+    pub fn set_extension<T: 'static + Send + Sync>(&mut self, value: Arc<T>) {
         self.extensions.insert(value);
     }
 

@@ -46,8 +46,8 @@ use std::sync::Arc;
 /// struct OtherData(&'static str);
 ///
 /// let mut ext = Extensions::new();
-/// ext.insert(MyData(42));
-/// ext.insert(OtherData("hello"));
+/// ext.insert(Arc::new(MyData(42)));
+/// ext.insert(Arc::new(OtherData("hello")));
 ///
 /// assert_eq!(ext.get::<MyData>().unwrap().0, 42);
 /// assert_eq!(ext.get::<OtherData>().unwrap().0, "hello");
@@ -75,16 +75,21 @@ impl Extensions {
 
     /// Insert an extension keyed by its concrete type `T`. Returns the
     /// previous value of that type, if any.
-    pub fn insert<T: Any + Send + Sync>(&mut self, value: T) -> Option<Arc<T>> {
-        self.insert_arc(Arc::new(value))
-    }
-
-    /// Insert an already-`Arc`ed extension keyed by `T`. Returns the
-    /// previous value of that type, if any.
-    pub fn insert_arc<T: Any + Send + Sync>(&mut self, value: Arc<T>) -> Option<Arc<T>> {
+    pub fn insert<T: Any + Send + Sync>(&mut self, value: Arc<T>) -> Option<Arc<T>> {
         self.inner
             .insert(TypeId::of::<T>(), value)
             .map(|p| Arc::downcast::<T>(p).expect("TypeId matches T"))
+    }
+
+    /// Insert an already-type-erased value, keyed by its dynamic
+    /// [`TypeId`]. Used by APIs that accept `Arc<dyn Any + Send + Sync>`
+    /// and need to recover the concrete type for keying.
+    pub fn insert_dyn(
+        &mut self,
+        value: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn Any + Send + Sync>> {
+        let id = (*value).type_id();
+        self.inner.insert(id, value)
     }
 
     /// Borrow the extension of type `T`, if set.
@@ -159,14 +164,14 @@ mod tests {
         let mut ext = Extensions::new();
         assert!(ext.is_empty());
 
-        ext.insert(A(1));
-        ext.insert(B("x"));
+        ext.insert(Arc::new(A(1)));
+        ext.insert(Arc::new(B("x")));
         assert_eq!(ext.len(), 2);
         assert_eq!(ext.get::<A>(), Some(&A(1)));
         assert_eq!(ext.get::<B>(), Some(&B("x")));
         assert!(ext.contains::<A>());
 
-        let prev = ext.insert(A(2));
+        let prev = ext.insert(Arc::new(A(2)));
         assert_eq!(prev.as_deref(), Some(&A(1)));
         assert_eq!(ext.get::<A>(), Some(&A(2)));
 
@@ -176,12 +181,20 @@ mod tests {
     }
 
     #[test]
+    fn insert_dyn_keys_by_concrete_type() {
+        let mut ext = Extensions::new();
+        let erased: Arc<dyn Any + Send + Sync> = Arc::new(A(7));
+        ext.insert_dyn(erased);
+        assert_eq!(ext.get::<A>(), Some(&A(7)));
+    }
+
+    #[test]
     fn merge_other_wins() {
         let mut a = Extensions::new();
-        a.insert(A(1));
+        a.insert(Arc::new(A(1)));
         let mut b = Extensions::new();
-        b.insert(A(2));
-        b.insert(B("hi"));
+        b.insert(Arc::new(A(2)));
+        b.insert(Arc::new(B("hi")));
         a.merge(&b);
         assert_eq!(a.get::<A>(), Some(&A(2)));
         assert_eq!(a.get::<B>(), Some(&B("hi")));

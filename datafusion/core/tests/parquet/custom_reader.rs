@@ -71,7 +71,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         .into_iter()
         .map(|meta| {
             PartitionedFile::new_from_meta(meta)
-                .with_extension(String::from(EXPECTED_USER_DEFINED_METADATA))
+                .with_extension(Arc::new(String::from(EXPECTED_USER_DEFINED_METADATA)))
         })
         .collect();
 
