@@ -262,25 +262,33 @@ impl LambdaArgument {
     /// `args` should evaluate to the value of each parameter
     /// of the correspondent lambda returned in [HigherOrderUDF::lambda_parameters].
     ///
-    /// `adjust` should adjust the captured columns of this
-    /// lambda, if any, relative to it's parameters
+    /// `spread_captures` is responsible for transforming the captured column arrays
+    /// so they align with the evaluation batch. Captures are snapshotted from the
+    /// outer batch at construction time, giving one value per outer row, but the
+    /// function may evaluate the lambda body over a batch with a different number
+    /// of rows. It is the function responsibility to provide the appropriate `spread_captures`
+    /// closure to expand (or otherwise reshape) the captures to match.
+    /// Function working on lists, for example `array_transform(arr, v -> v + 1)`
+    /// flattens all list elements into a single batch, duplicating captured
+    /// values for rows with multiple elements and dropping them for empty lists.
+    /// If the lambda has no captures, `spread_captures` is never called.
     pub fn evaluate(
         &self,
         args: &[&dyn Fn() -> Result<ArrayRef>],
-        adjust: impl FnOnce(&[ArrayRef]) -> Result<Vec<ArrayRef>>,
+        spread_captures: impl FnOnce(&[ArrayRef]) -> Result<Vec<ArrayRef>>,
     ) -> Result<ColumnarValue> {
-        let adjusted_captures = self
+        let spread_captures = self
             .captures
             .as_ref()
             .map(|captures| {
-                let adjusted_columns = adjust(captures.columns())?;
+                let spread_columns = spread_captures(captures.columns())?;
 
-                RecordBatch::try_new(captures.schema(), adjusted_columns)
+                RecordBatch::try_new(captures.schema(), spread_columns)
             })
             .transpose()?;
 
         let merged = merge_captures_with_variables(
-            adjusted_captures.as_ref(),
+            spread_captures.as_ref(),
             Arc::clone(&self.schema),
             &self.params,
             args,

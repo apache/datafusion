@@ -33,8 +33,9 @@ use datafusion_common::{
     internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -128,7 +129,8 @@ impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
     fn project(&self) -> Result<ProjectedCaseBody> {
         // Determine the set of columns that are used in all the expressions of the case body.
-        let mut used_column_indices = IndexSet::<usize>::new();
+        // Use an ordered set so lambda variables continue to be positioned after columns
+        let mut used_column_indices = BTreeSet::<usize>::new();
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
                 if let Some(column) = expr.downcast_ref::<Column>() {

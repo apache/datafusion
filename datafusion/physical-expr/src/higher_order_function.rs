@@ -568,7 +568,7 @@ mod tests {
             match &args.args[0] {
                 ValueOrLambda::Lambda(lambda) => lambda.evaluate(
                     &[&|| Ok(Arc::new(NullArray::new(args.number_rows)))],
-                    |_| unreachable!(),
+                    |arrays| Ok(arrays.to_vec()),
                 ),
                 ValueOrLambda::Value(value) => Ok(value.clone()),
             }

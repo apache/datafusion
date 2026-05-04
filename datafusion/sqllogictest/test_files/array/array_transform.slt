@@ -221,6 +221,40 @@ a [1, 50] 10 [[[11, 11]]]
 b [4, 50] 40 [[[48, 94]]]
 c [7, 50] 60 [[[74, 117]]]
 
+# case with inner nested higher order function where the condition is a lambda function
+query T?I?
+select
+    t.text,
+    t.list,
+    t.number,
+    case
+        when array_any_match(t.list, v -> v = 7) then array_transform(
+                [[t.list]],
+                list -> array_transform(
+                    list,
+                    list -> array_transform(
+                        list,
+                        v -> number + v + list[1]
+                    )
+                )
+            )
+        else array_transform(
+                [[t.list]],
+                list -> array_transform(
+                    list,
+                    list -> array_transform(
+                        list,
+                        v -> number + list[1]
+                    )
+                )
+            )
+    end
+from t
+order by t.number;
+----
+a [1, 50] 10 [[[11, 11]]]
+b [4, 50] 40 [[[44, 44]]]
+c [7, 50] 60 [[[74, 117]]]
 
 # array_transform coercion rules
 query TT
