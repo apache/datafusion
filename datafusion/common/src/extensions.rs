@@ -93,8 +93,16 @@ impl Extensions {
     }
 
     /// Insert an already-type-erased value, keyed by its dynamic
-    /// [`TypeId`]. Used by APIs that accept `Arc<dyn Any + Send + Sync>`
-    /// and need to recover the concrete type for keying.
+    /// [`TypeId`]. Used internally to support APIs that accept
+    /// `Arc<dyn Any + Send + Sync>` for backwards compatibility and need
+    /// to recover the concrete type for keying.
+    ///
+    /// New code should use [`Self::insert`] or [`Self::insert_arc`], which
+    /// preserve the concrete type at the call site.
+    #[deprecated(
+        since = "54.0.0",
+        note = "use `insert` or `insert_arc`; only retained to support the deprecated `PartitionedFile::with_extensions` shim"
+    )]
     pub fn insert_dyn(
         &mut self,
         value: Arc<dyn Any + Send + Sync>,
@@ -120,13 +128,6 @@ impl Extensions {
     /// Returns true if an extension of type `T` is set.
     pub fn contains<T: Any + Send + Sync>(&self) -> bool {
         self.inner.contains_key(&TypeId::of::<T>())
-    }
-
-    /// Remove and return the extension of type `T`, if set.
-    pub fn remove<T: Any + Send + Sync>(&mut self) -> Option<Arc<T>> {
-        self.inner
-            .remove(&TypeId::of::<T>())
-            .map(|p| Arc::downcast::<T>(p).expect("TypeId matches T"))
     }
 
     /// Merge entries from `other` into `self`. Entries in `other` take
@@ -171,7 +172,7 @@ mod tests {
     struct B(&'static str);
 
     #[test]
-    fn insert_get_remove() {
+    fn insert_get_replace() {
         let mut ext = Extensions::new();
         assert!(ext.is_empty());
 
@@ -185,13 +186,10 @@ mod tests {
         let prev = ext.insert(A(2));
         assert_eq!(prev.as_deref(), Some(&A(1)));
         assert_eq!(ext.get::<A>(), Some(&A(2)));
-
-        let removed = ext.remove::<A>();
-        assert_eq!(removed.as_deref(), Some(&A(2)));
-        assert!(!ext.contains::<A>());
     }
 
     #[test]
+    #[allow(deprecated)]
     fn insert_dyn_keys_by_concrete_type() {
         let mut ext = Extensions::new();
         let erased: Arc<dyn Any + Send + Sync> = Arc::new(A(7));

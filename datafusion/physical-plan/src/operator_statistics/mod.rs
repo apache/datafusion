@@ -163,17 +163,8 @@ impl ExtendedStatistics {
     }
 
     /// Set a custom statistics extension.
-    ///
-    /// Wraps the value in an [`Arc`] internally. If the caller already has an
-    /// `Arc<T>` and wants to avoid an extra allocation, use
-    /// [`Self::set_extension_arc`].
     pub fn set_extension<T: 'static + Send + Sync>(&mut self, value: T) {
         self.extensions.insert(value);
-    }
-
-    /// Set a custom statistics extension from an already-allocated [`Arc<T>`].
-    pub fn set_extension_arc<T: 'static + Send + Sync>(&mut self, value: Arc<T>) {
-        self.extensions.insert_arc(value);
     }
 
     /// Check if an extension of the given type exists.
