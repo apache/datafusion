@@ -1310,13 +1310,14 @@ impl protobuf::PhysicalPlanNode {
                 physical_schema_ref.as_ref(),
                 ctx,
             )?;
-            if let Ok(df) = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
                 .downcast::<DynamicFilterPhysicalExpr>()
-            {
-                agg.with_dynamic_filter_expr(df)?
-            } else {
-                agg
-            }
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "AggregateExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            agg.with_dynamic_filter_expr(df)?
         } else {
             agg
         };
@@ -1445,11 +1446,14 @@ impl protobuf::PhysicalPlanNode {
                 right_schema.as_ref(),
                 ctx,
             )?;
-            if let Ok(df) = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
                 .downcast::<DynamicFilterPhysicalExpr>()
-            {
-                hash_join = hash_join.with_dynamic_filter_expr(df)?;
-            }
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            hash_join = hash_join.with_dynamic_filter_expr(df)?;
         }
 
         Ok(Arc::new(hash_join))
@@ -1696,13 +1700,14 @@ impl protobuf::PhysicalPlanNode {
                 new_sort.input().schema().as_ref(),
                 ctx,
             )?;
-            if let Ok(df) = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
                 .downcast::<DynamicFilterPhysicalExpr>()
-            {
-                new_sort.with_dynamic_filter_expr(df)?
-            } else {
-                new_sort
-            }
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            new_sort.with_dynamic_filter_expr(df)?
         } else {
             new_sort
         };
