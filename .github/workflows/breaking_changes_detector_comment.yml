@@ -50,6 +50,13 @@ on:
 permissions:
   contents: read
 
+# A dedicated label, separate from the existing `api change` label.
+# `api change` may be applied manually for behavioral changes that aren't
+# strictly API changes, so we can't safely auto-remove it when this check
+# passes. This auto-managed label is fully owned by the workflow.
+env:
+  BREAKING_CHANGE_LABEL: "auto detected api change"
+
 jobs:
   comment-on-pr:
     name: Comment on pull request
@@ -130,3 +137,24 @@ jobs:
           number: ${{ steps.read.outputs.pr_number }}
           body-include: '<!-- semver-check-comment -->'
           delete: true
+
+      - name: Add "auto detected api change" label
+        if: steps.read.outputs.result != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.read.outputs.pr_number }}
+        run: |
+          gh pr edit "$PR_NUMBER" --repo "$REPO" \
+            --add-label "$BREAKING_CHANGE_LABEL"
+
+      - name: Remove "auto detected api change" label
+        if: steps.read.outputs.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.read.outputs.pr_number }}
+        run: |
+          # No-op when the label isn't currently applied.
+          gh pr edit "$PR_NUMBER" --repo "$REPO" \
+            --remove-label "$BREAKING_CHANGE_LABEL" || true
