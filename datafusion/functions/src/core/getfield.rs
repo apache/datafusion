@@ -18,20 +18,16 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, BooleanArray, Capacities, DictionaryArray, MutableArrayData, Scalar,
-    make_array, make_comparator,
+    Array, BooleanArray, Capacities, MutableArrayData, Scalar, cast::AsArray, make_array,
+    make_comparator,
 };
 use arrow::compute::SortOptions;
-use arrow::datatypes::{
-    DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
-    UInt16Type, UInt32Type, UInt64Type,
-};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow_buffer::NullBuffer;
 
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
-    internal_err, plan_datafusion_err,
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_datafusion_err,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
@@ -205,48 +201,20 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
         // Dictionary-encoded struct: extract the field from the dictionary's
         // values (the deduplicated struct array) and rebuild a dictionary with
         // the same keys. This preserves dictionary encoding without expanding.
-        (DataType::Dictionary(key_type, value_type), _, Some(field_name))
+        (DataType::Dictionary(_, value_type), _, Some(field_name))
             if matches!(value_type.as_ref(), DataType::Struct(_)) =>
         {
-            // Downcast to DictionaryArray to access keys and values without
-            // materializing the dictionary.
-            macro_rules! extract_dict_field {
-                ($key_ty:ty) => {{
-                    let dict = array
-                        .as_any()
-                        .downcast_ref::<DictionaryArray<$key_ty>>()
-                        .ok_or_else(|| {
-                            internal_datafusion_err!(
-                                "Failed to downcast dictionary with key type {key_type}"
-                            )
-                        })?;
-                    let values_struct = as_struct_array(dict.values())?;
-                    let field_col =
-                        values_struct.column_by_name(&field_name).ok_or_else(|| {
-                            exec_datafusion_err!(
-                                "Field {field_name} not found in dictionary struct"
-                            )
-                        })?;
-                    // Rebuild dictionary: same keys, extracted field as values.
-                    let new_dict = DictionaryArray::<$key_ty>::try_new(
-                        dict.keys().clone(),
-                        Arc::clone(field_col),
-                    )?;
-                    Ok(ColumnarValue::Array(Arc::new(new_dict)))
-                }};
-            }
-
-            match key_type.as_ref() {
-                DataType::Int8 => extract_dict_field!(Int8Type),
-                DataType::Int16 => extract_dict_field!(Int16Type),
-                DataType::Int32 => extract_dict_field!(Int32Type),
-                DataType::Int64 => extract_dict_field!(Int64Type),
-                DataType::UInt8 => extract_dict_field!(UInt8Type),
-                DataType::UInt16 => extract_dict_field!(UInt16Type),
-                DataType::UInt32 => extract_dict_field!(UInt32Type),
-                DataType::UInt64 => extract_dict_field!(UInt64Type),
-                other => exec_err!("Unsupported dictionary key type: {other}"),
-            }
+            let dict = array.as_any_dictionary();
+            let values_struct = dict.values().as_struct();
+            let field_col =
+                values_struct.column_by_name(&field_name).ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "Field {field_name} not found in dictionary struct"
+                    )
+                })?;
+            Ok(ColumnarValue::Array(
+                dict.with_values(Arc::clone(field_col)),
+            ))
         }
         (DataType::Map(_, _), ScalarValue::List(arr), _) => {
             let key_array: Arc<dyn Array> = arr;
