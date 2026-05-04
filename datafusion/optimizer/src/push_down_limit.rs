@@ -666,7 +666,7 @@ mod test {
     }
 
     #[test]
-    fn limit_doesnt_push_down_aggregation() -> Result<()> {
+    fn limit_prefilters_aggregation() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -674,13 +674,17 @@ mod test {
             .limit(0, Some(1000))?
             .build()?;
 
-        // Limit should *not* push down aggregate node
+        // Limit preselects group keys before running the aggregate
         assert_optimized_plan_equal!(
             plan,
             @r"
         Limit: skip=0, fetch=1000
           Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]
-            TableScan: test
+            RightSemi Join: test.a = test.a
+              Limit: skip=0, fetch=1000
+                Aggregate: groupBy=[[test.a]], aggr=[[]]
+                  TableScan: test
+              TableScan: test
         "
         )
     }
@@ -758,14 +762,20 @@ mod test {
             .limit(0, Some(10))?
             .build()?;
 
-        // Limit should use deeper LIMIT 1000, but Limit 10 shouldn't push down aggregation
+        // Limit should use deeper LIMIT 1000 and preselect group keys for the
+        // aggregate using the outer LIMIT 10.
         assert_optimized_plan_equal!(
             plan,
             @r"
         Limit: skip=0, fetch=10
           Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]
-            Limit: skip=0, fetch=1000
-              TableScan: test, fetch=1000
+            RightSemi Join: test.a = test.a
+              Limit: skip=0, fetch=10
+                Aggregate: groupBy=[[test.a]], aggr=[[]]
+                  Limit: skip=0, fetch=1000
+                    TableScan: test, fetch=1000
+              Limit: skip=0, fetch=1000
+                TableScan: test, fetch=1000
         "
         )
     }
@@ -869,7 +879,7 @@ mod test {
     }
 
     #[test]
-    fn limit_doesnt_push_down_with_offset_aggregation() -> Result<()> {
+    fn limit_with_offset_prefilters_aggregation() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -877,13 +887,17 @@ mod test {
             .limit(10, Some(1000))?
             .build()?;
 
-        // Limit should *not* push down aggregate node
+        // Limit preselects enough group keys to satisfy offset and fetch
         assert_optimized_plan_equal!(
             plan,
             @r"
         Limit: skip=10, fetch=1000
           Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]
-            TableScan: test
+            RightSemi Join: test.a = test.a
+              Limit: skip=0, fetch=1010
+                Aggregate: groupBy=[[test.a]], aggr=[[]]
+                  TableScan: test
+              TableScan: test
         "
         )
     }
