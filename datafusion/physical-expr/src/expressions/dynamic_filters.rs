@@ -689,7 +689,7 @@ mod test {
         assert!(arr_1.eq(&expected));
     }
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[test]
     fn test_snapshot() {
         let expr = lit(42) as Arc<dyn PhysicalExpr>;
