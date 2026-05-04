@@ -21,12 +21,7 @@ use clap::{Parser, Subcommand};
 use datafusion::error::Result;
 use datafusion_benchmarks::imdb;
 
-#[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
-compile_error!(
-    "feature \"snmalloc\" and feature \"mimalloc\" cannot be enabled at the same time"
-);
-
-#[cfg(feature = "snmalloc")]
+#[cfg(all(feature = "snmalloc", not(feature = "mimalloc")))]
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 

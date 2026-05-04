@@ -36,6 +36,7 @@ use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
+use arrow::compute::{SortColumn, SortOptions, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
@@ -372,6 +373,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// argument.
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
+    /// Number of intermediate state columns produced by each accumulator.
+    state_field_counts: Vec<usize>,
+
     /// Optional filter expression to evaluate, one for each for
     /// accumulator. If present, only those rows for which the filter
     /// evaluate to true should be included in the aggregate results.
@@ -386,10 +390,11 @@ pub(crate) struct GroupedHashAggregateStream {
     /// max rows in output RecordBatches
     batch_size: usize,
 
-    /// Optional soft limit on the number of `group_values` in a batch
-    /// If the number of `group_values` in a single batch exceeds this value,
-    /// the `GroupedHashAggregateStream` operation immediately switches to
-    /// output mode and emits all groups.
+    /// Optional soft limit on the number of `group_values`.
+    ///
+    /// Distinct-style aggregates can stop once this many groups have been seen.
+    /// Aggregates with accumulator state keep the top `limit` group keys after
+    /// each input batch.
     group_values_soft_limit: Option<usize>,
 
     // ========================================================================
@@ -477,6 +482,10 @@ impl GroupedHashAggregateStream {
         let timer = baseline_metrics.elapsed_compute().timer();
 
         let aggregate_exprs = Arc::clone(&agg.aggr_expr);
+        let state_field_counts = aggregate_exprs
+            .iter()
+            .map(|expr| expr.state_fields().map(|fields| fields.len()))
+            .collect::<Result<Vec<_>>>()?;
 
         // arguments for each aggregate, one vec of expressions per
         // aggregate
@@ -626,6 +635,7 @@ impl GroupedHashAggregateStream {
         //   aggregate state conversion
         // - there is only one GROUP BY expressions set
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
+            && agg.limit_options().is_none()
             && matches!(group_ordering, GroupOrdering::None)
             && accumulators
                 .iter()
@@ -665,6 +675,7 @@ impl GroupedHashAggregateStream {
             mode: agg.mode,
             accumulators,
             aggregate_arguments,
+            state_field_counts,
             filter_expressions,
             group_by: agg_group_by,
             reservation,
@@ -738,9 +749,11 @@ impl Stream for GroupedHashAggregateStream {
 
                             assert!(!self.input_done);
 
-                            // If the number of group values equals or exceeds the soft limit,
-                            // emit all groups and switch to producing output
-                            if self.hit_soft_group_limit() {
+                            // Distinct-style aggregation can stop once enough groups have been
+                            // found. Aggregates with accumulator state must keep reading input
+                            // so the selected groups' aggregate values remain exact.
+                            if self.accumulators.is_empty() && self.hit_soft_group_limit()
+                            {
                                 timer.done();
                                 self.set_input_done_and_produce_output()?;
                                 // make sure the exec_state just set is not overwritten below
@@ -1006,6 +1019,8 @@ impl GroupedHashAggregateStream {
             }
         }
 
+        self.prune_to_group_key_topk()?;
+
         Ok(())
     }
 
@@ -1084,6 +1099,91 @@ impl GroupedHashAggregateStream {
         }
 
         reservation_result
+    }
+
+    /// Keep only the smallest group keys for unordered `GROUP BY ... LIMIT`
+    /// aggregation.
+    ///
+    /// This is safe in partial aggregation because every partition uses the
+    /// same deterministic key order. Any globally top-k key is also in the
+    /// local top-k for every partition where it appears, so its partial state is
+    /// never dropped.
+    fn prune_to_group_key_topk(&mut self) -> Result<()> {
+        if !self.should_prune_to_group_key_topk() {
+            return Ok(());
+        }
+
+        let limit = self.group_values_soft_limit.unwrap();
+        if limit == 0 {
+            self.clear_all();
+            self.update_memory_reservation()?;
+            return Ok(());
+        }
+        if self.group_values.len() <= limit {
+            return Ok(());
+        }
+
+        let Some(batch) = self.emit(EmitTo::All, true)? else {
+            return Ok(());
+        };
+        self.clear_shrink(0);
+
+        let group_count = self.group_by.num_group_exprs();
+        let sort_columns = batch
+            .columns()
+            .iter()
+            .take(group_count)
+            .map(|values| SortColumn {
+                values: Arc::clone(values),
+                options: Some(SortOptions::default()),
+            })
+            .collect::<Vec<_>>();
+        let indices = lexsort_to_indices(&sort_columns, Some(limit))?;
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|array| Ok(take(array.as_ref(), &indices, None)?))
+            .collect::<Result<Vec<_>>>()?;
+        let batch = RecordBatch::try_new(Arc::clone(batch.schema_ref()), columns)?;
+
+        let group_values = batch
+            .columns()
+            .iter()
+            .take(group_count)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.group_values
+            .intern(&group_values, &mut self.current_group_indices)?;
+        let group_indices = &self.current_group_indices;
+        let total_num_groups = self.group_values.len();
+
+        let mut column_index = group_count;
+        for (acc, state_field_count) in self
+            .accumulators
+            .iter_mut()
+            .zip(self.state_field_counts.iter().copied())
+        {
+            let next_column_index = column_index + state_field_count;
+            let values = batch.columns()[column_index..next_column_index].to_vec();
+            acc.merge_batch(&values, group_indices, None, total_num_groups)?;
+            column_index = next_column_index;
+        }
+        assert_eq_or_internal_err!(
+            column_index,
+            batch.num_columns(),
+            "Mismatch rebuilding limited aggregate state"
+        );
+
+        self.update_memory_reservation()?;
+
+        Ok(())
+    }
+
+    fn should_prune_to_group_key_topk(&self) -> bool {
+        self.group_values_soft_limit.is_some()
+            && !self.accumulators.is_empty()
+            && !self.spill_state.is_stream_merging
+            && matches!(self.group_ordering, GroupOrdering::None)
     }
 
     /// Create an output RecordBatch with the group keys and
