@@ -95,11 +95,6 @@ tokio = { workspace = true, features = [
     "parking_lot",
 ] }
 
-# `arrow-ipc` is used only through the `arrow::ipc` re-export, so cargo-machete
-# reports it as unused even though this crate relies on its codec features.
-[package.metadata.cargo-machete]
-ignored = ["arrow-ipc"]
-
 [[bench]]
 harness = false
 name = "partial_ordering"
