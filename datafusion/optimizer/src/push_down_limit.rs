@@ -18,16 +18,17 @@
 //! [`PushDownLimit`] pushes `LIMIT` earlier in the query plan
 
 use std::cmp::min;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::combine_limit;
-use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
-use datafusion_expr::{FetchType, SkipType, lit};
+use datafusion_common::{NullEquality, Result};
+use datafusion_expr::logical_plan::{Aggregate, Join, JoinType, Limit, LogicalPlan};
+use datafusion_expr::{Expr, FetchType, LogicalPlanBuilder, SkipType, lit};
 
 /// Optimization rule that tries to push down `LIMIT`.
 //. It will push down through projection, limits (taking the smaller limit)
@@ -47,7 +48,6 @@ impl OptimizerRule for PushDownLimit {
         true
     }
 
-    #[expect(clippy::only_used_in_recursion)]
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -122,6 +122,21 @@ impl OptimizerRule for PushDownLimit {
                 .update_data(|join| {
                     make_limit(skip, fetch, Arc::new(LogicalPlan::Join(join)))
                 })),
+
+            LogicalPlan::Aggregate(aggregate)
+                if config
+                    .options()
+                    .optimizer
+                    .enable_distinct_aggregation_soft_limit =>
+            {
+                if let Some(aggregate) =
+                    prefilter_limited_aggregate(aggregate.clone(), fetch + skip)?
+                {
+                    transformed_limit(skip, fetch, aggregate)
+                } else {
+                    original_limit(skip, fetch, LogicalPlan::Aggregate(aggregate))
+                }
+            }
 
             LogicalPlan::Sort(mut sort) => {
                 let new_fetch = {
@@ -235,6 +250,74 @@ fn transformed_limit(
     input: LogicalPlan,
 ) -> Result<Transformed<LogicalPlan>> {
     Ok(Transformed::yes(make_limit(skip, fetch, Arc::new(input))))
+}
+
+/// Rewrite `LIMIT K (GROUP BY keys, aggs)` into a key preselection followed
+/// by a semi join. This keeps the aggregate itself ordinary while letting the
+/// join's dynamic filter push the selected key set into the second input scan.
+fn prefilter_limited_aggregate(
+    aggregate: Aggregate,
+    limit: usize,
+) -> Result<Option<LogicalPlan>> {
+    if limit == 0 || aggregate.aggr_expr.is_empty() || aggregate.group_expr.is_empty() {
+        return Ok(None);
+    }
+    if is_key_prefiltered_aggregate(&aggregate) {
+        return Ok(None);
+    }
+
+    let mut seen_columns = HashSet::with_capacity(aggregate.group_expr.len());
+    let mut join_columns = Vec::with_capacity(aggregate.group_expr.len());
+    for expr in &aggregate.group_expr {
+        let Expr::Column(column) = expr else {
+            return Ok(None);
+        };
+        if !seen_columns.insert(column.clone()) {
+            return Ok(None);
+        }
+        join_columns.push(column.clone());
+    }
+
+    let key_input = aggregate.input.as_ref().clone();
+    let keys = LogicalPlanBuilder::from(key_input)
+        .aggregate(aggregate.group_expr.clone(), Vec::<Expr>::new())?
+        .limit(0, Some(limit))?
+        .build()?;
+
+    let filtered_input = LogicalPlanBuilder::from(keys)
+        .join_detailed(
+            aggregate.input.as_ref().clone(),
+            JoinType::RightSemi,
+            (join_columns.clone(), join_columns),
+            None,
+            NullEquality::NullEqualsNull,
+        )?
+        .build()?;
+
+    Aggregate::try_new(
+        Arc::new(filtered_input),
+        aggregate.group_expr,
+        aggregate.aggr_expr,
+    )
+    .map(LogicalPlan::Aggregate)
+    .map(Some)
+}
+
+fn is_key_prefiltered_aggregate(aggregate: &Aggregate) -> bool {
+    let LogicalPlan::Join(join) = aggregate.input.as_ref() else {
+        return false;
+    };
+    if join.join_type != JoinType::RightSemi {
+        return false;
+    }
+    let LogicalPlan::Limit(limit) = join.left.as_ref() else {
+        return false;
+    };
+    let LogicalPlan::Aggregate(keys) = limit.input.as_ref() else {
+        return false;
+    };
+
+    keys.aggr_expr.is_empty() && keys.group_expr == aggregate.group_expr
 }
 
 /// Adds a limit to the inputs of a join, if possible

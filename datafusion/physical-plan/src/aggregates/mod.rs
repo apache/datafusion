@@ -915,7 +915,6 @@ impl AggregateExec {
 
         // grouping by an expression that has a sort/limit upstream
         if let Some(config) = self.limit_options
-            && config.descending().is_some()
             && !self.is_unordered_unfiltered_group_by_distinct()
         {
             return Ok(StreamType::GroupedPriorityQueue(
@@ -935,9 +934,11 @@ impl AggregateExec {
         agg_expr.get_minmax_desc()
     }
 
-    /// true if this Aggregate has a group-by with no required or explicit
-    /// ordering and no aggregate filters.
-    pub fn is_unordered_unfiltered_group_by(&self) -> bool {
+    /// true, if this Aggregate has a group-by with no required or explicit ordering,
+    /// no filtering and no aggregate expressions
+    /// This method qualifies the use of the LimitedDistinctAggregation rewrite rule
+    /// on an AggregateExec.
+    pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
         if self
             .limit_options()
             .and_then(|config| config.descending)
@@ -949,7 +950,12 @@ impl AggregateExec {
         if self.group_expr().is_empty() && !self.group_expr().has_grouping_set() {
             return false;
         }
-        // ensure there are no filters on aggregate expressions
+        // ensure there are no aggregate expressions
+        if !self.aggr_expr().is_empty() {
+            return false;
+        }
+        // ensure there are no filters on aggregate expressions; the above check
+        // may preclude this case
         if self.filter_expr().iter().any(|e| e.is_some()) {
             return false;
         }
@@ -966,15 +972,6 @@ impl AggregateExec {
             return matches!(requirement, OrderingRequirements::Hard(_));
         }
         true
-    }
-
-    /// true, if this Aggregate has a group-by with no required or explicit ordering,
-    /// no filtering and no aggregate expressions.
-    ///
-    /// This method qualifies the distinct-only use of the
-    /// LimitedDistinctAggregation rewrite rule on an AggregateExec.
-    pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
-        self.aggr_expr().is_empty() && self.is_unordered_unfiltered_group_by()
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.

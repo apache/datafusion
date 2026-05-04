@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A special-case optimizer rule that pushes limit into unordered grouped
-//! aggregation when the query only needs an arbitrary subset of groups.
+//! A special-case optimizer rule that pushes limit into a grouped aggregation
+//! which has no aggregate expressions or sorting requirements
 
 use std::sync::Arc;
 
-use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, LimitOptions};
+use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -32,10 +32,9 @@ use crate::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all
-/// groups to be produced for correctness. Example queries fitting this description are:
+/// rows in the group to be processed for correctness. Example queries fitting this description are:
 /// - `SELECT distinct l_orderkey FROM lineitem LIMIT 10;`
 /// - `SELECT l_orderkey FROM lineitem GROUP BY l_orderkey LIMIT 10;`
-/// - `SELECT l_orderkey, COUNT(*) FROM lineitem GROUP BY l_orderkey LIMIT 10;`
 #[derive(Debug)]
 pub struct LimitedDistinctAggregation {}
 
@@ -49,43 +48,21 @@ impl LimitedDistinctAggregation {
         aggr: &AggregateExec,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
-        if aggr.is_unordered_unfiltered_group_by_distinct() {
-            let new_aggr = aggr.with_new_limit_options(Some(LimitOptions::new(limit)));
-            return Some(Arc::new(new_aggr));
-        }
-
-        if !Self::can_limit_aggregate(aggr) {
+        // rules for transforming this Aggregate are held in this method
+        if !aggr.is_unordered_unfiltered_group_by_distinct() {
             return None;
         }
 
+        // We found what we want: clone, copy the limit down, and return modified node
         let new_aggr = aggr.with_new_limit_options(Some(LimitOptions::new(limit)));
 
         Some(Arc::new(new_aggr))
     }
 
-    fn can_limit_aggregate(aggr: &AggregateExec) -> bool {
-        if !aggr.is_unordered_unfiltered_group_by() {
-            return false;
-        }
-        if aggr.aggr_expr().is_empty() {
-            return false;
-        }
-        if !aggr.group_expr().is_single() {
-            return false;
-        }
-        matches!(
-            aggr.mode(),
-            AggregateMode::Partial
-                | AggregateMode::Final
-                | AggregateMode::FinalPartitioned
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned
-        )
-    }
-
     /// transform_limit matches an `AggregateExec` as the child of a `LocalLimitExec`
     /// or `GlobalLimitExec` and pushes the limit into the aggregation as a soft limit when
-    /// there is a group by, but no sorting or filters in the aggregation
+    /// there is a group by, but no sorting, no aggregate expressions, and no filters in the
+    /// aggregation
     fn transform_limit(plan: Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
         let limit: usize;
         let mut global_fetch: Option<usize> = None;

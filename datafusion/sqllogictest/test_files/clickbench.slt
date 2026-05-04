@@ -490,15 +490,27 @@ logical_plan
 01)Projection: hits.UserID, hits.SearchPhrase, count(Int64(1)) AS count(*)
 02)--Limit: skip=0, fetch=10
 03)----Aggregate: groupBy=[[hits.UserID, hits.SearchPhrase]], aggr=[[count(Int64(1))]]
-04)------SubqueryAlias: hits
-05)--------TableScan: hits_raw projection=[UserID, SearchPhrase]
+04)------RightSemi Join: hits.UserID = hits.UserID, hits.SearchPhrase = hits.SearchPhrase
+05)--------Limit: skip=0, fetch=10
+06)----------Aggregate: groupBy=[[hits.UserID, hits.SearchPhrase]], aggr=[[]]
+07)------------SubqueryAlias: hits
+08)--------------TableScan: hits_raw projection=[UserID, SearchPhrase]
+09)--------SubqueryAlias: hits
+10)----------TableScan: hits_raw projection=[UserID, SearchPhrase]
 physical_plan
 01)ProjectionExec: expr=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase, count(Int64(1))@2 as count(*)]
 02)--CoalescePartitionsExec: fetch=10
-03)----AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))], lim=[10]
-04)------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))], lim=[10]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet
+03)----AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
+04)------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(UserID@0, UserID@0), (SearchPhrase@1, SearchPhrase@1)], NullsEqual: true
+08)--------------CoalescePartitionsExec: fetch=10
+09)----------------AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[], lim=[10]
+10)------------------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=1
+11)--------------------AggregateExec: mode=Partial, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[], lim=[10]
+12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet
+13)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 query ITI rowsort
 SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" LIMIT 10;

@@ -28,12 +28,11 @@ use crate::physical_optimizer::test_utils::{
 use arrow::datatypes::DataType;
 use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{Result, config::ConfigOptions};
+use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast, col};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::{
     ExecutionPlan,
     aggregates::{AggregateExec, AggregateMode},
@@ -333,7 +332,7 @@ fn test_has_aggregate_expression() -> Result<()> {
     let schema = source.schema();
     let agg = TestAggregate::new_count_star();
 
-    // `SELECT a, COUNT(*) FROM DataSourceExec GROUP BY a LIMIT 10;`, Single AggregateExec
+    // `SELECT <aggregate with no expressions> FROM DataSourceExec LIMIT 10;`, Single AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema, vec!["a".to_string()]),
@@ -346,7 +345,7 @@ fn test_has_aggregate_expression() -> Result<()> {
         Arc::new(single_agg),
         10, // fetch
     );
-    // expected to push the limit to the AggregateExec
+    // expected not to push the limit to the AggregateExec
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     let formatted = get_optimized_plan(&plan)?;
     let actual = formatted.trim();
@@ -354,69 +353,8 @@ fn test_has_aggregate_expression() -> Result<()> {
         actual,
         @r"
     LocalLimitExec: fetch=10
-      AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(*)], lim=[10]
+      AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(*)]
         DataSourceExec: partitions=1, partition_sizes=[1]
-    "
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_partial_final_with_aggregate_expression() -> Result<()> {
-    let source = mock_data()?;
-    let schema = source.schema();
-    let agg = TestAggregate::new_count_star();
-
-    // `SELECT a, COUNT(*) FROM DataSourceExec GROUP BY a LIMIT 4;`,
-    // Partial/Final AggregateExec. Both stages can keep the same deterministic
-    // top-k group keys.
-    let partial_agg = AggregateExec::try_new(
-        AggregateMode::Partial,
-        build_group_by(&schema.clone(), vec!["a".to_string()]),
-        vec![Arc::new(agg.count_expr(&schema))], /* aggr_expr */
-        vec![None],                              /* filter_expr */
-        source,                                  /* input */
-        schema.clone(),                          /* input_schema */
-    )?;
-    let final_agg = AggregateExec::try_new(
-        AggregateMode::Final,
-        build_group_by(&schema.clone(), vec!["a".to_string()]),
-        vec![Arc::new(agg.count_expr(&schema))], /* aggr_expr */
-        vec![None],                              /* filter_expr */
-        Arc::new(partial_agg),                   /* input */
-        schema.clone(),                          /* input_schema */
-    )?;
-    let limit_exec = LocalLimitExec::new(
-        Arc::new(final_agg),
-        4, // fetch
-    );
-    let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = get_optimized_plan(&plan)?;
-    let actual = formatted.trim();
-    assert_snapshot!(
-        actual,
-        @r"
-    LocalLimitExec: fetch=4
-      AggregateExec: mode=Final, gby=[a@0 as a], aggr=[COUNT(*)], lim=[4]
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(*)], lim=[4]
-          DataSourceExec: partitions=1, partition_sizes=[1]
-    "
-    );
-    let optimized =
-        datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation::new()
-            .optimize(Arc::clone(&plan), &ConfigOptions::new())?;
-    let expected = run_plan_and_format(optimized).await?;
-    assert_snapshot!(
-        expected,
-        @r"
-    +---+----------+
-    | a | COUNT(*) |
-    +---+----------+
-    |   | 1        |
-    | 1 | 2        |
-    | 2 | 1        |
-    | 4 | 1        |
-    +---+----------+
     "
     );
     Ok(())
