@@ -889,11 +889,9 @@ message PhysicalExprNode {
   reserved 17;
 
   // Unique identifier for this expression to do deduplication during deserialization.
-  // When serializing, this is set to a unique identifier for each combination of
-  // expression, process and serialization run.
-  // When deserializing, if this ID has been seen before, the cached Arc is returned
-  // instead of creating a new one, enabling reconstruction of referential integrity
-  // across serde roundtrips.
+  // When serializing, this is set via `PhysicalExpr::expression_id`. When deserializing,
+  // this id is used by the `DeduplicatingProtoConverter` to preserve referential
+  // integrity across serde roundtrips for different expressions with the same id.
   optional uint64 expr_id = 30;
 
   oneof ExprType {
@@ -935,7 +933,17 @@ message PhysicalExprNode {
     PhysicalHashExprNode hash_expr = 21;
 
     PhysicalScalarSubqueryExprNode scalar_subquery = 22;
+
+    PhysicalDynamicFilterNode dynamic_filter = 23;
   }
+}
+
+message PhysicalDynamicFilterNode {
+  repeated PhysicalExprNode children = 1;
+  repeated PhysicalExprNode remapped_children = 2;
+  uint64 generation = 3;
+  PhysicalExprNode inner_expr = 4;
+  bool is_complete = 5;
 }
 
 message PhysicalScalarUdfNode {
