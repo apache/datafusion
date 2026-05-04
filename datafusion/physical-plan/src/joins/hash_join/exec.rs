@@ -904,7 +904,7 @@ impl HashJoinExec {
 
     /// Get the dynamic filter expression for testing purposes.
     /// Returns the dynamic filter expression for this hash join, if set.
-    pub fn dynamic_filter(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
+    pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
 
@@ -914,7 +914,7 @@ impl HashJoinExec {
     ///
     /// Validates that the filter's children reference valid columns in
     /// the probe (right) side's schema.
-    pub fn with_dynamic_filter(
+    pub fn with_dynamic_filter_expr(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -6345,15 +6345,17 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?;
-        assert!(join.dynamic_filter().is_none());
+        assert!(join.dynamic_filter_expr().is_none());
 
         let df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::new(Column::new("b1", 1)) as _],
             lit(true),
         ));
-        let join = join.with_dynamic_filter(Arc::clone(&df))?;
+        let join = join.with_dynamic_filter_expr(Arc::clone(&df))?;
 
-        let restored = join.dynamic_filter().expect("should have dynamic filter");
+        let restored = join
+            .dynamic_filter_expr()
+            .expect("should have dynamic filter");
         assert_eq!(
             restored
                 .expression_id()
@@ -6387,7 +6389,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(join.with_dynamic_filter(df).is_err());
+        assert!(join.with_dynamic_filter_expr(df).is_err());
         Ok(())
     }
 }

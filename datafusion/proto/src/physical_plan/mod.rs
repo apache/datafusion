@@ -1313,7 +1313,7 @@ impl protobuf::PhysicalPlanNode {
             if let Ok(df) = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
                 .downcast::<DynamicFilterPhysicalExpr>()
             {
-                agg.with_dynamic_filter(df)?
+                agg.with_dynamic_filter_expr(df)?
             } else {
                 agg
             }
@@ -1448,7 +1448,7 @@ impl protobuf::PhysicalPlanNode {
             if let Ok(df) = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
                 .downcast::<DynamicFilterPhysicalExpr>()
             {
-                hash_join = hash_join.with_dynamic_filter(df)?;
+                hash_join = hash_join.with_dynamic_filter_expr(df)?;
             }
         }
 
@@ -1699,7 +1699,7 @@ impl protobuf::PhysicalPlanNode {
             if let Ok(df) = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
                 .downcast::<DynamicFilterPhysicalExpr>()
             {
-                new_sort.with_dynamic_filter(df)?
+                new_sort.with_dynamic_filter_expr(df)?
             } else {
                 new_sort
             }
@@ -2514,7 +2514,7 @@ impl protobuf::PhysicalPlanNode {
         };
 
         let dynamic_filter = exec
-            .dynamic_filter()
+            .dynamic_filter_expr()
             .map(|df| {
                 let df_expr: Arc<dyn PhysicalExpr> =
                     Arc::clone(df) as Arc<dyn PhysicalExpr>;
@@ -2867,7 +2867,7 @@ impl protobuf::PhysicalPlanNode {
                     limit,
                     has_grouping_set: exec.group_expr().has_grouping_set(),
                     dynamic_filter: exec
-                        .dynamic_filter()
+                        .dynamic_filter_expr()
                         .map(|df| {
                             let df_expr: Arc<dyn PhysicalExpr> =
                                 Arc::clone(df) as Arc<dyn PhysicalExpr>;
@@ -3168,7 +3168,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<Vec<_>>>()?;
         let dynamic_filter = exec
-            .dynamic_filter()
+            .dynamic_filter_expr()
             .map(|df| {
                 let df_expr: Arc<dyn PhysicalExpr> = df as Arc<dyn PhysicalExpr>;
                 proto_converter.physical_expr_to_proto(&df_expr, codec)

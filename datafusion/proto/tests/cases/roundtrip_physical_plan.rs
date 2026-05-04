@@ -3538,7 +3538,7 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<HashJoinExec>()
         .expect("Should be HashJoinExec");
     let deserialized_hash_join_df = deserialized_join
-        .dynamic_filter()
+        .dynamic_filter_expr()
         .expect("HashJoinExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the probe side's ParquetSource.
@@ -3691,7 +3691,7 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<AggregateExec>()
         .expect("Should be AggregateExec");
     let deserialized_agg_df = deserialized_agg
-        .dynamic_filter()
+        .dynamic_filter_expr()
         .expect("AggregateExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.
@@ -3759,7 +3759,7 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<SortExec>()
         .expect("Should be SortExec");
     let deserialized_sort_df = deserialized_sort
-        .dynamic_filter()
+        .dynamic_filter_expr()
         .expect("SortExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.

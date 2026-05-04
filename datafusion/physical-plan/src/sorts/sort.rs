@@ -979,7 +979,7 @@ impl SortExec {
     }
 
     /// Returns the dynamic filter expression for this sort (TopK), if set.
-    pub fn dynamic_filter(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
+    pub fn dynamic_filter_expr(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
         self.filter.as_ref().map(|f| f.read().expr())
     }
 
@@ -990,7 +990,7 @@ impl SortExec {
     ///
     /// Validates that the filter's children reference valid columns in
     /// the sort's input schema.
-    pub fn with_dynamic_filter(
+    pub fn with_dynamic_filter_expr(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -2764,7 +2764,7 @@ mod tests {
 
         // SortExec with fetch creates a dynamic filter automatically.
         let original_id = sort
-            .dynamic_filter()
+            .dynamic_filter_expr()
             .expect("should have dynamic filter with fetch")
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
@@ -2777,9 +2777,9 @@ mod tests {
         let new_id = new_df
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
-        let sort = sort.with_dynamic_filter(Arc::clone(&new_df))?;
+        let sort = sort.with_dynamic_filter_expr(Arc::clone(&new_df))?;
         let restored_id = sort
-            .dynamic_filter()
+            .dynamic_filter_expr()
             .expect("should still have dynamic filter")
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
@@ -2808,7 +2808,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(sort.with_dynamic_filter(df).is_err());
+        assert!(sort.with_dynamic_filter_expr(df).is_err());
         Ok(())
     }
 

@@ -893,6 +893,47 @@ impl AggregateExec {
         &self.filter_expr
     }
 
+    /// Returns the dynamic filter expression for this aggregate, if set.
+    pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
+        self.dynamic_filter.as_ref().map(|df| &df.filter)
+    }
+
+    /// Replace the dynamic filter expression. This method errors if the aggregate does not
+    /// support dynamic filtering or if the filter expression is incompatible with this
+    /// [`AggregateExec`].
+    pub fn with_dynamic_filter_expr(
+        mut self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        // If there is no dynamic filter state initialized via `try_new`, then
+        // we can safely assume that the aggregate does not support dynamic filtering.
+        let Some(dyn_filter) = self.dynamic_filter.as_ref() else {
+            return internal_err!("Aggregate does not support dynamic filtering");
+        };
+
+        // Validate that the filter is compatible with the aggregation columns.
+        let cols = self.cols_for_dynamic_filter(&dyn_filter.supported_accumulators_info);
+        if cols.len() != filter.children().len() {
+            return internal_err!(
+                "Dynamic filter expression is incompatible with aggregate due to mismatched number of columns"
+            );
+        }
+        for (col, child) in cols.iter().zip(filter.children()) {
+            if !col.eq(child) {
+                return internal_err!(
+                    "Dynamic filter expression is incompatible with aggregate due to mismatched column references {col} != {child}"
+                );
+            }
+        }
+
+        // Overwrite our filter
+        self.dynamic_filter = Some(Arc::new(AggrDynFilter {
+            filter,
+            supported_accumulators_info: dyn_filter.supported_accumulators_info.clone(),
+        }));
+        Ok(self)
+    }
+
     /// Input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -1046,47 +1087,6 @@ impl AggregateExec {
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
         &self.input_order_mode
-    }
-
-    /// Returns the dynamic filter expression for this aggregate, if set.
-    pub fn dynamic_filter(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
-        self.dynamic_filter.as_ref().map(|df| &df.filter)
-    }
-
-    /// Replace the dynamic filter expression. This method errors if the aggregate does not
-    /// support dynamic filtering or if the filter expression is incompatible with this
-    /// [`AggregateExec`].
-    pub fn with_dynamic_filter(
-        mut self,
-        filter: Arc<DynamicFilterPhysicalExpr>,
-    ) -> Result<Self> {
-        // If there is no dynamic filter state initialized via `try_new`, then
-        // we can safely assume that the aggregate does not support dynamic filtering.
-        let Some(dyn_filter) = self.dynamic_filter.as_ref() else {
-            return internal_err!("Aggregate does not support dynamic filtering");
-        };
-
-        // Validate that the filter is compatible with the aggregation columns.
-        let cols = self.cols_for_dynamic_filter(&dyn_filter.supported_accumulators_info);
-        if cols.len() != filter.children().len() {
-            return internal_err!(
-                "Dynamic filter expression is incompatible with aggregate due to mismatched number of columns"
-            );
-        }
-        for (col, child) in cols.iter().zip(filter.children()) {
-            if !col.eq(child) {
-                return internal_err!(
-                    "Dynamic filter expression is incompatible with aggregate due to mismatched column references {col} != {child}"
-                );
-            }
-        }
-
-        // Overwrite our filter
-        self.dynamic_filter = Some(Arc::new(AggrDynFilter {
-            filter,
-            supported_accumulators_info: dyn_filter.supported_accumulators_info.clone(),
-        }));
-        Ok(self)
     }
 
     /// Estimates output statistics for this aggregate node.
@@ -4842,7 +4842,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test that [`AggregateExec::with_dynamic_filter`] overrides the existing dynamic filter
+    /// Test that [`AggregateExec::with_dynamic_filter_expr`] overrides the existing dynamic filter
     #[test]
     fn test_with_dynamic_filter() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
@@ -4869,11 +4869,11 @@ mod tests {
             vec![col("a", &schema)?],
             lit(false),
         ));
-        let agg = agg.with_dynamic_filter(Arc::clone(&new_df))?;
+        let agg = agg.with_dynamic_filter_expr(Arc::clone(&new_df))?;
 
         // The aggregate's filter should now resolve to the new inner expression.
         let swapped = agg
-            .dynamic_filter()
+            .dynamic_filter_expr()
             .expect("should still have dynamic filter")
             .current()?;
         assert_eq!(format!("{swapped}"), format!("{}", lit(false)));
@@ -4884,19 +4884,18 @@ mod tests {
             Arc::<DynamicFilterPhysicalExpr>::clone(&new_df);
         let remapped_pexpr =
             new_df_as_pexpr.with_new_children(vec![col("a", &schema)?])?;
-        let Ok(remapped_df) = (remapped_pexpr
-            as Arc<dyn std::any::Any + Send + Sync>)
+        let Ok(remapped_df) = (remapped_pexpr as Arc<dyn std::any::Any + Send + Sync>)
             .downcast::<DynamicFilterPhysicalExpr>()
         else {
             panic!("should be DynamicFilterPhysicalExpr after with_new_children");
         };
         // Hard to assert this because the filter is identical. No error means
         // the filter was accepted. That's a good enough assertion for now.
-        let _agg = agg.with_dynamic_filter(remapped_df)?;
+        let _agg = agg.with_dynamic_filter_expr(remapped_df)?;
         Ok(())
     }
 
-    /// Test that [`AggregateExec::with_dynamic_filter`] errors when the aggregate does not support dynamic filtering
+    /// Test that [`AggregateExec::with_dynamic_filter_expr`] errors when the aggregate does not support dynamic filtering
     #[test]
     fn test_with_dynamic_filter_error_unsupported() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -4919,17 +4918,17 @@ mod tests {
             child,
             Arc::clone(&schema),
         )?;
-        assert!(agg.dynamic_filter().is_none());
+        assert!(agg.dynamic_filter_expr().is_none());
 
         let df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![col("a", &schema)?],
             lit(true),
         ));
-        assert!(agg.with_dynamic_filter(df).is_err());
+        assert!(agg.with_dynamic_filter_expr(df).is_err());
         Ok(())
     }
 
-    /// Test that [`AggregateExec::with_dynamic_filter`] errors when the column is not in the schema
+    /// Test that [`AggregateExec::with_dynamic_filter_expr`] errors when the column is not in the schema
     #[test]
     fn test_with_dynamic_filter_error_column_mismatch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
@@ -4953,7 +4952,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(agg.with_dynamic_filter(df).is_err());
+        assert!(agg.with_dynamic_filter_expr(df).is_err());
         Ok(())
     }
 }
