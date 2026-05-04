@@ -105,8 +105,7 @@ impl DefaultFileStatisticsCacheState {
 
         if entry_size + key_size > self.memory_limit {
             // Remove potential stale entry
-            self.remove(key);
-            return None;
+            return self.remove(key);
         }
 
         self.memory_used += entry_size;
