@@ -940,7 +940,7 @@ mod tests {
     }
 
     /// The snapshot API is deprecated.
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[test]
     fn ffi_physical_expr_snapshots() -> Result<(), DataFusionError> {
         let (original, foreign_expr) = create_test_expr();

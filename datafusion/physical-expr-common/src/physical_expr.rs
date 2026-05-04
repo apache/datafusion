@@ -582,7 +582,7 @@ pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
     since = "54.0.0",
     note = "downcast to `DynamicFilterPhysicalExpr` and call `current()` instead"
 )]
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub fn snapshot_physical_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -593,7 +593,7 @@ pub fn snapshot_physical_expr(
     since = "54.0.0",
     note = "downcast to `DynamicFilterPhysicalExpr` and call `current()` instead"
 )]
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub fn snapshot_physical_expr_opt(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
