@@ -1410,6 +1410,25 @@ impl ExecutionPlan for SortExec {
             updated_node: Some(new_sort),
         })
     }
+
+    fn try_push_sample(
+        self: Arc<Self>,
+        _spec: &crate::sample_pushdown::SampleSpec,
+    ) -> Result<crate::sample_pushdown::SamplePushdownResult> {
+        // A pure SortExec is row-preserving and commutes with row
+        // sampling. A SortExec WITH a fetch (TopK) is row-LIMITING —
+        // pushing the sample below would change which rows survive
+        // the topk and the result would no longer be a sample of the
+        // top-N. In that case we stop pushdown.
+        if self.fetch().is_some() {
+            Ok(crate::sample_pushdown::SamplePushdownResult::Unsupported {
+                reason: "SortExec with fetch (TopK): SAMPLE(TopK(x)) ≠ TopK(SAMPLE(x))"
+                    .to_string(),
+            })
+        } else {
+            Ok(crate::sample_pushdown::SamplePushdownResult::Passthrough)
+        }
+    }
 }
 
 #[cfg(test)]

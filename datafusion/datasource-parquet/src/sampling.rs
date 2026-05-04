@@ -83,6 +83,23 @@ pub struct ParquetSampling {
     /// `ceil(target / row_cluster_size)` windows distributed across
     /// the row group with a random offset within each stride.
     pub row_cluster_size: usize,
+    /// Internal coordination channel between
+    /// `ParquetSource::try_push_sample` (the `FileSource` trait
+    /// method on [`crate::source::ParquetSource`]) and the parquet
+    /// opener. Not part of the public sampling API — direct callers
+    /// configure sampling via the per-axis fields above. See the
+    /// [`TABLESAMPLE clause`] section of the SQL reference for the
+    /// pushdown strategy this implements.
+    ///
+    /// [`TABLESAMPLE clause`]: https://datafusion.apache.org/user-guide/sql/select.html#tablesample-clause
+    pub(crate) system_target_remaining: Option<f64>,
+    /// Optional `REPEATABLE(seed)` value plumbed through from
+    /// `TABLESAMPLE`. When set, it is mixed into the per-row-group
+    /// seed so a user-supplied seed selects a different sample without
+    /// changing the keying on `file_index`. When unset, the same
+    /// `(file_index, row_group_index, fraction, cluster_size)` always
+    /// selects the same rows.
+    pub(crate) seed: Option<u64>,
 }
 
 impl Default for ParquetSampling {
@@ -91,6 +108,8 @@ impl Default for ParquetSampling {
             row_group_fraction: None,
             row_fraction: None,
             row_cluster_size: 32_768,
+            system_target_remaining: None,
+            seed: None,
         }
     }
 }
@@ -101,13 +120,16 @@ impl ParquetSampling {
     /// of the total. No-op if `row_group_fraction` is `None`, `>= 1.0`,
     /// or out of range.
     ///
-    /// Selection is deterministic given `(file_index, row_group_count,
-    /// fraction)`: we seed an `SmallRng` from a hash of those inputs
-    /// and use a partial Fisher-Yates shuffle. Same inputs → same
-    /// sample on re-runs. Different `file_index` values produce
-    /// uncorrelated samples even when row-group counts and fractions
-    /// match, so files in the same scan don't all keep the same
-    /// indices.
+    /// Selection is deterministic given `(self.seed, file_index,
+    /// row_group_count, fraction)`: we seed an `SmallRng` from a hash
+    /// of those inputs and use a partial Fisher-Yates shuffle. Same
+    /// inputs → same sample on re-runs. Different `file_index` values
+    /// produce uncorrelated samples even when row-group counts and
+    /// fractions match, so files in the same scan don't all keep the
+    /// same indices. `self.seed` (the `REPEATABLE(n)` value plumbed
+    /// from `TABLESAMPLE`) is mixed in so a user-supplied seed picks a
+    /// different sample without the planner-vs.-direct-builder paths
+    /// having to differ.
     pub(crate) fn apply_row_group_sampling(
         &self,
         plan: &mut ParquetAccessPlan,
@@ -130,6 +152,7 @@ impl ParquetSampling {
 
         let seed = derive_seed(
             b"row-group",
+            self.seed,
             file_index,
             row_group_count,
             fraction,
@@ -188,8 +211,14 @@ impl ParquetSampling {
                 continue;
             }
 
-            let seed =
-                derive_seed(b"row-fraction", file_index, idx, fraction, cluster_size);
+            let seed = derive_seed(
+                b"row-fraction",
+                self.seed,
+                file_index,
+                idx,
+                fraction,
+                cluster_size,
+            );
             let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
 
             let target_rows = ((total_rows as f64) * fraction).ceil().max(1.0) as usize;
@@ -216,6 +245,7 @@ impl ParquetSampling {
 /// data-integrity boundary.
 fn derive_seed(
     domain: &[u8],
+    repeatable_seed: Option<u64>,
     file_index: usize,
     secondary_index: usize,
     fraction: f64,
@@ -224,6 +254,7 @@ fn derive_seed(
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     domain.hash(&mut hasher);
+    repeatable_seed.hash(&mut hasher);
     file_index.hash(&mut hasher);
     secondary_index.hash(&mut hasher);
     fraction.to_bits().hash(&mut hasher);

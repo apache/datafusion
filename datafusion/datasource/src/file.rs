@@ -29,6 +29,29 @@ use crate::morsel::{FileOpenerMorselizer, Morselizer};
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
+
+/// Result of a [`FileSource::try_push_sample`] call.
+pub enum FileSourceSampleResult {
+    /// The source has absorbed the sample. The
+    /// [`crate::source::DataSourceExec`] caller should:
+    ///
+    /// 1. Replace the file source on its [`FileScanConfig`] with
+    ///    [`Self::Absorbed::new_source`].
+    /// 2. Drop any files whose flat-list index is *not* in
+    ///    [`Self::Absorbed::keep_files`] (None = keep all files).
+    Absorbed {
+        new_source: Arc<dyn FileSource>,
+        /// Optional file-level subset (flat-list indices of
+        /// `PartitionedFile`s to keep). `None` means keep every file.
+        keep_files: Option<Vec<usize>>,
+    },
+    /// The source can't sample. The pushdown rule will surface the
+    /// reason as a planning error today.
+    Unsupported {
+        /// Human-readable reason; included in the error message.
+        reason: String,
+    },
+}
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -338,6 +361,32 @@ pub trait FileSource: Any + Send + Sync {
     #[expect(deprecated)]
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
+    }
+
+    /// Try to push a TABLESAMPLE-shaped sample request into this file
+    /// source.
+    ///
+    /// Sources that can configure native sampling (e.g. parquet, via
+    /// row-group / row-window selection in the opener) return
+    /// [`FileSourceSampleResult::Absorbed`] with the new source and an
+    /// optional list of `PartitionedFile` indices the rule should keep
+    /// (drop the rest at the `FileScanConfig` level). For SYSTEM
+    /// sampling parquet uses a hierarchical "cube-root" split across
+    /// files, row groups, and rows, so the rule has to drop files at
+    /// the outer layer where this trait can't reach.
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_push_sample(
+        &self,
+        _spec: &datafusion_physical_plan::sample_pushdown::SampleSpec,
+        _num_files: usize,
+    ) -> Result<FileSourceSampleResult> {
+        Ok(FileSourceSampleResult::Unsupported {
+            reason: format!(
+                "{}: file source sample pushdown is not implemented",
+                self.file_type()
+            ),
+        })
     }
 
     /// Apply a function to all physical expressions used by this file source.

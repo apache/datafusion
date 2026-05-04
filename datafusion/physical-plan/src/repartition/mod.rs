@@ -1328,6 +1328,15 @@ impl ExecutionPlan for RepartitionExec {
             cache: new_properties.into(),
         })))
     }
+
+    fn try_push_sample(
+        self: Arc<Self>,
+        _spec: &crate::sample_pushdown::SampleSpec,
+    ) -> Result<crate::sample_pushdown::SamplePushdownResult> {
+        // Repartitioning preserves the row set (just redistributes
+        // across partitions); sampling commutes.
+        Ok(crate::sample_pushdown::SamplePushdownResult::Passthrough)
+    }
 }
 
 impl RepartitionExec {

@@ -48,6 +48,7 @@ pub use crate::execution_plan::{
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+pub use crate::sample_pushdown::{SampleMethod, SamplePushdownResult, SampleSpec};
 pub use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
@@ -85,6 +86,8 @@ pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
+pub mod sample;
+pub mod sample_pushdown;
 pub mod scalar_subquery;
 pub mod sort_pushdown;
 pub mod sorts;
