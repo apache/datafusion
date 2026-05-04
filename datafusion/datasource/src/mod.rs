@@ -293,7 +293,7 @@ impl PartitionedFile {
         note = "use `with_extension`; the extension is keyed by its concrete type"
     )]
     pub fn with_extensions(mut self, extensions: Arc<dyn Any + Send + Sync>) -> Self {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.extensions.insert_dyn(extensions);
         self
     }

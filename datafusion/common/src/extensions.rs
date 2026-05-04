@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn insert_dyn_keys_by_concrete_type() {
         let mut ext = Extensions::new();
         let erased: Arc<dyn Any + Send + Sync> = Arc::new(A(7));
