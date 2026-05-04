@@ -897,3 +897,109 @@ fn test_binary_comparison_string_numeric_coercion() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn test_string_concat_coercion() -> Result<()> {
+    // Binary
+    test_coercion_binary_rule!(
+        DataType::Binary,
+        DataType::Binary,
+        Operator::StringConcat,
+        DataType::Binary
+    );
+    test_coercion_binary_rule!(
+        DataType::LargeBinary,
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::BinaryView,
+        DataType::BinaryView,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
+    test_coercion_binary_rule!(
+        DataType::Binary,
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::BinaryView,
+        DataType::Binary,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::FixedSizeBinary(16),
+        Operator::StringConcat,
+        DataType::Binary
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::BinaryView,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
+
+    // String
+    test_coercion_binary_rule!(
+        DataType::Utf8,
+        DataType::Utf8,
+        Operator::StringConcat,
+        DataType::Utf8
+    );
+    test_coercion_binary_rule!(
+        DataType::LargeUtf8,
+        DataType::LargeUtf8,
+        Operator::StringConcat,
+        DataType::LargeUtf8
+    );
+    test_coercion_binary_rule!(
+        DataType::Utf8View,
+        DataType::Utf8View,
+        Operator::StringConcat,
+        DataType::Utf8View
+    );
+
+    // Mixed string-binary
+    for string_dt in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        for binary_dt in [
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::FixedSizeBinary(8),
+        ] {
+            assert!(
+                BinaryTypeCoercer::new(&binary_dt, &Operator::StringConcat, &string_dt,)
+                    .get_input_types()
+                    .is_err(),
+                "{binary_dt} || {string_dt}"
+            );
+            assert!(
+                BinaryTypeCoercer::new(&string_dt, &Operator::StringConcat, &binary_dt,)
+                    .get_input_types()
+                    .is_err(),
+                "{string_dt} || {binary_dt}"
+            );
+        }
+    }
+
+    // Mixed string-other
+    test_coercion_binary_rule!(
+        DataType::Utf8,
+        DataType::Timestamp(Second, None),
+        Operator::StringConcat,
+        DataType::Utf8
+    );
+
+    Ok(())
+}

@@ -440,20 +440,17 @@ where
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
     }
 
-    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
-        for i in 0..values[0].len() {
-            let v = ScalarValue::try_from_array(&values[0], i)?;
-            if !v.is_null() {
-                *to_remove.entry(v).or_default() += 1;
-            }
+        let mut to_remove: HashMap<Hashable<T::Native>, usize> = HashMap::new();
+
+        let arr = values[0].as_primitive::<T>();
+        for value in arr.iter().flatten() {
+            *to_remove.entry(Hashable(value)).or_default() += 1;
         }
 
         let mut i = 0;
         while i < self.all_values.len() {
-            let k =
-                ScalarValue::new_primitive::<T>(Some(self.all_values[i]), &T::DATA_TYPE)?;
+            let k = Hashable(self.all_values[i]);
             if let Some(count) = to_remove.get_mut(&k)
                 && *count > 0
             {

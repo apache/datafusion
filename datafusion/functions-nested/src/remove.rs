@@ -163,9 +163,15 @@ make_udf_expr_and_func!(
     argument(name = "max", description = "Number of first occurrences to remove.")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(super) struct ArrayRemoveN {
+pub struct ArrayRemoveN {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayRemoveN {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayRemoveN {
@@ -257,9 +263,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(super) struct ArrayRemoveAll {
+pub struct ArrayRemoveAll {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayRemoveAll {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayRemoveAll {

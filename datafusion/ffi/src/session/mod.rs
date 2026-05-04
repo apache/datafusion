@@ -32,8 +32,8 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::registry::{ExtensionTypeRegistryRef, MemoryExtensionTypeRegistry};
 use datafusion_expr::{
-    AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, ScalarUDFImpl,
-    WindowUDF, WindowUDFImpl,
+    AggregateUDF, AggregateUDFImpl, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF,
+    ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
@@ -378,6 +378,7 @@ pub struct ForeignSession {
     session: FFI_SessionRef,
     config: SessionConfig,
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     window_functions: HashMap<String, Arc<WindowUDF>>,
     extension_types: ExtensionTypeRegistryRef,
@@ -447,6 +448,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 config,
                 table_options,
                 scalar_functions,
+                higher_order_functions: HashMap::new(),
                 aggregate_functions,
                 window_functions,
                 extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
@@ -586,6 +588,10 @@ impl Session for ForeignSession {
 
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
         &self.scalar_functions
+    }
+
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+        &self.higher_order_functions
     }
 
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
