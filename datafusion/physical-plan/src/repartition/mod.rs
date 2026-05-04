@@ -1832,7 +1832,6 @@ struct PerPartitionStream {
 }
 
 impl PerPartitionStream {
-    #[expect(clippy::too_many_arguments)]
     fn new(
         schema: SchemaRef,
         receiver: DistributionReceiver<MaybeBatch>,
