@@ -16,9 +16,10 @@
 // under the License.
 
 //! Benchmarks for `GroupValues` over a single `Dictionary<Int32, Utf8>`
-//! column. Each iteration is timed end-to-end: it constructs the
-//! `Box<dyn GroupValues>` returned by `new_group_values`, runs `intern`
-//! once (or N times), and then `emit(EmitTo::All)`.
+//! column. Each iteration measures `intern` (once or N times) followed by
+//! `emit(EmitTo::All)`. The `Box<dyn GroupValues>` returned by
+//! `new_group_values` is constructed in the setup closure of
+//! `iter_batched_ref` and is not included in the timing.
 
 use arrow::array::{ArrayRef, DictionaryArray, PrimitiveArray, StringArray};
 use arrow::buffer::{Buffer, NullBuffer};
@@ -36,7 +37,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 const SIZES: [usize; 2] = [8 * 1024, 64 * 1024];
-const CARDS_RELATIVE: [usize; 4] = [20, 75, 300, 8 * 1024];
+const CARDS_RELATIVE: [usize; 4] = [20, 75, 300, 1000];
 const N_BATCHES: usize = 4;
 // Fixed for reproducibility.
 const SEED: u64 = 0xD1C7;
