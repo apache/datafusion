@@ -274,6 +274,10 @@ impl RowGroupAccessPlanFilter {
             parquet_schema,
             row_group_metadatas,
             arrow_schema,
+            // Preserve the existing row-group pruning behavior. This path only
+            // proves whether matching rows may exist, so it uses the
+            // StatisticsConverter default for older parquet-rs files where a
+            // missing null count can mean there are zero nulls.
             missing_null_counts_as_zero: true,
         };
 
@@ -376,6 +380,10 @@ impl RowGroupAccessPlanFilter {
                 .map(|&i| &groups[i])
                 .collect::<Vec<_>>(),
             arrow_schema,
+            // Fully matched row groups require a stronger proof: every row
+            // must pass the predicate. Missing null counts are unknown here;
+            // treating them as zero can incorrectly mark nullable row groups as
+            // fully matched and make limit pruning unsound.
             missing_null_counts_as_zero: false,
         };
 
