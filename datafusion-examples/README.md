@@ -193,11 +193,11 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand      | File Path                                                                             | Description                                |
-| --------------- | ------------------------------------------------------------------------------------- | ------------------------------------------ |
-| match_recognize | [`relation_planner/match_recognize.rs`](examples/relation_planner/match_recognize.rs) | Implement MATCH_RECOGNIZE pattern matching |
-| pivot_unpivot   | [`relation_planner/pivot_unpivot.rs`](examples/relation_planner/pivot_unpivot.rs)     | Implement PIVOT / UNPIVOT                  |
-| table_sample    | [`relation_planner/table_sample.rs`](examples/relation_planner/table_sample.rs)       | Implement TABLESAMPLE                      |
+| Subcommand      | File Path                                                                             | Description                                                           |
+| --------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| match_recognize | [`relation_planner/match_recognize.rs`](examples/relation_planner/match_recognize.rs) | Implement MATCH_RECOGNIZE pattern matching                            |
+| pivot_unpivot   | [`relation_planner/pivot_unpivot.rs`](examples/relation_planner/pivot_unpivot.rs)     | Implement PIVOT / UNPIVOT                                             |
+| table_sample    | [`relation_planner/table_sample.rs`](examples/relation_planner/table_sample.rs)       | Implement TABLESAMPLE BERNOULLI / ROW / BUCKET via per-batch sampling |
 
 ## SQL Ops Examples
 

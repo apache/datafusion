@@ -1,0 +1,115 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# End-to-end coverage for the built-in TABLESAMPLE SYSTEM planner +
+# adaptive cube-root pushdown into ParquetSource. The planner
+# (`datafusion_sql::sample::TableSampleSystemPlanner`) is auto-
+# registered by `SessionStateBuilder::with_default_features`, so this
+# fixture exercises the path a user gets out of the box from
+# `datafusion-cli`.
+
+# Single-file / single-row-group parquet. The adaptive logic detects
+# both axes can't reduce and pushes the full requested fraction down
+# to the row level, so we get ~p*N rows out instead of ~cbrt(p)*N.
+statement ok
+COPY (SELECT i AS id FROM generate_series(1, 1024) t(i))
+TO 'test_files/scratch/tablesample/sample_table.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE sample_table
+STORED AS PARQUET
+LOCATION 'test_files/scratch/tablesample/sample_table.parquet';
+
+# 100% returns every row.
+query I
+SELECT count(*) FROM sample_table TABLESAMPLE SYSTEM (100);
+----
+1024
+
+# REPEATABLE seed produces the same count on re-run. With one file and
+# one row group the adaptive split skips both file and row-group axes
+# and applies the full 0.5 at the row level, so the count is ~512 (the
+# exact number depends on cluster-window packing).
+query I
+SELECT count(*) FROM sample_table TABLESAMPLE SYSTEM (50) REPEATABLE (42);
+----
+512
+
+query I
+SELECT count(*) FROM sample_table TABLESAMPLE SYSTEM (50) REPEATABLE (42);
+----
+512
+
+# Different seed → still bounded.
+query B
+SELECT count(*) > 0 AND count(*) <= 1024 FROM sample_table TABLESAMPLE SYSTEM (10) REPEATABLE (7);
+----
+true
+
+# EXPLAIN — the SamplePushdown rule should have absorbed the sample
+# into ParquetSource; no SampleExec must remain in the physical plan.
+# `sample_system_target_remaining` is the residual fraction the opener
+# applies adaptively based on the actual row-group count it observes.
+query TT
+EXPLAIN SELECT id FROM sample_table TABLESAMPLE SYSTEM (50) REPEATABLE (42);
+----
+logical_plan
+01)Sample: SYSTEM(50.0000%) REPEATABLE(42)
+02)--TableScan: sample_table projection=[id]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/tablesample/sample_table.parquet]]}, projection=[id], file_type=parquet, sample_system_target_remaining=0.5000
+
+# --- Rejected forms (the built-in planner only supports SYSTEM PERCENT). ---
+
+statement error TABLESAMPLE method BERNOULLI is not supported
+SELECT count(*) FROM sample_table TABLESAMPLE BERNOULLI (10);
+
+statement error TABLESAMPLE without an explicit method is not supported
+SELECT count(*) FROM sample_table TABLESAMPLE (10);
+
+statement error TABLESAMPLE with ROWS count is not supported
+SELECT count(*) FROM sample_table TABLESAMPLE SYSTEM (100 ROWS);
+
+statement error TABLESAMPLE fraction must be in
+SELECT count(*) FROM sample_table TABLESAMPLE SYSTEM (150);
+
+statement error TABLESAMPLE fraction must be in
+SELECT count(*) FROM sample_table TABLESAMPLE SYSTEM (0);
+
+# Sources that don't implement `try_push_sample` (e.g. CSV) cause the
+# `SamplePushdown` rule to error at planning time, since there is no
+# generic post-scan SampleExec yet — the rule is the only thing that
+# currently turns a `Sample` into a runnable plan.
+statement ok
+COPY (SELECT i AS id FROM generate_series(1, 16) t(i))
+TO 'test_files/scratch/tablesample/sample_table.csv'
+STORED AS CSV;
+
+statement ok
+CREATE EXTERNAL TABLE sample_csv
+STORED AS CSV
+LOCATION 'test_files/scratch/tablesample/sample_table.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement error TABLESAMPLE could not be pushed down
+SELECT count(*) FROM sample_csv TABLESAMPLE SYSTEM (50);
+
+statement ok
+DROP TABLE sample_csv;
+
+statement ok
+DROP TABLE sample_table;

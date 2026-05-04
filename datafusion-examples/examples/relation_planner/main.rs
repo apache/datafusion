@@ -35,7 +35,14 @@
 //!   (file: pivot_unpivot.rs, desc: Implement PIVOT / UNPIVOT)
 //!
 //! - `table_sample`
-//!   (file: table_sample.rs, desc: Implement TABLESAMPLE)
+//!   (file: table_sample.rs, desc: Implement TABLESAMPLE BERNOULLI / ROW / BUCKET via per-batch sampling)
+//!
+//! Note: `TABLESAMPLE SYSTEM(p%)` is supported out of the box by the
+//! built-in `datafusion_sql::sample::TableSampleSystemPlanner`, which is
+//! auto-registered on a default `SessionContext`. The `table_sample`
+//! example below shows how to register a *different* planner for the
+//! row-level forms (`BERNOULLI`, `ROW`, `BUCKET`) that the built-in
+//! intentionally does not handle.
 //!
 //! ## Snapshot Testing
 //!

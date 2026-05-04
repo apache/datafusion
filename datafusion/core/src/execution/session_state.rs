@@ -1175,6 +1175,11 @@ impl SessionStateBuilder {
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_expr_planners());
 
+        #[cfg(feature = "sql")]
+        self.relation_planners
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_relation_planners());
+
         self.scalar_functions
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_scalar_functions());

@@ -341,12 +341,27 @@ approach:
 
 ### TABLESAMPLE (Custom Logical and Physical Nodes)
 
-The [table_sample.rs] example shows a complete end-to-end implementation of how to
-support queries such as:
+DataFusion ships with a built-in `RelationPlanner` for
+`TABLESAMPLE SYSTEM(p%)` (block-level sampling), auto-registered on
+any default `SessionContext` and pushed into `ParquetSource` by the
+`SamplePushdown` optimizer rule. See the [`TABLESAMPLE` section] of
+the SQL reference for a full description of the semantics and the
+parquet implementation.
+
+The [table_sample.rs] example shows how to register a _custom_
+`RelationPlanner` ahead of the built-in one to add other forms — row-
+level `BERNOULLI`, `ROW` count limits, Hive-style `BUCKET`, etc. — that
+DataFusion intentionally doesn't ship in core because the semantics
+vary across systems. Because `register_relation_planner` prepends
+to the chain, the custom planner runs first; returning
+`RelationPlanning::Original` falls through to the built-in
+`SYSTEM` planner.
 
 ```sql
 SELECT * FROM table TABLESAMPLE BERNOULLI(10 PERCENT) REPEATABLE(42)
 ```
+
+[`tablesample` section]: ../user-guide/sql/select.md#tablesample-clause
 
 ### PIVOT/UNPIVOT (Rewrite Strategy)
 

@@ -237,6 +237,79 @@ pub trait ExtensionPlanner {
     }
 }
 
+/// [`ExtensionPlanner`] that lowers the [`Sample`] logical extension
+/// node into a [`SampleExec`] physical node.
+///
+/// The pushdown machinery (cube-root absorption into `ParquetSource`,
+/// the `SamplePushdown` optimizer rule, per-node `Passthrough`
+/// overrides) is wired into the default optimizer pipeline, so once
+/// a `Sample` reaches the physical planner it will be pushed into
+/// the source — but it has to *get* there first. Register this
+/// planner on a [`SessionStateBuilder`] / [`DefaultPhysicalPlanner`]
+/// alongside whichever [`RelationPlanner`] (or other front-end) you
+/// use to emit the `Sample` logical node:
+///
+/// ```rust,ignore
+/// use std::sync::Arc;
+/// use datafusion::physical_planner::{DefaultPhysicalPlanner, SamplePhysicalPlanner};
+///
+/// let planner = DefaultPhysicalPlanner::with_extension_planners(vec![
+///     Arc::new(SamplePhysicalPlanner),
+/// ]);
+/// ```
+///
+/// `SamplePhysicalPlanner` is registered automatically in
+/// [`DefaultPhysicalPlanner::default`] so that `TABLESAMPLE SYSTEM`
+/// works out of the box on a default `SessionContext`. Callers who
+/// supply their own list via [`DefaultPhysicalPlanner::with_extension_planners`]
+/// **replace** the defaults — re-add `SamplePhysicalPlanner` to the
+/// front of their list if they want sampling support.
+///
+/// [`Sample`]: datafusion_expr::logical_plan::sample::Sample
+/// [`SampleExec`]: datafusion_physical_plan::sample::SampleExec
+/// [`RelationPlanner`]: datafusion_expr::planner::RelationPlanner
+/// [`SessionStateBuilder`]: crate::execution::session_state::SessionStateBuilder
+#[derive(Debug, Default)]
+pub struct SamplePhysicalPlanner;
+
+#[async_trait]
+impl ExtensionPlanner for SamplePhysicalPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let Some(sample) = node
+            .as_any()
+            .downcast_ref::<datafusion_expr::logical_plan::sample::Sample>()
+        else {
+            return Ok(None);
+        };
+        if physical_inputs.len() != 1 {
+            return plan_err!(
+                "Sample expects exactly one input; got {}",
+                physical_inputs.len()
+            );
+        }
+        let method = match sample.method {
+            datafusion_expr::logical_plan::sample::SampleMethod::System => {
+                datafusion_physical_plan::sample_pushdown::SampleMethod::System
+            }
+        };
+        Ok(Some(Arc::new(
+            datafusion_physical_plan::sample::SampleExec::new(
+                Arc::clone(&physical_inputs[0]),
+                method,
+                sample.fraction,
+                sample.seed,
+            ),
+        )))
+    }
+}
+
 /// Default single node physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
 ///
@@ -255,9 +328,19 @@ pub trait ExtensionPlanner {
 /// execute concurrently.
 ///
 /// [`planning_concurrency`]: crate::config::ExecutionOptions::planning_concurrency
-#[derive(Default)]
 pub struct DefaultPhysicalPlanner {
     extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
+}
+
+impl Default for DefaultPhysicalPlanner {
+    /// Constructs a planner with [`SamplePhysicalPlanner`] pre-registered
+    /// so the core `Sample` extension node lowers without any extra
+    /// wiring on a default `SessionContext`.
+    fn default() -> Self {
+        Self {
+            extension_planners: vec![Arc::new(SamplePhysicalPlanner)],
+        }
+    }
 }
 
 #[async_trait]
