@@ -274,8 +274,19 @@ impl PartitionedFile {
     ///
     /// This can be used to pass reader-specific information (e.g. a
     /// `ParquetAccessPlan`, or a custom index entry).
-    pub fn with_extension<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
+    ///
+    /// Wraps the value in an [`Arc`] internally. If the caller already has an
+    /// `Arc<T>` and wants to avoid an extra allocation, use
+    /// [`Self::with_extension_arc`].
+    pub fn with_extension<T: Any + Send + Sync>(mut self, value: T) -> Self {
         self.extensions.insert(value);
+        self
+    }
+
+    /// Attach a typed user-defined extension to this file from an
+    /// already-allocated [`Arc<T>`]. See [`Self::with_extension`].
+    pub fn with_extension_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
+        self.extensions.insert_arc(value);
         self
     }
 

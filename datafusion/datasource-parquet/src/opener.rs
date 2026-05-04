@@ -2507,7 +2507,7 @@ mod test {
             "test.parquet".to_string(),
             u64::try_from(data_len).unwrap(),
         )
-        .with_extension(Arc::new(access_plan));
+        .with_extension(access_plan);
 
         let make_opener = |reverse_scan: bool| {
             ParquetMorselizerBuilder::new()
@@ -2608,7 +2608,7 @@ mod test {
             "test.parquet".to_string(),
             u64::try_from(data_len).unwrap(),
         )
-        .with_extension(Arc::new(access_plan));
+        .with_extension(access_plan);
 
         let make_opener = |reverse_scan: bool| {
             ParquetMorselizerBuilder::new()

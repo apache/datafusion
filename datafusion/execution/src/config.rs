@@ -596,7 +596,7 @@ impl SessionConfig {
     where
         T: Send + Sync + 'static,
     {
-        self.extensions.insert(ext);
+        self.extensions.insert_arc(ext);
     }
 
     /// Get extension, if any for the specified type `T` exists.
