@@ -364,6 +364,7 @@ unsafe extern "C" fn fmt_sql_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_Result<S
     FFI_Result::Ok(result.into())
 }
 
+#[expect(deprecated)]
 unsafe extern "C" fn snapshot_fn_wrapper(
     expr: &FFI_PhysicalExpr,
 ) -> FFI_Result<FFI_Option<FFI_PhysicalExpr>> {
