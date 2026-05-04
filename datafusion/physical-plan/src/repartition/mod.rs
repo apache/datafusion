@@ -2645,13 +2645,17 @@ mod tests {
         let input_partitions = vec![partition];
         let partitioning = Partitioning::RoundRobinBatch(4);
 
-        // Set up context with moderate memory limit to force partial spilling
-        // 2KB should allow some batches in memory but force others to spill
+        // With `batch_size = 1024` and a single UInt32 column, each
+        // coalesced residual is ~4 KiB. An 8 KiB pool fits one and forces
+        // the rest to spill.
         let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(2 * 1024, 1.0)
+            .with_memory_limit(8 * 1024, 1.0)
             .build_arc()?;
 
-        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let session_config = SessionConfig::new().with_batch_size(1024);
+        let task_ctx = TaskContext::default()
+            .with_runtime(runtime)
+            .with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
