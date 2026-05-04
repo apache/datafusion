@@ -493,6 +493,49 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         self.placeholder_count += 1;
     }
 
+    /// Append a row whose bytes are produced by mapping each byte of `src`
+    /// through `map`, in order. Output length equals `src.len()`.
+    ///
+    /// # Safety
+    ///
+    /// The bytes produced by `map` over `src.iter()`, in order, must form
+    /// valid UTF-8.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cumulative byte length exceeds `O::MAX`.
+    #[inline]
+    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], mut map: F) {
+        self.value_buffer.extend(src.iter().map(|&b| map(b)));
+        let next_offset =
+            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
+        self.offsets_buffer.push(next_offset);
+    }
+
+    /// Append a row whose bytes are produced by `f` calling write methods on
+    /// the supplied [`StringWriter`].
+    ///
+    /// The closure can call `write_str` / `write_char` any number of times
+    /// (including zero, for an empty row). Bytes written go directly into the
+    /// builder's value buffer; there is no intermediate scratch.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cumulative byte length exceeds `O::MAX`.
+    #[inline]
+    pub fn append_with<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut GenericStringWriter<'_>),
+    {
+        let mut writer = GenericStringWriter {
+            value_buffer: &mut self.value_buffer,
+        };
+        f(&mut writer);
+        let next_offset =
+            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
+        self.offsets_buffer.push(next_offset);
+    }
+
     /// Finalize into a [`GenericStringArray<O>`] using the caller-supplied
     /// null buffer.
     ///
@@ -537,6 +580,33 @@ pub(crate) const STRING_VIEW_INIT_BLOCK_SIZE: u32 = 8 * 1024;
 /// Maximum size each long-string data block in a `StringView`-style array
 /// grows to; matches Arrow's `GenericByteViewBuilder` default.
 pub(crate) const STRING_VIEW_MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
+
+/// Append-only writer handed to closures passed to `append_with`.
+///
+/// Writes are committed without per-row heap allocation; the builder
+/// finalizes the row when the closure returns.
+pub(crate) trait StringWriter {
+    fn write_str(&mut self, s: &str);
+
+    #[inline]
+    fn write_char(&mut self, c: char) {
+        let mut buf = [0u8; 4];
+        self.write_str(c.encode_utf8(&mut buf));
+    }
+}
+
+/// [`StringWriter`] for [`GenericStringArrayBuilder`]. Writes go straight to
+/// the value buffer.
+pub(crate) struct GenericStringWriter<'a> {
+    value_buffer: &'a mut MutableBuffer,
+}
+
+impl StringWriter for GenericStringWriter<'_> {
+    #[inline]
+    fn write_str(&mut self, s: &str) {
+        self.value_buffer.extend_from_slice(s.as_bytes());
+    }
+}
 
 /// Builder for a [`StringViewArray`] that defers null tracking to `finish`.
 ///
@@ -599,23 +669,10 @@ impl StringViewArrayBuilder {
             self.in_progress.reserve(to_reserve);
         }
 
-        let buffer_index: u32 = i32::try_from(self.completed.len())
-            .expect("buffer count exceeds i32::MAX")
-            as u32;
         let offset: u32 = i32::try_from(self.in_progress.len())
             .expect("offset exceeds i32::MAX") as u32;
         self.in_progress.extend_from_slice(v);
-
-        // Build the ByteView inline rather than going through `make_view`,
-        // which is marked as `[inline(never)]`.
-        let view = ByteView {
-            length,
-            // SAFETY: length > 12 here, so v has at least 4 bytes.
-            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
-            buffer_index,
-            offset,
-        };
-        self.views.push(view.into());
+        self.views.push(self.make_long_view(length, offset, v));
     }
 
     /// Append an empty placeholder row. The corresponding slot must be
@@ -625,6 +682,138 @@ impl StringViewArrayBuilder {
         // Zero-length inline view — `length` field is 0, no buffer ref.
         self.views.push(0);
         self.placeholder_count += 1;
+    }
+
+    /// Ensure the in-progress block has room for `length` more bytes,
+    /// flushing the current block and starting a new (doubled) one if not.
+    /// Caller must only invoke this between rows — flushing mid-row would
+    /// orphan partial row data.
+    #[inline]
+    fn ensure_long_capacity(&mut self, length: u32) {
+        let required_cap = self.in_progress.len() + length as usize;
+        if self.in_progress.capacity() < required_cap {
+            self.flush_in_progress();
+            let to_reserve = (length as usize).max(self.next_block_size() as usize);
+            self.in_progress.reserve(to_reserve);
+        }
+    }
+
+    /// Encode a long-form view referencing `length` bytes already written
+    /// into the in-progress block at `offset`. `prefix_bytes` is the row's
+    /// data slice (or any slice starting with the row's first 4 bytes).
+    ///
+    /// Built inline rather than going through `make_view`, which is
+    /// `[inline(never)]`.
+    #[inline]
+    fn make_long_view(&self, length: u32, offset: u32, prefix_bytes: &[u8]) -> u128 {
+        let buffer_index: u32 = i32::try_from(self.completed.len())
+            .expect("buffer count exceeds i32::MAX")
+            as u32;
+        ByteView {
+            length,
+            // length > 12, so prefix_bytes has at least 4 bytes.
+            prefix: u32::from_le_bytes(prefix_bytes[..4].try_into().unwrap()),
+            buffer_index,
+            offset,
+        }
+        .into()
+    }
+
+    /// Append a row whose bytes are produced by mapping each byte of `src`
+    /// through `map`, in order. Output length equals `src.len()`.
+    ///
+    /// Because output length is known up front, this is more efficient than
+    /// `append_with` when computing a byte-to-byte mapping.
+    ///
+    /// # Safety
+    ///
+    /// The bytes produced by `map` over `src.iter()`, in order, must form
+    /// valid UTF-8.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`Self::append_value`]: if
+    /// `src.len()`, the in-progress buffer offset, or the number of completed
+    /// buffers exceeds `i32::MAX`.
+    #[inline]
+    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], mut map: F) {
+        let length: u32 =
+            i32::try_from(src.len()).expect("value length exceeds i32::MAX") as u32;
+        if length <= 12 {
+            // `iter_mut().zip()` over a stack array is the canonical autovec
+            // pattern.
+            let mut bytes = [0u8; 12];
+            for (d, &b) in bytes[..src.len()].iter_mut().zip(src) {
+                *d = map(b);
+            }
+            self.views.push(make_view(&bytes[..src.len()], 0, 0));
+            return;
+        }
+
+        self.ensure_long_capacity(length);
+
+        let cursor = self.in_progress.len();
+        let offset: u32 = i32::try_from(cursor).expect("offset exceeds i32::MAX") as u32;
+        self.in_progress.extend(src.iter().map(|&b| map(b)));
+        self.views
+            .push(self.make_long_view(length, offset, &self.in_progress[cursor..]));
+    }
+
+    /// Append a row whose bytes are produced by `f` calling write methods on
+    /// the supplied [`StringWriter`].
+    ///
+    /// Initial writes accumulate in a 12-byte stack buffer. If the row stays
+    /// at or below 12 bytes, it is finalized as an inline view and never
+    /// touches the data block. If it exceeds 12 bytes, the buffered prefix is
+    /// flushed into the in-progress block and subsequent writes go directly
+    /// there.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`Self::append_value`]: if the
+    /// row's byte length, the in-progress buffer offset, or the number of
+    /// completed buffers exceeds `i32::MAX`.
+    #[inline]
+    pub fn append_with<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut StringViewWriter<'_>),
+    {
+        let mut writer = StringViewWriter {
+            inline_buf: [0u8; 12],
+            inline_len: 0,
+            spill_cursor: None,
+            builder: self,
+        };
+        f(&mut writer);
+        // Destructure to release the borrow on `self` and pull out the
+        // inline-buffer state by-value. Copy types only; the &mut self is
+        // dropped here, ending the borrow.
+        let StringViewWriter {
+            inline_buf,
+            inline_len,
+            spill_cursor,
+            ..
+        } = writer;
+
+        match spill_cursor {
+            None => {
+                self.views
+                    .push(make_view(&inline_buf[..inline_len as usize], 0, 0));
+            }
+            Some(start) => {
+                let end = self.in_progress.len();
+                let length: u32 = i32::try_from(end - start)
+                    .expect("value length exceeds i32::MAX")
+                    as u32;
+                let offset: u32 =
+                    i32::try_from(start).expect("offset exceeds i32::MAX") as u32;
+                self.views.push(self.make_long_view(
+                    length,
+                    offset,
+                    &self.in_progress[start..],
+                ));
+            }
+        }
     }
 
     fn flush_in_progress(&mut self) {
@@ -673,18 +862,84 @@ impl StringViewArrayBuilder {
     }
 }
 
+/// [`StringWriter`] for [`StringViewArrayBuilder`].
+///
+/// The writer accumulates the first up-to-12 bytes of a row in a stack
+/// buffer; if the row stays inline-sized, it never touches the data block.
+/// On the first write that would exceed 12 bytes, the stack buffer is
+/// spilled into the builder's in-progress block and subsequent writes go
+/// directly there.
+pub(crate) struct StringViewWriter<'a> {
+    inline_buf: [u8; 12],
+    inline_len: u8,
+    /// `None` while the row fits inline; becomes `Some(start)` (offset of
+    /// the row's first byte in `in_progress`) at first spill.
+    spill_cursor: Option<usize>,
+    builder: &'a mut StringViewArrayBuilder,
+}
+
+impl StringWriter for StringViewWriter<'_> {
+    #[inline]
+    fn write_str(&mut self, s: &str) {
+        let bytes = s.as_bytes();
+        match self.spill_cursor {
+            None => {
+                let inline_len = self.inline_len as usize;
+                let new_len = inline_len + bytes.len();
+                if new_len <= 12 {
+                    self.inline_buf[inline_len..new_len].copy_from_slice(bytes);
+                    self.inline_len = new_len as u8;
+                } else {
+                    // First spill of this row: reserve capacity (which may
+                    // flush the current block — safe, no row-data is in it
+                    // yet for this row), copy the buffered prefix, then
+                    // write the new bytes.
+                    self.builder.ensure_long_capacity(new_len as u32);
+                    let cursor = self.builder.in_progress.len();
+                    self.builder
+                        .in_progress
+                        .extend_from_slice(&self.inline_buf[..inline_len]);
+                    self.builder.in_progress.extend_from_slice(bytes);
+                    self.spill_cursor = Some(cursor);
+                }
+            }
+            Some(_) => {
+                self.builder.in_progress.extend_from_slice(bytes);
+            }
+        }
+    }
+}
+
 /// Trait abstracting over the bulk-NULL string array builders.
 ///
 /// Similar to Arrow's `StringLikeArrayBuilder`, this allows generic dispatch
 /// over the three string array types (Utf8, LargeUtf8, Utf8View) when the
 /// function body is uniform across them.
 pub(crate) trait BulkNullStringArrayBuilder {
+    /// Per-builder concrete writer type, exposed as a GAT so generic callers
+    /// can use the inherent (non-`dyn`) writer methods without vtable
+    /// dispatch.
+    type Writer<'a>: StringWriter
+    where
+        Self: 'a;
+
     fn append_value(&mut self, value: &str);
     fn append_placeholder(&mut self);
+    fn append_with<F>(&mut self, f: F)
+    where
+        F: for<'a> FnOnce(&mut Self::Writer<'a>);
+    /// # Safety
+    ///
+    /// See [`StringViewArrayBuilder::append_byte_map`] /
+    /// [`GenericStringArrayBuilder::append_byte_map`] — the bytes produced
+    /// by `map` over `src.iter()` must form valid UTF-8.
+    unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F);
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef>;
 }
 
 impl<O: OffsetSizeTrait> BulkNullStringArrayBuilder for GenericStringArrayBuilder<O> {
+    type Writer<'a> = GenericStringWriter<'a>;
+
     #[inline]
     fn append_value(&mut self, value: &str) {
         GenericStringArrayBuilder::<O>::append_value(self, value)
@@ -692,6 +947,18 @@ impl<O: OffsetSizeTrait> BulkNullStringArrayBuilder for GenericStringArrayBuilde
     #[inline]
     fn append_placeholder(&mut self) {
         GenericStringArrayBuilder::<O>::append_placeholder(self)
+    }
+    #[inline]
+    fn append_with<F>(&mut self, f: F)
+    where
+        F: for<'a> FnOnce(&mut Self::Writer<'a>),
+    {
+        GenericStringArrayBuilder::<O>::append_with(self, f)
+    }
+    #[inline]
+    unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
+        // SAFETY: contract forwarded.
+        unsafe { GenericStringArrayBuilder::<O>::append_byte_map(self, src, map) }
     }
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
         Ok(Arc::new(GenericStringArrayBuilder::<O>::finish(
@@ -701,6 +968,8 @@ impl<O: OffsetSizeTrait> BulkNullStringArrayBuilder for GenericStringArrayBuilde
 }
 
 impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
+    type Writer<'a> = StringViewWriter<'a>;
+
     #[inline]
     fn append_value(&mut self, value: &str) {
         StringViewArrayBuilder::append_value(self, value)
@@ -708,6 +977,18 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
     #[inline]
     fn append_placeholder(&mut self) {
         StringViewArrayBuilder::append_placeholder(self)
+    }
+    #[inline]
+    fn append_with<F>(&mut self, f: F)
+    where
+        F: for<'a> FnOnce(&mut Self::Writer<'a>),
+    {
+        StringViewArrayBuilder::append_with(self, f)
+    }
+    #[inline]
+    unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
+        // SAFETY: contract forwarded.
+        unsafe { StringViewArrayBuilder::append_byte_map(self, src, map) }
     }
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
         Ok(Arc::new(StringViewArrayBuilder::finish(self, nulls)?))
@@ -892,6 +1173,54 @@ mod tests {
     }
 
     #[test]
+    fn string_array_builder_append_with_basic() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(4, 32);
+        builder.append_with(|w| w.write_str("hello"));
+        builder.append_placeholder();
+        builder.append_with(|w| {
+            w.write_str("hello ");
+            w.write_str("world");
+        });
+        builder.append_with(|_w| {});
+        let nulls = NullBuffer::from(vec![true, false, true, true]);
+        let array = builder.finish(Some(nulls)).unwrap();
+        assert_eq!(array.len(), 4);
+        assert_eq!(array.value(0), "hello");
+        assert!(array.is_null(1));
+        assert_eq!(array.value(2), "hello world");
+        assert_eq!(array.value(3), "");
+    }
+
+    #[test]
+    fn string_array_builder_append_with_chars() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(2, 16);
+        builder.append_with(|w| {
+            w.write_char('h');
+            w.write_char('é');
+            w.write_char('!');
+        });
+        builder.append_with(|w| w.write_char('x'));
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.value(0), "hé!");
+        assert_eq!(array.value(1), "x");
+    }
+
+    #[test]
+    fn string_array_builder_append_byte_map() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(3, 32);
+        // SAFETY: ASCII inputs and ASCII outputs.
+        unsafe {
+            builder.append_byte_map(b"hello", |b| b.to_ascii_uppercase());
+            builder.append_byte_map(b"abcab", |b| if b == b'b' { b'X' } else { b });
+            builder.append_byte_map(b"", |b| b);
+        }
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.value(0), "HELLO");
+        assert_eq!(array.value(1), "aXcaX");
+        assert_eq!(array.value(2), "");
+    }
+
+    #[test]
     fn large_string_array_builder_with_nulls() {
         let mut builder = GenericStringArrayBuilder::<i64>::with_capacity(3, 8);
         builder.append_value("a");
@@ -984,6 +1313,174 @@ mod tests {
     }
 
     #[test]
+    fn string_view_array_builder_append_with_inline() {
+        // Rows that stay ≤ 12 bytes never touch the data block.
+        let mut builder = StringViewArrayBuilder::with_capacity(4);
+        let inputs = ["hello", "world!", "", "0123456789ab"];
+        for s in &inputs {
+            builder.append_with(|w| w.write_str(s));
+        }
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.len(), inputs.len());
+        for (i, s) in inputs.iter().enumerate() {
+            assert_eq!(array.value(i), *s);
+        }
+        assert_eq!(array.data_buffers().len(), 0);
+    }
+
+    #[test]
+    fn string_view_array_builder_append_byte_map() {
+        let mut builder = StringViewArrayBuilder::with_capacity(4);
+        // SAFETY: ASCII inputs and ASCII outputs in every call.
+        unsafe {
+            builder.append_byte_map(b"hello", |b| b.to_ascii_uppercase());
+            builder.append_byte_map(b"a long string of 25 bytes", |b| {
+                if b == b' ' { b'_' } else { b }
+            });
+            // 12 bytes — exactly at the inline boundary.
+            builder.append_byte_map(b"abcdefghijkl", |b| b);
+            builder.append_byte_map(b"", |b| b);
+        }
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.value(0), "HELLO");
+        assert_eq!(array.value(1), "a_long_string_of_25_bytes");
+        assert_eq!(array.value(2), "abcdefghijkl");
+        assert_eq!(array.value(3), "");
+        assert_eq!(array.data_buffers().len(), 1);
+        assert_eq!(array.data_buffers()[0].len(), 25);
+    }
+
+    #[test]
+    fn string_view_array_builder_append_with_at_inline_boundary() {
+        // Building exactly 12 bytes via several writes should still go inline.
+        let mut builder = StringViewArrayBuilder::with_capacity(2);
+        builder.append_with(|w| {
+            w.write_str("hello");
+            w.write_str(" world!");
+        });
+        builder.append_with(|w| {
+            for _ in 0..6 {
+                w.write_str("ab");
+            }
+        });
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.value(0), "hello world!");
+        assert_eq!(array.value(1), "abababababab");
+        assert_eq!(array.data_buffers().len(), 0);
+    }
+
+    #[test]
+    fn string_view_array_builder_append_with_spill_on_overflow() {
+        // 12 bytes from one write, +1 byte from another → spill at boundary.
+        let mut builder = StringViewArrayBuilder::with_capacity(1);
+        builder.append_with(|w| {
+            w.write_str("hello world!");
+            w.write_str("X");
+        });
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.value(0), "hello world!X");
+        assert_eq!(array.data_buffers().len(), 1);
+        assert_eq!(array.data_buffers()[0].len(), 13);
+    }
+
+    #[test]
+    fn string_view_array_builder_append_with_long_single_write() {
+        // A single write larger than 12 bytes spills immediately with an
+        // empty inline_buf prefix.
+        let mut builder = StringViewArrayBuilder::with_capacity(1);
+        builder.append_with(|w| w.write_str("a long string of 25 bytes"));
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.value(0), "a long string of 25 bytes");
+        assert_eq!(array.data_buffers().len(), 1);
+        assert_eq!(array.data_buffers()[0].len(), 25);
+    }
+
+    #[test]
+    fn string_view_array_builder_append_with_many_small_writes_spilling() {
+        // 30 × "ab" (60 bytes total): first 6 fit inline, remainder spills.
+        let mut builder = StringViewArrayBuilder::with_capacity(1);
+        builder.append_with(|w| {
+            for _ in 0..30 {
+                w.write_str("ab");
+            }
+        });
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.value(0), "ab".repeat(30));
+        assert_eq!(array.data_buffers().len(), 1);
+        assert_eq!(array.data_buffers()[0].len(), 60);
+    }
+
+    #[test]
+    fn string_view_array_builder_append_with_chars() {
+        // write_char with multi-byte UTF-8: row 0 stays inline (3 bytes),
+        // row 1 spills (40 bytes).
+        let mut builder = StringViewArrayBuilder::with_capacity(2);
+        builder.append_with(|w| {
+            w.write_char('é');
+            w.write_char('!');
+        });
+        builder.append_with(|w| {
+            for _ in 0..10 {
+                w.write_char('🦀');
+            }
+        });
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.value(0), "é!");
+        assert_eq!(array.value(1), "🦀".repeat(10));
+    }
+
+    #[test]
+    fn string_view_array_builder_append_with_empty_row() {
+        let mut builder = StringViewArrayBuilder::with_capacity(2);
+        builder.append_with(|_w| {});
+        builder.append_with(|w| w.write_str("nonempty"));
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.value(0), "");
+        assert_eq!(array.value(1), "nonempty");
+        assert_eq!(array.data_buffers().len(), 0);
+    }
+
+    #[test]
+    fn string_view_array_builder_append_with_block_rotation() {
+        // 40 long rows, 500 bytes each, exceeds the first doubled block
+        // (~16 KiB). Forces the builder to rotate blocks between rows.
+        const STR_LEN: usize = 500;
+        const N: usize = 40;
+        let s = "x".repeat(STR_LEN);
+        let mut builder = StringViewArrayBuilder::with_capacity(N);
+        for _ in 0..N {
+            builder.append_with(|w| w.write_str(&s));
+        }
+        let array = builder.finish(None).unwrap();
+        assert_eq!(array.len(), N);
+        assert!(
+            array.data_buffers().len() >= 2,
+            "expected multiple data buffers, got {}",
+            array.data_buffers().len()
+        );
+        let total: usize = array.data_buffers().iter().map(|b| b.len()).sum();
+        assert_eq!(total, N * STR_LEN);
+        for i in 0..N {
+            assert_eq!(array.value(i), s);
+        }
+    }
+
+    #[test]
+    fn string_view_array_builder_append_with_mixed_with_placeholders() {
+        let mut builder = StringViewArrayBuilder::with_capacity(4);
+        builder.append_with(|w| w.write_str("hello"));
+        builder.append_placeholder();
+        builder.append_with(|w| w.write_str("a long string of 25 bytes"));
+        builder.append_with(|_w| {});
+        let nulls = NullBuffer::from(vec![true, false, true, true]);
+        let array = builder.finish(Some(nulls)).unwrap();
+        assert_eq!(array.value(0), "hello");
+        assert!(array.is_null(1));
+        assert_eq!(array.value(2), "a long string of 25 bytes");
+        assert_eq!(array.value(3), "");
+    }
+
+    #[test]
     fn string_view_array_builder_flushes_full_blocks() {
         // Each value is 300 bytes. The first data block is 2 × STRING_VIEW_INIT_BLOCK_SIZE
         // = 16 KiB, so ~50 values saturate it and the rest spill into additional
@@ -1064,5 +1561,34 @@ mod tests {
         assert_eq!(array.value(0), "x");
         assert_eq!(array.value(1), "yy");
         assert_eq!(array.null_count(), 0);
+    }
+
+    /// Exercise `append_with` through the trait against both builder types
+    /// to confirm GAT-based dispatch works.
+    fn build_with_append_with<B: BulkNullStringArrayBuilder>(mut builder: B) -> ArrayRef {
+        builder.append_with(|w| w.write_str("hello"));
+        builder.append_with(|w| {
+            w.write_str("hello ");
+            w.write_str("world!");
+        });
+        builder.finish(None).unwrap()
+    }
+
+    #[test]
+    fn bulk_null_trait_append_with_string() {
+        let builder = GenericStringArrayBuilder::<i32>::with_capacity(2, 32);
+        let array = build_with_append_with(builder);
+        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(array.value(0), "hello");
+        assert_eq!(array.value(1), "hello world!");
+    }
+
+    #[test]
+    fn bulk_null_trait_append_with_string_view() {
+        let builder = StringViewArrayBuilder::with_capacity(2);
+        let array = build_with_append_with(builder);
+        let array = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+        assert_eq!(array.value(0), "hello");
+        assert_eq!(array.value(1), "hello world!");
     }
 }
