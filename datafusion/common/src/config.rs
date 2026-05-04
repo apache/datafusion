@@ -3048,12 +3048,12 @@ impl TryFrom<ConfigFileDecryptionProperties> for FileDecryptionProperties {
         let mut column_keys: Vec<Vec<u8>> = Vec::new();
 
         for (col_name, decryption_properties) in val.column_decryption_properties.iter() {
-            let column_key_as_hex = hex::decode(&decryption_properties.column_key_as_hex).map_err(|e| {
+            let column_key = hex::decode(&decryption_properties.column_key_as_hex).map_err(|e| {
                         DataFusionError::Configuration(format!
                             ("Could not decode hex column key from ConfigFileDecryptionProperties for column name {col_name}: {e}."))
                     })?;
             column_names.push(col_name.as_str());
-            column_keys.push(column_key_as_hex);
+            column_keys.push(column_key);
         }
 
         let footer_key = hex::decode(val.footer_key_as_hex).map_err(|e| {
