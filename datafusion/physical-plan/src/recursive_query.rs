@@ -35,7 +35,7 @@ use crate::{
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -91,10 +91,12 @@ impl RecursiveQueryExec {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
         // Use the same work table for both the WorkTableExec and the recursive term
+        let output_schema =
+            recursive_output_schema(&static_term.schema(), &recursive_term.schema());
+        let static_term = project_plan_to_schema(static_term, &output_schema)?;
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        let recursive_term =
-            project_plan_to_schema(recursive_term, &static_term.schema())?;
-        let cache = Self::compute_properties(static_term.schema());
+        let recursive_term = project_plan_to_schema(recursive_term, &output_schema)?;
+        let cache = Self::compute_properties(output_schema);
         Ok(RecursiveQueryExec {
             name,
             static_term,
@@ -368,6 +370,30 @@ impl RecursiveQueryStream {
     }
 }
 
+fn recursive_output_schema(
+    static_schema: &SchemaRef,
+    recursive_schema: &SchemaRef,
+) -> SchemaRef {
+    let fields = static_schema
+        .fields()
+        .iter()
+        .zip(recursive_schema.fields())
+        .map(|(static_field, recursive_field)| {
+            Field::new(
+                static_field.name(),
+                static_field.data_type().clone(),
+                static_field.is_nullable() || recursive_field.is_nullable(),
+            )
+            .with_metadata(static_field.metadata().clone())
+        })
+        .collect::<Vec<_>>();
+
+    Arc::new(Schema::new_with_metadata(
+        fields,
+        static_schema.metadata().clone(),
+    ))
+}
+
 fn assign_work_table(
     plan: Arc<dyn ExecutionPlan>,
     work_table: &Arc<WorkTable>,
@@ -528,19 +554,21 @@ mod tests {
     }
 
     #[test]
-    fn recursive_query_exec_rejects_nullability_mismatch() {
+    fn recursive_query_exec_reconciles_nullability() -> Result<()> {
         let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
 
-        let err = RecursiveQueryExec::try_new(
+        let exec = RecursiveQueryExec::try_new(
             "numbers".to_string(),
             static_term,
             recursive_term,
             false,
-        )
-        .unwrap_err();
+        )?;
 
-        assert!(err.to_string().contains("field nullability differs"));
+        assert!(exec.schema().field(0).is_nullable());
+        assert!(exec.static_term().schema().field(0).is_nullable());
+        assert!(exec.recursive_term().schema().field(0).is_nullable());
+        Ok(())
     }
 }

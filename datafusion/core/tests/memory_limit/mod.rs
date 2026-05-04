@@ -343,7 +343,7 @@ async fn oom_recursive_cte() {
     TestCase::new()
         .with_query(
             "WITH RECURSIVE nodes AS (
-            SELECT id FROM (VALUES (1), (NULL)) AS t(id) WHERE id IS NOT NULL
+            SELECT 1 as id
             UNION ALL
             SELECT UNNEST(RANGE(id+1, id+1000)) as id
             FROM nodes

@@ -22,7 +22,7 @@ use std::fs::metadata;
 use std::sync::Arc;
 
 use super::SendableRecordBatchStream;
-use crate::expressions::Column;
+use crate::expressions::{CastExpr, Column};
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::stream::RecordBatchReceiverStream;
 use crate::{ColumnStatistics, ExecutionPlan, Statistics};
@@ -91,7 +91,7 @@ fn build_file_list_recurse(
     Ok(())
 }
 
-/// Align `input`'s physical plan schema with `expected_schema` when only field names differ.
+/// Align `input`'s physical plan schema with `expected_schema`.
 ///
 /// This helper is intended for operators that combine independently planned children but
 /// expose a single declared output schema. It returns `input` unchanged when schemas already
@@ -99,10 +99,10 @@ fn build_file_list_recurse(
 /// schema, then wraps `input` in a [`ProjectionExec`] that keeps columns in their existing
 /// positional order and aliases them to `expected_schema`'s field names.
 ///
-/// [`ProjectionExec`] can rename fields but preserves column data types, nullability, field
-/// metadata, and schema metadata from the input expressions. Therefore, this helper rejects
-/// mismatches in those attributes rather than returning a plan whose schema still differs
-/// from `expected_schema`.
+/// [`ProjectionExec`] can rename fields. When the expected field is nullable and the input
+/// field is not, this helper also widens nullability with a same-type [`CastExpr`]. It rejects
+/// differences that projection cannot safely normalize exactly, such as data type, metadata,
+/// schema metadata, and nullability narrowing.
 pub fn project_plan_to_schema(
     input: Arc<dyn ExecutionPlan>,
     expected_schema: &SchemaRef,
@@ -134,7 +134,7 @@ pub fn project_plan_to_schema(
         .find_map(|(i, (input_field, expected_field))| {
             if input_field.data_type() != expected_field.data_type() {
                 Some((i, input_field, expected_field, "data type"))
-            } else if input_field.is_nullable() != expected_field.is_nullable() {
+            } else if input_field.is_nullable() && !expected_field.is_nullable() {
                 Some((i, input_field, expected_field, "nullability"))
             } else if input_field.metadata() != expected_field.metadata() {
                 Some((i, input_field, expected_field, "metadata"))
@@ -157,9 +157,22 @@ pub fn project_plan_to_schema(
         .fields()
         .iter()
         .enumerate()
-        .map(|(i, expected_field)| ProjectionExpr {
-            expr: Arc::new(Column::new(input_schema.field(i).name(), i)),
-            alias: expected_field.name().clone(),
+        .map(|(i, expected_field)| {
+            let input_field = input_schema.field(i);
+            let column = Arc::new(Column::new(input_field.name(), i));
+            let expr = if !input_field.is_nullable() && expected_field.is_nullable() {
+                Arc::new(CastExpr::new_with_target_field(
+                    column,
+                    Arc::clone(expected_field),
+                    None,
+                )) as _
+            } else {
+                column as _
+            };
+            ProjectionExpr {
+                expr,
+                alias: expected_field.name().clone(),
+            }
         })
         .collect::<Vec<_>>();
 
@@ -484,7 +497,22 @@ mod tests {
     }
 
     #[test]
-    fn project_plan_to_schema_errors_on_nullability_mismatch() {
+    fn project_plan_to_schema_widens_nullability() -> Result<()> {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, false)]);
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "renamed",
+            DataType::Int32,
+            true,
+        )]));
+
+        let result = project_plan_to_schema(input, &expected_schema)?;
+
+        assert_eq!(result.schema(), expected_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn project_plan_to_schema_errors_on_nullability_narrowing() {
         let input = empty_exec(vec![Field::new("a", DataType::Int32, true)]);
         let expected_schema = Arc::new(Schema::new(vec![Field::new(
             "renamed",
