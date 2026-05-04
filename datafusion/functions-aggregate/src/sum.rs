@@ -289,10 +289,12 @@ impl AggregateUDFImpl for Sum {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
-                Ok(Box::new(PrimitiveGroupsAccumulator::<$t, _>::new(
-                    &$dt,
-                    |x, y| *x = x.add_wrapping(y),
-                ).with_starting_value_as_identity()))
+                Ok(Box::new(
+                    PrimitiveGroupsAccumulator::<$t, _>::new(&$dt, |x, y| {
+                        *x = x.add_wrapping(y)
+                    })
+                    .with_starting_value_as_identity(),
+                ))
             };
         }
         downcast_sum!(args, helper)
