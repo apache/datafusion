@@ -270,7 +270,7 @@ SELECT floor(1e20::FLOAT), floor(-1e20::FLOAT);
 
 # Negative zero floors to 0 (not -1) since -0.0 == 0.0
 query II
-SELECT floor(-0.0::DOUBLE), floor(-0.0::FLOAT);
+SELECT floor(-0.0::DOUBLE) AS f64, floor(-0.0::FLOAT) AS f32;
 ----
 0 0
 
