@@ -263,7 +263,7 @@ impl<T: DFHeapSize> DFHeapSize for Arc<T> {
         }
 
         // Arc stores weak and strong counts on the heap alongside an instance of T
-        2 * size_of::<usize>() + self.as_ref().heap_size(ctx)
+        2 * size_of::<usize>() + size_of::<T>() + self.as_ref().heap_size(ctx)
     }
 }
 
