@@ -76,21 +76,17 @@ struct UnionsToFilterRewriter;
 impl TreeNodeRewriter for UnionsToFilterRewriter {
     type Node = LogicalPlan;
 
-    fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Distinct(Distinct::All(input)) => {
-                let inner = Arc::unwrap_or_clone(input);
-                match try_rewrite_distinct_union(inner.clone())? {
-                    Some(rewritten) => Ok(Transformed::yes(rewritten)),
-                    None => Ok(Transformed::no(LogicalPlan::Distinct(Distinct::All(
-                        Arc::new(inner),
-                    )))),
-                }
-            }
-            _ => Ok(Transformed::no(plan)),
-        }
-    }
-}
+  fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {                                                                                                                              
+      match &plan {                                                                                                                                                                                        
+          LogicalPlan::Distinct(Distinct::All(input)) => {                                                                                                                                                 
+              match try_rewrite_distinct_union(input.as_ref().clone())? {                                                                                                                                  
+                  Some(rewritten) => Ok(Transformed::yes(rewritten)),                                                                                                                                      
+                  None => Ok(Transformed::no(plan)),                                                                                                                                                       
+              }                                                                                                                                                                                            
+          }                                                                                                                                                                                                
+          _ => Ok(Transformed::no(plan)),                                                                                                                                                                  
+      }                                                                                                                                                                                                    
+  } 
 
 fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
     let LogicalPlan::Union(Union { inputs, schema }) = plan else {
