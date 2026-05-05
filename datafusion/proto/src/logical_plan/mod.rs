@@ -804,9 +804,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(explain.input, ctx, extension_codec)?;
                 let pb_format = protobuf::ExplainFormat::try_from(explain.format)
                     .map_err(|_| {
-                        internal_datafusion_err!(
-                            "Protobuf deserialization error, invalid ExplainFormat"
-                        )
+                        proto_error(format!(
+                            "Received an ExplainNode message with unknown ExplainFormat {}",
+                            explain.format
+                        ))
                     })?;
                 let explain_format = match pb_format {
                     protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
