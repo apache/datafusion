@@ -30,9 +30,10 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
-    if let Err(e) = run_cli(std::env::args()) {
+    if let Err(e) = run_cli(std::env::args()).await {
         eprintln!("{e}");
         std::process::exit(1);
     }

@@ -172,10 +172,10 @@ fn handle_run(
     name: &str,
 ) {
     rt.block_on(async {
-        benchmark
+        let _ = benchmark
             .run(ctx, args.validate)
             .await
-            .unwrap_or_else(|err| panic!("Failed to run benchmark {name}: {err:?}"))
+            .unwrap_or_else(|err| panic!("Failed to run benchmark {name}: {err:?}"));
     });
 }
 
@@ -208,7 +208,7 @@ fn handle_verify(
     info!("Verifying benchmark {name} results ...");
 
     rt.block_on(async {
-        benchmark
+        let _ = benchmark
             .run(ctx, true)
             .await
             .unwrap_or_else(|err| panic!("Failed to run benchmark {name}: {err:?}"));
@@ -281,7 +281,8 @@ async fn load_benchmarks(
     for path in paths {
         debug!("Loading benchmark from {path}");
 
-        let benchmark = SqlBenchmark::new(ctx, &path, &*SQL_BENCHMARK_DIRECTORY).await?;
+        let benchmark =
+            SqlBenchmark::new(ctx, &path, &*SQL_BENCHMARK_DIRECTORY, None).await?;
         let entries = benches
             .entry(benchmark.group().to_string())
             .or_insert(vec![]);

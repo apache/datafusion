@@ -1,9 +1,24 @@
-name = "tpch"
 description = "TPC-H SQL benchmarks"
+
+# Query patterns control how numeric QUERY_ID values map to .benchmark files
+# during discovery and command resolution. Use exactly one query-id token:
+# - {QUERY_ID_PADDED}: two-digit ids, such as q01.benchmark
+# - {QUERY_ID}: unpadded ids, such as query-1.benchmark
+# If omitted, this defaults to q{QUERY_ID_PADDED}.benchmark.
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+# Path replacements define path-like variables used while parsing benchmark
+# files. Relative paths are resolved from this suite file's directory and then
+# passed to SqlBenchmark's replacement mapping, so benchmark SQL can refer to
+# values such as ${DATA_DIR}. For timed runs, the runner's --path/-p option
+# overrides DATA_DIR.
+[path_replacements]
+DATA_DIR = "../../data"
 
 [[options]]
 name = "format"
 short = "f"
+env = "TPCH_FILE_TYPE"
 default = "parquet"
 values = ["parquet", "csv", "mem"]
 help = "Selects the TPC-H data format."
@@ -11,6 +26,23 @@ help = "Selects the TPC-H data format."
 [[options]]
 name = "scale-factor"
 short = "sf"
+env = "BENCH_SIZE"
 default = "1"
 values = ["1", "10"]
 help = "Selects the TPC-H scale factor."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- run tpch"
+description = "Run all TPC-H queries with the default parquet SF1 configuration."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- run tpch 15"
+description = "Run TPC-H query 15 with the default parquet SF1 configuration."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- run tpch 15 -f csv"
+description = "Run TPC-H query 15 against CSV data."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- run tpch 15 -sf 10"
+description = "Run TPC-H query 15 at scale factor 10."
