@@ -333,7 +333,7 @@ impl RecordBatchReceiverStreamBuilder {
         let input_display = if log::log_enabled!(log::Level::Debug) {
             displayable(input.as_ref()).one_line().to_string()
         } else {
-            "".to_owned()
+            String::new()
         };
 
         self.inner.spawn(async move {
