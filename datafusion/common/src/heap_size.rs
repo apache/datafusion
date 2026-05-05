@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_heap_size_arc_str_avoid_double_accounting() {
-        let a1 = Arc::new("Hello".to_string());
+        let a1:  Arc<str> = Arc::from("Hello");
         let mut ctx = DFHeapSizeCtx::default();
         let heap_size = a1.heap_size(&mut ctx);
 
