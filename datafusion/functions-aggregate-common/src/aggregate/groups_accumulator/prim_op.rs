@@ -32,9 +32,8 @@ use crate::aggregate::groups_accumulator::accumulate::{
     BlockedNullState, BooleanBlock, FlatNullState, NullState, SeenValueStore,
 };
 use crate::aggregate::groups_accumulator::block_store::{
-    FlatBlockStore, VecValues, VecValuesBlockStore,
+    BlockedBlockStore, FlatBlockStore, VecValues, VecValuesBlockStore,
 };
-use crate::aggregate::groups_accumulator::blocks::Blocks;
 use crate::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
 };
@@ -187,9 +186,9 @@ type FlatPrimitiveGroupsState<V> = PrimitiveGroupsState<
 
 type BlockedPrimitiveGroupsState<V> = PrimitiveGroupsState<
     V,
-    Blocks<VecValues<V>>,
+    BlockedBlockStore<VecValues<V>>,
     BlockedGroupIndexOperations,
-    Blocks<BooleanBlock>,
+    BlockedBlockStore<BooleanBlock>,
 >;
 
 #[derive(Debug)]
@@ -208,7 +207,7 @@ impl<V: Clone + Debug + Send> PrimitiveGroupsStateAdapter<V> {
 
     fn new_blocked(block_size: usize) -> Self {
         Self::Blocked(PrimitiveGroupsState::new(
-            Blocks::new(block_size),
+            BlockedBlockStore::new(block_size),
             BlockedNullState::new(Some(block_size)),
         ))
     }

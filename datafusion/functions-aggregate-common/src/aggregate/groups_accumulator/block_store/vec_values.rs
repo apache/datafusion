@@ -20,11 +20,12 @@
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, internal_datafusion_err, internal_err};
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
+use crate::aggregate::groups_accumulator::block_store::blocked::BlockedBlockStore;
 use crate::aggregate::groups_accumulator::block_store::{BlockStore, FlatBlockStore};
-use crate::aggregate::groups_accumulator::blocks::{Block, Blocks};
+use crate::aggregate::groups_accumulator::blocks::Block;
 
 /// Newtype for values stored in grouped accumulators.
 ///
@@ -109,15 +110,21 @@ impl<T: Clone + Debug> VecValuesBlockStore<T> for FlatBlockStore<VecValues<T>> {
     }
 }
 
-impl<T: Clone + Debug> VecValuesBlockStore<T> for Blocks<VecValues<T>> {
+impl<T: Clone + Debug> VecValuesBlockStore<T> for BlockedBlockStore<VecValues<T>> {
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<T>> {
-        let values = match emit_to {
-            EmitTo::NextBlock => self
-                .pop_block()
-                .expect("should not try to emit empty blocks")
-                .into_inner(),
-            EmitTo::All | EmitTo::First(_) => emit_to.take_needed(self[0].as_mut_vec()),
-        };
-        Ok(values)
+        match emit_to {
+            EmitTo::NextBlock => {
+                let blk = self
+                    .pop_block()
+                    .ok_or_else(|| internal_datafusion_err!("no more blocks to emit"))?
+                    .into_inner();
+                Ok(blk)
+            }
+            EmitTo::All | EmitTo::First(_) => {
+                internal_err!(
+                    "blocks value block store does not support emitting all or first"
+                )
+            }
+        }
     }
 }

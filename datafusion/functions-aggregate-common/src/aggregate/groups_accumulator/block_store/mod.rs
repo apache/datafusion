@@ -26,7 +26,7 @@ pub mod blocked;
 pub mod flat;
 pub mod vec_values;
 
-pub use blocked::BlockedBlockStore;
+pub use blocked::{BlockedBlockStore, BlockedBlockStore};
 pub use flat::FlatBlockStore;
 pub use vec_values::{VecValues, VecValuesBlockStore};
 

@@ -31,8 +31,8 @@ use arrow::{
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
-use crate::aggregate::groups_accumulator::block_store::{BlockStore, FlatBlockStore};
-use crate::aggregate::groups_accumulator::blocks::{Block, Blocks};
+use crate::aggregate::groups_accumulator::block_store::{BlockStore, BlockedBlockStore, FlatBlockStore};
+use crate::aggregate::groups_accumulator::blocks::Block;
 use crate::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
 };
@@ -142,6 +142,7 @@ impl<S: SeenValueStore> SeenValues<S> {
 
         let builder = match self {
             SeenValues::All { num_values } => {
+                // Switch to `SeenValues::Some` with `num_values` trues
                 let mut builder = S::new(block_size);
                 builder.resize(*num_values, new_block, true);
                 *self = SeenValues::Some { builder };
@@ -550,9 +551,9 @@ pub type FlatNullState =
 ///
 /// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
 ///
-pub type BlockedNullState = NullState<BlockedGroupIndexOperations, Blocks<BooleanBlock>>;
+pub type BlockedNullState = NullState<BlockedGroupIndexOperations, BlockedBlockStore<BooleanBlock>>;
 
-impl SeenValueStore for Blocks<BooleanBlock> {
+impl SeenValueStore for BlockedBlockStore<BooleanBlock> {
     fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
         let nulls = match emit_to {
             EmitTo::All | EmitTo::First(_) => self[0].finish(),
