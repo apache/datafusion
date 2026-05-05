@@ -24,15 +24,21 @@ use std::sync::Arc;
 use super::SendableRecordBatchStream;
 use crate::expressions::{CastExpr, Column};
 use crate::projection::{ProjectionExec, ProjectionExpr};
-use crate::stream::RecordBatchReceiverStream;
-use crate::{ColumnStatistics, ExecutionPlan, Statistics};
+use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
+use crate::{
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, Statistics,
+};
 
 use arrow::array::Array;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, plan_err};
+use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use futures::{StreamExt, TryStreamExt};
 
@@ -94,57 +100,70 @@ fn build_file_list_recurse(
 ///
 /// This helper is intended for operators that combine independently planned children but
 /// expose a single declared output schema. It returns `input` unchanged when schemas already
-/// match exactly. Otherwise, it validates that projection can safely produce the expected
-/// schema, then wraps `input` in a [`ProjectionExec`] that keeps columns in their existing
-/// positional order and aliases them to `expected_schema`'s field names.
+/// match exactly. Otherwise, it validates positional compatibility and uses a plan-time
+/// adapter whose advertised and emitted schema is exactly `expected_schema`.
 ///
-/// [`ProjectionExec`] can rename fields. When the expected field is nullable and the input
-/// field is not, this helper also widens nullability with a same-type [`CastExpr`]. It rejects
-/// differences that projection cannot safely normalize exactly, such as data type, metadata,
-/// schema metadata, and nullability narrowing.
+/// Prefer this helper over rebinding batches inside a parent operator's stream. The alignment
+/// is visible in the physical plan, while batch schema rebinding remains contained in the
+/// adapter as the implementation detail required to uphold the plan-level schema contract.
+///
+/// This helper can align field names and nullability to the declared schema. It rejects
+/// differences that would change values or silently lose schema information, such as column
+/// count, data type, field metadata, or schema metadata mismatches.
+pub fn align_plan_to_schema(
+    input: Arc<dyn ExecutionPlan>,
+    expected_schema: &SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    validate_schema_alignment(&input.schema(), expected_schema, "align")?;
+
+    if input.schema().as_ref() == expected_schema.as_ref() {
+        return Ok(input);
+    }
+
+    if let Ok(projected) = project_plan_to_schema(Arc::clone(&input), expected_schema) {
+        if projected.schema().as_ref() == expected_schema.as_ref() {
+            return Ok(projected);
+        }
+    }
+
+    Ok(Arc::new(SchemaAlignExec::try_new(
+        input,
+        Arc::clone(expected_schema),
+    )?))
+}
+
+/// Project `input` to `expected_schema` when [`ProjectionExec`] can produce that exact schema.
+///
+/// This is a narrower helper than [`align_plan_to_schema`]. It is useful when a positional
+/// projection/alias is sufficient. It rejects requests where projection cannot advertise the
+/// exact expected schema, such as nullability narrowing.
 pub fn project_plan_to_schema(
     input: Arc<dyn ExecutionPlan>,
     expected_schema: &SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let input_schema = input.schema();
+    validate_schema_alignment(&input_schema, expected_schema, "project")?;
+
     if input_schema.as_ref() == expected_schema.as_ref() {
         return Ok(input);
     }
 
-    if input_schema.fields().len() != expected_schema.fields().len() {
-        return plan_err!(
-            "Cannot project plan to expected schema: expected {} column(s), got {}",
-            expected_schema.fields().len(),
-            input_schema.fields().len()
-        );
-    }
-
-    if input_schema.metadata() != expected_schema.metadata() {
-        return plan_err!(
-            "Cannot project plan to expected schema: schema metadata differ"
-        );
-    }
-
-    if let Some((i, input_field, expected_field, mismatch)) = input_schema
+    if let Some((i, input_field, expected_field)) = input_schema
         .fields()
         .iter()
         .zip(expected_schema.fields().iter())
         .enumerate()
         .find_map(|(i, (input_field, expected_field))| {
-            if input_field.data_type() != expected_field.data_type() {
-                Some((i, input_field, expected_field, "data type"))
-            } else if input_field.is_nullable() && !expected_field.is_nullable() {
-                Some((i, input_field, expected_field, "nullability"))
-            } else if input_field.metadata() != expected_field.metadata() {
-                Some((i, input_field, expected_field, "metadata"))
-            } else {
-                None
-            }
+            (input_field.is_nullable() && !expected_field.is_nullable()).then_some((
+                i,
+                input_field,
+                expected_field,
+            ))
         })
     {
         return plan_err!(
             "Cannot project plan column {i} ('{}') to expected output field '{}': \
-             field {mismatch} differs (input field: {:?}, expected field: {:?})",
+             field nullability differs (input field: {:?}, expected field: {:?})",
             input_field.name(),
             expected_field.name(),
             input_field,
@@ -178,6 +197,182 @@ pub fn project_plan_to_schema(
     let projection = ProjectionExec::try_new(projection_exprs, input)?;
     debug_assert_eq!(projection.schema().as_ref(), expected_schema.as_ref());
     Ok(Arc::new(projection))
+}
+
+fn validate_schema_alignment(
+    input_schema: &SchemaRef,
+    expected_schema: &SchemaRef,
+    operation: &str,
+) -> Result<()> {
+    if input_schema.fields().len() != expected_schema.fields().len() {
+        return plan_err!(
+            "Cannot {operation} plan to expected schema: expected {} column(s), got {}",
+            expected_schema.fields().len(),
+            input_schema.fields().len()
+        );
+    }
+
+    if input_schema.metadata() != expected_schema.metadata() {
+        return plan_err!(
+            "Cannot {operation} plan to expected schema: schema metadata differ"
+        );
+    }
+
+    if let Some((i, input_field, expected_field, mismatch)) = input_schema
+        .fields()
+        .iter()
+        .zip(expected_schema.fields().iter())
+        .enumerate()
+        .find_map(|(i, (input_field, expected_field))| {
+            if input_field.data_type() != expected_field.data_type() {
+                Some((i, input_field, expected_field, "data type"))
+            } else if input_field.metadata() != expected_field.metadata() {
+                Some((i, input_field, expected_field, "metadata"))
+            } else {
+                None
+            }
+        })
+    {
+        return plan_err!(
+            "Cannot {operation} plan column {i} ('{}') to expected output field '{}': \
+             field {mismatch} differs (input field: {:?}, expected field: {:?})",
+            input_field.name(),
+            expected_field.name(),
+            input_field,
+            expected_field
+        );
+    }
+
+    Ok(())
+}
+
+/// Plan-time schema adapter for positional schema alignment.
+///
+/// [`ProjectionExec`] cannot express every schema-only alignment. In particular, a column
+/// expression remains nullable when its input field is nullable, so projection cannot advertise
+/// a non-null expected field. This adapter is for cases where the operator-level contract has
+/// already established that columns are positionally compatible and the child plan must expose
+/// the declared schema exactly.
+#[derive(Debug, Clone)]
+pub struct SchemaAlignExec {
+    input: Arc<dyn ExecutionPlan>,
+    schema: SchemaRef,
+    cache: Arc<PlanProperties>,
+}
+
+impl SchemaAlignExec {
+    /// Create a new schema alignment adapter.
+    pub fn try_new(input: Arc<dyn ExecutionPlan>, schema: SchemaRef) -> Result<Self> {
+        validate_schema_alignment(&input.schema(), &schema, "align")?;
+
+        let input_properties = input.properties();
+        let partitioning = match &input_properties.partitioning {
+            Partitioning::RoundRobinBatch(partitions) => {
+                Partitioning::RoundRobinBatch(*partitions)
+            }
+            Partitioning::Hash(_, partitions)
+            | Partitioning::UnknownPartitioning(partitions) => {
+                Partitioning::UnknownPartitioning(*partitions)
+            }
+        };
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(Arc::clone(&schema)),
+            partitioning,
+            input_properties.emission_type,
+            input_properties.boundedness,
+        )
+        .with_evaluation_type(input_properties.evaluation_type)
+        .with_scheduling_type(input_properties.scheduling_type);
+
+        Ok(Self {
+            input,
+            schema,
+            cache: Arc::new(properties),
+        })
+    }
+
+    /// Input plan being aligned.
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+}
+
+impl DisplayAs for SchemaAlignExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "SchemaAlignExec")
+            }
+            DisplayFormatType::TreeRender => write!(f, ""),
+        }
+    }
+}
+
+impl ExecutionPlan for SchemaAlignExec {
+    fn name(&self) -> &'static str {
+        "SchemaAlignExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let [input] = children.try_into().map_err(|children: Vec<_>| {
+            datafusion_common::DataFusionError::Internal(format!(
+                "SchemaAlignExec expected 1 child, got {}",
+                children.len()
+            ))
+        })?;
+        Ok(Arc::new(Self::try_new(input, Arc::clone(&self.schema))?))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let schema = Arc::clone(&self.schema);
+        let stream = self.input.execute(partition, context)?.map({
+            let schema = Arc::clone(&schema);
+            move |batch| {
+                let batch = batch?;
+                if batch.schema().as_ref() == schema.as_ref() {
+                    Ok(batch)
+                } else {
+                    RecordBatch::try_new(Arc::clone(&schema), batch.columns().to_vec())
+                        .map_err(Into::into)
+                }
+            }
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        self.input.partition_statistics(partition)
+    }
 }
 
 /// If running in a tokio context spawns the execution of `stream` to a separate task
@@ -521,6 +716,25 @@ mod tests {
 
         let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
         assert!(err.to_string().contains("field nullability differs"));
+    }
+
+    #[test]
+    fn align_plan_to_schema_uses_adapter_for_nullability_narrowing() -> Result<()> {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, true)]);
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "renamed",
+            DataType::Int32,
+            false,
+        )]));
+
+        let result = align_plan_to_schema(Arc::clone(&input), &expected_schema)?;
+
+        let aligned = result
+            .downcast_ref::<SchemaAlignExec>()
+            .expect("nullability narrowing should use SchemaAlignExec");
+        assert!(Arc::ptr_eq(aligned.input(), &input));
+        assert_eq!(aligned.schema(), expected_schema);
+        Ok(())
     }
 
     #[test]

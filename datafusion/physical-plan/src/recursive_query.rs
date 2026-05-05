@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::common::project_plan_to_schema;
+use crate::common::align_plan_to_schema;
 use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
@@ -35,7 +35,7 @@ use crate::{
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -90,13 +90,13 @@ impl RecursiveQueryExec {
     ) -> Result<Self> {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
-        // Use the same work table for both the WorkTableExec and the recursive term
-        let output_schema =
-            recursive_output_schema(&static_term.schema(), &recursive_term.schema());
-        let static_term = project_plan_to_schema(static_term, &output_schema)?;
+        // Use the static term as the declared recursive CTE output schema. The
+        // recursive term is planned independently, so align it at plan construction
+        // time instead of patching batches in RecursiveQueryStream.
+        let output_schema = static_term.schema();
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        let recursive_term = project_plan_to_schema(recursive_term, &output_schema)?;
-        let cache = Self::compute_properties(output_schema);
+        let recursive_term = align_plan_to_schema(recursive_term, &output_schema)?;
+        let cache = Self::compute_properties(Arc::clone(&output_schema));
         Ok(RecursiveQueryExec {
             name,
             static_term,
@@ -370,30 +370,6 @@ impl RecursiveQueryStream {
     }
 }
 
-fn recursive_output_schema(
-    static_schema: &SchemaRef,
-    recursive_schema: &SchemaRef,
-) -> SchemaRef {
-    let fields = static_schema
-        .fields()
-        .iter()
-        .zip(recursive_schema.fields())
-        .map(|(static_field, recursive_field)| {
-            Field::new(
-                static_field.name(),
-                static_field.data_type().clone(),
-                static_field.is_nullable() || recursive_field.is_nullable(),
-            )
-            .with_metadata(static_field.metadata().clone())
-        })
-        .collect::<Vec<_>>();
-
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        static_schema.metadata().clone(),
-    ))
-}
-
 fn assign_work_table(
     plan: Arc<dyn ExecutionPlan>,
     work_table: &Arc<WorkTable>,
@@ -520,6 +496,7 @@ fn new_groups_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::SchemaAlignExec;
     use crate::empty::EmptyExec;
     use crate::projection::ProjectionExec;
 
@@ -554,21 +531,27 @@ mod tests {
     }
 
     #[test]
-    fn recursive_query_exec_reconciles_nullability() -> Result<()> {
+    fn recursive_query_exec_preserves_static_nullability_contract() -> Result<()> {
         let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
 
         let exec = RecursiveQueryExec::try_new(
             "numbers".to_string(),
-            static_term,
-            recursive_term,
+            Arc::clone(&static_term),
+            Arc::clone(&recursive_term),
             false,
         )?;
 
-        assert!(exec.schema().field(0).is_nullable());
-        assert!(exec.static_term().schema().field(0).is_nullable());
-        assert!(exec.recursive_term().schema().field(0).is_nullable());
+        assert_eq!(exec.schema(), static_term.schema());
+        assert_eq!(exec.static_term().schema(), static_term.schema());
+        assert_eq!(exec.recursive_term().schema(), static_term.schema());
+        assert!(!exec.schema().field(0).is_nullable());
+        let aligned = exec
+            .recursive_term()
+            .downcast_ref::<SchemaAlignExec>()
+            .expect("nullable recursive term should be aligned with SchemaAlignExec");
+        assert!(Arc::ptr_eq(aligned.input(), &recursive_term));
         Ok(())
     }
 }
