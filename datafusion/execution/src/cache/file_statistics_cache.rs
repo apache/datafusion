@@ -599,7 +599,7 @@ mod tests {
                         num_rows: Precision::Absent,
                         num_columns: 1,
                         table_size_bytes: Precision::Absent,
-                        statistics_size_bytes: 304,
+                        statistics_size_bytes: 360,
                         has_ordering: false,
                     }
                 ),
@@ -610,7 +610,7 @@ mod tests {
                         num_rows: Precision::Absent,
                         num_columns: 1,
                         table_size_bytes: Precision::Absent,
-                        statistics_size_bytes: 304,
+                        statistics_size_bytes: 360,
                         has_ordering: true,
                     }
                 ),
