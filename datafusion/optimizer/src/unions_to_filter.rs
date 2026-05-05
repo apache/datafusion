@@ -28,7 +28,6 @@ use datafusion_expr::{
     Distinct, Expr, Filter, LogicalPlan, Projection, SubqueryAlias, Union,
 };
 use log::debug;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Default, Debug)]
@@ -76,17 +75,18 @@ struct UnionsToFilterRewriter;
 impl TreeNodeRewriter for UnionsToFilterRewriter {
     type Node = LogicalPlan;
 
-  fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {                                                                                                                              
-      match &plan {                                                                                                                                                                                        
-          LogicalPlan::Distinct(Distinct::All(input)) => {                                                                                                                                                 
-              match try_rewrite_distinct_union(input.as_ref().clone())? {                                                                                                                                  
-                  Some(rewritten) => Ok(Transformed::yes(rewritten)),                                                                                                                                      
-                  None => Ok(Transformed::no(plan)),                                                                                                                                                       
-              }                                                                                                                                                                                            
-          }                                                                                                                                                                                                
-          _ => Ok(Transformed::no(plan)),                                                                                                                                                                  
-      }                                                                                                                                                                                                    
-  } 
+    fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        match &plan {
+            LogicalPlan::Distinct(Distinct::All(input)) => {
+                match try_rewrite_distinct_union(input.as_ref().clone())? {
+                    Some(rewritten) => Ok(Transformed::yes(rewritten)),
+                    None => Ok(Transformed::no(plan)),
+                }
+            }
+            _ => Ok(Transformed::no(plan)),
+        }
+    }
+}
 
 fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
     let LogicalPlan::Union(Union { inputs, schema }) = plan else {
@@ -102,8 +102,10 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
         return Ok(None);
     }
 
-    let mut grouped: HashMap<GroupKey, Vec<Expr>> = HashMap::new();
-    let mut input_order: Vec<GroupKey> = Vec::new();
+    // Use a Vec instead of HashMap: union branches are typically 2-10 entries,
+    // so a linear scan with PartialEq is faster than recursively hashing entire
+    // LogicalPlan subtrees (O(N * tree_size) hashing for every insert/lookup).
+    let mut grouped: Vec<(GroupKey, Vec<Expr>)> = Vec::new();
     let mut transformed = false;
 
     for input in inputs {
@@ -115,12 +117,11 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
             source: branch.source,
             wrappers: branch.wrappers,
         };
-        if let Some(conds) = grouped.get_mut(&key) {
+        if let Some((_, conds)) = grouped.iter_mut().find(|(k, _)| k == &key) {
             conds.push(branch.predicate);
             transformed = true;
         } else {
-            input_order.push(key.clone());
-            grouped.insert(key, vec![branch.predicate]);
+            grouped.push((key, vec![branch.predicate]));
         }
     }
 
@@ -130,10 +131,7 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
     }
 
     let mut builder: Option<LogicalPlanBuilder> = None;
-    for key in input_order {
-        let predicates = grouped
-            .remove(&key)
-            .expect("grouped predicates should exist for every source");
+    for (key, predicates) in grouped {
         let combined =
             disjunction(predicates).expect("union branches always provide predicates");
         let branch = LogicalPlanBuilder::from(key.source)
@@ -203,7 +201,7 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
             Ok(None)
         }
         other => Ok(Some(UnionBranch {
-            source: strip_passthrough_nodes(other.clone()),
+            source: strip_passthrough_nodes(other),
             predicate: Expr::Literal(
                 datafusion_common::ScalarValue::Boolean(Some(true)),
                 None,
@@ -213,13 +211,13 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct GroupKey {
     source: LogicalPlan,
     wrappers: Vec<Wrapper>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Wrapper {
     Projection {
         expr: Vec<Expr>,
@@ -268,6 +266,10 @@ fn wrap_branch(mut plan: LogicalPlan, wrappers: &[Wrapper]) -> Result<LogicalPla
                     Arc::clone(schema),
                 )?)
             }
+            // SubqueryAlias::try_new recomputes the schema from the new input.
+            // This is safe because the source table is unchanged; only the
+            // filter predicate differs, so the recomputed schema matches the
+            // original one stored in peel_wrappers.
             Wrapper::SubqueryAlias { alias, .. } => LogicalPlan::SubqueryAlias(
                 SubqueryAlias::try_new(Arc::new(plan), alias.clone())?,
             ),
@@ -276,15 +278,17 @@ fn wrap_branch(mut plan: LogicalPlan, wrappers: &[Wrapper]) -> Result<LogicalPla
     Ok(plan)
 }
 
-fn strip_passthrough_nodes(plan: LogicalPlan) -> LogicalPlan {
-    match plan {
-        LogicalPlan::Projection(Projection { input, .. }) => {
-            strip_passthrough_nodes(Arc::unwrap_or_clone(input))
-        }
-        LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
-            strip_passthrough_nodes(Arc::unwrap_or_clone(input))
-        }
-        other => other,
+fn strip_passthrough_nodes(mut plan: LogicalPlan) -> LogicalPlan {
+    loop {
+        plan = match plan {
+            LogicalPlan::Projection(Projection { input, .. }) => {
+                Arc::unwrap_or_clone(input)
+            }
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
+                Arc::unwrap_or_clone(input)
+            }
+            other => return other,
+        };
     }
 }
 
