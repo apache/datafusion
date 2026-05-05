@@ -45,7 +45,7 @@ pub struct RunOpt {
     pub query: Option<usize>,
 
     /// Output path for the JSON benchmark summary.
-    #[clap(short = 'o', long)]
+    #[arg(short = 'o', long = "output")]
     pub output_path: Option<PathBuf>,
 
     #[clap(flatten)]
@@ -91,14 +91,20 @@ impl Cardinality {
     }
 }
 
+/// `generate_dict` arguments for one dictionary column.
+#[derive(Debug)]
+pub struct DictColParams {
+    pub value_type: DictValueType,
+    pub null_percent: NullPercent,
+    pub cardinality: Cardinality,
+}
+
 #[derive(Debug)]
 pub struct DictionaryQuery {
     pub name: &'static str,
-    pub value_type: DictValueType,
-    /// Value type for a second dictionary column; `None` for single-column queries.
-    pub value_type2: Option<DictValueType>,
-    pub null_percent: NullPercent,
-    pub cardinality: Cardinality,
+    pub col: DictColParams,
+    /// Params for a second dictionary column; `None` for single-column queries.
+    pub col2: Option<DictColParams>,
     pub sql: &'static str,
 }
 
@@ -106,42 +112,52 @@ pub const DICTIONARY_QUERIES: &[DictionaryQuery] = &[
     // single-column group-by: Utf8
     DictionaryQuery {
         name: "group_by_utf8_card5_no_nulls",
-        value_type: DictValueType::Utf8,
-        value_type2: None,
-        null_percent: NullPercent::Zero,
-        cardinality: Cardinality::Five,
+        col: DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Zero,
+            cardinality: Cardinality::Five,
+        },
+        col2: None,
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
     DictionaryQuery {
         name: "group_by_utf8_card10_no_nulls",
-        value_type: DictValueType::Utf8,
-        value_type2: None,
-        null_percent: NullPercent::Zero,
-        cardinality: Cardinality::Ten,
+        col: DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Zero,
+            cardinality: Cardinality::Ten,
+        },
+        col2: None,
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
     DictionaryQuery {
         name: "group_by_utf8_card25_no_nulls",
-        value_type: DictValueType::Utf8,
-        value_type2: None,
-        null_percent: NullPercent::Zero,
-        cardinality: Cardinality::TwentyFive,
+        col: DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Zero,
+            cardinality: Cardinality::TwentyFive,
+        },
+        col2: None,
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
     DictionaryQuery {
         name: "group_by_utf8_card5_null15",
-        value_type: DictValueType::Utf8,
-        value_type2: None,
-        null_percent: NullPercent::Fifteen,
-        cardinality: Cardinality::Five,
+        col: DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Fifteen,
+            cardinality: Cardinality::Five,
+        },
+        col2: None,
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
     DictionaryQuery {
         name: "group_by_utf8_card25_null15",
-        value_type: DictValueType::Utf8,
-        value_type2: None,
-        null_percent: NullPercent::Fifteen,
-        cardinality: Cardinality::TwentyFive,
+        col: DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Fifteen,
+            cardinality: Cardinality::TwentyFive,
+        },
+        col2: None,
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
     // currently not supported by GroupValuesRows,
@@ -150,61 +166,91 @@ pub const DICTIONARY_QUERIES: &[DictionaryQuery] = &[
     /*
     DictionaryQuery {
         name: "group_by_list_utf8_card5_no_nulls",
-        value_type: DictValueType::ListUtf8,
-        value_type2: None,
-        null_percent: NullPercent::Zero,
-        cardinality: Cardinality::Five,
+        col: DictColParams {
+            value_type: DictValueType::ListUtf8,
+            null_percent: NullPercent::Zero,
+            cardinality: Cardinality::Five,
+        },
+        col2: None,
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
     DictionaryQuery {
         name: "group_by_list_utf8_card10_no_nulls",
-        value_type: DictValueType::ListUtf8,
-        value_type2: None,
-        null_percent: NullPercent::Zero,
-        cardinality: Cardinality::Ten,
+        col: DictColParams {
+            value_type: DictValueType::ListUtf8,
+            null_percent: NullPercent::Zero,
+            cardinality: Cardinality::Ten,
+        },
+        col2: None,
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
     DictionaryQuery {
         name: "group_by_list_utf8_card25_null15",
-        value_type: DictValueType::ListUtf8,
-        value_type2: None,
-        null_percent: NullPercent::Fifteen,
-        cardinality: Cardinality::TwentyFive,
+        col: DictColParams {
+            value_type: DictValueType::ListUtf8,
+            null_percent: NullPercent::Fifteen,
+            cardinality: Cardinality::TwentyFive,
+        },
+        col2: None,
         sql: r#"SELECT dict_col, COUNT(*) FROM test_data GROUP BY dict_col"#,
     },
     */
     DictionaryQuery {
         name: "group_by_two_utf8_card5_no_nulls",
-        value_type: DictValueType::Utf8,
-        value_type2: Some(DictValueType::Utf8),
-        null_percent: NullPercent::Zero,
-        cardinality: Cardinality::Five,
+        col: DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Zero,
+            cardinality: Cardinality::Five,
+        },
+        col2: Some(DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Fifteen,
+            cardinality: Cardinality::Ten,
+        }),
         sql: r#"SELECT dict_col, dict_col2, COUNT(*) FROM test_data GROUP BY dict_col, dict_col2"#,
     },
     DictionaryQuery {
         name: "group_by_two_utf8_card25_null15",
-        value_type: DictValueType::Utf8,
-        value_type2: Some(DictValueType::Utf8),
-        null_percent: NullPercent::Fifteen,
-        cardinality: Cardinality::TwentyFive,
+        col: DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Fifteen,
+            cardinality: Cardinality::TwentyFive,
+        },
+        col2: Some(DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Zero,
+            cardinality: Cardinality::Five,
+        }),
         sql: r#"SELECT dict_col, dict_col2, COUNT(*) FROM test_data GROUP BY dict_col, dict_col2"#,
     },
     // --- multi-column group-by: Utf8 + List<Utf8> ----------------------------
     /*
     DictionaryQuery {
         name: "group_by_utf8_and_list_utf8_card10_null15",
-        value_type: DictValueType::Utf8,
-        value_type2: Some(DictValueType::ListUtf8),
-        null_percent: NullPercent::Fifteen,
-        cardinality: Cardinality::Ten,
+        col: DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Fifteen,
+            cardinality: Cardinality::Ten,
+        },
+        col2: Some(DictColParams {
+            value_type: DictValueType::ListUtf8,
+            null_percent: NullPercent::Zero,
+            cardinality: Cardinality::Five,
+        }),
         sql: r#"SELECT dict_col, dict_col2, COUNT(*) FROM test_data GROUP BY dict_col, dict_col2"#,
     },
     DictionaryQuery {
         name: "group_by_utf8_and_list_utf8_card25_no_nulls",
-        value_type: DictValueType::Utf8,
-        value_type2: Some(DictValueType::ListUtf8),
-        null_percent: NullPercent::Zero,
-        cardinality: Cardinality::TwentyFive,
+        col: DictColParams {
+            value_type: DictValueType::Utf8,
+            null_percent: NullPercent::Zero,
+            cardinality: Cardinality::TwentyFive,
+        },
+        col2: Some(DictColParams {
+            value_type: DictValueType::ListUtf8,
+            null_percent: NullPercent::Fifteen,
+            cardinality: Cardinality::Ten,
+        }),
         sql: r#"SELECT dict_col, dict_col2, COUNT(*) FROM test_data GROUP BY dict_col, dict_col2"#,
     },
     */
@@ -323,7 +369,7 @@ impl RunOpt {
         ctx.deregister_table("test_data")?;
         ctx.register_batch("test_data", batch)?;
 
-        if query.value_type2.is_some() && schema.field_with_name("dict_col2").is_err() {
+        if query.col2.is_some() && schema.field_with_name("dict_col2").is_err() {
             return exec_err!(
                 "Query '{}' expects dict_col2 but it is missing from the schema",
                 query.name
@@ -350,13 +396,13 @@ impl RunOpt {
         let size = self.num_rows;
 
         let col1 = generate_dict(
-            query.value_type,
-            query.cardinality,
-            query.null_percent,
+            query.col.value_type,
+            query.col.cardinality,
+            query.col.null_percent,
             size,
         );
 
-        let (schema, columns): (Schema, Vec<ArrayRef>) = match query.value_type2 {
+        let (schema, columns): (Schema, Vec<ArrayRef>) = match &query.col2 {
             None => {
                 let schema = Schema::new(vec![Field::new(
                     "dict_col",
@@ -365,11 +411,11 @@ impl RunOpt {
                 )]);
                 (schema, vec![col1])
             }
-            Some(value_type2) => {
+            Some(col2_params) => {
                 let col2 = generate_dict(
-                    value_type2,
-                    query.cardinality,
-                    query.null_percent,
+                    col2_params.value_type,
+                    col2_params.cardinality,
+                    col2_params.null_percent,
                     size,
                 );
                 let schema = Schema::new(vec![
