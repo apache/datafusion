@@ -25,9 +25,18 @@ use crate::cache::{
     lru_queue::LruQueue,
 };
 
+/// Internal cache value: the entry plus its precomputed memory size, so we
+/// don't have to call [`FileMetadata::memory_size`] (which walks the entire
+/// metadata structure) on every put / remove / eviction.
+#[derive(Clone)]
+struct SizedCacheEntry {
+    entry: CachedFileMetadataEntry,
+    size: usize,
+}
+
 /// Handles the inner state of the [`DefaultFilesMetadataCache`] struct.
 struct DefaultFilesMetadataCacheState {
-    lru_queue: LruQueue<Path, CachedFileMetadataEntry>,
+    lru_queue: LruQueue<Path, SizedCacheEntry>,
     memory_limit: usize,
     memory_used: usize,
     cache_hits: HashMap<Path, usize>,
@@ -46,7 +55,7 @@ impl DefaultFilesMetadataCacheState {
     /// Returns the respective entry from the cache, if it exists.
     /// If the entry exists, it becomes the most recently used.
     fn get(&mut self, k: &Path) -> Option<CachedFileMetadataEntry> {
-        self.lru_queue.get(k).cloned().inspect(|_| {
+        self.lru_queue.get(k).map(|sized| sized.entry.clone()).inspect(|_| {
             *self.cache_hits.entry(k.clone()).or_insert(0) += 1;
         })
     }
@@ -65,6 +74,8 @@ impl DefaultFilesMetadataCacheState {
         key: Path,
         value: CachedFileMetadataEntry,
     ) -> Option<CachedFileMetadataEntry> {
+        // Compute the size once and store it on the entry so the eviction
+        // path can reuse it without re-walking the metadata.
         let value_size = value.file_metadata.memory_size();
 
         // no point in trying to add this value to the cache if it cannot fit entirely
@@ -73,23 +84,27 @@ impl DefaultFilesMetadataCacheState {
         }
 
         self.cache_hits.insert(key.clone(), 0);
+        let sized = SizedCacheEntry {
+            entry: value,
+            size: value_size,
+        };
         // if the key is already in the cache, the old value is removed
-        let old_value = self.lru_queue.put(key, value);
+        let old_value = self.lru_queue.put(key, sized);
         self.memory_used += value_size;
-        if let Some(ref old_entry) = old_value {
-            self.memory_used -= old_entry.file_metadata.memory_size();
+        if let Some(ref old) = old_value {
+            self.memory_used -= old.size;
         }
 
         self.evict_entries();
 
-        old_value
+        old_value.map(|s| s.entry)
     }
 
     /// Evicts entries from the LRU cache until `memory_used` is lower than `memory_limit`.
     fn evict_entries(&mut self) {
         while self.memory_used > self.memory_limit {
             if let Some(removed) = self.lru_queue.pop() {
-                self.memory_used -= removed.1.file_metadata.memory_size();
+                self.memory_used -= removed.1.size;
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
                 debug_assert!(
@@ -103,10 +118,10 @@ impl DefaultFilesMetadataCacheState {
 
     /// Removes an entry from the cache and returns it, if it exists.
     fn remove(&mut self, k: &Path) -> Option<CachedFileMetadataEntry> {
-        if let Some(old_entry) = self.lru_queue.remove(k) {
-            self.memory_used -= old_entry.file_metadata.memory_size();
+        if let Some(old) = self.lru_queue.remove(k) {
+            self.memory_used -= old.size;
             self.cache_hits.remove(k);
-            Some(old_entry)
+            Some(old.entry)
         } else {
             None
         }
@@ -220,14 +235,14 @@ impl FileMetadataCache for DefaultFilesMetadataCache {
         let state = self.state.lock().unwrap();
         let mut entries = HashMap::<Path, FileMetadataCacheEntry>::new();
 
-        for (path, entry) in state.lru_queue.list_entries() {
+        for (path, sized) in state.lru_queue.list_entries() {
             entries.insert(
                 path.clone(),
                 FileMetadataCacheEntry {
-                    object_meta: entry.meta.clone(),
-                    size_bytes: entry.file_metadata.memory_size(),
+                    object_meta: sized.entry.meta.clone(),
+                    size_bytes: sized.size,
                     hits: *state.cache_hits.get(path).expect("entry must exist"),
-                    extra: entry.file_metadata.extra_info(),
+                    extra: sized.entry.file_metadata.extra_info(),
                 },
             );
         }

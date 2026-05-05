@@ -289,3 +289,22 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+[patch.crates-io]
+arrow = { path = "../../../../arrow-rs/arrow" }
+arrow-arith = { path = "../../../../arrow-rs/arrow-arith" }
+arrow-array = { path = "../../../../arrow-rs/arrow-array" }
+arrow-avro = { path = "../../../../arrow-rs/arrow-avro" }
+arrow-buffer = { path = "../../../../arrow-rs/arrow-buffer" }
+arrow-cast = { path = "../../../../arrow-rs/arrow-cast" }
+arrow-csv = { path = "../../../../arrow-rs/arrow-csv" }
+arrow-data = { path = "../../../../arrow-rs/arrow-data" }
+arrow-flight = { path = "../../../../arrow-rs/arrow-flight" }
+arrow-ipc = { path = "../../../../arrow-rs/arrow-ipc" }
+arrow-json = { path = "../../../../arrow-rs/arrow-json" }
+arrow-ord = { path = "../../../../arrow-rs/arrow-ord" }
+arrow-row = { path = "../../../../arrow-rs/arrow-row" }
+arrow-schema = { path = "../../../../arrow-rs/arrow-schema" }
+arrow-select = { path = "../../../../arrow-rs/arrow-select" }
+arrow-string = { path = "../../../../arrow-rs/arrow-string" }
+parquet = { path = "../../../../arrow-rs/parquet" }

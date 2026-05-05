@@ -100,6 +100,8 @@ sort_tpch:              Benchmark of sorting speed for end-to-end sort queries o
 sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
 topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
+wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
+                          (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
@@ -238,6 +240,9 @@ main() {
                     ;;
                 tpch_csv10)
                     data_tpch "10" "csv"
+                    ;;
+                wide_schema)
+                    data_wide_schema
                     ;;
                 tpcds)
                     data_tpcds
@@ -443,6 +448,9 @@ main() {
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
+                    ;;
+                wide_schema)
+                    run_wide_schema
                     ;;
                 tpcds)
                     run_tpcds
@@ -694,6 +702,68 @@ run_tpch() {
       DATA_DIR="${DATA_DIR}" \
       PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       TPCH_FILE_TYPE="${FORMAT}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Synthesizes two parquet datasets used to measure per-file metadata
+# overhead of a wide schema:
+#
+#   - data/wide_schema/wide/    1024-col events × 256 files (~225 MB)
+#   - data/wide_schema/narrow/    8-col events × 256 files (~110 MB)
+#
+# Both share row count, file count, and per-file row-group shape; only
+# schema width differs. No external data source required — gen_wide_data
+# synthesizes everything from scratch in ~60 s.
+data_wide_schema() {
+    NUM_FILES=256
+    ROWS_PER_FILE=50000
+    WIDTH_FACTOR=128
+
+    DST_DIR="${DATA_DIR}/wide_schema"
+    WIDE_DIR="${DST_DIR}/wide"
+    NARROW_DIR="${DST_DIR}/narrow"
+
+    if [ -d "${WIDE_DIR}" ] && [ "$(ls -A "${WIDE_DIR}" 2>/dev/null | wc -l)" -ge ${NUM_FILES} ]; then
+        echo " wide parquet exists (${WIDE_DIR})."
+    else
+        mkdir -p "${WIDE_DIR}"
+        echo " synthesizing wide -> ${WIDE_DIR} (factor ${WIDTH_FACTOR}, ${NUM_FILES} files × ${ROWS_PER_FILE} rows) ..."
+        debug_run $CARGO_COMMAND --bin gen_wide_data -- \
+            --dst-dir "${WIDE_DIR}" \
+            --width-factor ${WIDTH_FACTOR} \
+            --num-files ${NUM_FILES} \
+            --rows-per-file ${ROWS_PER_FILE}
+    fi
+
+    if [ -d "${NARROW_DIR}" ] && [ "$(ls -A "${NARROW_DIR}" 2>/dev/null | wc -l)" -ge ${NUM_FILES} ]; then
+        echo " narrow parquet exists (${NARROW_DIR})."
+    else
+        mkdir -p "${NARROW_DIR}"
+        echo " synthesizing narrow -> ${NARROW_DIR} (8 base cols, ${NUM_FILES} files × ${ROWS_PER_FILE} rows) ..."
+        debug_run $CARGO_COMMAND --bin gen_wide_data -- \
+            --dst-dir "${NARROW_DIR}" \
+            --width-factor 1 \
+            --num-files ${NUM_FILES} \
+            --rows-per-file ${ROWS_PER_FILE}
+    fi
+}
+
+# Runs the wide_schema benchmark. Each query has a `subgroup`
+# directive that picks up BENCH_SUBGROUP, so we invoke the framework
+# twice — once with subgroup=wide (the actual workload) and once with
+# subgroup=narrow (the baseline). The wide-only queries (Q02/Q08/Q11/Q12)
+# hardcode `subgroup wide`, so they're skipped on the narrow pass.
+run_wide_schema() {
+    echo "Running wide_schema benchmark (wide subgroup)..."
+    debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=wide \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+
+    echo "Running wide_schema benchmark (narrow baseline subgroup)..."
+    debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=narrow \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"

@@ -36,12 +36,15 @@ use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumula
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::Accumulator;
-use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
+use parquet::arrow::{
+    ProjectionMask, parquet_column, parquet_to_arrow_schema,
+    parquet_to_arrow_schema_and_field_levels,
+};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, RowGroupMetaData,
     SortingColumn,
@@ -49,7 +52,7 @@ use parquet::file::metadata::{
 use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Minimum fraction of row groups that must report NDV statistics for the
 /// merged result to be `Inexact` rather than `Absent`, as the estimate
@@ -329,37 +332,43 @@ impl<'a> DFParquetMetadata<'a> {
                     vec![Some(true); logical_file_schema.fields().len()];
                 let mut distinct_counts_array =
                     vec![Precision::Absent; logical_file_schema.fields().len()];
+
+                // Resolve each logical field to its parquet leaf index once
+                // (O(N) total instead of an O(N) name lookup inside the
+                // per-field loop below). For wide schemas this is the
+                // difference between O(N) and O(N^2) per file.
+                let parquet_schema = file_metadata.schema_descr();
+                let parquet_indices = build_logical_to_parquet_index(
+                    logical_file_schema,
+                    &physical_file_schema,
+                    parquet_schema,
+                );
+
                 logical_file_schema.fields().iter().enumerate().for_each(
-                    |(idx, field)| match StatisticsConverter::try_new(
-                        field.name(),
-                        &physical_file_schema,
-                        file_metadata.schema_descr(),
-                    ) {
-                        Ok(stats_converter) => {
-                            let mut accumulators = StatisticsAccumulators {
-                                min_accs: &mut min_accs,
-                                max_accs: &mut max_accs,
-                                null_counts_array: &mut null_counts_array,
-                                is_min_value_exact: &mut is_min_value_exact,
-                                is_max_value_exact: &mut is_max_value_exact,
-                                column_byte_sizes: &mut column_byte_sizes,
-                                distinct_counts_array: &mut distinct_counts_array,
-                            };
-                            summarize_column_statistics(
-                                file_metadata.schema_descr(),
-                                logical_file_schema,
-                                &physical_file_schema,
-                                &mut accumulators,
-                                idx,
-                                &stats_converter,
-                                row_groups_metadata,
-                            )
-                            .ok();
-                        }
-                        Err(e) => {
-                            debug!("Failed to create statistics converter: {e}");
-                            null_counts_array[idx] = Precision::Exact(num_rows);
-                        }
+                    |(idx, field)| {
+                        let stats_converter = StatisticsConverter::from_arrow_field(
+                            field.as_ref(),
+                            parquet_schema,
+                            parquet_indices[idx],
+                        );
+                        let mut accumulators = StatisticsAccumulators {
+                            min_accs: &mut min_accs,
+                            max_accs: &mut max_accs,
+                            null_counts_array: &mut null_counts_array,
+                            is_min_value_exact: &mut is_min_value_exact,
+                            is_max_value_exact: &mut is_max_value_exact,
+                            column_byte_sizes: &mut column_byte_sizes,
+                            distinct_counts_array: &mut distinct_counts_array,
+                        };
+                        summarize_column_statistics(
+                            logical_file_schema,
+                            &mut accumulators,
+                            idx,
+                            parquet_indices[idx],
+                            &stats_converter,
+                            row_groups_metadata,
+                        )
+                        .ok();
                     },
                 );
 
@@ -374,20 +383,19 @@ impl<'a> DFParquetMetadata<'a> {
                 };
                 accumulators.build_column_statistics(logical_file_schema)
             } else {
-                // Record column sizes
+                // Record column sizes. Resolve all parquet indices in O(N)
+                // up front so the per-field loop is also O(N).
+                let parquet_indices = build_logical_to_parquet_index(
+                    logical_file_schema,
+                    &physical_file_schema,
+                    file_metadata.schema_descr(),
+                );
                 logical_file_schema
                     .fields()
                     .iter()
                     .enumerate()
                     .map(|(logical_file_schema_index, field)| {
-                        let arrow_field =
-                            logical_file_schema.field(logical_file_schema_index);
-                        let parquet_idx = parquet_column(
-                            file_metadata.schema_descr(),
-                            &physical_file_schema,
-                            arrow_field.name(),
-                        )
-                        .map(|(idx, _)| idx);
+                        let parquet_idx = parquet_indices[logical_file_schema_index];
                         let byte_size = compute_arrow_column_size(
                             field.data_type(),
                             row_groups_metadata,
@@ -423,6 +431,28 @@ fn min_max_aggregate_data_type(input_type: &DataType) -> &DataType {
     } else {
         input_type
     }
+}
+
+/// Map every field in `logical_file_schema` to its parquet leaf column index
+/// in `parquet_schema`, using `physical_file_schema` for name resolution.
+///
+/// Performing this in a single pass once is cheaper than calling
+/// [`parquet_column`] from inside an inner loop over the logical schema —
+/// the latter is `O(N^2)` for wide schemas, which dominates per-file
+/// metadata work when files have hundreds or thousands of columns.
+fn build_logical_to_parquet_index(
+    logical_file_schema: &Schema,
+    physical_file_schema: &Schema,
+    parquet_schema: &SchemaDescriptor,
+) -> Vec<Option<usize>> {
+    logical_file_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            parquet_column(parquet_schema, physical_file_schema, field.name())
+                .map(|(idx, _)| idx)
+        })
+        .collect()
 }
 
 fn create_max_min_accs(
@@ -499,11 +529,10 @@ impl StatisticsAccumulators<'_> {
 }
 
 fn summarize_column_statistics(
-    parquet_schema: &SchemaDescriptor,
     logical_file_schema: &Schema,
-    physical_file_schema: &Schema,
     accumulators: &mut StatisticsAccumulators,
     logical_schema_index: usize,
+    parquet_index: Option<usize>,
     stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
 ) -> Result<()> {
@@ -557,15 +586,6 @@ fn summarize_column_statistics(
             _ => Precision::Absent,
         },
     };
-
-    // This is the same logic as parquet_column but we start from arrow schema index
-    // instead of looking up by name.
-    let parquet_index = parquet_column(
-        parquet_schema,
-        physical_file_schema,
-        logical_file_schema.field(logical_schema_index).name(),
-    )
-    .map(|(idx, _)| idx);
 
     // Extract distinct counts from row group column statistics
     accumulators.distinct_counts_array[logical_schema_index] =
@@ -675,15 +695,91 @@ fn has_any_exact_match(
 }
 
 /// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
-pub struct CachedParquetMetaData(Arc<ParquetMetaData>);
+pub struct CachedParquetMetaData {
+    metadata: Arc<ParquetMetaData>,
+    /// Lazily-built [`ArrowReaderMetadata`] for this file. Constructing
+    /// this walks every leaf in the parquet schema (the "field-levels"
+    /// step), which is `O(N_columns)` work per file. Caching it lets
+    /// subsequent reader builds for the same file just `Clone` the result
+    /// (an `Arc` bump for the parquet metadata, the arrow schema, and the
+    /// dremel-level info) instead of redoing the walk.
+    arrow_reader_metadata: OnceLock<ArrowReaderMetadata>,
+    /// Single-slot cache for [`ArrowReaderMetadata`] built with a supplied
+    /// schema (e.g. after `apply_file_schema_type_coercions` or
+    /// `coerce_int96_to_resolution` produced one). Keyed by the supplied
+    /// schema's `Arc` pointer — different supplied schemas miss and
+    /// overwrite the slot. In typical workloads (one query touches every
+    /// file with the same coerced table schema) every file pays this rebuild
+    /// at most once per session.
+    coerced_arm: std::sync::Mutex<Option<(usize, ArrowReaderMetadata)>>,
+}
 
 impl CachedParquetMetaData {
     pub fn new(metadata: Arc<ParquetMetaData>) -> Self {
-        Self(metadata)
+        Self {
+            metadata,
+            arrow_reader_metadata: OnceLock::new(),
+            coerced_arm: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Get-or-build an [`ArrowReaderMetadata`] whose arrow schema is
+    /// `supplied_schema`. The result is memoised in a single-slot cache
+    /// keyed by `Arc::as_ptr(&supplied_schema)` — repeat calls with the
+    /// same schema (the common case: every file in a query coerces to the
+    /// same table schema) return a cheap [`ArrowReaderMetadata::clone`]
+    /// instead of re-walking the parquet schema.
+    pub fn coerced_arrow_reader_metadata(
+        &self,
+        supplied_schema: SchemaRef,
+        options: ArrowReaderOptions,
+    ) -> Result<ArrowReaderMetadata> {
+        let key = Arc::as_ptr(&supplied_schema) as usize;
+        {
+            let guard = self.coerced_arm.lock().unwrap();
+            if let Some((cached_key, cached)) = guard.as_ref() {
+                if *cached_key == key {
+                    return Ok(cached.clone());
+                }
+            }
+        }
+        let arm = ArrowReaderMetadata::try_new(
+            Arc::clone(&self.metadata),
+            options.with_schema(Arc::clone(&supplied_schema)),
+        )?;
+        let mut guard = self.coerced_arm.lock().unwrap();
+        *guard = Some((key, arm.clone()));
+        Ok(arm)
     }
 
     pub fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
-        &self.0
+        &self.metadata
+    }
+
+    /// Return the cached [`ArrowReaderMetadata`] for this file, building it
+    /// on first use.
+    ///
+    /// `ArrowReaderMetadata` stores its schema and field-levels behind
+    /// `Arc`s, so [`ArrowReaderMetadata::clone`] is cheap and is what
+    /// callers should use to consume the cached value.
+    pub fn arrow_reader_metadata(&self) -> Result<&ArrowReaderMetadata> {
+        if let Some(v) = self.arrow_reader_metadata.get() {
+            return Ok(v);
+        }
+        let file_meta = self.metadata.file_metadata();
+        let (schema, levels) = parquet_to_arrow_schema_and_field_levels(
+            file_meta.schema_descr(),
+            ProjectionMask::all(),
+            file_meta.key_value_metadata(),
+        )?;
+        let arm = ArrowReaderMetadata::from_field_levels(
+            Arc::clone(&self.metadata),
+            Arc::new(schema),
+            levels,
+        );
+        // Race: if another thread also computed it, theirs wins.
+        let _ = self.arrow_reader_metadata.set(arm);
+        Ok(self.arrow_reader_metadata.get().expect("just set"))
     }
 }
 
@@ -693,12 +789,12 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn memory_size(&self) -> usize {
-        self.0.memory_size()
+        self.metadata.memory_size()
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
         let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+            self.metadata.column_index().is_some() && self.metadata.offset_index().is_some();
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }

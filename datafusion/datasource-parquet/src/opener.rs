@@ -376,9 +376,12 @@ impl ParquetOpenState {
                 Ok(ParquetOpenState::LoadMetadata(future))
             }
             ParquetOpenState::PrepareFilters(loaded) => {
-                let prepared_filters = loaded.prepare_filters()?;
                 Ok(ParquetOpenState::LoadPageIndex(
-                    prepared_filters.load_page_index().boxed(),
+                    async move {
+                        let prepared_filters = loaded.prepare_filters().await?;
+                        prepared_filters.load_page_index().await
+                    }
+                    .boxed(),
                 ))
             }
             ParquetOpenState::LoadPageIndex(future) => {
@@ -745,7 +748,7 @@ impl PreparedParquetOpen {
 impl MetadataLoadedParquetOpen {
     /// Prepare file-schema coercions and pruning predicates once metadata is
     /// loaded.
-    fn prepare_filters(self) -> Result<FiltersPreparedParquetOpen> {
+    async fn prepare_filters(self) -> Result<FiltersPreparedParquetOpen> {
         let MetadataLoadedParquetOpen {
             mut prepared,
             mut reader_metadata,
@@ -764,16 +767,22 @@ impl MetadataLoadedParquetOpen {
         // The schema loaded from the file may not be the same as the
         // desired schema (for example if we want to instruct the parquet
         // reader to read strings using Utf8View instead). Update if necessary
+        // Go through the AsyncFileReader's get_arrow_reader_metadata for
+        // post-coercion rebuilds so cache-aware impls (e.g. our
+        // CachedParquetFileReader, which delegates to
+        // CachedParquetMetaData::coerced_arrow_reader_metadata) can skip
+        // the per-leaf walk on subsequent files / queries with the same
+        // supplied schema.
         if let Some(merged) = apply_file_schema_type_coercions(
             &prepared.logical_file_schema,
             &physical_file_schema,
         ) {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
-            reader_metadata = ArrowReaderMetadata::try_new(
-                Arc::clone(reader_metadata.metadata()),
-                options.clone(),
-            )?;
+            reader_metadata = prepared
+                .async_file_reader
+                .get_arrow_reader_metadata(options.clone())
+                .await?;
         }
 
         if let Some(ref coerce) = prepared.coerce_int96
@@ -785,10 +794,10 @@ impl MetadataLoadedParquetOpen {
         {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
-            reader_metadata = ArrowReaderMetadata::try_new(
-                Arc::clone(reader_metadata.metadata()),
-                options.clone(),
-            )?;
+            reader_metadata = prepared
+                .async_file_reader
+                .get_arrow_reader_metadata(options.clone())
+                .await?;
         }
 
         // Adapt the projection & filter predicate to the physical file schema.
