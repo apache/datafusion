@@ -282,7 +282,7 @@ impl DFHeapSize for Arc<str> {
 
 impl DFHeapSize for Arc<dyn DFHeapSize> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as usize;
+        let ptr = Arc::as_ptr(self) as *const i32 as usize;
 
         if !ctx.seen.insert(ptr) {
             return 0;
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_heap_size_arc_str_avoid_double_accounting() {
-        let a1:  Arc<str> = Arc::from("Hello");
+        let a1: Arc<str> = Arc::from("Hello");
         let mut ctx = DFHeapSizeCtx::default();
         let heap_size = a1.heap_size(&mut ctx);
 
