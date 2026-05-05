@@ -496,8 +496,6 @@ impl Default for CacheManagerConfig {
 
 impl CacheManagerConfig {
     /// Set the cache for file statistics.
-    ///
-    /// Default is `None` (disabled).
     pub fn with_file_statistics_cache(
         mut self,
         cache: Option<Arc<dyn FileStatisticsCache>>,
