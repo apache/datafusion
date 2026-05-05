@@ -256,7 +256,7 @@ impl<K: DFHeapSize, V: DFHeapSize> DFHeapSize for HashMap<K, V> {
 
 impl<T: DFHeapSize> DFHeapSize for Arc<T> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as *const i32 as usize;
+        let ptr = Arc::as_ptr(self) as usize;
 
         if !ctx.seen.insert(ptr) {
             return 0;
@@ -282,7 +282,7 @@ impl DFHeapSize for Arc<str> {
 
 impl DFHeapSize for Arc<dyn DFHeapSize> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as *const i32 as usize;
+        let ptr = Arc::as_ptr(self) as usize;
 
         if !ctx.seen.insert(ptr) {
             return 0;
