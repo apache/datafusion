@@ -167,12 +167,27 @@ impl PartitionEvaluator for NtileEvaluator {
         _values: &[ArrayRef],
         num_rows: usize,
     ) -> Result<ArrayRef> {
+        // SQL NTILE distributes rows "as equally as possible": with `base = num_rows / n`
+        // and `remainder = num_rows % n`, the first `remainder` buckets each contain
+        // `base + 1` rows and the rest contain `base` rows. The previous formula
+        // `i * n / num_rows` does not preserve those bucket sizes (e.g. NTILE(4) over
+        // 10 rows yielded sizes 3,2,3,2 instead of 3,3,2,2).
         let num_rows = num_rows as u64;
-        let mut vec: Vec<u64> = Vec::new();
-        let n = u64::min(self.n, num_rows);
+        let n = self.n;
+        let mut vec: Vec<u64> = Vec::with_capacity(num_rows as usize);
+        let base = num_rows / n;
+        let remainder = num_rows % n;
+        let large_bucket_size = base + 1;
+        let large_rows = remainder * large_bucket_size;
         for i in 0..num_rows {
-            let res = i * n / num_rows;
-            vec.push(res + 1)
+            let bucket = if i < large_rows {
+                i / large_bucket_size + 1
+            } else {
+                // base > 0 here: i >= large_rows is only reachable when remainder < n,
+                // which forces base >= 1 (otherwise large_rows would equal num_rows).
+                remainder + (i - large_rows) / base + 1
+            };
+            vec.push(bucket);
         }
         Ok(Arc::new(UInt64Array::from(vec)))
     }
