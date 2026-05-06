@@ -3870,6 +3870,101 @@ mod tests {
     }
 
     #[test]
+    fn test_intersect_mismatched_decimal_types() -> Result<()> {
+        // Regression test: previously `Interval::intersect` asserted that both
+        // operands had identical data types. Now it coerces via
+        // `comparison_coercion`, which for `Decimal128(38, 10)` and
+        // `Decimal128(20, 0)` produces `Decimal128(38, 10)`.
+
+        // Overlapping intervals: [0.0, 10.0] ∩ [5, 20] = [5.0, 10.0]
+        let lhs = Interval::try_new(
+            ScalarValue::Decimal128(Some(0), 38, 10),
+            ScalarValue::Decimal128(Some(100_000_000_000), 38, 10), // 10.0
+        )?;
+        let rhs = Interval::try_new(
+            ScalarValue::Decimal128(Some(5), 20, 0),
+            ScalarValue::Decimal128(Some(20), 20, 0),
+        )?;
+        let intersected = lhs.intersect(&rhs)?.expect("intervals overlap");
+        let expected = Interval::try_new(
+            ScalarValue::Decimal128(Some(50_000_000_000), 38, 10), // 5.0
+            ScalarValue::Decimal128(Some(100_000_000_000), 38, 10), // 10.0
+        )?;
+        assert_eq!(intersected, expected);
+        assert_eq!(intersected.data_type(), DataType::Decimal128(38, 10));
+
+        // Disjoint intervals across mismatched precisions: [0.0, 3.0] ∩ [5, 20] = ∅
+        let lhs_disjoint = Interval::try_new(
+            ScalarValue::Decimal128(Some(0), 38, 10),
+            ScalarValue::Decimal128(Some(30_000_000_000), 38, 10), // 3.0
+        )?;
+        assert_eq!(lhs_disjoint.intersect(&rhs)?, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_mismatched_decimal_types() -> Result<()> {
+        // [0.0, 3.0] ∪ [5, 20] (mismatched precision/scale) = [0.0, 20.0]
+        let lhs = Interval::try_new(
+            ScalarValue::Decimal128(Some(0), 38, 10),
+            ScalarValue::Decimal128(Some(30_000_000_000), 38, 10), // 3.0
+        )?;
+        let rhs = Interval::try_new(
+            ScalarValue::Decimal128(Some(5), 20, 0),
+            ScalarValue::Decimal128(Some(20), 20, 0),
+        )?;
+        let unioned = lhs.union(&rhs)?;
+        let expected = Interval::try_new(
+            ScalarValue::Decimal128(Some(0), 38, 10),
+            ScalarValue::Decimal128(Some(200_000_000_000), 38, 10), // 20.0
+        )?;
+        assert_eq!(unioned, expected);
+        assert_eq!(unioned.data_type(), DataType::Decimal128(38, 10));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_contains_mismatched_decimal_types() -> Result<()> {
+        // `contains` should return TRUE when the lhs is a strict superset of
+        // rhs after coercion, TRUE_OR_FALSE when they merely overlap, and
+        // FALSE when they are disjoint — even with mismatched Decimal128
+        // precision/scale.
+        let rhs = Interval::try_new(
+            ScalarValue::Decimal128(Some(5), 20, 0),
+            ScalarValue::Decimal128(Some(10), 20, 0),
+        )?;
+
+        // Superset: [0.0, 20.0] ⊇ [5, 10] → TRUE
+        let superset = Interval::try_new(
+            ScalarValue::Decimal128(Some(0), 38, 10),
+            ScalarValue::Decimal128(Some(200_000_000_000), 38, 10), // 20.0
+        )?;
+        assert_eq!(superset.contains(&rhs)?, Interval::TRUE);
+
+        // Overlap (not superset): [0.0, 7.0] ∩ [5, 10] = [5.0, 7.0] → TRUE_OR_FALSE
+        let overlap = Interval::try_new(
+            ScalarValue::Decimal128(Some(0), 38, 10),
+            ScalarValue::Decimal128(Some(70_000_000_000), 38, 10), // 7.0
+        )?;
+        assert_eq!(overlap.contains(&rhs)?, Interval::TRUE_OR_FALSE);
+
+        // Disjoint: [0.0, 3.0] ∩ [5, 10] = ∅ → FALSE
+        let disjoint = Interval::try_new(
+            ScalarValue::Decimal128(Some(0), 38, 10),
+            ScalarValue::Decimal128(Some(30_000_000_000), 38, 10), // 3.0
+        )?;
+        assert_eq!(disjoint.contains(&rhs)?, Interval::FALSE);
+
+        // Cross-type with Int64: [0.0, 20.0] ⊇ [5, 10] → TRUE
+        let int_rhs = Interval::make(Some(5_i64), Some(10_i64))?;
+        assert_eq!(superset.contains(&int_rhs)?, Interval::TRUE);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_overflow_handling() -> Result<()> {
         // Test integer overflow handling:
         let dt = DataType::Int32;
