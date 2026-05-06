@@ -43,6 +43,10 @@
 //! footer / page index / column-chunk metadata; the on-disk size
 //! stays small — the point being to measure per-file metadata
 //! overhead, not row IO.
+//! Zero-filled was chosen over random data or other options because
+//! it’s simple to implement, avoids any questions about what
+//! the data distribution or shape should look like, and still achieves
+//! the goal of having a wide table.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
