@@ -31,7 +31,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub(crate) fn connections(&self) -> &[EdgeId] {
+    pub fn connections(&self) -> &[EdgeId] {
         &self.connections
     }
 
@@ -46,11 +46,7 @@ impl Node {
             .find(move |x| x.nodes.contains(&node_id))
     }
 
-    pub(crate) fn neighbours(
-        &self,
-        node_id: NodeId,
-        query_graph: &QueryGraph,
-    ) -> Vec<NodeId> {
+    pub fn neighbours(&self, node_id: NodeId, query_graph: &QueryGraph) -> Vec<NodeId> {
         self.connections
             .iter()
             .filter_map(|edge_id| query_graph.get_edge(*edge_id))
@@ -87,7 +83,7 @@ impl QueryGraph {
         })
     }
 
-    pub(crate) fn add_node_with_edge(
+    pub fn add_node_with_edge(
         &mut self,
         other: NodeId,
         node_data: Arc<LogicalPlan>,
@@ -123,17 +119,17 @@ impl QueryGraph {
         }
     }
 
-    pub(crate) fn remove_node(&mut self, node_id: NodeId) -> Option<Arc<LogicalPlan>> {
+    pub fn remove_node(&mut self, node_id: NodeId) -> Option<Arc<LogicalPlan>> {
         if let Some(node) = self.nodes.remove(node_id) {
             // Remove all edges connected to this node
             for edge_id in &node.connections {
                 if let Some(edge) = self.edges.remove(*edge_id) {
                     // Remove the edge from the other node's connections
                     for other_node_id in edge.nodes {
-                        if other_node_id != node_id {
-                            if let Some(other_node) = self.nodes.get_mut(other_node_id) {
-                                other_node.connections.retain(|id| id != edge_id);
-                            }
+                        if other_node_id != node_id
+                            && let Some(other_node) = self.nodes.get_mut(other_node_id)
+                        {
+                            other_node.connections.retain(|id| id != edge_id);
                         }
                     }
                 }
@@ -144,7 +140,7 @@ impl QueryGraph {
         }
     }
 
-    fn remove_edge(&mut self, edge_id: EdgeId) -> Option<Join> {
+    pub fn remove_edge(&mut self, edge_id: EdgeId) -> Option<Join> {
         if let Some(edge) = self.edges.remove(edge_id) {
             // Remove the edge from both nodes' connections
             for node_id in edge.nodes {
@@ -248,7 +244,7 @@ pub(crate) fn extract_join_subtree(
 /// # Errors
 ///
 /// Returns an error if reconstructing any wrapper operator fails.
-pub(crate) fn reconstruct_plan(
+pub fn reconstruct_plan(
     join_plan: LogicalPlan,
     wrappers: Vec<LogicalPlan>,
 ) -> Result<LogicalPlan> {
@@ -336,11 +332,11 @@ fn flatten_joins_recursive(
                 let node_id_b = matching_nodes[1];
 
                 // Add an edge if one doesn't exist yet
-                if let Some(node_a) = query_graph.get_node(node_id_a) {
-                    if node_a.connection_with(node_id_b, query_graph).is_none() {
-                        // No edge exists yet, create one with this join
-                        query_graph.add_edge(node_id_a, node_id_b, join.clone());
-                    }
+                if let Some(node_a) = query_graph.get_node(node_id_a)
+                    && node_a.connection_with(node_id_b, query_graph).is_none()
+                {
+                    // No edge exists yet, create one with this join
+                    query_graph.add_edge(node_id_a, node_id_b, join.clone());
                 }
             }
 
