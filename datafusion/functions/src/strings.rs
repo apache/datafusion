@@ -531,12 +531,12 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     }
 }
 
-/// Starting size for the long-string data block; matches Arrow's
-/// `GenericByteViewBuilder` default.
-const STARTING_BLOCK_SIZE: u32 = 8 * 1024;
-/// Maximum size each long-string data block grows to; matches Arrow's
-/// `GenericByteViewBuilder` default.
-const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
+/// Starting size for the long-string data block used by `StringView`-style
+/// arrays; matches Arrow's `GenericByteViewBuilder` default.
+pub(crate) const STRING_VIEW_INIT_BLOCK_SIZE: u32 = 8 * 1024;
+/// Maximum size each long-string data block in a `StringView`-style array
+/// grows to; matches Arrow's `GenericByteViewBuilder` default.
+pub(crate) const STRING_VIEW_MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
 
 /// Builder for a [`StringViewArray`] that defers null tracking to `finish`.
 ///
@@ -545,13 +545,11 @@ const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
 /// Short strings (≤ 12 bytes) are inlined into the view itself; long strings
 /// are appended into an in-progress data block. When the in-progress block
 /// fills up it is flushed into `completed` and a new block — double the size
-/// of the last, capped at [`MAX_BLOCK_SIZE`] — is started.
+/// of the last, capped at [`STRING_VIEW_MAX_BLOCK_SIZE`] — is started.
 pub(crate) struct StringViewArrayBuilder {
     views: Vec<u128>,
     in_progress: Vec<u8>,
     completed: Vec<Buffer>,
-    /// Current block-size target; doubles each time a block is flushed, up to
-    /// [`MAX_BLOCK_SIZE`].
     block_size: u32,
     placeholder_count: usize,
 }
@@ -562,15 +560,14 @@ impl StringViewArrayBuilder {
             views: Vec::with_capacity(item_capacity),
             in_progress: Vec::new(),
             completed: Vec::new(),
-            block_size: STARTING_BLOCK_SIZE,
+            block_size: STRING_VIEW_INIT_BLOCK_SIZE,
             placeholder_count: 0,
         }
     }
 
-    /// Doubles the block-size target (capped at [`MAX_BLOCK_SIZE`]) and
-    /// returns the new size. The first call returns `2 * STARTING_BLOCK_SIZE`.
+    /// Doubles the block-size target and returns the new size.
     fn next_block_size(&mut self) -> u32 {
-        if self.block_size < MAX_BLOCK_SIZE {
+        if self.block_size < STRING_VIEW_MAX_BLOCK_SIZE {
             self.block_size = self.block_size.saturating_mul(2);
         }
         self.block_size
@@ -988,7 +985,7 @@ mod tests {
 
     #[test]
     fn string_view_array_builder_flushes_full_blocks() {
-        // Each value is 300 bytes. The first data block is 2 × STARTING_BLOCK_SIZE
+        // Each value is 300 bytes. The first data block is 2 × STRING_VIEW_INIT_BLOCK_SIZE
         // = 16 KiB, so ~50 values saturate it and the rest spill into additional
         // blocks.
         let value = "x".repeat(300);

@@ -15,18 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion benchmark runner
-pub mod benchmark_runner;
-pub mod cancellation;
-pub mod clickbench;
-pub mod h2o;
-pub mod hj;
-pub mod imdb;
-pub mod nlj;
-pub mod smj;
-pub mod sort_pushdown;
-pub mod sort_tpch;
-pub mod sql_benchmark;
-pub mod tpcds;
-pub mod tpch;
-pub mod util;
+use datafusion_benchmarks::benchmark_runner::run_cli;
+
+#[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
+compile_error!(
+    "feature \"snmalloc\" and feature \"mimalloc\" cannot be enabled at the same time"
+);
+
+#[cfg(feature = "snmalloc")]
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+fn main() {
+    env_logger::init();
+    if let Err(e) = run_cli(std::env::args()) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+}
