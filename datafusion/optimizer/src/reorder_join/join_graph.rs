@@ -413,7 +413,7 @@ fn flatten_joins_recursive(plan: LogicalPlan, join_graph: &mut JoinGraph) -> Res
     }
 }
 
-/// A simple Vec-based map that uses Option<T> for sparse storage
+/// A simple Vec-based map that uses `Option<T>` for sparse storage
 /// Keys are never reused once removed
 pub(crate) struct VecMap<V>(Vec<Option<V>>);
 
