@@ -1824,6 +1824,56 @@ SELECT x FROM sq_main ORDER BY x + (SELECT max(v) FROM sq_values);
 10
 20
 
+# ScalarSubqueryExec should not add an extra repartition above an ordered main
+# input. The main child should be SortPreservingMergeExec directly.
+query TT
+EXPLAIN SELECT i
+FROM generate_series(1, 10) AS t(i)
+WHERE i > (
+  SELECT avg(j) FROM generate_series(1, 10) AS u(j)
+)
+ORDER BY i;
+----
+logical_plan
+01)Sort: t.i ASC NULLS LAST
+02)--SubqueryAlias: t
+03)----Projection: generate_series().value AS i
+04)------Filter: CAST(generate_series().value AS Float64) > (<subquery>)
+05)--------Subquery:
+06)----------Aggregate: groupBy=[[]], aggr=[[avg(CAST(u.j AS Float64))]]
+07)------------SubqueryAlias: u
+08)--------------Projection: generate_series().value AS j
+09)----------------TableScan: generate_series() projection=[value]
+10)--------TableScan: generate_series() projection=[value]
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--SortPreservingMergeExec: [i@0 ASC NULLS LAST]
+03)----SortExec: expr=[i@0 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[value@0 as i]
+05)--------FilterExec: CAST(value@0 AS Float64) > scalar_subquery(<pending>)
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
+08)--AggregateExec: mode=Final, gby=[], aggr=[avg(u.j)]
+09)----CoalescePartitionsExec
+10)------AggregateExec: mode=Partial, gby=[], aggr=[avg(u.j)]
+11)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------ProjectionExec: expr=[value@0 as j]
+13)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
+
+query I
+SELECT i
+FROM generate_series(1, 10) AS t(i)
+WHERE i > (
+  SELECT avg(j) FROM generate_series(1, 10) AS u(j)
+)
+ORDER BY i;
+----
+6
+7
+8
+9
+10
+
 # Aggregate function argument containing uncorrelated scalar subquery
 query I
 SELECT sum(x + (SELECT max(v) FROM sq_values)) AS s FROM sq_main;
