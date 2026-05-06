@@ -997,18 +997,19 @@ impl MaterializingSortMergeJoinStream {
 
                         buffered_batch.batch = BufferedBatchState::Spilled(spill_file);
 
-                        // Track remaining in-memory data (join key arrays) that
-                        // stay in memory even after the batch is spilled. This is
-                        // much smaller than the full batch, so try_grow should
-                        // usually succeed. If it fails, reserved_amount stays 0 -
-                        // best-effort tracking, free_reservation will safely be a no-op.
+                        // Join key arrays remain in memory after the batch is
+                        // spilled — the comparator needs them for key boundary
+                        // detection. Force-grow the reservation so the pool
+                        // reflects actual memory usage. This is unconditional
+                        // because the memory is physically consumed regardless
+                        // and not tracking it would let other operators
+                        // over-allocate against a stale pool view.
                         let join_arrays_mem = buffered_batch.join_arrays_mem();
-                        if self.reservation.try_grow(join_arrays_mem).is_ok() {
-                            buffered_batch.reserved_amount = join_arrays_mem;
-                            self.join_metrics
-                                .peak_mem_used()
-                                .set_max(self.reservation.size());
-                        }
+                        self.reservation.grow(join_arrays_mem);
+                        buffered_batch.reserved_amount = join_arrays_mem;
+                        self.join_metrics
+                            .peak_mem_used()
+                            .set_max(self.reservation.size());
 
                         Ok(())
                     }
