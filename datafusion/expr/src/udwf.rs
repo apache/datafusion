@@ -431,6 +431,25 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     }
 }
 
+impl dyn WindowUDFImpl {
+    /// Returns `true` if the implementation is of type `T`.
+    ///
+    /// Works correctly when called on `Arc<dyn WindowUDFImpl>` via auto-deref.
+    pub fn is<T: WindowUDFImpl>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast to a concrete type `T`, returning `None` if the
+    /// implementation is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn WindowUDFImpl>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: WindowUDFImpl>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// the effect this function will have on the limit pushdown
 pub enum LimitEffect {
     /// Does not affect the limit (i.e. this is causal)

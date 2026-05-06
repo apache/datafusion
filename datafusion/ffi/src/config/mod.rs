@@ -17,12 +17,12 @@
 
 pub mod extension_options;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{RHashMap, RString};
 use datafusion_common::config::{
     ConfigExtension, ConfigOptions, ExtensionOptions, TableOptions,
 };
 use datafusion_common::{DataFusionError, Result};
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
 
 use crate::config::extension_options::FFI_ExtensionOptions;
 
@@ -32,16 +32,16 @@ use crate::config::extension_options::FFI_ExtensionOptions;
 /// than local extensions. The trait [`ExtensionOptionsFFIProvider`] can
 /// be used to simplify accessing FFI extensions.
 #[repr(C)]
-#[derive(Debug, Clone, StableAbi)]
+#[derive(Debug, Clone)]
 pub struct FFI_ConfigOptions {
-    base_options: RHashMap<RString, RString>,
+    base_options: SVec<(SString, SString)>,
 
     extensions: FFI_ExtensionOptions,
 }
 
 impl From<&ConfigOptions> for FFI_ConfigOptions {
     fn from(options: &ConfigOptions) -> Self {
-        let base_options: RHashMap<RString, RString> = options
+        let base_options: SVec<(SString, SString)> = options
             .entries()
             .into_iter()
             .filter_map(|entry| entry.value.map(|value| (entry.key, value)))
@@ -120,16 +120,16 @@ impl ExtensionOptionsFFIProvider for TableOptions {
 /// than local extensions. The trait [`ExtensionOptionsFFIProvider`] can
 /// be used to simplify accessing FFI extensions.
 #[repr(C)]
-#[derive(Debug, Clone, StableAbi)]
+#[derive(Debug, Clone)]
 pub struct FFI_TableOptions {
-    base_options: RHashMap<RString, RString>,
+    base_options: SVec<(SString, SString)>,
 
     extensions: FFI_ExtensionOptions,
 }
 
 impl From<&TableOptions> for FFI_TableOptions {
     fn from(options: &TableOptions) -> Self {
-        let base_options: RHashMap<RString, RString> = options
+        let base_options: SVec<(SString, SString)> = options
             .entries()
             .into_iter()
             .filter_map(|entry| entry.value.map(|value| (entry.key, value)))

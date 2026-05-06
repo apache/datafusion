@@ -154,23 +154,20 @@ impl ScalarUDFImpl for ArrowCastFunc {
 
     fn simplify(
         &self,
-        mut args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // convert this into a real cast
-        let target_type = data_type_from_args(self.name(), &args)?;
-        // remove second (type) argument
-        args.pop().unwrap();
-        let arg = args.pop().unwrap();
-
-        let source_type = info.get_data_type(&arg)?;
+        let [source_arg, type_arg] = take_function_args(self.name(), args)?;
+        let target_type = data_type_from_type_arg(self.name(), &type_arg)?;
+        let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
             // the argument's data type is already the correct type
-            arg
+            source_arg
         } else {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
+                expr: Box::new(source_arg),
                 field: target_type.into_nullable_field_ref(),
             })
         };
@@ -183,10 +180,8 @@ impl ScalarUDFImpl for ArrowCastFunc {
     }
 }
 
-/// Returns the requested type from the arguments
-pub(crate) fn data_type_from_args(name: &str, args: &[Expr]) -> Result<DataType> {
-    let [_, type_arg] = take_function_args(name, args)?;
-
+/// Returns the requested type from the type argument
+pub(crate) fn data_type_from_type_arg(name: &str, type_arg: &Expr) -> Result<DataType> {
     let Expr::Literal(ScalarValue::Utf8(Some(val)), _) = type_arg else {
         return exec_err!(
             "{name} requires its second argument to be a constant string, got {:?}",

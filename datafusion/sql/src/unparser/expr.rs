@@ -16,13 +16,16 @@
 // under the License.
 
 use datafusion_common::datatype::DataTypeExt;
-use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
+use datafusion_expr::expr::{
+    AggregateFunctionParams, HigherOrderFunction, WindowFunctionParams,
+};
+use datafusion_expr::expr::{Lambda, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Array, BinaryOperator, CaseWhen, DuplicateTreatment, Expr as AstExpr, Function,
-    Ident, Interval, ObjectName, OrderByOptions, Subscript, TimezoneInfo, UnaryOperator,
-    ValueWithSpan,
+    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
+    Subscript, TimezoneInfo, UnaryOperator,
 };
+use sqlparser::ast::{CaseWhen, DuplicateTreatment, OrderByOptions, ValueWithSpan};
 use std::sync::Arc;
 use std::vec;
 
@@ -552,6 +555,33 @@ impl Unparser<'_> {
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                let func_name = func.name();
+
+                if let Some(expr) = self
+                    .dialect
+                    .higher_order_function_to_sql_overrides(self, func_name, args)?
+                {
+                    return Ok(expr);
+                }
+
+                self.function_to_sql_internal(func_name, args)
+            }
+            Expr::Lambda(Lambda { params, body }) => {
+                Ok(ast::Expr::Lambda(ast::LambdaFunction {
+                    params: ast::OneOrManyWithParens::Many(
+                        params
+                            .iter()
+                            .map(|param| self.new_ident_quoted_if_needs(param.clone()))
+                            .collect(),
+                    ),
+                    body: Box::new(self.expr_to_sql_inner(body)?),
+                    syntax: ast::LambdaSyntax::Arrow,
+                }))
+            }
+            Expr::LambdaVariable(l) => Ok(ast::Expr::Identifier(
+                self.new_ident_quoted_if_needs(l.name.clone()),
+            )),
         }
     }
 
@@ -567,11 +597,11 @@ impl Unparser<'_> {
             "get_field" => self.get_field_to_sql(args),
             "map" => self.map_to_sql(args),
             // TODO: support for the construct and access functions of the `map` type
-            _ => self.scalar_function_to_sql_internal(func_name, args),
+            _ => self.function_to_sql_internal(func_name, args),
         }
     }
 
-    fn scalar_function_to_sql_internal(
+    fn function_to_sql_internal(
         &self,
         func_name: &str,
         args: &[Expr],
@@ -604,7 +634,7 @@ impl Unparser<'_> {
             .collect::<Result<Vec<_>>>()?;
         Ok(ast::Expr::Array(Array {
             elem: args,
-            named: false,
+            named: self.dialect.use_array_keyword_for_array_literals(),
         }))
     }
 
@@ -615,7 +645,10 @@ impl Unparser<'_> {
             elem.push(self.scalar_to_sql(&value)?);
         }
 
-        Ok(ast::Expr::Array(Array { elem, named: false }))
+        Ok(ast::Expr::Array(Array {
+            elem,
+            named: self.dialect.use_array_keyword_for_array_literals(),
+        }))
     }
 
     fn array_element_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
@@ -1321,6 +1354,8 @@ impl Unparser<'_> {
             ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::ListView(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::LargeListView(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::Date32(Some(_)) => {
                 let date = v
                     .to_array()?
@@ -1734,7 +1769,7 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Boolean => Ok(ast::DataType::Bool),
-            DataType::Int8 => Ok(ast::DataType::TinyInt(None)),
+            DataType::Int8 => Ok(self.dialect.int8_cast_dtype()),
             DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
             DataType::Int32 => Ok(self.dialect.int32_cast_dtype()),
             DataType::Int64 => Ok(self.dialect.int64_cast_dtype()),
@@ -1836,17 +1871,18 @@ mod tests {
     use std::{sync::Arc, vec};
 
     use crate::unparser::dialect::SqliteDialect;
-    use arrow::array::{LargeListArray, ListArray};
+    use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
-    use datafusion_expr::expr::WildcardOptions;
+    use datafusion_expr::expr::{LambdaVariable, WildcardOptions};
     use datafusion_expr::{
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col, cube, exists,
-        grouping_set, interval_datetime_lit, interval_year_month_lit, lit, not,
-        not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast, when,
+        ColumnarValue, HigherOrderUDF, LambdaParametersProgress, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, WindowFrame,
+        WindowFunctionDefinition, case, cast, col, cube, exists, grouping_set,
+        interval_datetime_lit, interval_year_month_lit, lambda, lit, not, not_exists,
+        out_ref_col, placeholder, rollup, table_scan, try_cast, when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
@@ -1899,6 +1935,41 @@ mod tests {
         }
     }
     // See sql::tests for E2E tests.
+
+    #[derive(Debug, Hash, Eq, PartialEq)]
+    struct DummyHigherOrderUDF;
+
+    impl HigherOrderUDF for DummyHigherOrderUDF {
+        fn name(&self) -> &str {
+            "dummy_higher_order_function"
+        }
+
+        fn signature(&self) -> &datafusion_expr::HigherOrderSignature {
+            unimplemented!()
+        }
+
+        fn lambda_parameters(
+            &self,
+            _step: usize,
+            _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            unimplemented!()
+        }
+
+        fn return_field_from_args(
+            &self,
+            _args: datafusion_expr::HigherOrderReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            unimplemented!()
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: datafusion_expr::HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
 
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
@@ -1985,6 +2056,22 @@ mod tests {
                 r#"dummy_udf(a, b) IS NOT NULL"#,
             ),
             (
+                Expr::HigherOrderFunction(HigherOrderFunction::new(
+                    Arc::new(DummyHigherOrderUDF),
+                    vec![
+                        col("a"),
+                        lambda(
+                            ["v"],
+                            -Expr::LambdaVariable(LambdaVariable::new(
+                                "v".to_string(),
+                                Some(Arc::new(Field::new("", DataType::Null, true))),
+                            )),
+                        ),
+                    ],
+                )),
+                r#"dummy_higher_order_function(a, (v) -> -v)"#,
+            ),
+            (
                 Expr::Like(Like {
                     negated: true,
                     expr: Box::new(col("a")),
@@ -2047,7 +2134,7 @@ mod tests {
                     ScalarValue::TimestampSecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 10:46:41 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T10:46:41+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMillisecond(Some(10001), None), None),
@@ -2058,7 +2145,7 @@ mod tests {
                     ScalarValue::TimestampMillisecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 08:00:10.001 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:10.001+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMicrosecond(Some(10001), None), None),
@@ -2069,7 +2156,7 @@ mod tests {
                     ScalarValue::TimestampMicrosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 08:00:00.010001 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.010001+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampNanosecond(Some(10001), None), None),
@@ -2080,7 +2167,7 @@ mod tests {
                     ScalarValue::TimestampNanosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 08:00:00.000010001 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.000010001+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Time32Second(Some(10001)), None),
@@ -2343,6 +2430,28 @@ mod tests {
                 Expr::Literal(
                     ScalarValue::LargeList(Arc::new(
                         LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                            Some(vec![Some(1), Some(2), Some(3)]),
+                        ]),
+                    )),
+                    None,
+                ),
+                "[1, 2, 3]",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::ListView(Arc::new(
+                        ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                            Some(vec![Some(1), Some(2), Some(3)]),
+                        ]),
+                    )),
+                    None,
+                ),
+                "[1, 2, 3]",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::LargeListView(Arc::new(
+                        LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
                             Some(vec![Some(1), Some(2), Some(3)]),
                         ]),
                     )),
@@ -3043,6 +3152,61 @@ mod tests {
     }
 
     #[test]
+    fn test_array_literal_scalar_value_to_sql_postgres() -> Result<()> {
+        let dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+        let unparser = Unparser::new(dialect.as_ref());
+
+        let expr = Expr::Literal(
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(2)),
+                    ScalarValue::Int32(Some(3)),
+                ],
+                &DataType::Int32,
+            )),
+            None,
+        );
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(ast.to_string(), "ARRAY[1, 2, 3]");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_array_literal_scalar_value_to_sql_postgres() -> Result<()> {
+        let dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+        let unparser = Unparser::new(dialect.as_ref());
+
+        let inner_type = DataType::Int32;
+        let nested_type =
+            DataType::List(Arc::new(Field::new_list_field(inner_type.clone(), true)));
+
+        let expr = Expr::Literal(
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))],
+                        &inner_type,
+                    )),
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(4))],
+                        &inner_type,
+                    )),
+                ],
+                &nested_type,
+            )),
+            None,
+        );
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(ast.to_string(), "ARRAY[ARRAY[1, 2], ARRAY[3, 4]]");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_round_scalar_fn_to_expr() -> Result<()> {
         let default_dialect: Arc<dyn Dialect> = Arc::new(
             CustomDialectBuilder::new()
@@ -3374,7 +3538,7 @@ mod tests {
             (
                 Arc::clone(&default_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15 11:00:00 +00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3382,7 +3546,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15 12:00:00.123 +01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3390,7 +3554,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15 10:00:00.123456 -01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3398,12 +3562,12 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15 11:00:00.123456789 +00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15 11:00:00+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3411,7 +3575,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15 12:00:00.123+01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3419,7 +3583,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15 10:00:00.123456-01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3427,13 +3591,12 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15 11:00:00.123456789+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
             ),
-            // BigQuery: should be no space between timestamp and timezone
             (
                 Arc::clone(&bigquery_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15 11:00:00+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&bigquery_dialect),
@@ -3441,7 +3604,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15 12:00:00.123+01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&bigquery_dialect),
@@ -3449,7 +3612,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15 10:00:00.123456-01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&bigquery_dialect),
@@ -3457,7 +3620,7 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15 11:00:00.123456789+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
             ),
         ] {
             let unparser = Unparser::new(dialect.as_ref());
@@ -3467,6 +3630,55 @@ mod tests {
             let actual = format!("{}", unparser.expr_to_sql(&expr)?);
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_bigquery_dialect_overrides() -> Result<()> {
+        let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
+        let unparser = Unparser::new(bigquery_dialect.as_ref());
+
+        // date_field_extract_style: EXTRACT instead of date_part
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::new_from_impl(
+                datafusion_functions::datetime::date_part::DatePartFunc::new(),
+            )),
+            args: vec![lit("YEAR"), col("date_col")],
+        });
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "EXTRACT(YEAR FROM `date_col`)");
+
+        // interval_style: SQL standard instead of PostgresVerbose
+        let expr = interval_year_month_lit("3 months");
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "INTERVAL '3' MONTH");
+
+        // float64_ast_dtype: FLOAT64 instead of DOUBLE
+        let expr = cast(col("a"), DataType::Float64);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS FLOAT64)");
+
+        // supports_column_alias_in_table_alias: false
+        assert!(!bigquery_dialect.supports_column_alias_in_table_alias());
+
+        // utf8_cast_dtype: STRING instead of VARCHAR
+        let expr = cast(col("a"), DataType::Utf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // large_utf8_cast_dtype: STRING instead of TEXT
+        let expr = cast(col("a"), DataType::LargeUtf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // timestamp_cast_dtype: TIMESTAMP (no WITH TIME ZONE)
+        let expr = cast(
+            col("a"),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+        );
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS TIMESTAMP)");
+
         Ok(())
     }
 }

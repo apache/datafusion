@@ -265,8 +265,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
 fn replace_with_partial_sort(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let plan_any = plan.as_any();
-    let Some(sort_plan) = plan_any.downcast_ref::<SortExec>() else {
+    let Some(sort_plan) = plan.downcast_ref::<SortExec>() else {
         return Ok(plan);
     };
 
@@ -509,8 +508,7 @@ pub fn ensure_sorting(
                 child = add_sort_above(
                     child,
                     req,
-                    plan.as_any()
-                        .downcast_ref::<OutputRequirementExec>()
+                    plan.downcast_ref::<OutputRequirementExec>()
                         .map(|output| output.fetch())
                         .unwrap_or(None),
                 );
@@ -555,7 +553,7 @@ pub fn ensure_sorting(
 fn analyze_immediate_sort_removal(
     mut node: PlanWithCorrespondingSort,
 ) -> Result<Transformed<PlanWithCorrespondingSort>> {
-    let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() else {
+    let Some(sort_exec) = node.plan.downcast_ref::<SortExec>() else {
         return Ok(Transformed::no(node));
     };
     let sort_input = sort_exec.input();
@@ -620,22 +618,22 @@ fn adjust_window_sort_removal(
     )?;
     window_tree.children.push(child_node);
 
-    let plan = window_tree.plan.as_any();
     let child_plan = &window_tree.children[0].plan;
-    let (window_expr, new_window) =
-        if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
-            let window_expr = exec.window_expr();
-            let new_window =
-                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
-            (window_expr, new_window)
-        } else if let Some(exec) = plan.downcast_ref::<BoundedWindowAggExec>() {
-            let window_expr = exec.window_expr();
-            let new_window =
-                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
-            (window_expr, new_window)
-        } else {
-            return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
-        };
+    let (window_expr, new_window) = if let Some(exec) =
+        window_tree.plan.downcast_ref::<WindowAggExec>()
+    {
+        let window_expr = exec.window_expr();
+        let new_window =
+            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        (window_expr, new_window)
+    } else if let Some(exec) = window_tree.plan.downcast_ref::<BoundedWindowAggExec>() {
+        let window_expr = exec.window_expr();
+        let new_window =
+            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        (window_expr, new_window)
+    } else {
+        return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
+    };
 
     window_tree.plan = if let Some(new_window) = new_window {
         // We were able to change the window to accommodate the input, use it:
@@ -706,7 +704,7 @@ fn remove_bottleneck_in_subplan(
             .collect::<Result<_>>()?;
     }
     let mut new_reqs = requirements.update_plan_from_children()?;
-    if let Some(repartition) = new_reqs.plan.as_any().downcast_ref::<RepartitionExec>() {
+    if let Some(repartition) = new_reqs.plan.downcast_ref::<RepartitionExec>() {
         let input_partitioning = repartition.input().output_partitioning();
         // We can remove this repartitioning operator if it is now a no-op:
         let mut can_remove = input_partitioning.eq(repartition.partitioning());
@@ -744,7 +742,7 @@ fn remove_corresponding_sort_from_sub_plan(
     requires_single_partition: bool,
 ) -> Result<PlanWithCorrespondingSort> {
     // A `SortExec` is always at the bottom of the tree.
-    if let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() {
+    if let Some(sort_exec) = node.plan.downcast_ref::<SortExec>() {
         // Do not remove sorts with fetch:
         if sort_exec.fetch().is_none() {
             node = node.children.swap_remove(0);
@@ -777,9 +775,7 @@ fn remove_corresponding_sort_from_sub_plan(
         if is_sort_preserving_merge(&node.plan) {
             node.children = node.children.swap_remove(0).children;
             node.plan = Arc::clone(node.plan.children().swap_remove(0));
-        } else if let Some(repartition) =
-            node.plan.as_any().downcast_ref::<RepartitionExec>()
-        {
+        } else if let Some(repartition) = node.plan.downcast_ref::<RepartitionExec>() {
             node.plan = Arc::new(RepartitionExec::try_new(
                 Arc::clone(&node.children[0].plan),
                 repartition.properties().output_partitioning().clone(),
@@ -811,10 +807,9 @@ fn remove_corresponding_sort_from_sub_plan(
 fn get_sort_exprs(
     sort_any: &Arc<dyn ExecutionPlan>,
 ) -> Result<(&LexOrdering, Option<usize>)> {
-    if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
+    if let Some(sort_exec) = sort_any.downcast_ref::<SortExec>() {
         Ok((sort_exec.expr(), sort_exec.fetch()))
-    } else if let Some(spm) = sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
-    {
+    } else if let Some(spm) = sort_any.downcast_ref::<SortPreservingMergeExec>() {
         Ok((spm.expr(), spm.fetch()))
     } else {
         plan_err!("Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec")

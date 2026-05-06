@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -201,10 +200,6 @@ impl DefaultValueTableProvider {
 
 #[async_trait]
 impl TableProvider for DefaultValueTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

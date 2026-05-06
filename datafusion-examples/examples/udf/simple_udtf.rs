@@ -85,10 +85,6 @@ struct LocalCsvTable {
 
 #[async_trait]
 impl TableProvider for LocalCsvTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

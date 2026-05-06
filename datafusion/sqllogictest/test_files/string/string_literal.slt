@@ -312,6 +312,35 @@ SELECT lpad(NULL, 5, 'xy')
 ----
 NULL
 
+# lpad counts Unicode codepoints, not grapheme clusters.
+# chr(769) is U+0301 COMBINING ACUTE ACCENT — 'e' || chr(769) is 2 codepoints
+# but renders as a single grapheme cluster.
+
+# Input with combining character: 'e' + combining accent + 'x' = 3 codepoints.
+# Padding to 4 means 1 space prepended.
+query BII
+SELECT lpad('e' || chr(769) || 'x', 4) = ' ' || 'e' || chr(769) || 'x',
+       character_length('e' || chr(769) || 'x'),
+       character_length(lpad('e' || chr(769) || 'x', 4))
+----
+true 3 4
+
+# Truncating input with combining character: 'e' + combining accent + 'x' + 'y'
+# = 4 codepoints. Truncating to 3 keeps first 3 codepoints: 'e' + combining accent + 'x'.
+query BI
+SELECT lpad('e' || chr(769) || 'xy', 3) = 'e' || chr(769) || 'x',
+       character_length(lpad('e' || chr(769) || 'xy', 3))
+----
+true 3
+
+# Fill string with combining character: fill is 'e' + combining accent = 2 codepoints.
+# Padding 'x' (1 codepoint) to length 5 means 4 fill codepoints = 2 cycles of fill.
+query BI
+SELECT lpad('x', 5, 'e' || chr(769)) = 'e' || chr(769) || 'e' || chr(769) || 'x',
+       character_length(lpad('x', 5, 'e' || chr(769)))
+----
+true 5
+
 query T
 SELECT regexp_replace('foobar', 'bar', 'xx', 'gi')
 ----
@@ -582,6 +611,34 @@ query T
 SELECT rpad(arrow_cast(NULL, 'Utf8View'), 5, 'xy')
 ----
 NULL
+
+# rpad counts Unicode codepoints, not grapheme clusters.
+# chr(769) is U+0301 COMBINING ACUTE ACCENT.
+
+# Input with combining character: 'e' + combining accent + 'x' = 3 codepoints.
+# Padding to 4 means 1 space appended.
+query BII
+SELECT rpad('e' || chr(769) || 'x', 4) = 'e' || chr(769) || 'x' || ' ',
+       character_length('e' || chr(769) || 'x'),
+       character_length(rpad('e' || chr(769) || 'x', 4))
+----
+true 3 4
+
+# Truncating input with combining character: 'e' + combining accent + 'x' + 'y'
+# = 4 codepoints. Truncating to 3 keeps first 3 codepoints: 'e' + combining accent + 'x'.
+query BI
+SELECT rpad('e' || chr(769) || 'xy', 3) = 'e' || chr(769) || 'x',
+       character_length(rpad('e' || chr(769) || 'xy', 3))
+----
+true 3
+
+# Fill string with combining character: fill is 'e' + combining accent = 2 codepoints.
+# Padding 'x' (1 codepoint) to length 5 means 4 fill codepoints = 2 cycles of fill.
+query BI
+SELECT rpad('x', 5, 'e' || chr(769)) = 'x' || 'e' || chr(769) || 'e' || chr(769),
+       character_length(rpad('x', 5, 'e' || chr(769)))
+----
+true 5
 
 query I
 SELECT char_length('')
@@ -1829,3 +1886,27 @@ query T
 SELECT arrow_typeof(translate(arrow_cast('12345', 'Utf8View'), '143', 'ax'))
 ----
 Utf8View
+
+# translate operates on Unicode codepoints, not grapheme clusters.
+# chr(769) is U+0301 COMBINING ACUTE ACCENT.
+
+# Replacing a combining accent (a single codepoint) with another character.
+# 'e' || chr(769) is 2 codepoints; translating chr(769) → 'X' replaces just the accent.
+query B
+SELECT translate('e' || chr(769), chr(769), 'X') = 'eX'
+----
+true
+
+# Replacing the base character but not the combining accent.
+query B
+SELECT translate('e' || chr(769) || 'y', 'e', 'a') = 'a' || chr(769) || 'y'
+----
+true
+
+# Deleting a combining accent (from longer than to).
+# 'e' || chr(769) || 'x' with chr(769) in `from` but no corresponding `to` entry → deleted.
+query BI
+SELECT translate('e' || chr(769) || 'x', chr(769), '') = 'ex',
+       character_length(translate('e' || chr(769) || 'x', chr(769), ''))
+----
+true 2

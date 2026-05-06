@@ -37,6 +37,7 @@
 
 extern crate core;
 
+mod higher_order_function;
 mod literal;
 mod operation;
 mod partition_evaluator;
@@ -112,6 +113,11 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
+pub use higher_order_function::{
+    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderTypeSignature, HigherOrderUDF, LambdaArgument, LambdaParametersProgress,
+    ValueOrLambda,
+};
 pub use literal::{
     Literal, TimestampLiteral, lit, lit_timestamp_nano, lit_with_metadata,
 };
@@ -126,7 +132,9 @@ pub use udaf::{
     udaf_default_schema_name, udaf_default_window_function_display_name,
     udaf_default_window_function_schema_name,
 };
-pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+pub use udf::{
+    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, StructFieldMapping,
+};
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 

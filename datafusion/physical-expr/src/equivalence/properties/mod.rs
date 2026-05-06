@@ -33,7 +33,7 @@ use self::dependency::{
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{CastColumnExpr, CastExpr, Column, Literal, with_new_schema};
+use crate::expressions::{CastExpr, Column, Literal, with_new_schema};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -196,35 +196,23 @@ impl OrderingEquivalenceCache {
 
 impl EquivalenceProperties {
     /// Helper used by the ordering equivalence rule when considering whether a
-    /// cast-bearing expression can replace an existing sort key without invalidating
-    /// the ordering.
+    /// cast-bearing expression can replace an existing sort key without
+    /// invalidating the ordering.
     ///
-    /// This function handles *both* `CastExpr` (generic cast) and
-    /// `CastColumnExpr` (field-aware cast) because the planner may introduce either
-    /// form during rewrite steps; the core logic is the same in both cases.  The
-    /// substitution is only allowed when the cast wraps **the very same child
-    /// expression** that the original sort used (an exact-child-match invariant),
-    /// and the casted type must be a widening/order-preserving conversion
-    /// `CastExpr::check_bigger_cast(...)` ensures.  Without those restrictions the
-    /// existing sort order could be violated (e.g. a narrowing cast could collapse
-    /// distinct values together).
-    fn substitute_cast_like_ordering(
+    /// The substitution is only allowed when the cast wraps the very same child
+    /// expression that the original sort used and the casted type is a
+    /// widening/order-preserving conversion. Without those restrictions, a
+    /// narrowing cast could collapse distinct values and violate the existing
+    /// sort order.
+    fn substitute_cast_ordering(
         r_expr: Arc<dyn PhysicalExpr>,
         sort_expr: &PhysicalSortExpr,
         expr_type: &DataType,
     ) -> Option<PhysicalSortExpr> {
-        let (child_expr, cast_type) = if let Some(cast_expr) =
-            r_expr.as_any().downcast_ref::<CastExpr>()
-        {
-            (cast_expr.expr(), cast_expr.cast_type())
-        } else if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastColumnExpr>() {
-            (cast_expr.expr(), cast_expr.target_field().data_type())
-        } else {
-            return None;
-        };
+        let cast_expr = r_expr.downcast_ref::<CastExpr>()?;
 
-        (child_expr.eq(&sort_expr.expr)
-            && CastExpr::check_bigger_cast(cast_type, expr_type))
+        (cast_expr.expr().eq(&sort_expr.expr)
+            && CastExpr::check_bigger_cast(cast_expr.cast_type(), expr_type))
         .then(|| PhysicalSortExpr::new(r_expr, sort_expr.options))
     }
 
@@ -750,8 +738,7 @@ impl EquivalenceProperties {
                         // Build a map of column positions in the ordering:
                         let mut col_positions = HashMap::with_capacity(length);
                         for (pos, req) in ordering.iter().enumerate() {
-                            if let Some(col) = req.expr.as_any().downcast_ref::<Column>()
-                            {
+                            if let Some(col) = req.expr.downcast_ref::<Column>() {
                                 let nullable = col.nullable(&self.schema).unwrap_or(true);
                                 col_positions.insert(col.index(), (pos, nullable));
                             }
@@ -795,8 +782,7 @@ impl EquivalenceProperties {
                         // Build a map of column positions in the ordering:
                         let mut col_positions = HashMap::with_capacity(length);
                         for (pos, req) in ordering.iter().enumerate() {
-                            if let Some(col) = req.expr.as_any().downcast_ref::<Column>()
-                            {
+                            if let Some(col) = req.expr.downcast_ref::<Column>() {
                                 let nullable = col.nullable(&self.schema).unwrap_or(true);
                                 col_positions.insert(col.index(), (pos, nullable));
                             }
@@ -866,25 +852,25 @@ impl EquivalenceProperties {
             order
                 .into_iter()
                 .map(|sort_expr| {
-                    let referring_exprs = mapping
-                        .iter()
-                        .map(|(source, _target)| source)
-                        .filter(|source| expr_refers(source, &sort_expr.expr))
-                        .cloned();
-                    let mut result = vec![];
                     // The sort expression comes from this schema, so the
                     // following call to `unwrap` is safe.
                     let expr_type = sort_expr.expr.data_type(schema).unwrap();
+                    let original_sort_expr = sort_expr.clone();
                     // TODO: Add one-to-one analysis for ScalarFunctions.
-                    for r_expr in referring_exprs {
-                        if let Some(substituted) = Self::substitute_cast_like_ordering(
-                            r_expr, &sort_expr, &expr_type,
-                        ) {
-                            result.push(substituted);
-                        }
-                    }
-                    result.push(sort_expr);
-                    result
+                    mapping
+                        .iter()
+                        .map(|(source, _target)| source)
+                        .filter(|source| expr_refers(source, &original_sort_expr.expr))
+                        .cloned()
+                        .filter_map(|r_expr| {
+                            Self::substitute_cast_ordering(
+                                r_expr,
+                                &original_sort_expr,
+                                &expr_type,
+                            )
+                        })
+                        .chain(std::iter::once(sort_expr))
+                        .collect::<Vec<_>>()
                 })
                 // Generate all valid orderings given substituted expressions:
                 .multi_cartesian_product()
@@ -1146,7 +1132,7 @@ impl EquivalenceProperties {
             .iter()
             .flat_map(|(_, targets)| {
                 targets.iter().flat_map(|(target, _)| {
-                    target.as_any().downcast_ref::<Column>().map(|c| c.index())
+                    target.downcast_ref::<Column>().map(|c| c.index())
                 })
             })
             .collect::<Vec<_>>();
@@ -1404,10 +1390,10 @@ fn update_properties(
         // We have an intermediate (non-leaf) node, account for its children:
         let children_props = node.children.iter().map(|c| c.data.clone()).collect_vec();
         node.data = node.expr.get_properties(&children_props)?;
-    } else if node.expr.as_any().is::<Literal>() {
+    } else if node.expr.is::<Literal>() {
         // We have a Literal, which is one of the two possible leaf node types:
         node.data = node.expr.get_properties(&[])?;
-    } else if node.expr.as_any().is::<Column>() {
+    } else if node.expr.is::<Column>() {
         // We have a Column, which is the other possible leaf node type:
         node.data.range =
             Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?
@@ -1478,13 +1464,13 @@ fn get_expr_properties(
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
         })
-    } else if expr.as_any().downcast_ref::<Column>().is_some() {
+    } else if expr.downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
         })
-    } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+    } else if let Some(literal) = expr.downcast_ref::<Literal>() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
             range: literal.value().into(),

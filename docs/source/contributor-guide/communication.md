@@ -68,6 +68,15 @@ In Slack, we use these channels:
 - `#datafusion-comet`
 - `#datafusion-python`
 
+## Weekly Video Call Syncs
+
+The DataFusion community also holds a weekly video call sync for real-time
+discussion and coordination. You can join the meeting using the Google Meet
+link below, and use the shared meeting document for agenda items and notes:
+
+- [Video call link](https://meet.google.com/nfg-eviu-qrm)
+- [Meeting details and notes](https://docs.google.com/document/d/1NBpkIAuU7O9h8Br5CbFksDhX-L9TyO9wmGLPMe0Plc8)
+
 ### Job Board
 
 There are plenty of opportunities to work with DataFusion advertised on the

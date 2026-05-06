@@ -43,7 +43,6 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::*;
 use futures::stream::{StreamExt, TryStreamExt};
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -224,10 +223,6 @@ impl DisplayAs for BufferingExecutionPlan {
 impl ExecutionPlan for BufferingExecutionPlan {
     fn name(&self) -> &'static str {
         "BufferingExecutionPlan"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {

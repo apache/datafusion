@@ -201,13 +201,33 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         group.finish();
 
-        // Scalar start, no count, long strings
+        // Scalar start, no count, long strings, start near middle
         let len = 128;
         let mut group = c.benchmark_group("substr, scalar start, no count, long strings");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
 
         let args = create_args_without_count::<i32>(size, len, true, true, true);
+        group.bench_function(
+            format!("substr_string_view [size={size}, strlen={len}]"),
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
+        );
+
+        let args = create_args_without_count::<i32>(size, len, false, false, true);
+        group.bench_function(format!("substr_string [size={size}, strlen={len}]"), |b| {
+            b.iter(|| black_box(invoke_substr_with_args(args.clone(), size)))
+        });
+
+        group.finish();
+
+        // Scalar start=1, no count, long strings
+        let len = 128;
+        let mut group =
+            c.benchmark_group("substr, scalar start=1, no count, long strings");
+        group.sampling_mode(SamplingMode::Flat);
+        group.sample_size(10);
+
+        let args = create_args_without_count::<i32>(size, len, false, true, true);
         group.bench_function(
             format!("substr_string_view [size={size}, strlen={len}]"),
             |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
