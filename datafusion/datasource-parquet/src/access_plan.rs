@@ -203,6 +203,11 @@ impl ParquetAccessPlan {
         self.should_scan(idx) && self.fully_matched[idx]
     }
 
+    /// Returns the fully matched row group flags.
+    pub(crate) fn fully_matched(&self) -> &Vec<bool> {
+        &self.fully_matched
+    }
+
     /// Return true if any scanned row group is fully matched.
     fn has_fully_matched(&self) -> bool {
         self.row_group_index_iter()

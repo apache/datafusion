@@ -74,6 +74,11 @@ impl RowGroupAccessPlanFilter {
         self.access_plan
     }
 
+    /// Returns the is_fully_matched vector.
+    pub fn is_fully_matched(&self) -> &Vec<bool> {
+        self.access_plan.fully_matched()
+    }
+
     /// Prunes the access plan based on the limit and fully contained row groups.
     ///
     /// The pruning works by leveraging the concept of fully matched row groups. Consider a query like:

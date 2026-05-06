@@ -1010,7 +1010,10 @@ impl MetricValue {
             Self::SpilledBytes(_) => 11,
             Self::SpilledRows(_) => 12,
             Self::CurrentMemoryUsage(_) => 13,
-            Self::Count { .. } => 14,
+            Self::Count { name, .. } => match name.as_ref() {
+                "page_index_pages_skipped_by_fully_matched" => 8,
+                _ => 14,
+            },
             Self::Gauge { .. } => 15,
             Self::Time { .. } => 16,
             Self::Ratio { .. } => 17,

@@ -19,6 +19,7 @@ use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricCategory, MetricType,
     PruningMetrics, RatioMergeStrategy, RatioMetrics, Time,
 };
+use std::sync::{Arc, OnceLock};
 
 /// Stores metrics about the parquet execution for a particular parquet file.
 ///
@@ -67,6 +68,11 @@ pub struct ParquetFileMetrics {
     pub page_index_rows_pruned: PruningMetrics,
     /// Total pages filtered or matched by parquet page index
     pub page_index_pages_pruned: PruningMetrics,
+    /// Lazily registered counter for pages whose page-index pruning was skipped
+    /// because the containing row group was fully matched by row-group statistics.
+    ///
+    /// These pages are still scanned; only page-index predicate evaluation is skipped.
+    page_index_pages_skipped_by_fully_matched: LazyParquetSummaryCount,
     /// Total time spent evaluating parquet page index filters
     pub page_index_eval_time: Time,
     /// Total time spent reading and parsing metadata from the footer
@@ -204,6 +210,12 @@ impl ParquetFileMetrics {
             row_pushdown_eval_time,
             page_index_rows_pruned,
             page_index_pages_pruned,
+            page_index_pages_skipped_by_fully_matched: LazyParquetSummaryCount::new(
+                "page_index_pages_skipped_by_fully_matched",
+                partition,
+                filename,
+                metrics,
+            ),
             statistics_eval_time,
             bloom_filter_eval_time,
             page_index_eval_time,
@@ -212,5 +224,52 @@ impl ParquetFileMetrics {
             predicate_cache_inner_records,
             predicate_cache_records,
         }
+    }
+
+    /// Record pages whose page-index pruning was skipped because the containing
+    /// row group was fully matched by row-group statistics.
+    pub(crate) fn add_page_index_pages_skipped_by_fully_matched(&self, n: usize) {
+        if n == 0 {
+            return;
+        }
+
+        self.page_index_pages_skipped_by_fully_matched.add(n);
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LazyParquetSummaryCount {
+    count: Arc<OnceLock<Count>>,
+    name: &'static str,
+    partition: usize,
+    filename: String,
+    metrics: ExecutionPlanMetricsSet,
+}
+
+impl LazyParquetSummaryCount {
+    fn new(
+        name: &'static str,
+        partition: usize,
+        filename: &str,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Self {
+        Self {
+            count: Arc::new(OnceLock::new()),
+            name,
+            partition,
+            filename: filename.to_string(),
+            metrics: metrics.clone(),
+        }
+    }
+
+    fn add(&self, n: usize) {
+        let count = self.count.get_or_init(|| {
+            MetricBuilder::new(&self.metrics)
+                .with_new_label("filename", self.filename.clone())
+                .with_type(MetricType::Summary)
+                .with_category(MetricCategory::Rows)
+                .counter(self.name, self.partition)
+        });
+        count.add(n);
     }
 }
