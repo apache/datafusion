@@ -128,12 +128,96 @@ FULL JOIN generate_series(1, 200) AS t2(v2)
 ----
 100199 199 99999
 
-# Restore settings to slt runner defaults
-statement ok
-RESET datafusion.runtime.memory_limit
+# =============================================================================
+# Multi-partition memory-limited correctness tests
+#
+# These exercise the cross-partition shared-state path of NLJ's spill
+# fallback: every right partition must observe the same per-chunk
+# `JoinLeftData` (visited bitmap + probe-thread counter) so that join
+# types which emit unmatched left rows (LEFT, LEFT SEMI, LEFT ANTI,
+# LEFT MARK, FULL) produce the same results as the single-pass and
+# single-partition paths. Without the coordinator, each partition would
+# independently emit unmatched left rows from its own bitmap, producing
+# duplicates.
+# =============================================================================
 
 statement ok
 SET datafusion.execution.target_partitions = 4
+
+# Memory budget tight enough to force NLJ left-side OOM and trigger the
+# memory-limited fallback. Shared between all queries in this section.
+statement ok
+SET datafusion.runtime.memory_limit = '50K'
+
+# --- LEFT JOIN ---
+# v1 in [1,5000], v2 in [1,100] with predicate (v1+v2)=101 AND v2<=50.
+# Matches:    v2 in [1..50] each pairs with v1 = 101 - v2 in [51..100]   → 50 pairs
+# Left only:  v1 in [1..5000] \ [51..100]                                  → 4950 unmatched
+# Total LEFT JOIN output rows = 50 + 4950 = 5000 (each left row exactly once).
+query I nosort
+SELECT count(*) as cnt
+FROM generate_series(1, 5000) AS t1(v1)
+LEFT JOIN generate_series(1, 100) AS t2(v2)
+  ON (t1.v1 + t2.v2) = 101 AND t2.v2 <= 50
+----
+5000
+
+# Same predicate, also asserts the unmatched-left count is correct
+# (would be 4950 * N where N is the partition count without coordination).
+query II nosort
+SELECT count(*) as cnt,
+       sum(case when t2.v2 IS NULL then 1 else 0 end) as unmatched_left
+FROM generate_series(1, 5000) AS t1(v1)
+LEFT JOIN generate_series(1, 100) AS t2(v2)
+  ON (t1.v1 + t2.v2) = 101 AND t2.v2 <= 50
+----
+5000 4950
+
+# --- FULL JOIN ---
+# Same predicate. Output:
+#   - 50 matched pairs
+#   - 4950 unmatched left rows (NULL-padded right)
+#   - 50 unmatched right rows (v2 in [51..100], rejected by `v2 <= 50`)
+# Total = 5050.
+query III nosort
+SELECT count(*) as cnt,
+       sum(case when t2.v2 IS NULL then 1 else 0 end) as unmatched_left,
+       sum(case when t1.v1 IS NULL then 1 else 0 end) as unmatched_right
+FROM generate_series(1, 5000) AS t1(v1)
+FULL JOIN generate_series(1, 100) AS t2(v2)
+  ON (t1.v1 + t2.v2) = 101 AND t2.v2 <= 50
+----
+5050 4950 50
+
+# --- LEFT SEMI JOIN ---
+# Each left row appears at most once, even though multiple right rows
+# (potentially across multiple right partitions) could match it.
+# The 50 left rows in [51..100] each match exactly one right row.
+query I nosort
+SELECT count(*) as cnt
+FROM generate_series(1, 5000) AS t1(v1)
+WHERE EXISTS (
+  SELECT 1 FROM generate_series(1, 100) AS t2(v2)
+  WHERE (t1.v1 + t2.v2) = 101 AND t2.v2 <= 50
+)
+----
+50
+
+# --- LEFT ANTI JOIN ---
+# Left rows with NO matching right row: 5000 - 50 = 4950.
+query I nosort
+SELECT count(*) as cnt
+FROM generate_series(1, 5000) AS t1(v1)
+WHERE NOT EXISTS (
+  SELECT 1 FROM generate_series(1, 100) AS t2(v2)
+  WHERE (t1.v1 + t2.v2) = 101 AND t2.v2 <= 50
+)
+----
+4950
+
+# Restore settings to slt runner defaults
+statement ok
+RESET datafusion.runtime.memory_limit
 
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema
