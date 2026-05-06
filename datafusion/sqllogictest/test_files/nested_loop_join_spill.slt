@@ -162,6 +162,30 @@ LEFT JOIN generate_series(1, 100) AS t2(v2)
 ----
 5000
 
+# Verify the memory-limited fallback was actually taken (spill_count > 0)
+# under target_partitions=4. The fallback shares per-chunk `JoinLeftData`
+# across right partitions via `FallbackCoordinator`; without that path
+# the test would simply OOM rather than spill.
+query TT
+EXPLAIN ANALYZE
+SELECT count(*) as cnt
+FROM generate_series(1, 5000) AS t1(v1)
+LEFT JOIN generate_series(1, 100) AS t2(v2)
+  ON (t1.v1 + t2.v2) = 101 AND t2.v2 <= 50
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as cnt], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----CoalescePartitionsExec, metrics=[<slt:ignore>]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+05)--------NestedLoopJoinExec: join_type=Left, filter=v1@0 + v2@1 = 101, projection=[], metrics=[output_rows=5.00 K, <slt:ignore> spill_count=2, <slt:ignore>]
+06)----------ProjectionExec: expr=[value@0 as v1], metrics=[<slt:ignore>]
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=5000, batch_size=8192], metrics=[<slt:ignore>]
+08)----------ProjectionExec: expr=[value@0 as v2], metrics=[<slt:ignore>]
+09)------------FilterExec: value@0 <= 50, metrics=[<slt:ignore>]
+10)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[<slt:ignore>]
+11)----------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100, batch_size=8192], metrics=[<slt:ignore>]
+
 # Same predicate, also asserts the unmatched-left count is correct
 # (would be 4950 * N where N is the partition count without coordination).
 query II nosort
