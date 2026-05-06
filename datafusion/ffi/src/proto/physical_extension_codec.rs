@@ -152,7 +152,7 @@ unsafe extern "C" fn try_decode_fn_wrapper(
         buf.as_ref(),
         &inputs,
         task_ctx.as_ref(),
-        &DefaultPhysicalProtoConverter,
+        &DefaultPhysicalProtoConverter {},
     ));
 
     FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
@@ -167,7 +167,11 @@ unsafe extern "C" fn try_encode_fn_wrapper(
     let plan: Arc<dyn ExecutionPlan> = sresult_return!((&node).try_into());
 
     let mut bytes = Vec::new();
-    sresult_return!(codec.try_encode(plan, &mut bytes, &DefaultPhysicalProtoConverter));
+    sresult_return!(codec.try_encode(
+        plan,
+        &mut bytes,
+        &DefaultPhysicalProtoConverter {}
+    ));
 
     FFI_Result::Ok(bytes.into_iter().collect())
 }
@@ -608,14 +612,14 @@ pub(crate) mod tests {
         foreign_codec.try_encode(
             Arc::clone(&exec),
             &mut bytes,
-            &DefaultPhysicalProtoConverter,
+            &DefaultPhysicalProtoConverter {},
         )?;
 
         let returned_exec = foreign_codec.try_decode(
             &bytes,
             &input_execs,
             ctx.task_ctx().as_ref(),
-            &DefaultPhysicalProtoConverter,
+            &DefaultPhysicalProtoConverter {},
         )?;
 
         assert!(returned_exec.is::<EmptyExec>());
