@@ -848,6 +848,40 @@ and affected calls to <code class="docutils literal notranslate"><span class="pr
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/21602">#21602</a> and
 <a class="reference external" href="https://github.com/apache/datafusion/pull/21603">PR #21603</a> for details.</p>
 </section>
+<section id="conversion-from-configfileencryptionproperties-configfiledecryptionproperties-is-now-fallible">
+<h3>Conversion from <code class="docutils literal notranslate"><span class="pre">ConfigFileEncryptionProperties</span></code> / <code class="docutils literal notranslate"><span class="pre">ConfigFileDecryptionProperties</span></code> is now fallible<a class="headerlink" href="#conversion-from-configfileencryptionproperties-configfiledecryptionproperties-is-now-fallible" title="Link to this heading">#</a></h3>
+<p>Previously, <code class="docutils literal notranslate"><span class="pre">datafusion_common::config::ConfigFileEncryptionProperties</span></code> and
+<code class="docutils literal notranslate"><span class="pre">datafusion_common::config::ConfigFileDecryptionProperties</span></code> implemented infallible
+conversions into Parquet’s encryption/decryption types (via <code class="docutils literal notranslate"><span class="pre">From</span></code> / <code class="docutils literal notranslate"><span class="pre">Into</span></code>).
+These conversions may need to decode hex-encoded keys and other configuration values, which can fail.</p>
+<p>They now use <code class="docutils literal notranslate"><span class="pre">TryFrom</span></code> / <code class="docutils literal notranslate"><span class="pre">TryInto</span></code> and return a <code class="docutils literal notranslate"><span class="pre">Result</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">TryFrom&lt;ConfigFileEncryptionProperties&gt;</span> <span class="pre">for</span> <span class="pre">parquet::encryption::encrypt::FileEncryptionProperties</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">TryFrom&lt;ConfigFileDecryptionProperties&gt;</span> <span class="pre">for</span> <span class="pre">parquet::encryption::decrypt::FileDecryptionProperties</span></code></p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Replace <code class="docutils literal notranslate"><span class="pre">from()</span></code> / <code class="docutils literal notranslate"><span class="pre">into()</span></code> with <code class="docutils literal notranslate"><span class="pre">try_from()</span></code> / <code class="docutils literal notranslate"><span class="pre">try_into()</span></code> and handle the resulting <code class="docutils literal notranslate"><span class="pre">Result</span></code>.</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">file_encryption_properties</span><span class="p">:</span><span class="w"> </span><span class="nc">FileEncryptionProperties</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">config_encryption_properties</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
+<span class="c1">// or</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">file_decryption_properties</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FileDecryptionProperties</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">config_decryption_properties</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>(
+where <code class="docutils literal notranslate"><span class="pre">config_encryption_properties</span></code> is a <code class="docutils literal notranslate"><span class="pre">ConfigFileEncryptionProperties</span></code> and
+<code class="docutils literal notranslate"><span class="pre">config_decryption_properties</span></code> is a <code class="docutils literal notranslate"><span class="pre">ConfigFileDecryptionProperties</span></code>
+)</p>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">file_encryption_properties</span><span class="p">:</span><span class="w"> </span><span class="nc">FileEncryptionProperties</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">config_encryption_properties</span><span class="p">.</span><span class="n">try_into</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="c1">// or</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">file_decryption_properties</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">FileDecryptionProperties</span><span class="p">::</span><span class="n">try_from</span><span class="p">(</span><span class="n">config_decryption_properties</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/21974">#21974</a> and
+<a class="reference external" href="https://github.com/apache/datafusion/pull/21985">PR #21985</a> for details.</p>
+</section>
 <section id="approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats">
 <h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_median</span></code> now coerce to floats<a class="headerlink" href="#approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats" title="Link to this heading">#</a></h3>
 <p>The type signatures of <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, and
@@ -957,6 +991,7 @@ allocation-free variant:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionprops-has-new-fields"><code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code> has new fields</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#items-in-datafusion-functions-strings-are-no-longer-public">Items in <code class="docutils literal notranslate"><span class="pre">datafusion_functions::strings</span></code> are no longer public</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#conversion-from-filedecryptionproperties-to-configfiledecryptionproperties-is-now-fallible">Conversion from <code class="docutils literal notranslate"><span class="pre">FileDecryptionProperties</span></code> to <code class="docutils literal notranslate"><span class="pre">ConfigFileDecryptionProperties</span></code> is now fallible</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#conversion-from-configfileencryptionproperties-configfiledecryptionproperties-is-now-fallible">Conversion from <code class="docutils literal notranslate"><span class="pre">ConfigFileEncryptionProperties</span></code> / <code class="docutils literal notranslate"><span class="pre">ConfigFileDecryptionProperties</span></code> is now fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats"><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_median</span></code> now coerce to floats</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default"><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code></a></li>
 </ul>
