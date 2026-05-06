@@ -138,23 +138,9 @@ fn spark_floor(
             ScalarValue::Float64,
             |x| x.floor() as i64
         ),
-        DataType::Int8 => {
-            apply_int64!(value, arrow::datatypes::Int8Type, ScalarValue::Int8, |x| x
-                as i64)
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+            value.cast_to(&DataType::Int64, None)
         }
-        DataType::Int16 => apply_int64!(
-            value,
-            arrow::datatypes::Int16Type,
-            ScalarValue::Int16,
-            |x| x as i64
-        ),
-        DataType::Int32 => apply_int64!(
-            value,
-            arrow::datatypes::Int32Type,
-            ScalarValue::Int32,
-            |x| x as i64
-        ),
-        DataType::Int64 => Ok(value.clone()),
         DataType::Decimal128(_, scale) if scale > 0 => {
             let divisor = 10_i128.pow_wrapping(scale as u32);
             let floor_decimal = |x: i128| {

@@ -172,9 +172,10 @@ SELECT floor(1.9::FLOAT), floor(-1.9::FLOAT);
 ----
 1 -2
 
-# Int8 boundary values pass through as Int64
+# Int8 boundaries (i8::MAX, i8::MIN) pass through as Int64
+# Note: i8::MIN written via arrow_cast to dodge the -(128) parse issue (128 > i8::MAX)
 query III
-SELECT floor(127::TINYINT), floor(-128::TINYINT), floor(NULL::TINYINT);
+SELECT floor(arrow_cast(127, 'Int8')), floor(arrow_cast(-128, 'Int8')), floor(NULL::TINYINT);
 ----
 127 -128 NULL
 
@@ -246,14 +247,16 @@ NULL
 ####################
 
 # Int16 boundaries (i16::MAX, i16::MIN) pass through as Int64
+# Note: i16::MIN via arrow_cast to dodge the -(32768) parse issue
 query III
-SELECT floor(32767::SMALLINT), floor(-32768::SMALLINT), floor(NULL::SMALLINT);
+SELECT floor(arrow_cast(32767, 'Int16')), floor(arrow_cast(-32768, 'Int16')), floor(NULL::SMALLINT);
 ----
 32767 -32768 NULL
 
 # Int32 boundaries (i32::MAX, i32::MIN) pass through as Int64
+# Note: i32::MIN via arrow_cast to dodge the -(2147483648) parse issue
 query III
-SELECT floor(2147483647::INT), floor(-2147483648::INT), floor(NULL::INT);
+SELECT floor(arrow_cast(2147483647, 'Int32')), floor(arrow_cast(-2147483648, 'Int32')), floor(NULL::INT);
 ----
 2147483647 -2147483648 NULL
 
