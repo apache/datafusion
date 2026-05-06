@@ -364,17 +364,8 @@ impl RunOpt {
         ctx: &SessionContext,
     ) -> Result<Vec<QueryResult>> {
         let batch = self.make_record_batch(query)?;
-        let schema = batch.schema();
-
         ctx.deregister_table("test_data")?;
         ctx.register_batch("test_data", batch)?;
-
-        if query.col2.is_some() && schema.field_with_name("dict_col2").is_err() {
-            return exec_err!(
-                "Query '{}' expects dict_col2 but it is missing from the schema",
-                query.name
-            );
-        }
 
         let mut query_results = vec![];
         for i in 0..self.common.iterations {
