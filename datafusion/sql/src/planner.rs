@@ -23,12 +23,11 @@ use std::vec;
 
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
-use arrow_schema::extension::{
-    EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType, Json, Uuid,
-};
+use arrow_schema::extension::{ExtensionType, Json, Uuid};
 use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
+use datafusion_common::types::{DFJson, DFUuid, DFExtensionType};
 use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
@@ -662,20 +661,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // If no type_planner can handle this type, use the default conversion
         match sql_type {
             // Canonical Arrow extension types
-            SQLDataType::Uuid => Ok(Arc::new(
-                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    HashMap::from([(
-                        EXTENSION_TYPE_NAME_KEY.to_string(),
-                        Uuid::NAME.to_string(),
-                    )]),
-                ),
-            )),
-            SQLDataType::JSON => Ok(Arc::new(
-                Field::new("", DataType::Utf8, true).with_metadata(HashMap::from([
-                    (EXTENSION_TYPE_NAME_KEY.to_string(), Json::NAME.to_string()),
-                    (EXTENSION_TYPE_METADATA_KEY.to_string(), "".to_string()),
-                ])),
-            )),
+            SQLDataType::Uuid => {
+                let data_type = DataType::FixedSizeBinary(16);
+                let df_uuid = DFUuid::try_new(&data_type, Default::default())?;
+                
+                // Re-construct the Arrow Uuid using the validated data from df_uuid
+                let arrow_uuid = Uuid::try_new(
+                    &df_uuid.storage_type().clone(),
+                    (),
+                ).map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                Ok(Arc::new(
+                    Field::new("", data_type, true)
+                        .with_extension_type(arrow_uuid)
+                ))
+        },
+            SQLDataType::JSON => {
+                let data_type = DataType::Utf8;
+                let df_json = DFJson::try_new(&data_type, Default::default())?;
+
+                let arrow_json = Json::try_new(
+                    &df_json.storage_type().clone(),
+                    Default::default(),
+                ).map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                Ok(Arc::new(
+                    Field::new("", data_type, true)
+                        .with_extension_type(arrow_json)
+                ))
+            },
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 Ok(self.convert_data_type_to_field(inner_sql_type)?.into_list())

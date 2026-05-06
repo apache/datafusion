@@ -64,6 +64,14 @@ arrow.uuid
 statement ok
 DROP TABLE test_uuid2;
 
+# Error: Cannot cast an integer to UUID
+statement error Unsupported CAST from Int64 to FixedSizeBinary\(16\)
+SELECT CAST(12345 AS UUID);
+
+# Error: Cannot cast a short string to UUID
+statement error Unsupported CAST from Utf8 to FixedSizeBinary\(16\)
+SELECT CAST('too-short' AS UUID);
+
 #######
 # JSON Extension Type
 #######
