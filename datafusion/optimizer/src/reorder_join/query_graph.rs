@@ -75,6 +75,18 @@ pub struct QueryGraph {
 }
 
 impl QueryGraph {
+    pub fn try_from_logical_plan(
+        value: LogicalPlan,
+    ) -> Result<(QueryGraph, Vec<LogicalPlan>), DataFusionError> {
+        // First, extract the join subtree from any wrapper operators
+        let (join_subtree, wrappers) = extract_join_subtree(value)?;
+
+        // Now convert only the join subtree to a query graph
+        let mut query_graph = QueryGraph::new();
+        flatten_joins_recursive(join_subtree, &mut query_graph)?;
+        Ok((query_graph, wrappers))
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             nodes: VecMap::new(),
@@ -82,7 +94,6 @@ impl QueryGraph {
             filters: Vec::new(),
         }
     }
-
     pub fn filters(&self) -> &[Expr] {
         &self.filters
     }
@@ -287,20 +298,6 @@ pub fn reconstruct_plan(
     Ok(current)
 }
 
-impl TryFrom<LogicalPlan> for QueryGraph {
-    type Error = DataFusionError;
-
-    fn try_from(value: LogicalPlan) -> Result<Self, Self::Error> {
-        // First, extract the join subtree from any wrapper operators
-        let (join_subtree, _wrappers) = extract_join_subtree(value)?;
-
-        // Now convert only the join subtree to a query graph
-        let mut query_graph = QueryGraph::new();
-        flatten_joins_recursive(join_subtree, &mut query_graph)?;
-        Ok(query_graph)
-    }
-}
-
 fn flatten_joins_recursive(
     plan: LogicalPlan,
     query_graph: &mut QueryGraph,
@@ -501,7 +498,7 @@ mod tests {
             .unwrap();
 
         // Convert to QueryGraph
-        let query_graph = QueryGraph::try_from(plan)?;
+        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
 
         // Verify structure: 3 nodes, 2 edges
         assert_eq!(query_graph.nodes().count(), 3);
@@ -569,7 +566,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let query_graph = QueryGraph::try_from(plan)?;
+        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
 
         assert_eq!(query_graph.nodes().count(), 3);
         assert_eq!(query_graph.edges.iter().count(), 2);
@@ -613,7 +610,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let query_graph = QueryGraph::try_from(plan)?;
+        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
 
         // Two leaves: the aggregated subtree (opaque) and lineitem.
         assert_eq!(query_graph.nodes().count(), 2);
@@ -660,7 +657,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let query_graph = QueryGraph::try_from(plan)?;
+        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
 
         // Two leaves: the LEFT-join subtree (opaque) and lineitem.
         assert_eq!(query_graph.nodes().count(), 2);
@@ -699,7 +696,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let query_graph = QueryGraph::try_from(plan)?;
+        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
 
         assert_eq!(query_graph.nodes().count(), 1);
         assert_eq!(query_graph.edges.iter().count(), 0);
