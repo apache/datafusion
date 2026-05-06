@@ -110,6 +110,10 @@ fn build_file_list_recurse(
 /// This helper can align field names and nullability to the declared schema. It rejects
 /// differences that would change values or silently lose schema information, such as column
 /// count, data type, field metadata, or schema metadata mismatches.
+///
+/// When an adapter is required, it conservatively derives fresh equivalence properties from
+/// `expected_schema` and drops child hash partitioning because field names/nullability may have
+/// changed while the underlying partitioning expressions still refer to the child schema.
 pub fn align_plan_to_schema(
     input: Arc<dyn ExecutionPlan>,
     expected_schema: &SchemaRef,
@@ -719,6 +723,37 @@ mod tests {
     }
 
     #[test]
+    fn align_plan_to_schema_returns_input_when_schema_matches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let result = align_plan_to_schema(Arc::clone(&input), &schema)?;
+
+        assert!(Arc::ptr_eq(&input, &result));
+        Ok(())
+    }
+
+    #[test]
+    fn align_plan_to_schema_uses_projection_for_rename_only() -> Result<()> {
+        let input = empty_exec(vec![Field::new("recursive_a", DataType::Int32, false)]);
+        let expected_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let result = align_plan_to_schema(Arc::clone(&input), &expected_schema)?;
+
+        let projection = result
+            .downcast_ref::<ProjectionExec>()
+            .expect("rename-only alignment should use ProjectionExec");
+        assert!(Arc::ptr_eq(projection.input(), &input));
+        assert_eq!(projection.schema(), expected_schema);
+        Ok(())
+    }
+
+    #[test]
     fn align_plan_to_schema_uses_adapter_for_nullability_narrowing() -> Result<()> {
         let input = empty_exec(vec![Field::new("a", DataType::Int32, true)]);
         let expected_schema = Arc::new(Schema::new(vec![Field::new(
@@ -735,6 +770,60 @@ mod tests {
         assert!(Arc::ptr_eq(aligned.input(), &input));
         assert_eq!(aligned.schema(), expected_schema);
         Ok(())
+    }
+
+    #[test]
+    fn align_plan_to_schema_errors_on_column_count_mismatch() {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, false)]);
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let err = align_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("expected 2 column"));
+    }
+
+    #[test]
+    fn align_plan_to_schema_errors_on_type_mismatch() {
+        let input = empty_exec(vec![Field::new("a", DataType::Int32, false)]);
+        let expected_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+        let err = align_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("field data type differs"));
+    }
+
+    #[test]
+    fn align_plan_to_schema_errors_on_field_metadata_mismatch() {
+        let input =
+            empty_exec(vec![Field::new("a", DataType::Int32, false).with_metadata(
+                HashMap::from([("source".to_string(), "input".to_string())]),
+            )]);
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("renamed", DataType::Int32, false).with_metadata(HashMap::from([
+                ("source".to_string(), "expected".to_string()),
+            ])),
+        ]));
+
+        let err = align_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("field metadata differs"));
+    }
+
+    #[test]
+    fn align_plan_to_schema_errors_on_schema_metadata_mismatch() {
+        let input_schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("a", DataType::Int32, false)],
+            HashMap::from([("source".to_string(), "input".to_string())]),
+        ));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
+        let expected_schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("renamed", DataType::Int32, false)],
+            HashMap::from([("source".to_string(), "expected".to_string())]),
+        ));
+
+        let err = align_plan_to_schema(input, &expected_schema).unwrap_err();
+        assert!(err.to_string().contains("schema metadata differ"));
     }
 
     #[test]
