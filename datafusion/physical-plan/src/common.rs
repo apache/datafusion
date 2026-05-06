@@ -274,7 +274,9 @@ impl SchemaAlignExec {
             Partitioning::RoundRobinBatch(partitions) => {
                 Partitioning::RoundRobinBatch(*partitions)
             }
-            partitioning => Partitioning::UnknownPartitioning(partitioning.partition_count()),
+            partitioning => {
+                Partitioning::UnknownPartitioning(partitioning.partition_count())
+            }
         };
         let properties = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),

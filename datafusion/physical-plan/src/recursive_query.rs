@@ -543,9 +543,10 @@ mod tests {
             false,
         )?;
 
-        assert_eq!(exec.schema(), static_term.schema());
-        assert_eq!(exec.static_term().schema(), static_term.schema());
-        assert_eq!(exec.recursive_term().schema(), static_term.schema());
+        let static_schema = static_term.schema();
+        assert_eq!(exec.schema(), static_schema);
+        assert_eq!(exec.static_term().schema(), static_schema);
+        assert_eq!(exec.recursive_term().schema(), static_schema);
         assert!(!exec.schema().field(0).is_nullable());
         let aligned = exec
             .recursive_term()
