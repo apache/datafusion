@@ -103,7 +103,7 @@ explain analyze select a from fully_matched_limit where a >= 3 limit 4;
 Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=4, <slt:ignore>row_groups_pruned_statistics=3 total → 3 matched -> 1 fully matched<slt:ignore>]
 
 query I
-select a from fully_matched_limit where a >= 3 limit 4;
+select a from fully_matched_limit where a >= 3 order by a limit 4;
 ----
 3
 4
