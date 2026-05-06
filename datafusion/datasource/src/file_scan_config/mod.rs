@@ -169,6 +169,10 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
+    /// The number of rows to skip before returning results.
+    /// When combined with `limit`, this enables efficient OFFSET handling
+    /// at the file scan level by skipping entire row groups when possible.
+    pub offset: Option<usize>,
     /// Whether the scan's limit is order sensitive
     /// When `true`, files must be read in the exact order specified to produce
     /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
@@ -271,6 +275,7 @@ pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
+    offset: Option<usize>,
     preserve_order: bool,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
@@ -301,6 +306,7 @@ impl FileScanConfigBuilder {
             output_ordering: vec![],
             file_compression_type: None,
             limit: None,
+            offset: None,
             preserve_order: false,
             constraints: None,
             batch_size: None,
@@ -314,6 +320,15 @@ impl FileScanConfigBuilder {
     /// If `None`, all records after filtering are returned.
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
+        self
+    }
+
+    /// Set the number of rows to skip before returning results.
+    ///
+    /// When combined with a limit, this enables efficient OFFSET handling
+    /// at the file scan level by skipping entire row groups when possible.
+    pub fn with_offset(mut self, offset: Option<usize>) -> Self {
+        self.offset = offset;
         self
     }
 
@@ -518,6 +533,7 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_source,
             limit,
+            offset,
             preserve_order,
             constraints,
             file_groups,
@@ -543,6 +559,7 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_source,
             limit,
+            offset,
             preserve_order,
             constraints,
             file_groups,
@@ -566,6 +583,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
             limit: config.limit,
+            offset: config.offset,
             preserve_order: config.preserve_order,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
@@ -658,6 +676,10 @@ impl DataSource for FileScanConfig {
 
                 if let Some(limit) = self.limit {
                     write!(f, ", limit={limit}")?;
+                }
+
+                if let Some(offset) = self.offset {
+                    write!(f, ", offset={offset}")?;
                 }
 
                 display_orderings(f, &orderings)?;
@@ -847,6 +869,25 @@ impl DataSource for FileScanConfig {
 
     fn fetch(&self) -> Option<usize> {
         self.limit
+    }
+
+    fn with_offset(&self, offset: usize) -> Option<Arc<dyn DataSource>> {
+        // Accept offset when source can efficiently skip rows (parquet)
+        // and no filter is present (row counts must be exact).
+        // For multi-partition single file: each partition independently
+        // skips RGs within its byte range. GlobalLimitExec is kept
+        // when multiple partitions exist to handle cross-partition offset.
+        if !self.file_source.supports_offset() || self.file_source.filter().is_some() {
+            return None;
+        }
+        let source = FileScanConfigBuilder::from(self.clone())
+            .with_offset(Some(offset))
+            .build();
+        Some(Arc::new(source))
+    }
+
+    fn offset(&self) -> Option<usize> {
+        self.offset
     }
 
     fn metrics(&self) -> ExecutionPlanMetricsSet {
@@ -1358,6 +1399,10 @@ impl DisplayAs for FileScanConfig {
 
         if let Some(limit) = self.limit {
             write!(f, ", limit={limit}")?;
+        }
+
+        if let Some(offset) = self.offset {
+            write!(f, ", offset={offset}")?;
         }
 
         display_orderings(f, &orderings)?;

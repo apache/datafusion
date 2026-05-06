@@ -588,6 +588,18 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         None
     }
 
+    /// Returns a variant of this `ExecutionPlan` with the given offset
+    /// (number of rows to skip). Returns `None` if offset pushdown is
+    /// not supported.
+    fn with_offset(&self, _offset: usize) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
+
+    /// Gets the offset for the operator, `None` means there is no offset.
+    fn offset(&self) -> Option<usize> {
+        None
+    }
+
     /// Gets the effect on cardinality, if known
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown

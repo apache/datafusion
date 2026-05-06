@@ -214,6 +214,51 @@ impl RowGroupAccessPlanFilter {
         }
     }
 
+    /// Prune row groups that can be entirely skipped due to offset.
+    ///
+    /// When an offset is specified, rows at the beginning of the scan must be
+    /// skipped. This method marks leading fully-matched row groups whose
+    /// cumulative row count falls within the offset as skipped, so they are
+    /// never read from disk.
+    ///
+    /// Returns the remaining offset (number of rows still to skip within the
+    /// first non-pruned row group).
+    pub fn prune_by_offset(
+        &mut self,
+        offset: usize,
+        has_predicate: bool,
+        rg_metadata: &[RowGroupMetaData],
+        metrics: &ParquetFileMetrics,
+    ) -> usize {
+        let mut remaining = offset;
+        let mut pruned_count = 0;
+
+        for &idx in self.access_plan.row_group_indexes().iter() {
+            if remaining == 0 {
+                break;
+            }
+            // We can skip a row group entirely if:
+            // - No predicate: all rows match, row count is exact
+            // - Has predicate but is_fully_matched: all rows pass filter
+            let can_skip = !has_predicate || self.is_fully_matched[idx];
+            if can_skip {
+                let rg_rows = rg_metadata[idx].num_rows() as usize;
+                if remaining >= rg_rows {
+                    self.access_plan.skip(idx);
+                    remaining -= rg_rows;
+                    pruned_count += 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        metrics.offset_pruned_row_groups.add_pruned(pruned_count);
+        remaining
+    }
+
     /// Prune remaining row groups to only those  within the specified range.
     ///
     /// Updates this set to mark row groups that should not be scanned
@@ -1532,6 +1577,133 @@ mod tests {
     fn parquet_file_metrics() -> ParquetFileMetrics {
         let metrics = Arc::new(ExecutionPlanMetricsSet::new());
         ParquetFileMetrics::new(0, "file.parquet", &metrics)
+    }
+
+    /// Create a RowGroupMetaData with the specified number of rows.
+    /// Uses a minimal schema with a single INT32 column.
+    fn make_row_group_meta(num_rows: i64) -> RowGroupMetaData {
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "id",
+            PhysicalType::INT32,
+        )]);
+        let column = ColumnChunkMetaData::builder(schema_descr.column(0))
+            .set_num_values(num_rows)
+            .build()
+            .unwrap();
+        RowGroupMetaData::builder(schema_descr)
+            .set_num_rows(num_rows)
+            .set_total_byte_size(1000)
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap()
+    }
+
+    /// Helper to build a RowGroupAccessPlanFilter with specified fully_matched flags.
+    fn make_filter_with_fully_matched(
+        num_rgs: usize,
+        fully_matched: Vec<bool>,
+    ) -> RowGroupAccessPlanFilter {
+        assert_eq!(num_rgs, fully_matched.len());
+        let access_plan = ParquetAccessPlan::new_all(num_rgs);
+        let mut filter = RowGroupAccessPlanFilter::new(access_plan);
+        filter.is_fully_matched = fully_matched;
+        filter
+    }
+
+    #[test]
+    fn test_prune_by_offset_skips_fully_matched_rgs() {
+        // 3 RGs each with 100 rows, all fully_matched. offset=250.
+        // Should skip 2 RGs (200 rows), remaining=50.
+        let rg_metadata: Vec<RowGroupMetaData> =
+            (0..3).map(|_| make_row_group_meta(100)).collect();
+        let metrics = parquet_file_metrics();
+        let mut filter = make_filter_with_fully_matched(3, vec![true, true, true]);
+
+        let remaining = filter.prune_by_offset(250, false, &rg_metadata, &metrics);
+        assert_eq!(remaining, 50);
+        // First two RGs should be skipped, third should still be scanned
+        let indexes: Vec<usize> = filter.row_group_indexes().collect();
+        assert_eq!(indexes, vec![2]);
+    }
+
+    #[test]
+    fn test_prune_by_offset_stops_at_non_fully_matched() {
+        // 3 RGs each with 100 rows. First two fully_matched, third not.
+        // offset=250 → skip 2 RGs (200 rows), remaining=50.
+        // Cannot skip the non-fully-matched third RG even though offset
+        // still needs more rows skipped.
+        let rg_metadata: Vec<RowGroupMetaData> =
+            (0..3).map(|_| make_row_group_meta(100)).collect();
+        let metrics = parquet_file_metrics();
+        let mut filter = make_filter_with_fully_matched(3, vec![true, true, false]);
+
+        let remaining = filter.prune_by_offset(250, true, &rg_metadata, &metrics);
+        assert_eq!(remaining, 50);
+        // First two RGs skipped, third still scanned (not fully matched)
+        let indexes: Vec<usize> = filter.row_group_indexes().collect();
+        assert_eq!(indexes, vec![2]);
+    }
+
+    #[test]
+    fn test_prune_by_offset_zero() {
+        // offset=0 → no pruning, remaining=0.
+        let rg_metadata: Vec<RowGroupMetaData> =
+            (0..3).map(|_| make_row_group_meta(100)).collect();
+        let metrics = parquet_file_metrics();
+        let mut filter = make_filter_with_fully_matched(3, vec![true, true, true]);
+
+        let remaining = filter.prune_by_offset(0, false, &rg_metadata, &metrics);
+        assert_eq!(remaining, 0);
+        // All RGs should still be scanned
+        let indexes: Vec<usize> = filter.row_group_indexes().collect();
+        assert_eq!(indexes, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_prune_by_offset_exact_boundary() {
+        // 3 RGs each 100 rows. offset=200 → skip exactly 2 RGs, remaining=0.
+        let rg_metadata: Vec<RowGroupMetaData> =
+            (0..3).map(|_| make_row_group_meta(100)).collect();
+        let metrics = parquet_file_metrics();
+        let mut filter = make_filter_with_fully_matched(3, vec![true, true, true]);
+
+        let remaining = filter.prune_by_offset(200, false, &rg_metadata, &metrics);
+        assert_eq!(remaining, 0);
+        // First two RGs skipped, third still scanned
+        let indexes: Vec<usize> = filter.row_group_indexes().collect();
+        assert_eq!(indexes, vec![2]);
+    }
+
+    #[test]
+    fn test_prune_by_offset_exceeds_total() {
+        // offset=400 > total 300 rows → skip all fully_matched RGs,
+        // remaining = 400 - 300 = 100.
+        let rg_metadata: Vec<RowGroupMetaData> =
+            (0..3).map(|_| make_row_group_meta(100)).collect();
+        let metrics = parquet_file_metrics();
+        let mut filter = make_filter_with_fully_matched(3, vec![true, true, true]);
+
+        let remaining = filter.prune_by_offset(400, false, &rg_metadata, &metrics);
+        assert_eq!(remaining, 100);
+        // All RGs should be skipped
+        let indexes: Vec<usize> = filter.row_group_indexes().collect();
+        assert!(indexes.is_empty());
+    }
+
+    #[test]
+    fn test_prune_by_offset_partial_rg() {
+        // offset=50 (less than first RG of 100 rows) → don't skip any RG,
+        // remaining=50.
+        let rg_metadata: Vec<RowGroupMetaData> =
+            (0..3).map(|_| make_row_group_meta(100)).collect();
+        let metrics = parquet_file_metrics();
+        let mut filter = make_filter_with_fully_matched(3, vec![true, true, true]);
+
+        let remaining = filter.prune_by_offset(50, false, &rg_metadata, &metrics);
+        assert_eq!(remaining, 50);
+        // No RGs should be skipped since offset < first RG's row count
+        let indexes: Vec<usize> = filter.row_group_indexes().collect();
+        assert_eq!(indexes, vec![0, 1, 2]);
     }
 
     #[tokio::test]

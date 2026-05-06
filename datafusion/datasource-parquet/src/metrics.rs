@@ -49,6 +49,8 @@ pub struct ParquetFileMetrics {
     pub row_groups_pruned_bloom_filter: PruningMetrics,
     /// Number of row groups pruned due to limit pruning.
     pub limit_pruned_row_groups: PruningMetrics,
+    /// Number of row groups pruned due to offset pruning.
+    pub offset_pruned_row_groups: PruningMetrics,
     /// Number of row groups pruned by statistics
     pub row_groups_pruned_statistics: PruningMetrics,
     /// Total number of bytes scanned
@@ -112,6 +114,11 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::Summary)
             .pruning_metrics("limit_pruned_row_groups", partition);
+
+        let offset_pruned_row_groups = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .pruning_metrics("offset_pruned_row_groups", partition);
 
         let row_groups_pruned_statistics = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
@@ -198,6 +205,7 @@ impl ParquetFileMetrics {
             row_groups_pruned_bloom_filter,
             row_groups_pruned_statistics,
             limit_pruned_row_groups,
+            offset_pruned_row_groups,
             bytes_scanned,
             pushdown_rows_pruned,
             pushdown_rows_matched,

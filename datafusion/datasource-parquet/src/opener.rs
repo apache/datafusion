@@ -92,6 +92,9 @@ pub(super) struct ParquetMorselizer {
     pub batch_size: usize,
     /// Optional limit on the number of rows to read
     pub(crate) limit: Option<usize>,
+    /// Shared remaining offset across all partition openers.
+    /// Each opener atomically consumes rows by skipping RGs.
+    pub(crate) remaining_offset: Arc<std::sync::atomic::AtomicUsize>,
     /// If should keep the output rows in order
     pub preserve_order: bool,
     /// Optional predicate to apply during the scan
@@ -281,6 +284,7 @@ struct PreparedParquetOpen {
     enable_bloom_filter: bool,
     enable_row_group_stats_pruning: bool,
     limit: Option<usize>,
+    remaining_offset: Arc<std::sync::atomic::AtomicUsize>,
     coerce_int96: Option<TimeUnit>,
     expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     predicate_creation_errors: Count,
@@ -650,6 +654,7 @@ impl ParquetMorselizer {
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
             limit: self.limit,
+            remaining_offset: Arc::clone(&self.remaining_offset),
             coerce_int96: self.coerce_int96,
             expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
             predicate_creation_errors,
@@ -1101,6 +1106,29 @@ impl RowGroupsPrunedParquetOpen {
             None
         };
 
+        // Prune by offset: atomically consume from the shared remaining_offset.
+        // Prune by offset: atomically consume from shared remaining_offset.
+        // Multiple partitions safely share this counter — each skips RGs
+        // and reduces the counter. When it reaches 0, remaining partitions
+        // start producing rows.
+        let current_offset = prepared
+            .remaining_offset
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if current_offset > 0 {
+            let remaining = row_groups.prune_by_offset(
+                current_offset,
+                prepared.predicate.is_some(),
+                rg_metadata,
+                &prepared.file_metrics,
+            );
+            let skipped = current_offset - remaining;
+            if skipped > 0 {
+                prepared
+                    .remaining_offset
+                    .fetch_sub(skipped, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
         // Prune by limit if limit is set and limit order is not sensitive
         if let (Some(limit), false) = (prepared.limit, prepared.preserve_order) {
             row_groups.prune_by_limit(limit, rg_metadata, &prepared.file_metrics);
@@ -1125,6 +1153,25 @@ impl RowGroupsPrunedParquetOpen {
 
         // Prepare the access plan (extract row groups and row selection)
         let mut prepared_plan = access_plan.prepare(rg_metadata)?;
+
+        // Apply remaining offset (partial RG skip) via RowSelection.
+        // SharedCount was reduced by whole-RG skips above; any leftover
+        // offset is handled by skipping rows within the first surviving RG.
+        let now_remaining = prepared
+            .remaining_offset
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if now_remaining > 0 {
+            // Atomically consume the remaining offset for this partition
+            let taken = prepared
+                .remaining_offset
+                .fetch_sub(now_remaining, std::sync::atomic::Ordering::SeqCst)
+                .min(now_remaining);
+            if taken > 0 {
+                prepared_plan = prepared_plan.apply_offset(taken, rg_metadata);
+            }
+        }
+        // GlobalLimitExec handles the row-level skip. We only prune
+        // whole RGs to reduce I/O.
 
         // Potentially reverse the access plan for performance.
         // See `ParquetSource::try_pushdown_sort` for the rationale.
@@ -1157,8 +1204,19 @@ impl RowGroupsPrunedParquetOpen {
         }
         decoder_builder =
             decoder_builder.with_row_groups(prepared_plan.row_group_indexes);
+
+        // Adjust limit: original limit is skip+fetch from optimizer.
+        // Subtract the offset that was consumed by this partition's
+        // RG pruning (via SharedCount). Remaining rows to read =
+        // limit - (original_offset - current_remaining).
         if let Some(limit) = prepared.limit {
-            decoder_builder = decoder_builder.with_limit(limit);
+            let original_offset = current_offset; // captured before prune
+            let now_remaining = prepared
+                .remaining_offset
+                .load(std::sync::atomic::Ordering::SeqCst);
+            let this_partition_skipped = original_offset.saturating_sub(now_remaining);
+            let effective_limit = limit.saturating_sub(this_partition_skipped);
+            decoder_builder = decoder_builder.with_limit(effective_limit);
         }
         if let Some(max_predicate_cache_size) = prepared.max_predicate_cache_size {
             decoder_builder =
@@ -1794,6 +1852,7 @@ mod test {
                 projection,
                 batch_size: self.batch_size,
                 limit: self.limit,
+                remaining_offset: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 preserve_order: self.preserve_order,
                 predicate: self.predicate,
                 table_schema,
