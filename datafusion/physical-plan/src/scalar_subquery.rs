@@ -239,9 +239,9 @@ impl ExecutionPlan for ScalarSubqueryExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        // Only the main input; subquery children produce at most one row, so
-        // repartitioning them has no benefit.
-        self.true_for_input_only()
+        // ScalarSubqueryExec is a pass-through coordinator: it does not
+        // benefit from repartitioning any child directly below it.
+        vec![false; self.subqueries.len() + 1]
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {

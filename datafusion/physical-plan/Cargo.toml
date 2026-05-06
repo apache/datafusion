@@ -49,6 +49,10 @@ name = "datafusion_physical_plan"
 [dependencies]
 arrow = { workspace = true }
 arrow-data = { workspace = true }
+# Spill IPC writes require lz4 and zstd codec support. Keep these features in
+# sync with the SpillCompression variants in datafusion-common so codec
+# availability is explicit in the crate that owns spill handling.
+arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }

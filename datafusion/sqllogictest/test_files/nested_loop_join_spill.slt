@@ -57,6 +57,77 @@ Plan with Metrics
 06)------ProjectionExec: expr=[value@0 as v2], metrics=[<slt:ignore>]
 07)--------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=1, batch_size=8192], metrics=[<slt:ignore>]
 
+# --- RIGHT JOIN with non-equijoin predicate ---
+# Every (v1, v2=1) pair passes the predicate `v1 + v2 > 0`, so all
+# 100000 left rows match the single right row. Output count = 100000.
+query I nosort
+SELECT count(*)
+FROM generate_series(1, 100000) AS t1(v1)
+RIGHT JOIN generate_series(1, 1) AS t2(v2)
+  ON (t1.v1 + t2.v2) > 0
+----
+100000
+
+# --- RIGHT JOIN with partial matches under spill ---
+# Left has 100000 rows (forces spill); right has 200 rows.
+# The predicate `(t1.v1 + t2.v2) = 2 AND t2.v2 <= 100` is non-equi from
+# the optimizer's perspective (no equi-join key), so the plan uses NLJ.
+# Behavior:
+#   - v2 = 1: needs v1 = 1 → 1 match
+#   - v2 in [2..100]: needs v1 = 2 - v2 ≤ 0, no match → NULL-padded left
+#   - v2 in [101..200]: condition false → NULL-padded left
+# Output = 1 matched pair + 199 unmatched right rows = 200 total.
+# This exercises the per-batch global right bitmap: each right batch is
+# replayed across many left chunks, and within each batch a few bits flip
+# on (only when v2=1 sees v1=1) while the rest stay off across all passes.
+query III nosort
+SELECT count(*) as cnt,
+       sum(case when t1.v1 IS NULL then 1 else 0 end) as unmatched_right,
+       sum(case when t1.v1 IS NOT NULL then 1 else 0 end) as matched
+FROM generate_series(1, 100000) AS t1(v1)
+RIGHT JOIN generate_series(1, 200) AS t2(v2)
+  ON (t1.v1 + t2.v2) = 2 AND t2.v2 <= 100
+----
+200 199 1
+
+# Verify spill metrics for the partial-match RIGHT JOIN above.
+# The optimizer pushes `t2.v2 <= 100` into a projection on the right side
+# (rewriting it as a `join_proj_push_down_*` boolean column), so the join
+# filter becomes `v1@0 + v2@1 = 2 AND join_proj_push_down_1@2` and an
+# extra ProjectionExec is inserted between AggregateExec and NLJ.
+query TT
+EXPLAIN ANALYZE
+SELECT count(*)
+FROM generate_series(1, 100000) AS t1(v1)
+RIGHT JOIN generate_series(1, 200) AS t2(v2)
+  ON (t1.v1 + t2.v2) = 2 AND t2.v2 <= 100
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----ProjectionExec: expr=[], metrics=[<slt:ignore>]
+04)------NestedLoopJoinExec: join_type=Right, filter=v1@0 + v2@1 = 2 AND join_proj_push_down_1@2, projection=[v1@0, v2@1], metrics=[output_rows=200, <slt:ignore> spill_count=2, <slt:ignore>]
+05)--------ProjectionExec: expr=[value@0 as v1], metrics=[<slt:ignore>]
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192], metrics=[<slt:ignore>]
+07)--------ProjectionExec: expr=[value@0 as v2, value@0 <= 100 as join_proj_push_down_1], metrics=[<slt:ignore>]
+08)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=200, batch_size=8192], metrics=[<slt:ignore>]
+
+# --- FULL JOIN with partial matches under spill ---
+# Same predicate as above. Output:
+#   - 1 matched pair (v1=1, v2=1)
+#   - 199 unmatched right rows (NULL-padded left)
+#   - 99999 unmatched left rows (v1 != 1, NULL-padded right)
+# Total = 1 + 199 + 99999 = 100199
+query III nosort
+SELECT count(*) as cnt,
+       sum(case when t1.v1 IS NULL then 1 else 0 end) as unmatched_right,
+       sum(case when t2.v2 IS NULL then 1 else 0 end) as unmatched_left
+FROM generate_series(1, 100000) AS t1(v1)
+FULL JOIN generate_series(1, 200) AS t2(v2)
+  ON (t1.v1 + t2.v2) = 2 AND t2.v2 <= 100
+----
+100199 199 99999
+
 # Restore settings to slt runner defaults
 statement ok
 RESET datafusion.runtime.memory_limit
