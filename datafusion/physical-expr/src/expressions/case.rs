@@ -19,7 +19,7 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::PhysicalExpr;
-use crate::expressions::{lit, try_cast};
+use crate::expressions::{LambdaExpr, LambdaVariable, lit, try_cast};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -36,7 +36,7 @@ use datafusion_expr::ColumnarValue;
 use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
 use std::hash::Hash;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
@@ -131,8 +131,15 @@ impl CaseBody {
         let mut used_column_indices = IndexSet::<usize>::new();
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
-                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(column) = expr.downcast_ref::<Column>() {
                     used_column_indices.insert(column.index());
+                } else if let Some(lambda_variable) =
+                    expr.downcast_ref::<LambdaVariable>()
+                {
+                    used_column_indices.insert(lambda_variable.index());
+                } else if expr.is::<LambdaExpr>() {
+                    //todo: remove this branch when lambda supports column capture
+                    return Ok(TreeNodeRecursion::Jump);
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
@@ -162,7 +169,7 @@ impl CaseBody {
         let project = |expr: &Arc<dyn PhysicalExpr>| -> Result<Arc<dyn PhysicalExpr>> {
             Arc::clone(expr)
                 .transform_down(|e| {
-                    if let Some(column) = e.as_any().downcast_ref::<Column>() {
+                    if let Some(column) = e.downcast_ref::<Column>() {
                         let original = column.index();
                         let projected = *column_index_map.get(&original).unwrap();
                         if projected != original {
@@ -171,6 +178,20 @@ impl CaseBody {
                                 projected,
                             ))));
                         }
+                    } else if let Some(lambda_variable) =
+                        e.downcast_ref::<LambdaVariable>()
+                    {
+                        let original = lambda_variable.index();
+                        let projected = *column_index_map.get(&original).unwrap();
+                        if projected != original {
+                            return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
+                                projected,
+                                Arc::clone(lambda_variable.field()),
+                            ))));
+                        }
+                    } else if e.is::<LambdaExpr>() {
+                        //todo: remove this branch when lambda supports column capture
+                        return Ok(Transformed::new(e, false, TreeNodeRecursion::Jump));
                     }
                     Ok(Transformed::no(e))
                 })
@@ -281,7 +302,7 @@ impl std::fmt::Display for CaseExpr {
 /// this is limited to use with Column expressions but could potentially be used for other
 /// expressions in the future
 fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any().is::<Column>()
+    expr.is::<Column>()
 }
 
 /// Creates a [FilterPredicate] from a boolean array.
@@ -621,7 +642,7 @@ impl CaseExpr {
         // normalize null literals to None in the else_expr (this already happens
         // during SQL planning, but not necessarily for other use cases)
         let else_expr = match &else_expr {
-            Some(e) => match e.as_any().downcast_ref::<Literal>() {
+            Some(e) => match e.downcast_ref::<Literal>() {
                 Some(lit) if lit.value().is_null() => None,
                 _ => else_expr,
             },
@@ -659,9 +680,9 @@ impl CaseExpr {
             {
                 EvalMethod::InfallibleExprOrNull
             } else if body.when_then_expr.len() == 1
-                && body.when_then_expr[0].1.as_any().is::<Literal>()
+                && body.when_then_expr[0].1.is::<Literal>()
                 && body.else_expr.is_some()
-                && body.else_expr.as_ref().unwrap().as_any().is::<Literal>()
+                && body.else_expr.as_ref().unwrap().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
             } else if body.when_then_expr.len() == 1 {
@@ -793,17 +814,15 @@ impl CaseBody {
                 }
             }?;
 
-            // `true_count` ignores `true` values where the validity bit is not set, so there's
-            // no need to call `prep_null_mask_filter`.
-            let when_true_count = when_value.true_count();
-
-            // If the 'when' predicate did not match any rows, continue to the next branch immediately
-            if when_true_count == 0 {
+            // If the 'when' predicate did not match any rows, continue to the next branch immediately.
+            // Only counts valid slots that are true (masked-null predicate slots are ignored),
+            // so no `prep_null_mask_filter` needed here.
+            if !when_value.has_true() {
                 continue;
             }
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
-            if when_true_count == remainder_batch.num_rows() {
+            if when_value.null_count() == 0 && !when_value.has_false() {
                 let then_expression = &self.when_then_expr[i].1;
                 let then_value = then_expression.evaluate(&remainder_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
@@ -882,17 +901,15 @@ impl CaseBody {
                 internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
 
-            // `true_count` ignores `true` values where the validity bit is not set, so there's
-            // no need to call `prep_null_mask_filter`.
-            let when_true_count = when_value.true_count();
-
-            // If the 'when' predicate did not match any rows, continue to the next branch immediately
-            if when_true_count == 0 {
+            // If the 'when' predicate did not match any rows, continue to the next branch immediately.
+            // Only counts valid slots that are true (masked-null predicate slots are ignored)
+            // so no `prep_null_mask_filter` needed here.
+            if !when_value.has_true() {
                 continue;
             }
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
-            if when_true_count == remainder_batch.num_rows() {
+            if when_value.null_count() == 0 && !when_value.has_false() {
                 let then_expression = &self.when_then_expr[i].1;
                 let then_value = then_expression.evaluate(&remainder_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
@@ -1144,11 +1161,10 @@ impl CaseExpr {
             )
         })?;
 
-        let true_count = when_value.true_count();
-        if true_count == when_value.len() {
+        if when_value.null_count() == 0 && !when_value.has_false() {
             // All input rows are true, just call the 'then' expression
             self.body.when_then_expr[0].1.evaluate(batch)
-        } else if true_count == 0 {
+        } else if !when_value.has_true() {
             // All input rows are false/null, just call the 'else' expression
             match &self.body.else_expr {
                 Some(else_expr) => else_expr.evaluate(batch),
@@ -1194,11 +1210,6 @@ impl CaseExpr {
 }
 
 impl PhysicalExpr for CaseExpr {
-    /// Return a reference to Any that can be used for down-casting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         self.body.data_type(input_schema)
     }
@@ -2207,7 +2218,7 @@ mod tests {
 
         let expr2 = Arc::clone(&expr)
             .transform(|e| {
-                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                let transformed = match e.downcast_ref::<Literal>() {
                     Some(lit_value) => match lit_value.value() {
                         ScalarValue::Utf8(Some(str_value)) => {
                             Some(lit(str_value.to_uppercase()))
@@ -2227,7 +2238,7 @@ mod tests {
 
         let expr3 = Arc::clone(&expr)
             .transform_down(|e| {
-                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                let transformed = match e.downcast_ref::<Literal>() {
                     Some(lit_value) => match lit_value.value() {
                         ScalarValue::Utf8(Some(str_value)) => {
                             Some(lit(str_value.to_uppercase()))

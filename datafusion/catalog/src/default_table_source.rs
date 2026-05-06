@@ -17,8 +17,8 @@
 
 //! Default TableSource implementation used in DataFusion physical plans
 
+use std::borrow::Cow;
 use std::sync::Arc;
-use std::{any::Any, borrow::Cow};
 
 use crate::TableProvider;
 
@@ -46,12 +46,6 @@ impl DefaultTableSource {
 }
 
 impl TableSource for DefaultTableSource {
-    /// Returns the table source as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef {
         self.table_provider.schema()
@@ -97,11 +91,7 @@ pub fn provider_as_source(
 pub fn source_as_provider(
     source: &Arc<dyn TableSource>,
 ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-    match source
-        .as_ref()
-        .as_any()
-        .downcast_ref::<DefaultTableSource>()
-    {
+    match source.as_ref().downcast_ref::<DefaultTableSource>() {
         Some(source) => Ok(Arc::clone(&source.table_provider)),
         _ => internal_err!("TableSource was not DefaultTableSource"),
     }

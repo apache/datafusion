@@ -26,7 +26,8 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::{
-    as_fixed_size_list_array, as_large_list_array, as_list_array,
+    as_fixed_size_list_array, as_large_list_array, as_large_list_view_array,
+    as_list_array, as_list_view_array,
 };
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
@@ -241,6 +242,14 @@ pub(crate) fn compute_array_dims(
             }
             DataType::LargeList(_) => {
                 value = as_large_list_array(&value)?.value(0);
+                res.push(Some(value.len() as u64));
+            }
+            DataType::ListView(_) => {
+                value = as_list_view_array(&value)?.value(0);
+                res.push(Some(value.len() as u64));
+            }
+            DataType::LargeListView(_) => {
+                value = as_large_list_view_array(&value)?.value(0);
                 res.push(Some(value.len() as u64));
             }
             DataType::FixedSizeList(..) => {

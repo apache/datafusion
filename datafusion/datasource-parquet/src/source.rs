@@ -16,7 +16,6 @@
 // under the License.
 
 //! ParquetSource implementation for reading parquet files
-use std::any::Any;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -184,7 +183,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
 /// let exec = parquet_exec();
 /// let data_source = exec.data_source();
-/// let base_config = data_source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+/// let base_config = data_source.downcast_ref::<FileScanConfig>().unwrap();
 /// let existing_file_groups = &base_config.file_groups;
 /// let new_execs = existing_file_groups
 ///   .iter()
@@ -231,7 +230,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// access_plan.skip(4);
 /// // provide the plan as extension to the FileScanConfig
 /// let partitioned_file = PartitionedFile::new("my_file.parquet", 1234)
-///   .with_extensions(Arc::new(access_plan));
+///   .with_extension(access_plan);
 /// // create a FileScanConfig to scan this file
 /// let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), Arc::new(ParquetSource::new(schema())))
 ///     .with_file(partitioned_file).build();
@@ -544,7 +543,8 @@ impl FileSource for ParquetSource {
             .crypto
             .file_decryption
             .clone()
-            .map(FileDecryptionProperties::from)
+            .map(FileDecryptionProperties::try_from)
+            .transpose()?
             .map(Arc::new);
 
         let coerce_int96 = self
@@ -582,10 +582,6 @@ impl FileSource for ParquetSource {
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
         }))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn table_schema(&self) -> &TableSchema {

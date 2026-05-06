@@ -24,9 +24,12 @@ EXPLAIN ANALYZE SELECT * FROM generate_series(100);
 Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 
 # --------------------------------------------
-# Test parquet-only output_rows_skew metric
+# Test parquet-only output_rows_skew metric (WITH ORDER(x) → preserve_order scan)
 # --------------------------------------------
 
+# Parquet supports dynamic work scheduling by default; per-partition data
+# sources might steal work from siblings, making row counts per partition
+# non-deterministic. Forcing `WITH ORDER` disables this behavior.
 statement ok
 set datafusion.explain.analyze_level = dev;
 
@@ -48,6 +51,7 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE skew_parquet
 STORED AS PARQUET
+WITH ORDER (x)
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
 
 # All partition's output_rows: [4]
@@ -70,6 +74,7 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE skew_parquet
 STORED AS PARQUET
+WITH ORDER (x)
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
 
 query TT
@@ -98,6 +103,7 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE skew_parquet
 STORED AS PARQUET
+WITH ORDER (x)
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
 
 query TT
@@ -109,6 +115,7 @@ Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=84.31%<slt:ignore
 statement ok
 CREATE EXTERNAL TABLE skew_parquet_single
 STORED AS PARQUET
+WITH ORDER (x)
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew/f4.parquet';
 
 query TT

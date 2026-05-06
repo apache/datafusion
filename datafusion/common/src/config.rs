@@ -24,7 +24,7 @@ use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::DFParquetWriterVersion;
-use crate::parsers::CompressionTypeVariant;
+use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
@@ -311,6 +311,15 @@ config_namespace! {
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
         pub default_null_ordering: String, default = "nulls_max".to_string()
+
+        /// When set to true, DataFusion may remove `ORDER BY` clauses from
+        /// subqueries or CTEs during SQL planning when their ordering cannot
+        /// affect the result, such as when no `LIMIT` or other
+        /// order-sensitive operator depends on them.
+        ///
+        /// Disable this option to preserve explicit subquery ordering in the
+        /// planned query.
+        pub enable_subquery_sort_elimination: bool, default = true
     }
 }
 
@@ -1086,6 +1095,15 @@ config_namespace! {
         /// When set to true, the optimizer will attempt to push limit operations
         /// past window functions, if possible
         pub enable_window_limits: bool, default = true
+
+        /// When set to true, the optimizer will replace
+        /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
+        /// PartitionedTopKExec that maintains per-partition heaps, avoiding
+        /// a full sort of the input.
+        /// When the window partition key has low cardinality, enabling this optimization
+        /// can improve performance. However, for high cardinality keys, it may
+        /// cause regressions in both memory usage and runtime.
+        pub enable_window_topn: bool, default = false
 
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the
@@ -2024,6 +2042,17 @@ impl ConfigField for CompressionTypeVariant {
     }
 }
 
+impl ConfigField for CsvQuoteStyle {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = CsvQuoteStyle::from_str(value)?;
+        Ok(())
+    }
+}
+
 /// An implementation trait used to recursively walk configuration
 pub trait Visit {
     fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str);
@@ -2833,10 +2862,15 @@ impl ConfigField for ConfigFileEncryptionProperties {
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
-    fn from(val: ConfigFileEncryptionProperties) -> Self {
+impl TryFrom<ConfigFileEncryptionProperties> for FileEncryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(val: ConfigFileEncryptionProperties) -> Result<Self> {
         let mut fep = FileEncryptionProperties::builder(
-            hex::decode(val.footer_key_as_hex).unwrap(),
+            hex::decode(val.footer_key_as_hex)
+            .map_err(|e| {
+                DataFusionError::Configuration(format!("Unable to decode hex footer key from ConfigFileEncryptionProperties: {e}"))
+            })?,
         )
         .with_plaintext_footer(!val.encrypt_footer)
         .with_aad_prefix_storage(val.store_aad_prefix);
@@ -2844,17 +2878,26 @@ impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
         if !val.footer_key_metadata_as_hex.is_empty() {
             fep = fep.with_footer_key_metadata(
                 hex::decode(&val.footer_key_metadata_as_hex)
-                    .expect("Invalid footer key metadata"),
+                    .map_err(|e| {
+                        DataFusionError::Configuration(format!("Unable to decode hex footer key metadata from ConfigFileEncryptionProperties: {e}"))
+                    })?,
             );
         }
 
         for (column_name, encryption_props) in val.column_encryption_properties.iter() {
             let encryption_key = hex::decode(&encryption_props.column_key_as_hex)
-                .expect("Invalid column encryption key");
+                .map_err(|e| {
+                    DataFusionError::Configuration(format!("Unable to decode hex encryption key for column {column_name}: {e}"))
+                })?;
             let key_metadata = encryption_props
                 .column_metadata_as_hex
                 .as_ref()
-                .map(|x| hex::decode(x).expect("Invalid column metadata"));
+                .map(hex::decode)
+                .transpose()
+                .map_err(|e| {
+                    DataFusionError::Configuration(format!("Unable to decode hex column metadata for column {column_name}: {e}"))
+                })?;
+
             match key_metadata {
                 Some(key_metadata) => {
                     fep = fep.with_column_key_and_metadata(
@@ -2870,11 +2913,18 @@ impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
         }
 
         if !val.aad_prefix_as_hex.is_empty() {
-            let aad_prefix: Vec<u8> =
-                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            let aad_prefix: Vec<u8> = hex::decode(&val.aad_prefix_as_hex).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Unable to decode hex AAD prefix from ConfigFileEncryptionProperties: {e}"
+                ))
+            })?;
             fep = fep.with_aad_prefix(aad_prefix);
         }
-        Arc::unwrap_or_clone(fep.build().unwrap())
+        Ok(Arc::unwrap_or_clone(fep.build().map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not build FileEncryptionProperties: {e}"
+            ))
+        })?))
     }
 }
 
@@ -2990,42 +3040,70 @@ impl ConfigField for ConfigFileDecryptionProperties {
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
-    fn from(val: ConfigFileDecryptionProperties) -> Self {
+impl TryFrom<ConfigFileDecryptionProperties> for FileDecryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(val: ConfigFileDecryptionProperties) -> Result<Self> {
         let mut column_names: Vec<&str> = Vec::new();
         let mut column_keys: Vec<Vec<u8>> = Vec::new();
 
         for (col_name, decryption_properties) in val.column_decryption_properties.iter() {
+            let column_key = hex::decode(&decryption_properties.column_key_as_hex).map_err(|e| {
+                        DataFusionError::Configuration(format!
+                            ("Could not decode hex column key from ConfigFileDecryptionProperties for column name {col_name}: {e}."))
+                    })?;
             column_names.push(col_name.as_str());
-            column_keys.push(
-                hex::decode(&decryption_properties.column_key_as_hex)
-                    .expect("Invalid column decryption key"),
-            );
+            column_keys.push(column_key);
         }
 
-        let mut fep = FileDecryptionProperties::builder(
-            hex::decode(val.footer_key_as_hex).expect("Invalid footer key"),
-        )
-        .with_column_keys(column_names, column_keys)
-        .unwrap();
+        let footer_key = hex::decode(val.footer_key_as_hex).map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not decode hex footer key from ConfigFileDecryptionProperties: {e}."
+            ))
+        })?;
+
+        let mut fep = FileDecryptionProperties::builder(footer_key)
+            .with_column_keys(column_names, column_keys)
+            .map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Could not set column keys on FileDecryptionPropertiesBuilder: {e}."
+                ))
+            })?;
 
         if !val.footer_signature_verification {
             fep = fep.disable_footer_signature_verification();
         }
 
         if !val.aad_prefix_as_hex.is_empty() {
-            let aad_prefix =
-                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            let aad_prefix = hex::decode(&val.aad_prefix_as_hex).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Could not decode hex AAD prefix from ConfigFileDecryptionProperties: {e}."
+                ))
+            })?;
             fep = fep.with_aad_prefix(aad_prefix);
         }
 
-        Arc::unwrap_or_clone(fep.build().unwrap())
+        Ok(Arc::unwrap_or_clone(fep.build().map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not build FileDecryptionProperties: {e}."
+            ))
+        })?))
     }
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
-    fn from(f: &Arc<FileDecryptionProperties>) -> Self {
+impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(f: &Arc<FileDecryptionProperties>) -> Result<Self> {
+        let footer_key = f.footer_key(None).map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not retrieve footer key from FileDecryptionProperties. \
+                Note that conversion to ConfigFileDecryptionProperties is not supported \
+                when using a key retriever: {e}"
+            ))
+        })?;
+
         let (column_names_vec, column_keys_vec) = f.column_keys();
         let mut column_decryption_properties: HashMap<
             String,
@@ -3039,14 +3117,12 @@ impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
         }
 
         let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
-        ConfigFileDecryptionProperties {
-            footer_key_as_hex: hex::encode(
-                f.footer_key(None).unwrap_or_default().as_ref(),
-            ),
+        Ok(ConfigFileDecryptionProperties {
+            footer_key_as_hex: hex::encode(footer_key.as_ref()),
             column_decryption_properties,
             aad_prefix_as_hex: hex::encode(aad_prefix),
             footer_signature_verification: f.check_plaintext_footer_integrity(),
-        }
+        })
     }
 }
 
@@ -3096,6 +3172,15 @@ config_namespace! {
         pub terminator: Option<u8>, default = None
         pub escape: Option<u8>, default = None
         pub double_quote: Option<bool>, default = None
+        /// Quote style for CSV writing.
+        /// One of: "Always", "Necessary", "NonNumeric", "Never"
+        pub quote_style: CsvQuoteStyle, default = CsvQuoteStyle::Necessary
+        /// Whether to ignore leading whitespace in string values when writing CSV.
+        /// Defaults to `false` when `None`.
+        pub ignore_leading_whitespace: Option<bool>, default = None
+        /// Whether to ignore trailing whitespace in string values when writing CSV.
+        /// Defaults to `false` when `None`.
+        pub ignore_trailing_whitespace: Option<bool>, default = None
         /// Specifies whether newlines in (quoted) values are supported.
         ///
         /// Parsing newlines in quoted values may be affected by execution behaviour such as
@@ -3201,6 +3286,30 @@ impl CsvOptions {
     /// - default to true
     pub fn with_double_quote(mut self, double_quote: bool) -> Self {
         self.double_quote = Some(double_quote);
+        self
+    }
+
+    /// Set the quote style for CSV writing.
+    pub fn with_quote_style(mut self, quote_style: CsvQuoteStyle) -> Self {
+        self.quote_style = quote_style;
+        self
+    }
+
+    /// Set whether to ignore leading whitespace in string values when writing CSV.
+    pub fn with_ignore_leading_whitespace(
+        mut self,
+        ignore_leading_whitespace: bool,
+    ) -> Self {
+        self.ignore_leading_whitespace = Some(ignore_leading_whitespace);
+        self
+    }
+
+    /// Set whether to ignore trailing whitespace in string values when writing CSV.
+    pub fn with_ignore_trailing_whitespace(
+        mut self,
+        ignore_trailing_whitespace: bool,
+    ) -> Self {
+        self.ignore_trailing_whitespace = Some(ignore_trailing_whitespace);
         self
     }
 
@@ -3516,12 +3625,13 @@ mod tests {
         let config_encrypt =
             ConfigFileEncryptionProperties::from(&file_encryption_properties);
         let encryption_properties_built =
-            Arc::new(FileEncryptionProperties::from(config_encrypt.clone()));
+            Arc::new(FileEncryptionProperties::try_from(config_encrypt.clone()).unwrap());
         assert_eq!(file_encryption_properties, encryption_properties_built);
 
-        let config_decrypt = ConfigFileDecryptionProperties::from(&decryption_properties);
+        let config_decrypt =
+            ConfigFileDecryptionProperties::try_from(&decryption_properties).unwrap();
         let decryption_properties_built =
-            Arc::new(FileDecryptionProperties::from(config_decrypt.clone()));
+            Arc::new(FileDecryptionProperties::try_from(config_decrypt.clone()).unwrap());
         assert_eq!(decryption_properties, decryption_properties_built);
 
         ///////////////////////////////////////////////////////////////////////////////////
@@ -3609,6 +3719,124 @@ mod tests {
 
     #[cfg(feature = "parquet_encryption")]
     #[test]
+    fn parquet_encryption_invalid_hex_errors_encryption() {
+        use crate::config::ColumnEncryptionProperties;
+        use crate::config::ConfigFileEncryptionProperties;
+        use parquet::encryption::encrypt::FileEncryptionProperties;
+        use std::collections::HashMap;
+
+        let valid_footer_key_as_hex = hex::encode(b"0123456789012345");
+
+        let mut enc = ConfigFileEncryptionProperties {
+            encrypt_footer: true,
+            footer_key_as_hex: valid_footer_key_as_hex.clone(),
+            footer_key_metadata_as_hex: String::new(),
+            column_encryption_properties: HashMap::new(),
+            aad_prefix_as_hex: String::new(),
+            store_aad_prefix: false,
+        };
+
+        // Encryption: invalid footer key hex
+        enc.footer_key_as_hex = "not_hex".to_string();
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex footer key"));
+        enc.footer_key_as_hex = valid_footer_key_as_hex.clone();
+
+        // Encryption: invalid footer key metadata hex
+        enc.footer_key_metadata_as_hex = "zz".to_string();
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex footer key metadata"));
+        enc.footer_key_metadata_as_hex = String::new();
+
+        // Encryption: invalid column key hex
+        enc.column_encryption_properties.insert(
+            "col1".to_string(),
+            ColumnEncryptionProperties {
+                column_key_as_hex: "bad".to_string(),
+                column_metadata_as_hex: None,
+            },
+        );
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex encryption key for column col1"));
+        enc.column_encryption_properties.clear();
+
+        // Encryption: invalid column metadata hex
+        enc.column_encryption_properties.insert(
+            "col1".to_string(),
+            ColumnEncryptionProperties {
+                column_key_as_hex: hex::encode(b"1234567890123450"),
+                column_metadata_as_hex: Some("zz".to_string()),
+            },
+        );
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex column metadata for column col1"));
+        enc.column_encryption_properties.clear();
+
+        // Encryption: invalid AAD prefix hex
+        enc.aad_prefix_as_hex = "zz".to_string();
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex AAD prefix"));
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn parquet_encryption_invalid_hex_errors_decryption() {
+        use crate::config::ColumnDecryptionProperties;
+        use crate::config::ConfigFileDecryptionProperties;
+        use parquet::encryption::decrypt::FileDecryptionProperties;
+        use std::collections::HashMap;
+
+        let valid_footer_key_as_hex = hex::encode(b"0123456789012345");
+
+        let mut dec = ConfigFileDecryptionProperties {
+            footer_key_as_hex: valid_footer_key_as_hex.clone(),
+            column_decryption_properties: HashMap::new(),
+            aad_prefix_as_hex: String::new(),
+            footer_signature_verification: true,
+        };
+
+        // Decryption: invalid column key hex
+        dec.column_decryption_properties.insert(
+            "col1".to_string(),
+            ColumnDecryptionProperties {
+                column_key_as_hex: "bad".to_string(),
+            },
+        );
+        let err = FileDecryptionProperties::try_from(dec.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Could not decode hex column key"));
+        assert!(err.contains("col1"));
+        dec.column_decryption_properties.clear();
+
+        // Decryption: invalid footer key hex
+        dec.footer_key_as_hex = "bad".to_string();
+        let err = FileDecryptionProperties::try_from(dec.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Could not decode hex footer key"));
+        dec.footer_key_as_hex = valid_footer_key_as_hex;
+
+        // Decryption: invalid AAD prefix hex
+        dec.aad_prefix_as_hex = "zz".to_string();
+        let err = FileDecryptionProperties::try_from(dec.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Could not decode hex AAD prefix"));
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
     fn parquet_encryption_factory_config() {
         let mut parquet_options = TableParquetOptions::default();
 
@@ -3635,6 +3863,42 @@ mod tests {
         assert_eq!(factory_options.len(), 2);
         assert_eq!(factory_options.get("key1"), Some(&"value 1".to_string()));
         assert_eq!(factory_options.get("key2"), Some(&"value 2".to_string()));
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    struct ParquetEncryptionKeyRetriever {}
+
+    #[cfg(feature = "parquet_encryption")]
+    impl parquet::encryption::decrypt::KeyRetriever for ParquetEncryptionKeyRetriever {
+        fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
+            if !key_metadata.is_empty() {
+                Ok(b"1234567890123450".to_vec())
+            } else {
+                Err(parquet::errors::ParquetError::General(
+                    "Key metadata not provided".to_string(),
+                ))
+            }
+        }
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn conversion_from_key_retriever_to_config_file_decryption_properties() {
+        use crate::Result;
+        use crate::config::ConfigFileDecryptionProperties;
+        use crate::encryption::FileDecryptionProperties;
+
+        let retriever = std::sync::Arc::new(ParquetEncryptionKeyRetriever {});
+        let decryption_properties =
+            FileDecryptionProperties::with_key_retriever(retriever)
+                .build()
+                .unwrap();
+        let config_file_decryption_properties: Result<ConfigFileDecryptionProperties> =
+            (&decryption_properties).try_into();
+        assert!(config_file_decryption_properties.is_err());
+        let err = config_file_decryption_properties.unwrap_err().to_string();
+        assert!(err.contains("key retriever"));
+        assert!(err.contains("Key metadata not provided"));
     }
 
     #[cfg(feature = "parquet")]

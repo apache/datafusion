@@ -185,10 +185,6 @@ mod tests {
     }
 
     impl PhysicalExpr for MockExpr {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn data_type(
             &self,
             _input_schema: &Schema,
