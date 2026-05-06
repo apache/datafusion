@@ -298,7 +298,6 @@ jobs:
             --profile ci \
             --exclude datafusion-examples \
             --exclude ffi_example_table_provider \
-            --exclude datafusion-benchmarks \
             --exclude datafusion-cli \
             --workspace \
             --lib \
@@ -557,6 +556,11 @@ jobs:
   #          export PATH=$PATH:$HOME/d/protoc/bin
   #          cargo test --lib --tests --bins --features avro,json,backtrace
 
+  # macOS scope is narrowed to `datafusion-ffi`: the only bug class amd64
+  # cannot reproduce is FFI cdylib loading (`.dylib` vs `.so` resolution in
+  # datafusion/ffi/src/tests/utils.rs). All other macos-only failures
+  # historically came from datafusion-benchmarks (now covered on amd64) or
+  # flaky sqllogictest metrics.
   macos-aarch64:
     name: cargo test (macos-aarch64)
     runs-on: macos-15
@@ -567,9 +571,9 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
-      - name: Run tests (excluding doctests)
+      - name: Run datafusion-ffi tests
         shell: bash
-        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests,substrait
+        run: cargo test --profile ci -p datafusion-ffi --lib --tests --features integration-tests
 
   vendor:
     name: Verify Vendored Code
