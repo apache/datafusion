@@ -903,6 +903,43 @@ As a result, these functions always return a float, even when the input column i
 </pre></div>
 </div>
 </section>
+<section id="partitionedfile-extensions-is-now-a-type-keyed-map">
+<h3><code class="docutils literal notranslate"><span class="pre">PartitionedFile::extensions</span></code> is now a type-keyed map<a class="headerlink" href="#partitionedfile-extensions-is-now-a-type-keyed-map" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">PartitionedFile.extensions</span></code> previously held a single
+<code class="docutils literal notranslate"><span class="pre">Option&lt;Arc&lt;dyn</span> <span class="pre">Any</span> <span class="pre">+</span> <span class="pre">Send</span> <span class="pre">+</span> <span class="pre">Sync&gt;&gt;</span></code> slot, so two independent components
+could not both attach data to the same file without colliding. The field
+is now a <code class="docutils literal notranslate"><span class="pre">FileExtensions</span></code> (a re-export of
+<code class="docutils literal notranslate"><span class="pre">datafusion_common::extensions::Extensions</span></code>), a map keyed by concrete Rust
+type. Each type occupies its own slot, so multiple consumers (e.g. a
+<code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan</span></code> and a custom index entry) can coexist on a single
+<code class="docutils literal notranslate"><span class="pre">PartitionedFile</span></code>.</p>
+<p>The previous <code class="docutils literal notranslate"><span class="pre">with_extensions(Arc&lt;dyn</span> <span class="pre">Any</span> <span class="pre">+</span> <span class="pre">Send</span> <span class="pre">+</span> <span class="pre">Sync&gt;)</span></code> builder is
+deprecated (it still works, keyed by the value’s dynamic <code class="docutils literal notranslate"><span class="pre">TypeId</span></code>) in
+favor of a typed variant:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">-let pf = PartitionedFile::new(path, size)</span>
+<span class="gd">-    .with_extensions(Arc::new(access_plan));</span>
+<span class="gi">+let pf = PartitionedFile::new(path, size)</span>
+<span class="gi">+    .with_extension(access_plan);</span>
+</pre></div>
+</div>
+<p>Reading an extension no longer requires a manual downcast:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">-let access_plan = partitioned_file</span>
+<span class="gd">-    .extensions</span>
+<span class="gd">-    .as_ref()</span>
+<span class="gd">-    .and_then(|ext| ext.downcast_ref::&lt;ParquetAccessPlan&gt;());</span>
+<span class="gi">+let access_plan = partitioned_file.extension::&lt;ParquetAccessPlan&gt;();</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">FileExtensions</span></code> API is <code class="docutils literal notranslate"><span class="pre">insert</span></code> / <code class="docutils literal notranslate"><span class="pre">insert_arc</span></code> / <code class="docutils literal notranslate"><span class="pre">get</span></code> / <code class="docutils literal notranslate"><span class="pre">get_arc</span></code>
+/ <code class="docutils literal notranslate"><span class="pre">contains</span></code> / <code class="docutils literal notranslate"><span class="pre">merge</span></code>, all generic over the concrete type <code class="docutils literal notranslate"><span class="pre">T</span></code>. Values
+are stored as <code class="docutils literal notranslate"><span class="pre">Arc&lt;T&gt;</span></code> so the map remains cheap to clone.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Code that constructs <code class="docutils literal notranslate"><span class="pre">PartitionedFile</span></code> and calls <code class="docutils literal notranslate"><span class="pre">.with_extensions(...)</span></code>.</p></li>
+<li><p>Custom <code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> implementations or other consumers that
+read <code class="docutils literal notranslate"><span class="pre">partitioned_file.extensions</span></code> and downcast manually.</p></li>
+</ul>
+</section>
 <section id="box-c-and-arc-c-treenodecontainer-impls-now-require-c-default">
 <h3><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code><a class="headerlink" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default" title="Link to this heading">#</a></h3>
 <p>The generic <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> implementations for <code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> now
@@ -993,6 +1030,7 @@ allocation-free variant:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#conversion-from-filedecryptionproperties-to-configfiledecryptionproperties-is-now-fallible">Conversion from <code class="docutils literal notranslate"><span class="pre">FileDecryptionProperties</span></code> to <code class="docutils literal notranslate"><span class="pre">ConfigFileDecryptionProperties</span></code> is now fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#conversion-from-configfileencryptionproperties-configfiledecryptionproperties-is-now-fallible">Conversion from <code class="docutils literal notranslate"><span class="pre">ConfigFileEncryptionProperties</span></code> / <code class="docutils literal notranslate"><span class="pre">ConfigFileDecryptionProperties</span></code> is now fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats"><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_median</span></code> now coerce to floats</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partitionedfile-extensions-is-now-a-type-keyed-map"><code class="docutils literal notranslate"><span class="pre">PartitionedFile::extensions</span></code> is now a type-keyed map</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default"><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code></a></li>
 </ul>
 </li>

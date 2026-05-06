@@ -515,6 +515,48 @@ SELECT CAST(approx_percentile_cont(quantity, 0.5) AS BIGINT) FROM orders;
 
 [#21074]: https://github.com/apache/datafusion/pull/21074
 
+### `PartitionedFile::extensions` is now a type-keyed map
+
+`PartitionedFile.extensions` previously held a single
+`Option<Arc<dyn Any + Send + Sync>>` slot, so two independent components
+could not both attach data to the same file without colliding. The field
+is now a `FileExtensions` (a re-export of
+`datafusion_common::extensions::Extensions`), a map keyed by concrete Rust
+type. Each type occupies its own slot, so multiple consumers (e.g. a
+`ParquetAccessPlan` and a custom index entry) can coexist on a single
+`PartitionedFile`.
+
+The previous `with_extensions(Arc<dyn Any + Send + Sync>)` builder is
+deprecated (it still works, keyed by the value's dynamic `TypeId`) in
+favor of a typed variant:
+
+```diff
+-let pf = PartitionedFile::new(path, size)
+-    .with_extensions(Arc::new(access_plan));
++let pf = PartitionedFile::new(path, size)
++    .with_extension(access_plan);
+```
+
+Reading an extension no longer requires a manual downcast:
+
+```diff
+-let access_plan = partitioned_file
+-    .extensions
+-    .as_ref()
+-    .and_then(|ext| ext.downcast_ref::<ParquetAccessPlan>());
++let access_plan = partitioned_file.extension::<ParquetAccessPlan>();
+```
+
+The `FileExtensions` API is `insert` / `insert_arc` / `get` / `get_arc`
+/ `contains` / `merge`, all generic over the concrete type `T`. Values
+are stored as `Arc<T>` so the map remains cheap to clone.
+
+**Who is affected:**
+
+- Code that constructs `PartitionedFile` and calls `.with_extensions(...)`.
+- Custom `ParquetFileReaderFactory` implementations or other consumers that
+  read `partitioned_file.extensions` and downcast manually.
+
 ### `Box<C>` and `Arc<C>` `TreeNodeContainer` impls now require `C: Default`
 
 The generic `TreeNodeContainer` implementations for `Box<C>` and `Arc<C>` now
