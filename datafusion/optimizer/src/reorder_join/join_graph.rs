@@ -38,18 +38,18 @@ impl Node {
     pub(crate) fn connection_with<'graph>(
         &self,
         node_id: NodeId,
-        query_graph: &'graph QueryGraph,
+        join_graph: &'graph JoinGraph,
     ) -> Option<&'graph Edge> {
         self.connections
             .iter()
-            .filter_map(|edge_id| query_graph.get_edge(*edge_id))
+            .filter_map(|edge_id| join_graph.get_edge(*edge_id))
             .find(move |x| x.nodes.contains(&node_id))
     }
 
-    pub fn neighbours(&self, node_id: NodeId, query_graph: &QueryGraph) -> Vec<NodeId> {
+    pub fn neighbours(&self, node_id: NodeId, join_graph: &JoinGraph) -> Vec<NodeId> {
         self.connections
             .iter()
-            .filter_map(|edge_id| query_graph.get_edge(*edge_id))
+            .filter_map(|edge_id| join_graph.get_edge(*edge_id))
             .flat_map(|edge| edge.nodes)
             .filter(|&id| id != node_id)
             .collect()
@@ -65,7 +65,7 @@ pub struct Edge {
     pub null_equality: NullEquality,
 }
 
-pub struct QueryGraph {
+pub struct JoinGraph {
     pub(crate) nodes: VecMap<Node>,
     edges: VecMap<Edge>,
     /// Non-equi predicates hoisted out of decomposed `Join.filter` clauses
@@ -74,17 +74,17 @@ pub struct QueryGraph {
     filters: Vec<Expr>,
 }
 
-impl QueryGraph {
+impl JoinGraph {
     pub fn try_from_logical_plan(
         value: LogicalPlan,
-    ) -> Result<(QueryGraph, Vec<LogicalPlan>), DataFusionError> {
+    ) -> Result<(JoinGraph, Vec<LogicalPlan>), DataFusionError> {
         // First, extract the join subtree from any wrapper operators
         let (join_subtree, wrappers) = extract_join_subtree(value)?;
 
         // Now convert only the join subtree to a query graph
-        let mut query_graph = QueryGraph::new();
-        flatten_joins_recursive(join_subtree, &mut query_graph)?;
-        Ok((query_graph, wrappers))
+        let mut join_graph = JoinGraph::new();
+        flatten_joins_recursive(join_subtree, &mut join_graph)?;
+        Ok((join_graph, wrappers))
     }
 
     pub(crate) fn new() -> Self {
@@ -300,7 +300,7 @@ pub fn reconstruct_plan(
 
 fn flatten_joins_recursive(
     plan: LogicalPlan,
-    query_graph: &mut QueryGraph,
+    join_graph: &mut JoinGraph,
 ) -> Result<()> {
     match plan {
         // Inner joins decompose into the graph. (Cross joins are encoded as
@@ -312,17 +312,17 @@ fn flatten_joins_recursive(
         LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
             if let Some(filter) = join.filter.clone() {
                 for conj in split_conjunction_owned(filter) {
-                    query_graph.add_filter(conj);
+                    join_graph.add_filter(conj);
                 }
             }
 
             flatten_joins_recursive(
                 Arc::unwrap_or_clone(Arc::clone(&join.left)),
-                query_graph,
+                join_graph,
             )?;
             flatten_joins_recursive(
                 Arc::unwrap_or_clone(Arc::clone(&join.right)),
-                query_graph,
+                join_graph,
             )?;
 
             // Process each equijoin predicate to find which nodes it connects
@@ -332,7 +332,7 @@ fn flatten_joins_recursive(
                 let right_columns = right_key.column_refs();
 
                 // Filter nodes by checking which ones contain the columns from each expression
-                let matching_nodes: Vec<NodeId> = query_graph
+                let matching_nodes: Vec<NodeId> = join_graph
                     .nodes()
                     .filter_map(|(node_id, node)| {
                         let schema = node.plan.schema();
@@ -369,10 +369,10 @@ fn flatten_joins_recursive(
                 let node_id_b = matching_nodes[1];
 
                 // Add an edge if one doesn't exist yet
-                if let Some(node_a) = query_graph.get_node(node_id_a)
-                    && node_a.connection_with(node_id_b, query_graph).is_none()
+                if let Some(node_a) = join_graph.get_node(node_id_a)
+                    && node_a.connection_with(node_id_b, join_graph).is_none()
                 {
-                    query_graph.add_edge(
+                    join_graph.add_edge(
                         node_id_a,
                         node_id_b,
                         join.on.clone(),
@@ -387,7 +387,7 @@ fn flatten_joins_recursive(
         // Non-inner joins (Left/Right/Full/Semi/Anti/Mark) are not freely
         // reorderable, so the entire join subtree becomes one opaque leaf.
         LogicalPlan::Join(join) => {
-            query_graph.add_node(Arc::new(LogicalPlan::Join(join)));
+            join_graph.add_node(Arc::new(LogicalPlan::Join(join)));
             Ok(())
         }
         // A `Filter` directly above a decomposable join is part of the join
@@ -400,17 +400,17 @@ fn flatten_joins_recursive(
             ) =>
         {
             for conj in split_conjunction_owned(filter.predicate) {
-                query_graph.add_filter(conj);
+                join_graph.add_filter(conj);
             }
             let inner = Arc::unwrap_or_clone(filter.input);
-            flatten_joins_recursive(inner, query_graph)
+            flatten_joins_recursive(inner, join_graph)
         }
         // Anything else (Aggregate, Projection, Sort, Limit, Window, Filter
         // not over a decomposable join, base scans, ...) is absorbed as an
         // opaque leaf. Joins nested inside such a wrapper are intentionally
         // hidden from the enumerator (matches Databend's dphyp behavior).
         other => {
-            query_graph.add_node(Arc::new(other));
+            join_graph.add_node(Arc::new(other));
             Ok(())
         }
     }
@@ -470,7 +470,7 @@ mod tests {
         })
     }
 
-    /// Test converting a three-way join with filter into a QueryGraph
+    /// Test converting a three-way join with filter into a JoinGraph
     #[test]
     fn test_try_from_three_way_join_with_filter() -> Result<(), DataFusionError> {
         // Create three-way join: customer JOIN orders JOIN lineitem
@@ -497,15 +497,15 @@ mod tests {
             .build()
             .unwrap();
 
-        // Convert to QueryGraph
-        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
+        // Convert to JoinGraph
+        let join_graph = JoinGraph::try_from_logical_plan(plan)?.0;
 
         // Verify structure: 3 nodes, 2 edges
-        assert_eq!(query_graph.nodes().count(), 3);
-        assert_eq!(query_graph.edges.iter().count(), 2);
+        assert_eq!(join_graph.nodes().count(), 3);
+        assert_eq!(join_graph.edges.iter().count(), 2);
 
         // Verify connectivity: one node has 2 connections (orders), two nodes have 1
-        let mut connections: Vec<usize> = query_graph
+        let mut connections: Vec<usize> = join_graph
             .nodes()
             .map(|(_, node)| node.connections().len())
             .collect();
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(connections, vec![1, 1, 2]);
 
         // Verify edges have correct join predicates
-        let edges: Vec<&Edge> = query_graph.edges.iter().map(|(_, e)| e).collect();
+        let edges: Vec<&Edge> = join_graph.edges.iter().map(|(_, e)| e).collect();
         assert!(
             edges
                 .iter()
@@ -528,8 +528,8 @@ mod tests {
         );
 
         // The non-equi join.filter should now live in the side-channel
-        assert_eq!(query_graph.filters().len(), 1);
-        let f = format!("{}", query_graph.filters()[0]);
+        assert_eq!(join_graph.filters().len(), 1);
+        let f = format!("{}", join_graph.filters()[0]);
         assert!(
             f.contains("l_quantity"),
             "expected l_quantity in side-channel filter, got: {f}"
@@ -566,12 +566,12 @@ mod tests {
             .build()
             .unwrap();
 
-        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
+        let join_graph = JoinGraph::try_from_logical_plan(plan)?.0;
 
-        assert_eq!(query_graph.nodes().count(), 3);
-        assert_eq!(query_graph.edges.iter().count(), 2);
-        assert_eq!(query_graph.filters().len(), 1);
-        let f = format!("{}", query_graph.filters()[0]);
+        assert_eq!(join_graph.nodes().count(), 3);
+        assert_eq!(join_graph.edges.iter().count(), 2);
+        assert_eq!(join_graph.filters().len(), 1);
+        let f = format!("{}", join_graph.filters()[0]);
         assert!(
             f.contains("o_totalprice"),
             "expected o_totalprice in side-channel filter, got: {f}"
@@ -610,15 +610,15 @@ mod tests {
             .build()
             .unwrap();
 
-        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
+        let join_graph = JoinGraph::try_from_logical_plan(plan)?.0;
 
         // Two leaves: the aggregated subtree (opaque) and lineitem.
-        assert_eq!(query_graph.nodes().count(), 2);
-        assert_eq!(query_graph.edges.iter().count(), 1);
-        assert_eq!(query_graph.filters().len(), 0);
+        assert_eq!(join_graph.nodes().count(), 2);
+        assert_eq!(join_graph.edges.iter().count(), 1);
+        assert_eq!(join_graph.filters().len(), 0);
 
         // One leaf must be a LogicalPlan::Aggregate.
-        let has_aggregate_leaf = query_graph
+        let has_aggregate_leaf = join_graph
             .nodes()
             .any(|(_, n)| matches!(n.plan.as_ref(), LogicalPlan::Aggregate(_)));
         assert!(
@@ -657,14 +657,14 @@ mod tests {
             .build()
             .unwrap();
 
-        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
+        let join_graph = JoinGraph::try_from_logical_plan(plan)?.0;
 
         // Two leaves: the LEFT-join subtree (opaque) and lineitem.
-        assert_eq!(query_graph.nodes().count(), 2);
-        assert_eq!(query_graph.edges.iter().count(), 1);
+        assert_eq!(join_graph.nodes().count(), 2);
+        assert_eq!(join_graph.edges.iter().count(), 1);
 
         // The opaque-leaf node's plan should be a LogicalPlan::Join with Left type.
-        let has_left_join_leaf = query_graph.nodes().any(|(_, n)| {
+        let has_left_join_leaf = join_graph.nodes().any(|(_, n)| {
             matches!(
                 n.plan.as_ref(),
                 LogicalPlan::Join(j) if j.join_type == JoinType::Left
@@ -696,13 +696,13 @@ mod tests {
             .build()
             .unwrap();
 
-        let query_graph = QueryGraph::try_from_logical_plan(plan)?.0;
+        let join_graph = JoinGraph::try_from_logical_plan(plan)?.0;
 
-        assert_eq!(query_graph.nodes().count(), 1);
-        assert_eq!(query_graph.edges.iter().count(), 0);
-        assert_eq!(query_graph.filters().len(), 0);
+        assert_eq!(join_graph.nodes().count(), 1);
+        assert_eq!(join_graph.edges.iter().count(), 0);
+        assert_eq!(join_graph.filters().len(), 0);
 
-        let only_node = query_graph.nodes().next().unwrap().1;
+        let only_node = join_graph.nodes().next().unwrap().1;
         assert!(matches!(
             only_node.plan.as_ref(),
             LogicalPlan::Join(j) if j.join_type == JoinType::Left

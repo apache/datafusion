@@ -17,4 +17,4 @@
 
 //! Optimizer rule for reordering joins to minimize query execution cost
 
-pub mod query_graph;
+pub mod join_graph;
