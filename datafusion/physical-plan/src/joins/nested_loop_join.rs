@@ -4019,4 +4019,254 @@ pub(crate) mod tests {
         "));
         Ok(())
     }
+
+    // ========================================================================
+    // Multi-partition memory-limited correctness tests
+    //
+    // These tests reproduce the cross-partition coordination bug in the
+    // memory-limited fallback path: each output partition independently
+    // constructs a per-chunk `JoinLeftData` with `AtomicUsize::new(1)`,
+    // so left-side visited state is not shared across right partitions.
+    // For join types that emit unmatched left rows in the final output
+    // (LEFT, LEFT SEMI, LEFT ANTI, LEFT MARK, FULL), this leads to a
+    // left row being emitted as unmatched by partitions whose right
+    // input did not match it — even when another partition did match.
+    // ========================================================================
+
+    /// Build the right table as one batch per row, so RepartitionExec can
+    /// distribute rows across multiple output partitions.
+    fn build_right_table_one_batch_per_row() -> Arc<dyn ExecutionPlan> {
+        build_table(
+            ("a2", &vec![12, 2, 10]),
+            ("b2", &vec![10, 2, 10]),
+            ("c2", &vec![40, 80, 100]),
+            Some(1),
+            Vec::new(),
+        )
+    }
+
+    /// Run a NLJ across 4 right partitions under a tight memory limit, so
+    /// every output partition takes the memory-limited fallback path. The
+    /// right side is shuffled via `RepartitionExec(RoundRobinBatch(4))`.
+    async fn multi_partition_memory_limited_join_collect(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: &JoinType,
+        join_filter: Option<JoinFilter>,
+        context: Arc<TaskContext>,
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
+        let partition_count = 4;
+        let right = Arc::new(RepartitionExec::try_new(
+            right,
+            Partitioning::RoundRobinBatch(partition_count),
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let nested_loop_join =
+            NestedLoopJoinExec::try_new(left, right, join_filter, join_type, None)?;
+        let columns = columns(&nested_loop_join.schema());
+
+        let mut batches = vec![];
+        for i in 0..partition_count {
+            let stream = nested_loop_join.execute(i, Arc::clone(&context))?;
+            let more = common::collect(stream).await?;
+            batches.extend(more.into_iter().filter(|b| b.num_rows() > 0));
+        }
+
+        let metrics = nested_loop_join.metrics().unwrap();
+        Ok((columns, batches, metrics))
+    }
+
+    #[tokio::test]
+    #[ignore = "fails until cross-partition shared left-visited state is implemented"]
+    async fn test_nlj_memory_limited_multi_partition_left_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table_one_batch_per_row();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) = multi_partition_memory_limited_join_collect(
+            left,
+            right,
+            &JoinType::Left,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling under tight memory limit"
+        );
+
+        // Expected output is identical to the single-partition spill path
+        // and the multi-partition non-spill path. Each left row appears
+        // exactly once: the matched (5,5,50)+(2,2,80) row, plus the two
+        // left rows filtered out by `b1 != 8` as unmatched.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+----+----+----+
+        | a1 | b1 | c1  | a2 | b2 | c2 |
+        +----+----+-----+----+----+----+
+        | 11 | 8  | 110 |    |    |    |
+        | 5  | 5  | 50  | 2  | 2  | 80 |
+        | 9  | 8  | 90  |    |    |    |
+        +----+----+-----+----+----+----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "fails until cross-partition shared left-visited state is implemented"]
+    async fn test_nlj_memory_limited_multi_partition_full_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table_one_batch_per_row();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) = multi_partition_memory_limited_join_collect(
+            left,
+            right,
+            &JoinType::Full,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling under tight memory limit"
+        );
+
+        // Expected: 1 matched + 2 left-unmatched + 2 right-unmatched.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+----+----+-----+
+        | a1 | b1 | c1  | a2 | b2 | c2  |
+        +----+----+-----+----+----+-----+
+        |    |    |     | 10 | 10 | 100 |
+        |    |    |     | 12 | 10 | 40  |
+        | 11 | 8  | 110 |    |    |     |
+        | 5  | 5  | 50  | 2  | 2  | 80  |
+        | 9  | 8  | 90  |    |    |     |
+        +----+----+-----+----+----+-----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "fails until cross-partition shared left-visited state is implemented"]
+    async fn test_nlj_memory_limited_multi_partition_left_semi_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        // Two right rows that both match the same left row (5,5,50). Without
+        // shared left-visited state across partitions, each matching partition
+        // emits the left row once, producing duplicates.
+        let right = build_table(
+            ("a2", &vec![2, 3, 10]),
+            ("b2", &vec![2, 2, 10]),
+            ("c2", &vec![80, 70, 100]),
+            Some(1),
+            Vec::new(),
+        );
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) = multi_partition_memory_limited_join_collect(
+            left,
+            right,
+            &JoinType::LeftSemi,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling under tight memory limit"
+        );
+
+        // Left semi: each left row appears at most once, even if it matches
+        // multiple right rows distributed across partitions.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 5  | 5  | 50 |
+        +----+----+----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "fails until cross-partition shared left-visited state is implemented"]
+    async fn test_nlj_memory_limited_multi_partition_left_anti_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table_one_batch_per_row();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) = multi_partition_memory_limited_join_collect(
+            left,
+            right,
+            &JoinType::LeftAnti,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling under tight memory limit"
+        );
+
+        // Left anti: only left rows with no matching right row.
+        // (5,5,50) matches (2,2,80) under the filter, so it must NOT appear.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+
+        | a1 | b1 | c1  |
+        +----+----+-----+
+        | 11 | 8  | 110 |
+        | 9  | 8  | 90  |
+        +----+----+-----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "fails until cross-partition shared left-visited state is implemented"]
+    async fn test_nlj_memory_limited_multi_partition_left_mark_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table_one_batch_per_row();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) = multi_partition_memory_limited_join_collect(
+            left,
+            right,
+            &JoinType::LeftMark,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling under tight memory limit"
+        );
+
+        // Left mark: every left row appears exactly once with a bool
+        // indicating whether it matched at least one right row.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+-------+
+        | a1 | b1 | c1  | mark  |
+        +----+----+-----+-------+
+        | 11 | 8  | 110 | false |
+        | 5  | 5  | 50  | true  |
+        | 9  | 8  | 90  | false |
+        +----+----+-----+-------+
+        "));
+        Ok(())
+    }
 }
