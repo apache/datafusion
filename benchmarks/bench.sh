@@ -691,6 +691,7 @@ run_tpch() {
 
     debug_run env BENCH_NAME=tpch \
       BENCH_SIZE="${SCALE_FACTOR}" \
+      DATA_DIR="${DATA_DIR}" \
       PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       TPCH_FILE_TYPE="${FORMAT}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
@@ -709,6 +710,7 @@ run_tpch_mem() {
 
     debug_run env BENCH_NAME=tpch \
       BENCH_SIZE="${SCALE_FACTOR}" \
+      DATA_DIR="${DATA_DIR}" \
       TPCH_FILE_TYPE="mem" \
       PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
