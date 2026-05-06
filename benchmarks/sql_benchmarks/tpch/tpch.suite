@@ -1,0 +1,16 @@
+name = "tpch"
+description = "TPC-H SQL benchmarks"
+
+[[options]]
+name = "format"
+short = "f"
+default = "parquet"
+values = ["parquet", "csv", "mem"]
+help = "Selects the TPC-H data format."
+
+[[options]]
+name = "scale-factor"
+short = "sf"
+default = "1"
+values = ["1", "10"]
+help = "Selects the TPC-H scale factor."
