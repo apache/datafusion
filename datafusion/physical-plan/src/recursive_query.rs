@@ -506,18 +506,25 @@ mod tests {
         Arc::new(EmptyExec::new(Arc::new(Schema::new(fields))))
     }
 
+    fn recursive_exec(
+        static_term: Arc<dyn ExecutionPlan>,
+        recursive_term: Arc<dyn ExecutionPlan>,
+    ) -> Result<RecursiveQueryExec> {
+        RecursiveQueryExec::try_new(
+            "numbers".to_string(),
+            static_term,
+            recursive_term,
+            false,
+        )
+    }
+
     #[test]
     fn recursive_query_exec_projects_recursive_term_to_reconciled_schema() -> Result<()> {
         let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, false)]);
 
-        let exec = RecursiveQueryExec::try_new(
-            "numbers".to_string(),
-            Arc::clone(&static_term),
-            Arc::clone(&recursive_term),
-            false,
-        )?;
+        let exec = recursive_exec(Arc::clone(&static_term), Arc::clone(&recursive_term))?;
 
         assert_eq!(exec.schema(), static_term.schema());
         let projection = exec
@@ -536,12 +543,7 @@ mod tests {
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
 
-        let exec = RecursiveQueryExec::try_new(
-            "numbers".to_string(),
-            Arc::clone(&static_term),
-            Arc::clone(&recursive_term),
-            false,
-        )?;
+        let exec = recursive_exec(Arc::clone(&static_term), Arc::clone(&recursive_term))?;
 
         let static_schema = static_term.schema();
         assert_eq!(exec.schema(), static_schema);
