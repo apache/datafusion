@@ -118,16 +118,16 @@ pub fn align_plan_to_schema(
     input: Arc<dyn ExecutionPlan>,
     expected_schema: &SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    validate_schema_alignment(&input.schema(), expected_schema, "align")?;
+    let input_schema = input.schema();
+    validate_schema_alignment(&input_schema, expected_schema, "align")?;
 
-    if input.schema().as_ref() == expected_schema.as_ref() {
+    if input_schema.as_ref() == expected_schema.as_ref() {
         return Ok(input);
     }
 
     if let Ok(projected) = project_plan_to_schema(Arc::clone(&input), expected_schema) {
-        if projected.schema().as_ref() == expected_schema.as_ref() {
-            return Ok(projected);
-        }
+        debug_assert_eq!(projected.schema().as_ref(), expected_schema.as_ref());
+        return Ok(projected);
     }
 
     Ok(Arc::new(SchemaAlignExec::try_new(
@@ -274,10 +274,7 @@ impl SchemaAlignExec {
             Partitioning::RoundRobinBatch(partitions) => {
                 Partitioning::RoundRobinBatch(*partitions)
             }
-            Partitioning::Hash(_, partitions)
-            | Partitioning::UnknownPartitioning(partitions) => {
-                Partitioning::UnknownPartitioning(*partitions)
-            }
+            partitioning => Partitioning::UnknownPartitioning(partitioning.partition_count()),
         };
         let properties = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
@@ -311,7 +308,7 @@ impl DisplayAs for SchemaAlignExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "SchemaAlignExec")
             }
-            DisplayFormatType::TreeRender => write!(f, ""),
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }
