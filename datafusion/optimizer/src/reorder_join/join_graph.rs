@@ -298,10 +298,7 @@ pub fn reconstruct_plan(
     Ok(current)
 }
 
-fn flatten_joins_recursive(
-    plan: LogicalPlan,
-    join_graph: &mut JoinGraph,
-) -> Result<()> {
+fn flatten_joins_recursive(plan: LogicalPlan, join_graph: &mut JoinGraph) -> Result<()> {
     match plan {
         // Inner joins decompose into the graph. (Cross joins are encoded as
         // Inner with an empty `on` list, which is also handled here: the
