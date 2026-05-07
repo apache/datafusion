@@ -1119,7 +1119,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1207,6 +1207,10 @@ pub mod physical_plan_node {
         ScalarSubquery(::prost::alloc::boxed::Box<super::ScalarSubqueryExecNode>),
         #[prost(message, tag = "40")]
         GroupJoin(::prost::alloc::boxed::Box<super::GroupJoinExecNode>),
+        #[prost(message, tag = "41")]
+        EagerRightGroupJoin(
+            ::prost::alloc::boxed::Box<super::EagerRightGroupJoinExecNode>,
+        ),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1777,6 +1781,27 @@ pub struct HashJoinExecNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GroupJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub on: ::prost::alloc::vec::Vec<JoinOn>,
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "4")]
+    pub join_type: i32,
+    #[prost(message, repeated, tag = "5")]
+    pub group_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(string, repeated, tag = "6")]
+    pub group_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "7")]
+    pub aggr_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(string, repeated, tag = "8")]
+    pub aggr_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "9")]
+    pub input_schema: ::core::option::Option<super::datafusion_common::Schema>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EagerRightGroupJoinExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, boxed, tag = "2")]

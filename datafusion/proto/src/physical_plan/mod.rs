@@ -72,6 +72,7 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
 use datafusion_physical_plan::expressions::PhysicalSortExpr;
 use datafusion_physical_plan::filter::{FilterExec, FilterExecBuilder};
+use datafusion_physical_plan::joins::eager_group_join::EagerRightGroupJoinExec;
 use datafusion_physical_plan::joins::group_join::GroupJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
@@ -297,6 +298,12 @@ impl protobuf::PhysicalPlanNode {
             PhysicalPlanType::GroupJoin(group_join) => {
                 self.try_into_group_join_physical_plan(group_join, ctx, proto_converter)
             }
+            PhysicalPlanType::EagerRightGroupJoin(group_join) => self
+                .try_into_eager_right_group_join_physical_plan(
+                    group_join,
+                    ctx,
+                    proto_converter,
+                ),
             PhysicalPlanType::SymmetricHashJoin(sym_join) => self
                 .try_into_symmetric_hash_join_physical_plan(
                     sym_join,
@@ -431,6 +438,14 @@ impl protobuf::PhysicalPlanNode {
 
         if let Some(exec) = plan.downcast_ref::<GroupJoinExec>() {
             return protobuf::PhysicalPlanNode::try_from_group_join_exec(
+                exec,
+                codec,
+                proto_converter,
+            );
+        }
+
+        if let Some(exec) = plan.downcast_ref::<EagerRightGroupJoinExec>() {
+            return protobuf::PhysicalPlanNode::try_from_eager_right_group_join_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -1453,6 +1468,91 @@ impl protobuf::PhysicalPlanNode {
             aggr_expr,
             physical_schema,
         )?))
+    }
+
+    fn try_into_eager_right_group_join_physical_plan(
+        &self,
+        group_join: &protobuf::EagerRightGroupJoinExecNode,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = into_physical_plan(&group_join.left, ctx, proto_converter)?;
+        let right = into_physical_plan(&group_join.right, ctx, proto_converter)?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        let on = group_join
+            .on
+            .iter()
+            .map(|col| {
+                let left = proto_converter.proto_to_physical_expr(
+                    col.left.as_ref().ok_or_else(|| {
+                        proto_error("Missing EagerRightGroupJoin left key")
+                    })?,
+                    left_schema.as_ref(),
+                    ctx,
+                )?;
+                let right = proto_converter.proto_to_physical_expr(
+                    col.right.as_ref().ok_or_else(|| {
+                        proto_error("Missing EagerRightGroupJoin right key")
+                    })?,
+                    right_schema.as_ref(),
+                    ctx,
+                )?;
+                Ok((left, right))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let join_type =
+            protobuf::JoinType::try_from(group_join.join_type).map_err(|_| {
+                proto_error(format!(
+                    "Received an EagerRightGroupJoinNode message with unknown JoinType {}",
+                    group_join.join_type
+                ))
+            })?;
+
+        let group_by_exprs = group_join
+            .group_expr
+            .iter()
+            .zip(group_join.group_expr_name.iter())
+            .map(|(expr, name)| {
+                proto_converter
+                    .proto_to_physical_expr(expr, left_schema.as_ref(), ctx)
+                    .map(|expr| (expr, name.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let input_schema = group_join.input_schema.as_ref().ok_or_else(|| {
+            internal_datafusion_err!(
+                "input_schema in EagerRightGroupJoinNode is missing."
+            )
+        })?;
+        let physical_schema = SchemaRef::new(input_schema.try_into()?);
+
+        let aggr_expr = group_join
+            .aggr_expr
+            .iter()
+            .zip(group_join.aggr_expr_name.iter())
+            .map(|(expr, name)| {
+                parse_physical_aggr_expr_node(
+                    expr,
+                    name,
+                    &physical_schema,
+                    ctx,
+                    proto_converter,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(
+            EagerRightGroupJoinExec::try_new_with_aggr_input_schema(
+                left,
+                right,
+                on,
+                join_type.into(),
+                group_by_exprs,
+                aggr_expr,
+                physical_schema,
+            )?,
+        ))
     }
 
     fn try_into_symmetric_hash_join_physical_plan(
@@ -2558,6 +2658,63 @@ impl protobuf::PhysicalPlanNode {
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::GroupJoin(Box::new(
                 protobuf::GroupJoinExecNode {
+                    left: Some(Box::new(left)),
+                    right: Some(Box::new(right)),
+                    on,
+                    join_type: protobuf::JoinType::from(*exec.join_type()).into(),
+                    group_expr,
+                    group_expr_name,
+                    aggr_expr,
+                    aggr_expr_name,
+                    input_schema: Some(exec.aggr_input_schema().as_ref().try_into()?),
+                },
+            ))),
+        })
+    }
+
+    fn try_from_eager_right_group_join_exec(
+        exec: &EagerRightGroupJoinExec,
+        codec: &dyn PhysicalExtensionCodec,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Self> {
+        let left = proto_converter.execution_plan_to_proto(exec.left(), codec)?;
+        let right = proto_converter.execution_plan_to_proto(exec.right(), codec)?;
+        let on = exec
+            .on()
+            .iter()
+            .map(|(left, right)| {
+                Ok(protobuf::JoinOn {
+                    left: Some(proto_converter.physical_expr_to_proto(left, codec)?),
+                    right: Some(proto_converter.physical_expr_to_proto(right, codec)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let group_expr = exec
+            .group_by_exprs()
+            .iter()
+            .map(|(expr, _)| proto_converter.physical_expr_to_proto(expr, codec))
+            .collect::<Result<Vec<_>>>()?;
+        let group_expr_name = exec
+            .group_by_exprs()
+            .iter()
+            .map(|(_, name)| name.clone())
+            .collect();
+        let aggr_expr = exec
+            .aggr_expr()
+            .iter()
+            .map(|expr| {
+                serialize_physical_aggr_expr(expr.to_owned(), codec, proto_converter)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let aggr_expr_name = exec
+            .aggr_expr()
+            .iter()
+            .map(|expr| expr.name().to_string())
+            .collect();
+
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::EagerRightGroupJoin(Box::new(
+                protobuf::EagerRightGroupJoinExecNode {
                     left: Some(Box::new(left)),
                     right: Some(Box::new(right)),
                     on,

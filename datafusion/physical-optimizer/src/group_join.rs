@@ -30,6 +30,7 @@ use datafusion_common::{JoinType, Result};
 use datafusion_physical_expr::physical_exprs_equal;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode};
+use datafusion_physical_plan::joins::eager_group_join::EagerRightGroupJoinExec;
 use datafusion_physical_plan::joins::group_join::GroupJoinExec;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -53,10 +54,68 @@ use crate::PhysicalOptimizerRule;
 #[derive(Default, Debug)]
 pub struct GroupJoinOptimizer {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupJoinStrategy {
+    EagerRight,
+    Memoizing,
+    Separate,
+}
+
 impl GroupJoinOptimizer {
     /// Create a new `GroupJoinOptimizer`.
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+fn choose_strategy(hash_join: &HashJoinExec, join_type: JoinType) -> GroupJoinStrategy {
+    let left_stats = hash_join.left().partition_statistics(None);
+    let right_stats = hash_join.right().partition_statistics(None);
+
+    match (left_stats, right_stats) {
+        (Ok(left_stats), Ok(right_stats)) => choose_strategy_from_row_counts(
+            left_stats.num_rows.get_value().copied(),
+            right_stats.num_rows.get_value().copied(),
+            join_type,
+        ),
+        _ => GroupJoinStrategy::Memoizing,
+    }
+}
+
+fn choose_strategy_from_row_counts(
+    left_rows: Option<usize>,
+    right_rows: Option<usize>,
+    join_type: JoinType,
+) -> GroupJoinStrategy {
+    let (Some(left_rows), Some(right_rows)) = (left_rows, right_rows) else {
+        return GroupJoinStrategy::Memoizing;
+    };
+
+    if left_rows == 0 {
+        return GroupJoinStrategy::Memoizing;
+    }
+
+    match join_type {
+        JoinType::Left => {
+            if right_rows as f64 > 1.5 * left_rows as f64 {
+                GroupJoinStrategy::EagerRight
+            } else {
+                GroupJoinStrategy::Memoizing
+            }
+        }
+        JoinType::Inner => {
+            let build_side_distinct_ratio = None::<f64>;
+            if build_side_distinct_ratio.is_some_and(|ratio| ratio < 0.5) {
+                return GroupJoinStrategy::Separate;
+            }
+
+            if right_rows > 2 * left_rows {
+                GroupJoinStrategy::EagerRight
+            } else {
+                GroupJoinStrategy::Memoizing
+            }
+        }
+        _ => GroupJoinStrategy::Memoizing,
     }
 }
 
@@ -168,7 +227,12 @@ impl PhysicalOptimizerRule for GroupJoinOptimizer {
                 }
             }
 
-            // All preconditions met — create GroupJoinExec
+            let strategy = choose_strategy(hash_join, *hash_join.join_type());
+            if strategy == GroupJoinStrategy::Separate {
+                return Ok(Transformed::no(plan));
+            }
+
+            // All preconditions met — create a fused group join plan
             let group_by_with_names: Vec<_> = agg_exec
                 .group_expr()
                 .expr()
@@ -176,19 +240,40 @@ impl PhysicalOptimizerRule for GroupJoinOptimizer {
                 .map(|(expr, name)| (Arc::clone(expr), name.clone()))
                 .collect();
 
-            let group_join = GroupJoinExec::try_new_with_aggr_input_schema(
-                Arc::clone(hash_join.left()),
-                Arc::clone(hash_join.right()),
-                join_on.to_vec(),
-                *hash_join.join_type(),
-                group_by_with_names,
-                aggr_exprs.to_vec(),
-                agg_exec.input_schema(),
-            )?;
+            match strategy {
+                GroupJoinStrategy::EagerRight => {
+                    let group_join =
+                        EagerRightGroupJoinExec::try_new_with_aggr_input_schema(
+                            Arc::clone(hash_join.left()),
+                            Arc::clone(hash_join.right()),
+                            join_on.to_vec(),
+                            *hash_join.join_type(),
+                            group_by_with_names,
+                            aggr_exprs.to_vec(),
+                            agg_exec.input_schema(),
+                        )?;
 
-            Ok(Transformed::yes(
-                Arc::new(group_join) as Arc<dyn ExecutionPlan>
-            ))
+                    Ok(Transformed::yes(
+                        Arc::new(group_join) as Arc<dyn ExecutionPlan>
+                    ))
+                }
+                GroupJoinStrategy::Memoizing => {
+                    let group_join = GroupJoinExec::try_new_with_aggr_input_schema(
+                        Arc::clone(hash_join.left()),
+                        Arc::clone(hash_join.right()),
+                        join_on.to_vec(),
+                        *hash_join.join_type(),
+                        group_by_with_names,
+                        aggr_exprs.to_vec(),
+                        agg_exec.input_schema(),
+                    )?;
+
+                    Ok(Transformed::yes(
+                        Arc::new(group_join) as Arc<dyn ExecutionPlan>
+                    ))
+                }
+                GroupJoinStrategy::Separate => Ok(Transformed::no(plan)),
+            }
         })
         .data()
     }
@@ -408,5 +493,37 @@ mod tests {
             EmptyExec
         ");
         Ok(())
+    }
+
+    #[test]
+    fn cost_model_selects_eager_right_for_large_left_join_probe() {
+        assert_eq!(
+            choose_strategy_from_row_counts(Some(100), Some(151), JoinType::Left),
+            GroupJoinStrategy::EagerRight
+        );
+    }
+
+    #[test]
+    fn cost_model_keeps_memoizing_for_small_left_join_probe() {
+        assert_eq!(
+            choose_strategy_from_row_counts(Some(100), Some(150), JoinType::Left),
+            GroupJoinStrategy::Memoizing
+        );
+    }
+
+    #[test]
+    fn cost_model_selects_eager_right_for_large_inner_join_probe() {
+        assert_eq!(
+            choose_strategy_from_row_counts(Some(100), Some(201), JoinType::Inner),
+            GroupJoinStrategy::EagerRight
+        );
+    }
+
+    #[test]
+    fn cost_model_uses_memoizing_without_row_counts() {
+        assert_eq!(
+            choose_strategy_from_row_counts(None, Some(201), JoinType::Left),
+            GroupJoinStrategy::Memoizing
+        );
     }
 }

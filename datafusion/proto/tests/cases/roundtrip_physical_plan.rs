@@ -65,6 +65,7 @@ use datafusion::physical_plan::expressions::{
     BinaryExpr, Column, NotExpr, PhysicalSortExpr, binary, cast, col, in_list, like, lit,
 };
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
+use datafusion::physical_plan::joins::eager_group_join::EagerRightGroupJoinExec;
 use datafusion::physical_plan::joins::group_join::GroupJoinExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
@@ -356,6 +357,51 @@ fn roundtrip_group_join() -> Result<()> {
         aggr_expr,
         input_schema,
     )?))
+}
+
+#[test]
+fn roundtrip_eager_right_group_join() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("l_key", DataType::Int64, false),
+        Field::new("l_value", DataType::Int64, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("r_key", DataType::Int64, false),
+        Field::new("r_value", DataType::Int64, false),
+    ]));
+    let input_schema = Arc::new(Schema::new(vec![
+        Field::new("l_key", DataType::Int64, false),
+        Field::new("l_value", DataType::Int64, false),
+        Field::new("r_key", DataType::Int64, false),
+        Field::new("r_value", DataType::Int64, false),
+    ]));
+
+    let on = vec![(
+        Arc::new(Column::new("l_key", left_schema.index_of("l_key")?)) as _,
+        Arc::new(Column::new("r_key", right_schema.index_of("r_key")?)) as _,
+    )];
+    let group_by_exprs = vec![(
+        Arc::new(Column::new("l_key", left_schema.index_of("l_key")?)) as _,
+        "l_key".to_string(),
+    )];
+    let aggr_expr = vec![Arc::new(
+        AggregateExprBuilder::new(count_udaf(), vec![col("r_value", &input_schema)?])
+            .schema(Arc::clone(&input_schema))
+            .alias("count_values")
+            .build()?,
+    )];
+
+    roundtrip_test(Arc::new(
+        EagerRightGroupJoinExec::try_new_with_aggr_input_schema(
+            Arc::new(EmptyExec::new(left_schema)),
+            Arc::new(EmptyExec::new(right_schema)),
+            on,
+            JoinType::Inner,
+            group_by_exprs,
+            aggr_expr,
+            input_schema,
+        )?,
+    ))
 }
 
 #[test]

@@ -789,6 +789,7 @@ message PhysicalPlanNode {
     ArrowScanExecNode arrow_scan = 38;
     ScalarSubqueryExecNode scalar_subquery = 39;
     GroupJoinExecNode group_join = 40;
+    EagerRightGroupJoinExecNode eager_right_group_join = 41;
   }
 }
 
@@ -1191,6 +1192,18 @@ message HashJoinExecNode {
 }
 
 message GroupJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  repeated JoinOn on = 3;
+  datafusion_common.JoinType join_type = 4;
+  repeated PhysicalExprNode group_expr = 5;
+  repeated string group_expr_name = 6;
+  repeated PhysicalExprNode aggr_expr = 7;
+  repeated string aggr_expr_name = 8;
+  datafusion_common.Schema input_schema = 9;
+}
+
+message EagerRightGroupJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
   repeated JoinOn on = 3;
