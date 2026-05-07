@@ -478,8 +478,7 @@ pub fn accumulate<T, F>(
 ///
 /// * `group_indices` - To which groups do the rows in `value_columns` belong
 /// * `value_columns` - The input arrays to accumulate
-/// * `opt_filter` - Optional filter array. If present, only rows where filter
-///                  is `Some(true)` are included
+/// * `opt_filter` - Optional filter array. If present, only rows where filter is `Some(true)` are included
 /// * `value_fn` - Callback function for each valid row, with parameters:
 ///     * `group_idx`: The group index for the current row
 ///     * `batch_idx`: The index of the current row in the input arrays
