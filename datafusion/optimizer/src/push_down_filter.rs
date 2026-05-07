@@ -1004,16 +1004,18 @@ impl OptimizerRule for PushDownFilter {
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
-                let mut replace_map = HashMap::new();
-                for expr in &agg.group_expr {
-                    replace_map.insert(expr.schema_name().to_string(), expr.clone());
-                }
+                let replace_map = agg
+                    .group_expr
+                    .iter()
+                    .map(|expr| (expr.schema_name().to_string(), expr.clone()))
+                    .collect::<HashMap<_, _>>();
 
                 push_down_filter_through_unary(
                     filter.predicate,
                     |expr| {
-                        let cols = expr.column_refs();
-                        cols.iter().all(|c| group_expr_columns.contains(c))
+                        expr.column_refs()
+                            .iter()
+                            .all(|c| group_expr_columns.contains(c))
                     },
                     LogicalPlan::Aggregate(agg),
                     |push_predicates| {
@@ -1090,8 +1092,9 @@ impl OptimizerRule for PushDownFilter {
                 push_down_filter_through_unary(
                     filter.predicate,
                     |expr| {
-                        let cols = expr.column_refs();
-                        cols.iter().all(|c| potential_partition_keys.contains(c))
+                        expr.column_refs()
+                            .iter()
+                            .all(|c| potential_partition_keys.contains(c))
                     },
                     LogicalPlan::Window(window),
                     Ok,
@@ -1375,20 +1378,7 @@ fn insert_filter_below_unary(
     plan: LogicalPlan,
     predicate: Expr,
 ) -> Result<Transformed<LogicalPlan>> {
-    let mut predicate = Some(predicate);
-    let transformed_plan = plan.map_children(|child| {
-        if let Some(predicate) = predicate.take() {
-            make_filter(predicate, Arc::new(child)).map(Transformed::yes)
-        } else {
-            // already took the predicate
-            internal_err!("node had more than one input")
-        }
-    })?;
-
-    // make sure we did the actual replacement
-    assert_or_internal_err!(predicate.is_none(), "node had no inputs");
-
-    Ok(transformed_plan)
+    map_single_child(plan, |child| make_filter(predicate, Arc::new(child)))
 }
 
 /// Creates a new LogicalPlan::Filter node.
@@ -1413,18 +1403,28 @@ fn insert_below(
     plan: LogicalPlan,
     new_child: LogicalPlan,
 ) -> Result<Transformed<LogicalPlan>> {
-    let mut new_child = Some(new_child);
-    let transformed_plan = plan.map_children(|_child| {
-        if let Some(new_child) = new_child.take() {
-            Ok(Transformed::yes(new_child))
+    map_single_child(plan, |_child| Ok(new_child))
+}
+
+fn map_single_child<F>(
+    plan: LogicalPlan,
+    replace_child: F,
+) -> Result<Transformed<LogicalPlan>>
+where
+    F: FnOnce(LogicalPlan) -> Result<LogicalPlan>,
+{
+    let mut replace_child = Some(replace_child);
+    let transformed_plan = plan.map_children(|child| {
+        if let Some(replace_child) = replace_child.take() {
+            replace_child(child).map(Transformed::yes)
         } else {
-            // already took the new child
+            // already replaced the child
             internal_err!("node had more than one input")
         }
     })?;
 
     // make sure we did the actual replacement
-    assert_or_internal_err!(new_child.is_none(), "node had no inputs");
+    assert_or_internal_err!(replace_child.is_none(), "node had no inputs");
 
     Ok(transformed_plan)
 }
