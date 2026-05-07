@@ -81,10 +81,12 @@ impl ScalarUDFImpl for SparkFloor {
                 DataType::Decimal128(new_p, 0)
             }
             DataType::Decimal128(p, s) => DataType::Decimal128(*p, *s),
-            DataType::Float32 | DataType::Float64 | DataType::Int8 | DataType::Int16 |
-            DataType::Int32 | DataType::Int64 => {
-                DataType::Int64
-            }
+            DataType::Float32
+            | DataType::Float64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64 => DataType::Int64,
             _ => exec_err!(
                 "found unsupported return type {:?}",
                 args.arg_fields[0].data_type()
@@ -178,4 +180,3 @@ fn spark_floor(
         other => exec_err!("Unsupported data type {other:?} for function floor"),
     }
 }
-
