@@ -94,7 +94,7 @@ harness = false
 name = "sqllogictests"
 path = "bin/sqllogictests.rs"
 
-# Required because we pull serde_json with a feature to get consistent pg display,
-# but its not directly used.
+# serde_json is pulled with a feature to get
+# consistent pg display, but is not directly used in this crate.
 [package.metadata.cargo-machete]
-ignored = "serde_json"
+ignored = ["serde_json"]

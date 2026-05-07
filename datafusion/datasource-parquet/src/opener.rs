@@ -259,7 +259,7 @@ struct PreparedParquetOpen {
     partition_index: usize,
     partitioned_file: PartitionedFile,
     file_range: Option<datafusion_datasource::FileRange>,
-    extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    extensions: datafusion_datasource::FileExtensions,
     file_name: String,
     file_metrics: ParquetFileMetrics,
     baseline_metrics: BaselineMetrics,
@@ -884,7 +884,7 @@ impl FiltersPreparedParquetOpen {
         // as many row groups as possible based on the metadata and query
         let mut row_groups = RowGroupAccessPlanFilter::new(create_initial_plan(
             &prepared.file_name,
-            prepared.extensions.clone(),
+            &prepared.extensions,
             rg_metadata.len(),
         )?);
 
@@ -1540,23 +1540,17 @@ impl ParquetMorselizer {
 /// Note: file_name is only used for error messages
 fn create_initial_plan(
     file_name: &str,
-    extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    extensions: &datafusion_datasource::FileExtensions,
     row_group_count: usize,
 ) -> Result<ParquetAccessPlan> {
-    if let Some(extensions) = extensions {
-        if let Some(access_plan) = extensions.downcast_ref::<ParquetAccessPlan>() {
-            let plan_len = access_plan.len();
-            if plan_len != row_group_count {
-                return exec_err!(
-                    "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
-                );
-            }
-
-            // check row group count matches the plan
-            return Ok(access_plan.clone());
-        } else {
-            debug!("DataSourceExec Ignoring unknown extension specified for {file_name}");
+    if let Some(access_plan) = extensions.get::<ParquetAccessPlan>() {
+        let plan_len = access_plan.len();
+        if plan_len != row_group_count {
+            return exec_err!(
+                "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
+            );
         }
+        return Ok(access_plan.clone());
     }
 
     // default to scanning all row groups
@@ -2513,7 +2507,7 @@ mod test {
             "test.parquet".to_string(),
             u64::try_from(data_len).unwrap(),
         )
-        .with_extensions(Arc::new(access_plan));
+        .with_extension(access_plan);
 
         let make_opener = |reverse_scan: bool| {
             ParquetMorselizerBuilder::new()
@@ -2614,7 +2608,7 @@ mod test {
             "test.parquet".to_string(),
             u64::try_from(data_len).unwrap(),
         )
-        .with_extensions(Arc::new(access_plan));
+        .with_extension(access_plan);
 
         let make_opener = |reverse_scan: bool| {
             ParquetMorselizerBuilder::new()
