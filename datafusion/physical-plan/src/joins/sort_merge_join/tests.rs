@@ -2590,8 +2590,8 @@ async fn spill_join_arrays_memory_accounting() -> Result<()> {
         .map(|m| m.as_usize())
         .unwrap_or(0);
     assert!(
-        peak_mem > 0,
-        "peak_mem_used should reflect join_arrays tracked on spill path"
+        peak_mem >= join_arrays_mem,
+        "peak_mem_used ({peak_mem}) should be >= join_arrays_mem ({join_arrays_mem})"
     );
 
     // All memory must be released (grow/shrink balanced, no underflow)
@@ -2690,8 +2690,8 @@ async fn spill_join_arrays_no_headroom() -> Result<()> {
         .map(|m| m.as_usize())
         .unwrap_or(0);
     assert!(
-        peak_mem > 0,
-        "peak_mem_used should reflect force-grown join_arrays"
+        peak_mem >= join_arrays_mem,
+        "peak_mem_used ({peak_mem}) should be >= join_arrays_mem ({join_arrays_mem})"
     );
 
     // Pool should be fully released (grow/shrink balanced)
