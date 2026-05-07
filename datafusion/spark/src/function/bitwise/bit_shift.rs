@@ -292,6 +292,7 @@ impl ScalarUDFImpl for SparkBitShift {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_bit_shift_nullability() -> Result<()> {
@@ -308,6 +309,7 @@ mod tests {
                 Arc::clone(&non_nullable_shift),
             ],
             scalar_arguments: &[None, None],
+            config_options: &ConfigOptions::default(),
         })?;
 
         assert_eq!(out.data_type(), non_nullable_value.data_type());
@@ -321,6 +323,7 @@ mod tests {
         let out_nullable_value = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[Arc::clone(&nullable_value), Arc::clone(&non_nullable_shift)],
             scalar_arguments: &[None, None],
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(
             out_nullable_value.is_nullable(),
@@ -332,6 +335,7 @@ mod tests {
         let out_nullable_shift = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[non_nullable_value, nullable_shift],
             scalar_arguments: &[None, None],
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(
             out_nullable_shift.is_nullable(),

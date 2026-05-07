@@ -155,6 +155,7 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::datatypes::Fields;
+    use datafusion_common::config::ConfigOptions;
 
     fn make_entries_field(array_nullable: bool, element_nullable: bool) -> FieldRef {
         let struct_type = DataType::Struct(Fields::from(vec![
@@ -180,6 +181,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&non_nullable_field)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .expect("should infer field");
         assert!(!result.is_nullable());
@@ -191,6 +193,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&element_nullable_field)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .expect("should infer field");
         assert!(result.is_nullable());
@@ -202,6 +205,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&array_nullable_field)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .expect("should infer field");
         assert!(result.is_nullable());

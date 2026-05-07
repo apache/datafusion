@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow_schema::FieldRef;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{DataFusionError, ffi_datafusion_err};
 use datafusion_expr::ReturnFieldArgs;
@@ -74,11 +75,14 @@ impl TryFrom<ReturnFieldArgs<'_>> for FFI_ReturnFieldArgs {
 pub struct ForeignReturnFieldArgsOwned {
     arg_fields: Vec<FieldRef>,
     scalar_arguments: Vec<Option<ScalarValue>>,
+    // ConfigOptions cannot cross the FFI boundary; always holds the default.
+    config_options: ConfigOptions,
 }
 
 pub struct ForeignReturnFieldArgs<'a> {
     arg_fields: &'a [FieldRef],
     scalar_arguments: Vec<Option<&'a ScalarValue>>,
+    config_options: &'a ConfigOptions,
 }
 
 impl TryFrom<&FFI_ReturnFieldArgs> for ForeignReturnFieldArgsOwned {
@@ -105,6 +109,7 @@ impl TryFrom<&FFI_ReturnFieldArgs> for ForeignReturnFieldArgsOwned {
         Ok(Self {
             arg_fields,
             scalar_arguments,
+            config_options: ConfigOptions::default(),
         })
     }
 }
@@ -118,6 +123,7 @@ impl<'a> From<&'a ForeignReturnFieldArgsOwned> for ForeignReturnFieldArgs<'a> {
                 .iter()
                 .map(|opt| opt.as_ref())
                 .collect(),
+            config_options: &value.config_options,
         }
     }
 }
@@ -127,6 +133,7 @@ impl<'a> From<&'a ForeignReturnFieldArgs<'a>> for ReturnFieldArgs<'a> {
         ReturnFieldArgs {
             arg_fields: value.arg_fields,
             scalar_arguments: &value.scalar_arguments,
+            config_options: value.config_options,
         }
     }
 }

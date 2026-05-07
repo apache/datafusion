@@ -129,6 +129,7 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_date_sub_nullability_non_nullable_args() {
@@ -140,6 +141,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[date_field, days_field],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -157,6 +159,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[date_field, nullable_days_field],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 

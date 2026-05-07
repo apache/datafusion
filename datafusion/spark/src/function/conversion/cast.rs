@@ -633,6 +633,7 @@ mod tests {
         let return_field_args = ReturnFieldArgs {
             arg_fields: &arg_fields,
             scalar_arguments: &scalar_arguments,
+            config_options: &ConfigOptions::default(),
         };
         let result = cast.return_field_from_args(return_field_args);
         assert!(result.is_err());

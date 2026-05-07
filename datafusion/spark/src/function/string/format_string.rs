@@ -2412,6 +2412,7 @@ mod tests {
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::StringArray;
     use arrow::datatypes::DataType::Utf8;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_format_string_nullability() -> Result<()> {
@@ -2421,6 +2422,7 @@ mod tests {
         let out_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[nullable_format],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
 
         assert!(
@@ -2432,6 +2434,7 @@ mod tests {
         let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[non_nullable_format],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
 
         assert!(

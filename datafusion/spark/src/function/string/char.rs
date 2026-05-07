@@ -138,6 +138,7 @@ fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[test]
 fn test_char_nullability() -> Result<()> {
     use arrow::datatypes::{DataType::Utf8, Field, FieldRef};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ReturnFieldArgs;
     use std::sync::Arc;
 
@@ -148,6 +149,7 @@ fn test_char_nullability() -> Result<()> {
     let out_nullable = func.return_field_from_args(ReturnFieldArgs {
         arg_fields: &[nullable_field],
         scalar_arguments: &[None],
+        config_options: &ConfigOptions::default(),
     })?;
 
     assert!(
@@ -165,6 +167,7 @@ fn test_char_nullability() -> Result<()> {
     let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
         arg_fields: &[non_nullable_field],
         scalar_arguments: &[None],
+        config_options: &ConfigOptions::default(),
     })?;
 
     assert!(

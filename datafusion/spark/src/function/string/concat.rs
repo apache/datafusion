@@ -162,6 +162,7 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, StringArray};
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_concat_basic() -> Result<()> {
@@ -208,6 +209,7 @@ mod tests {
         let args = ReturnFieldArgs {
             arg_fields: &fields,
             scalar_arguments: &[],
+            config_options: &ConfigOptions::default(),
         };
 
         let field = func.return_field_from_args(args)?;
@@ -231,6 +233,7 @@ mod tests {
         let args = ReturnFieldArgs {
             arg_fields: &fields,
             scalar_arguments: &[],
+            config_options: &ConfigOptions::default(),
         };
 
         let field = func.return_field_from_args(args)?;

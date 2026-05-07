@@ -250,6 +250,7 @@ mod tests {
         let result = bitmap_count.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[Arc::clone(&non_nullable_field)],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
 
         // The result should not be nullable (same as input)
@@ -262,6 +263,7 @@ mod tests {
         let result = bitmap_count.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[Arc::clone(&nullable_field)],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
 
         // The result should be nullable (same as input)

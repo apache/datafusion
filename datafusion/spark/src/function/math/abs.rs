@@ -230,6 +230,7 @@ pub fn spark_abs(
 mod tests {
     use super::*;
     use arrow::datatypes::i256;
+    use datafusion_common::config::ConfigOptions;
 
     macro_rules! eval_array_legacy_mode {
         ($INPUT:expr, $OUTPUT:expr, $FUNC:ident) => {{
@@ -518,6 +519,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&non_nullable_i32)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -531,6 +533,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&nullable_i32)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -544,6 +547,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&non_nullable_f64)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -556,6 +560,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&nullable_f64)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 

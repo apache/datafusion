@@ -140,6 +140,7 @@ fn spark_sha1(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_sha1_nullability() -> Result<()> {
@@ -150,6 +151,7 @@ mod tests {
         let out = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[Arc::clone(&non_nullable)],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(!out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Utf8);
@@ -159,6 +161,7 @@ mod tests {
         let out = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[Arc::clone(&nullable)],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Utf8);

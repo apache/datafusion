@@ -131,6 +131,7 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_date_add_non_nullable_inputs() {
@@ -144,6 +145,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: args,
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -163,6 +165,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: args,
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 

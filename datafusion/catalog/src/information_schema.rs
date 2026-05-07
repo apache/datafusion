@@ -436,6 +436,7 @@ fn get_udf_args_and_return_types(
                     .return_field_from_args(ReturnFieldArgs {
                         arg_fields: &arg_fields,
                         scalar_arguments: &scalar_arguments,
+                        config_options: &ConfigOptions::default(),
                     })
                     .map(|f| {
                         remove_native_type_prefix(&NativeType::from(

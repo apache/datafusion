@@ -336,6 +336,7 @@ mod tests {
     use arrow::datatypes::DataType::{Int32, Int64};
 
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -434,6 +435,7 @@ mod tests {
                     Field::new("f2", DataType::Utf8, substring_nullable).into(),
                 ],
                 scalar_arguments: &[None::<&ScalarValue>, None::<&ScalarValue>],
+                config_options: &ConfigOptions::default(),
             };
 
             strpos.return_field_from_args(args).unwrap().is_nullable()

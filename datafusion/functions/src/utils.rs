@@ -291,6 +291,7 @@ pub mod test {
         let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
             arg_fields: &field_array,
             scalar_arguments: &scalar_arguments_refs,
+        config_options: &ConfigOptions::default(),
         });
             let arg_fields = $ARGS.iter()
             .enumerate()

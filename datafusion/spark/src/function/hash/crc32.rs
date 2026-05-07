@@ -126,6 +126,7 @@ fn spark_crc32(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_crc32_nullability() -> Result<()> {
@@ -136,6 +137,7 @@ mod tests {
         let result = crc32_func.return_field_from_args(ReturnFieldArgs {
             arg_fields: std::slice::from_ref(&field_not_null),
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(!result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Int64);
@@ -145,6 +147,7 @@ mod tests {
         let result = crc32_func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[field_nullable],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Int64);

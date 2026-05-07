@@ -159,6 +159,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::Field;
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
 
     fn field(name: &str, dt: DataType, nullable: bool) -> FieldRef {
@@ -185,6 +186,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &fields,
                 scalar_arguments: &scalars,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
         assert_eq!(ret.name(), "my_col");
@@ -218,6 +220,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &fields,
                 scalar_arguments: &scalars,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
         assert_eq!(ret.name(), "x");
@@ -246,6 +249,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &fields,
                 scalar_arguments: &scalars,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
         assert_eq!(ret.metadata().get("a").map(String::as_str), Some("1"));
@@ -271,6 +275,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &fields,
                 scalar_arguments: &scalars,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap_err();
         assert!(err.to_string().contains("odd number"));
@@ -287,6 +292,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &fields,
                 scalar_arguments: &scalars,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap_err();
         assert!(err.to_string().contains("at least one"));
@@ -308,6 +314,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &fields,
                 scalar_arguments: &scalars,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
         assert_eq!(ret.metadata().get("unit").map(String::as_str), Some(""));
@@ -328,6 +335,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &fields,
                 scalar_arguments: &scalars,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap_err();
         assert!(err.to_string().contains("non-empty constant string"));

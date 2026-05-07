@@ -139,9 +139,10 @@ impl ScalarUDFImpl for SparkMakeInterval {
     ///   - ANSI mode on  → nullable only when any input field is nullable
     ///   - ANSI mode off → always nullable (overflow silently produces NULL)
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let ansi_mode = args.config_options.execution.enable_ansi_mode;
         let nullable = if args.arg_fields.is_empty() {
             false
-        } else if self.ansi_mode {
+        } else if ansi_mode {
             args.arg_fields.iter().any(|f| f.is_nullable())
         } else {
             true
@@ -672,6 +673,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[],
                 scalar_arguments: &[],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
         assert!(!field.is_nullable(), "nullary call must not be nullable");
@@ -687,6 +689,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[non_null_field],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
         assert!(field.is_nullable(), "non-ANSI must always be nullable");
@@ -695,12 +698,14 @@ mod tests {
     #[test]
     fn return_field_ansi_mode_not_nullable_when_inputs_not_null() {
         // ANSI mode: no overflow → null; nullable only if inputs are nullable.
+        // config_options carries ansi mode to return_field_from_args.
         let udf = SparkMakeInterval::new_with_config(&make_ansi_config());
         let non_null_field: FieldRef = Arc::new(Field::new("x", DataType::Int32, false));
         let field = udf
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[non_null_field],
                 scalar_arguments: &[None],
+                config_options: &make_ansi_config(),
             })
             .unwrap();
         assert!(
@@ -717,6 +722,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[nullable_field],
                 scalar_arguments: &[None],
+                config_options: &make_ansi_config(),
             })
             .unwrap();
         assert!(

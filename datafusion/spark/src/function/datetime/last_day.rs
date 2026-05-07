@@ -139,6 +139,7 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::Array;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_last_day_nullability_matches_input() {
@@ -151,6 +152,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&non_nullable_arg)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .expect("non-nullable arg should succeed");
         assert_eq!(non_nullable_out.data_type(), &DataType::Date32);
@@ -160,6 +162,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&nullable_arg)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .expect("nullable arg should succeed");
         assert_eq!(nullable_out.data_type(), &DataType::Date32);
