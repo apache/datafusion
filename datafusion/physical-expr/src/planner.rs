@@ -296,62 +296,18 @@ pub fn create_physical_expr(
         }
         Expr::Cast(Cast { expr, field }) => {
             let (_, src_field) = expr.to_field(input_dfschema)?;
-
-            if !field.metadata().is_empty() {
-                if let Some(registry) = &execution_props.extension_types
-                    && let Some(extension_type) =
-                        registry.create_extension_type_for_field(field)?
-                {
-                    let cast_extension = extension_type.cast_from()?;
-                    if cast_extension.can_cast_fields(&src_field, field)? {
-                        return expressions::cast_with_extension(
-                            create_physical_expr(expr, input_dfschema, execution_props)?,
-                            input_schema,
-                            field.data_type().clone(),
-                            cast_extension,
-                        );
-                    }
-                }
-
-                return plan_err!(
-                    "Cast from {} to {} is not supported",
-                    format_type_and_metadata(
-                        src_field.data_type(),
-                        Some(src_field.metadata()),
-                    ),
-                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
-                );
-            } else if let Some(registry) = &execution_props.extension_types
-                && let Some(extension_type) =
-                    registry.create_extension_type_for_field(&src_field)?
-            {
-                let cast_extension = extension_type.cast_to()?;
-                if cast_extension.can_cast_fields(&src_field, field)? {
-                    return expressions::cast_with_extension(
-                        create_physical_expr(expr, input_dfschema, execution_props)?,
-                        input_schema,
-                        field.data_type().clone(),
-                        cast_extension,
-                    );
+            let cast_extension =
+                if let Some(extension_types) = &execution_props.extension_types {
+                    extension_types.cast_extension(&src_field, &field)
                 } else {
-                    return plan_err!(
-                        "Cast from {} to {} is not supported",
-                        format_type_and_metadata(
-                            src_field.data_type(),
-                            Some(src_field.metadata()),
-                        ),
-                        format_type_and_metadata(
-                            field.data_type(),
-                            Some(field.metadata())
-                        )
-                    );
-                }
-            }
+                    None
+                };
 
             expressions::cast_with_target_field(
                 create_physical_expr(expr, input_dfschema, execution_props)?,
                 input_schema,
                 Arc::clone(field),
+                cast_extension,
                 None,
             )
         }

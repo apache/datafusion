@@ -434,12 +434,11 @@ impl DefaultPhysicalExprAdapterRewriter {
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
         // since that's much cheaper to evalaute.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
-        // TODO don't pass None here
         validate_data_type_compatibility(
             resolved_column.name(),
             physical_field.data_type(),
             logical_field.data_type(),
-            None
+            None // TODO: can we get a cast extension here?
         )
         .map_err(|e| {
             DataFusionError::Execution(format!(
@@ -453,6 +452,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
             Arc::new(resolved_column),
             Arc::new(logical_field.clone()),
+            None, // TODO: can we get a cast extension here?
             None,
         ))))
     }
@@ -855,6 +855,7 @@ mod tests {
         let expected = Arc::new(CastExpr::new_with_target_field(
             Arc::new(Column::new("data", 0)),
             logical_field,
+            None,
             None,
         )) as Arc<dyn PhysicalExpr>;
 

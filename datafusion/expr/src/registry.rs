@@ -27,6 +27,7 @@ use arrow_schema::extension::{
     Bool8, ExtensionType, FixedShapeTensor, Json, Opaque, TimestampWithOffset, Uuid,
     VariableShapeTensor,
 };
+use datafusion_common::nested_struct::CastExtension;
 use datafusion_common::types::{
     DFBool8, DFExtensionTypeRef, DFFixedShapeTensor, DFJson, DFOpaque,
     DFTimestampWithOffset, DFUuid, DFVariableShapeTensor,
@@ -346,6 +347,14 @@ pub trait ExtensionTypeRegistry: Debug + Send + Sync {
         &self,
         name: &str,
     ) -> Result<Option<ExtensionTypeRegistrationRef>>;
+
+    fn cast_extension(
+        &self,
+        _source_field: &Field,
+        _target_field: &Field,
+    ) -> Option<Arc<dyn CastExtension>> {
+        None
+    }
 }
 
 /// A factory that creates instances of extension types from a storage [`DataType`] and the

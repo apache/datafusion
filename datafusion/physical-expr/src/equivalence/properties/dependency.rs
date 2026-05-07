@@ -942,6 +942,7 @@ mod tests {
             col_c,
             Arc::new(Field::new("c", DataType::Date32, true)),
             None,
+            None,
         )) as _;
         let required_sort = vec![PhysicalSortExpr::new_default(col("c", &schema)?)];
 

@@ -26,6 +26,7 @@ use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
+use datafusion_common::metadata::format_type_and_metadata;
 use datafusion_common::nested_struct::{
     CastExtension, requires_nested_struct_cast, validate_data_type_compatibility,
 };
@@ -50,9 +51,12 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 /// planning-time validation matches runtime validation, enabling fail-fast behavior
 /// instead of deferring errors to execution. Handles structs at any nesting level
 /// (e.g., `List<Struct>`, `Dictionary<_, Struct>`).
-fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> bool {
-    // TODO: don't pass None here
-    validate_data_type_compatibility("", source, target, None).is_ok()
+fn can_cast_named_struct_types(
+    source: &DataType,
+    target: &DataType,
+    cast_extension: Option<&dyn CastExtension>,
+) -> bool {
+    validate_data_type_compatibility("", source, target, cast_extension).is_ok()
 }
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
@@ -110,6 +114,7 @@ impl CastExpr {
         Self::new_with_target_field(
             expr,
             cast_type.into_nullable_field_ref(),
+            None,
             cast_options,
         )
     }
@@ -126,13 +131,14 @@ impl CastExpr {
     pub fn new_with_target_field(
         expr: Arc<dyn PhysicalExpr>,
         target_field: FieldRef,
+        cast_extension: Option<Arc<dyn CastExtension>>,
         cast_options: Option<CastOptions<'static>>,
     ) -> Self {
         Self {
             expr,
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
-            cast_extension: None,
+            cast_extension,
         }
     }
 
@@ -314,6 +320,7 @@ impl PhysicalExpr for CastExpr {
         Ok(Arc::new(CastExpr::new_with_target_field(
             Arc::clone(&children[0]),
             Arc::clone(&self.target_field),
+            self.cast_extension.clone(),
             Some(self.cast_options.clone()),
         )))
     }
@@ -365,6 +372,7 @@ pub fn cast_with_options(
         expr,
         input_schema,
         cast_type.into_nullable_field_ref(),
+        None,
         cast_options,
     )
 }
@@ -381,11 +389,19 @@ pub fn cast_with_target_field(
     expr: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
     target_field: FieldRef,
+    cast_extension: Option<Arc<dyn CastExtension>>,
     cast_options: Option<CastOptions<'static>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let expr_type = expr.data_type(input_schema)?;
+    let expr_field = expr.return_field(input_schema)?;
+    if let Some(cast_extension) = cast_extension.as_deref()
+        && cast_extension.can_cast_fields(&expr_field, target_field.as_ref())?
+    {
+        todo!()
+    }
+
+    let expr_type = expr_field.data_type();
     let cast_type = target_field.data_type();
-    if expr_type == *cast_type && is_default_target_field(&target_field) {
+    if expr_type == cast_type && is_default_target_field(&target_field) {
         return Ok(Arc::clone(&expr));
     }
 
@@ -395,18 +411,22 @@ pub fn cast_with_target_field(
         // applied at planning time (now) to fail fast, rather than deferring errors
         // to execution time. The name-based casting logic will be executed at runtime
         // via ColumnarValue::cast_to.
-        can_cast_named_struct_types(&expr_type, cast_type)
+        can_cast_named_struct_types(&expr_type, cast_type, cast_extension.as_deref())
     } else {
         can_cast_types(&expr_type, cast_type)
     };
 
+    let source_fmt = format_type_and_metadata(expr_type, Some(expr_field.metadata()));
+    let target_fmt =
+        format_type_and_metadata(target_field.data_type(), Some(expr_field.metadata()));
     if !can_build_cast {
-        return not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}");
+        return not_impl_err!("Unsupported CAST from {source_fmt} to {target_fmt}");
     }
 
     Ok(Arc::new(CastExpr::new_with_target_field(
         expr,
         target_field,
+        None,
         cast_options,
     )))
 }
@@ -476,6 +496,7 @@ mod tests {
         let expr = CastExpr::new_with_target_field(
             col(column, schema.as_ref())?,
             Arc::new(target_field),
+            None,
             None,
         );
 
@@ -1002,6 +1023,7 @@ mod tests {
                         .with_metadata(metadata.clone()),
                 ),
                 None,
+                None,
             );
 
             let field = expr.return_field(&schema)?;
@@ -1171,7 +1193,8 @@ mod tests {
         let literal = Arc::new(crate::expressions::Literal::new(ScalarValue::Struct(
             Arc::new(scalar_struct),
         )));
-        let expr = CastExpr::new_with_target_field(literal, Arc::new(target_field), None);
+        let expr =
+            CastExpr::new_with_target_field(literal, Arc::new(target_field), None, None);
 
         let batch = RecordBatch::new_empty(schema);
         let result = expr.evaluate(&batch)?;
