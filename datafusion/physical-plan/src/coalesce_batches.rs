@@ -344,7 +344,8 @@ impl CoalesceBatchesStream {
                 None => {
                     // Input stream is exhausted, finalize any remaining batches
                     self.completed = true;
-                    self.input = Box::pin(EmptyRecordBatchStream::new(self.coalescer.schema()));
+                    self.input =
+                        Box::pin(EmptyRecordBatchStream::new(self.coalescer.schema()));
                     self.coalescer.finish()?;
                 }
                 Some(Ok(batch)) => {
@@ -355,7 +356,9 @@ impl CoalesceBatchesStream {
                         PushBatchStatus::LimitReached => {
                             // limit was reached, so stop early
                             self.completed = true;
-                            self.input = Box::pin(EmptyRecordBatchStream::new(self.coalescer.schema()));
+                            self.input = Box::pin(EmptyRecordBatchStream::new(
+                                self.coalescer.schema(),
+                            ));
                             self.coalescer.finish()?;
                         }
                     }
