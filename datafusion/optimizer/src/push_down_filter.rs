@@ -1009,7 +1009,6 @@ impl OptimizerRule for PushDownFilter {
                     replace_map.insert(expr.schema_name().to_string(), expr.clone());
                 }
 
-                let agg_input = Arc::clone(&agg.input);
                 push_down_filter_through_unary(
                     filter.predicate,
                     |expr| {
@@ -1017,7 +1016,6 @@ impl OptimizerRule for PushDownFilter {
                         cols.iter().all(|c| group_expr_columns.contains(c))
                     },
                     LogicalPlan::Aggregate(agg),
-                    agg_input,
                     |push_predicates| {
                         push_predicates
                             .into_iter()
@@ -1089,7 +1087,6 @@ impl OptimizerRule for PushDownFilter {
                 // place, so we can use `push_predicates` directly. This is consistent with other
                 // optimizers, such as the one used by Postgres.
 
-                let window_input = Arc::clone(&window.input);
                 push_down_filter_through_unary(
                     filter.predicate,
                     |expr| {
@@ -1097,7 +1094,6 @@ impl OptimizerRule for PushDownFilter {
                         cols.iter().all(|c| potential_partition_keys.contains(c))
                     },
                     LogicalPlan::Window(window),
-                    window_input,
                     Ok,
                 )
             }
@@ -1342,7 +1338,6 @@ fn push_down_filter_through_unary<C, R>(
     predicate: Expr,
     mut can_push: C,
     unary_plan: LogicalPlan,
-    unary_input: Arc<LogicalPlan>,
     rewrite_push_predicates: R,
 ) -> Result<Transformed<LogicalPlan>>
 where
@@ -1359,8 +1354,7 @@ where
         .transform_data(|new_plan| {
             // If we have a filter to push, push it down to the unary node's input.
             if let Some(predicate) = conjunction(push_predicates) {
-                let new_filter = make_filter(predicate, unary_input)?;
-                insert_below(new_plan, new_filter)
+                insert_filter_below_unary(new_plan, predicate)
             } else {
                 Ok(Transformed::no(new_plan))
             }
@@ -1373,6 +1367,28 @@ where
                 Ok(child_plan)
             }
         })
+}
+
+/// Inserts a filter below a single-input plan node, using that node's existing
+/// child as the filter input.
+fn insert_filter_below_unary(
+    plan: LogicalPlan,
+    predicate: Expr,
+) -> Result<Transformed<LogicalPlan>> {
+    let mut predicate = Some(predicate);
+    let transformed_plan = plan.map_children(|child| {
+        if let Some(predicate) = predicate.take() {
+            make_filter(predicate, Arc::new(child)).map(Transformed::yes)
+        } else {
+            // already took the predicate
+            internal_err!("node had more than one input")
+        }
+    })?;
+
+    // make sure we did the actual replacement
+    assert_or_internal_err!(predicate.is_none(), "node had no inputs");
+
+    Ok(transformed_plan)
 }
 
 /// Creates a new LogicalPlan::Filter node.
