@@ -463,6 +463,11 @@ impl DynamicFilterPhysicalExpr {
             fetch: None,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
+            // The proto wire format does not (yet) carry these fields,
+            // so reconstruction defaults them to `None`. Callers that
+            // need sort metadata must set it via `new_with_sort_options`.
+            sort_options: None,
+            fetch: None,
         }
     }
 
