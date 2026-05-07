@@ -142,16 +142,6 @@ impl CastExpr {
         }
     }
 
-    pub fn with_cast_extension(
-        self,
-        cast_extension: Option<Arc<dyn CastExtension>>,
-    ) -> Self {
-        Self {
-            cast_extension,
-            ..self
-        }
-    }
-
     /// The expression to cast
     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.expr
@@ -173,21 +163,22 @@ impl CastExpr {
     }
 
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        // When using a cast_extension, return the explicit target_field to avoid
-        // propagating source metadata (e.g., extension type metadata) to the output.
-        if self.cast_extension.is_some() {
-            return Ok(Arc::clone(&self.target_field));
-        }
-
         if is_default_target_field(&self.target_field) {
-            // TODO: not correct, metadata should not be propagated here
             self.expr.return_field(input_schema).map(|field| {
-                Arc::new(
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_data_type(self.cast_type().clone()),
-                )
+                let cast_type = self.cast_type();
+                let mut out_field =
+                    field.as_ref().clone().with_data_type(cast_type.clone());
+
+                // If we modify the storage type we can't ensure that the metadata
+                // is valid on the target type (e.g., a cast from UUID with extension
+                // metadata to Utf8 should not result in extension metadata
+                // on a Utf8 type, which would be invalid and may be rejected by
+                // consumers).
+                if field.data_type() != cast_type {
+                    out_field = out_field.with_metadata(Default::default());
+                }
+
+                Arc::new(out_field)
             })
         } else {
             Ok(Arc::clone(&self.target_field))
@@ -449,18 +440,6 @@ pub fn cast(
     cast_type: DataType,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     cast_with_options(expr, input_schema, cast_type, None)
-}
-
-pub fn cast_with_extension(
-    expr: Arc<dyn PhysicalExpr>,
-    _input_schema: &Schema,
-    cast_type: DataType,
-    cast_extension: Arc<dyn CastExtension>,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(
-        CastExpr::new(expr, cast_type, Some(DEFAULT_CAST_OPTIONS))
-            .with_cast_extension(Some(cast_extension)),
-    ))
 }
 
 #[cfg(test)]
