@@ -17,9 +17,7 @@
 
 //! `ntile` window function implementation
 
-use crate::utils::{
-    get_scalar_value_from_args, get_signed_integer, get_unsigned_integer,
-};
+use crate::utils::{get_scalar_value_from_args, get_unsigned_integer};
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -120,6 +118,7 @@ impl WindowUDFImpl for Ntile {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
+        // check the n value is provided, guard against NTILE()
         let scalar_n =
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 0)?
                 .ok_or_else(|| {
@@ -130,16 +129,17 @@ impl WindowUDFImpl for Ntile {
             return exec_err!("NTILE requires a positive integer, but finds NULL");
         }
 
-        if scalar_n.is_unsigned() {
-            let n = get_unsigned_integer(&scalar_n)?;
-            Ok(Box::new(NtileEvaluator { n }))
-        } else {
-            let n: i64 = get_signed_integer(&scalar_n)?;
-            if n <= 0 {
-                return exec_err!("NTILE requires a positive integer");
-            }
-            Ok(Box::new(NtileEvaluator { n: n as u64 }))
+        // Works for both signed and unsigned inputs: ScalarValue::cast_to uses
+        // safe=false, so negative signed values fail the cast to UInt64, and
+        // routing through UInt64 also accepts values greater than i64::MAX.
+        let n = get_unsigned_integer(&scalar_n)
+            .map_err(|_| exec_datafusion_err!("NTILE requires a positive integer"))?;
+
+        if n == 0 {
+            return exec_err!("NTILE requires a positive integer");
         }
+
+        Ok(Box::new(NtileEvaluator { n }))
     }
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         let nullable = false;
