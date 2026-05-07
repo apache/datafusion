@@ -82,9 +82,9 @@ impl ScalarAndMetadata {
         }
 
         if let Some(cast_extension) = cast_extension
-            && cast_extension.can_cast_types(&source_field, target_field)?
+            && cast_extension.can_cast_fields(&source_field, target_field)?
         {
-            let cast_arr = cast_extension.cast_array(
+            let cast_arr = cast_extension.cast_array_fields(
                 &self.value.to_array()?,
                 &source_field,
                 target_field,

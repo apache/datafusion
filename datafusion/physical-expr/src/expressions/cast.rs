@@ -52,6 +52,7 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 /// instead of deferring errors to execution. Handles structs at any nesting level
 /// (e.g., `List<Struct>`, `Dictionary<_, Struct>`).
 fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> bool {
+    // TODO: don't pass None here
     validate_data_type_compatibility("", source, target, None).is_ok()
 }
 
@@ -273,7 +274,7 @@ impl PhysicalExpr for CastExpr {
             let to_field = self.return_field(&batch.schema())?;
             match value {
                 ColumnarValue::Array(array) => {
-                    Ok(ColumnarValue::Array(cast_extension.cast(
+                    Ok(ColumnarValue::Array(cast_extension.cast_array_fields(
                         array,
                         &from_field,
                         &to_field,
@@ -282,7 +283,7 @@ impl PhysicalExpr for CastExpr {
                 }
                 ColumnarValue::Scalar(scalar_value) => {
                     let array = scalar_value.to_array()?;
-                    let array_result = cast_extension.cast(
+                    let array_result = cast_extension.cast_array_fields(
                         array,
                         &from_field,
                         &to_field,

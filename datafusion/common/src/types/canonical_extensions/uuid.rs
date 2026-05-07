@@ -17,7 +17,7 @@
 
 use crate::Result;
 use crate::cast::{as_fixed_size_binary_array, as_string_array};
-use crate::error::_internal_err;
+use crate::error::{_exec_err, _internal_err};
 use crate::types::CastExtension;
 use crate::types::extension::DFExtensionType;
 use arrow::array::{
@@ -117,40 +117,38 @@ impl DisplayIndex for UuidValueDisplayIndex<'_> {
 struct CastFromUuid {}
 
 impl CastExtension for CastFromUuid {
-    fn can_cast(&self, _from: &Field, to: &Field, options: &CastOptions) -> Result<bool> {
+    fn can_cast_fields(&self, _from: &Field, to: &Field) -> Result<bool> {
         if to.extension_type_name().is_some() {
             return Ok(false);
         }
 
         match to.data_type() {
             // Only explicit casts to string
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-                if options.safe {
-                    Ok(false)
-                } else {
-                    Ok(true)
-                }
-            }
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(true),
             // Can implicitly cast to storage
             DataType::FixedSizeBinary(16) => Ok(true),
             _ => Ok(false),
         }
     }
 
-    fn cast(
+    fn cast_array_fields(
         &self,
         value: ArrayRef,
         from: &Field,
         to: &Field,
         options: &CastOptions,
     ) -> Result<ArrayRef> {
-        if !self.can_cast(from, to, options)? {
+        if !self.can_cast_fields(from, to)? {
             return _internal_err!("Unhandled cast");
         }
 
         let storage = as_fixed_size_binary_array(&value)?;
         match to.data_type() {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                if options.safe {
+                    return _exec_err!("Cast from string to UUID must be explicit");
+                }
+
                 let mut builder =
                     StringBuilder::with_capacity(storage.len(), storage.len() * 36);
                 for bytes_opt in storage {
@@ -182,23 +180,27 @@ impl CastExtension for CastFromUuid {
 struct CastToUuid {}
 
 impl CastExtension for CastToUuid {
-    fn can_cast(&self, from: &Field, to: &Field, options: &CastOptions) -> Result<bool> {
-        CastFromUuid {}.can_cast(to, from, options)
+    fn can_cast_fields(&self, from: &Field, to: &Field) -> Result<bool> {
+        CastFromUuid {}.can_cast_fields(to, from)
     }
 
-    fn cast(
+    fn cast_array_fields(
         &self,
         value: ArrayRef,
         from: &Field,
         to: &Field,
         options: &CastOptions,
     ) -> Result<ArrayRef> {
-        if !self.can_cast(from, to, options)? {
+        if !self.can_cast_fields(from, to)? {
             return _internal_err!("Unhandled cast");
         }
 
         match from.data_type() {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                if options.safe {
+                    return _exec_err!("Cast from UUID to string must be explicit");
+                }
+
                 let string_array_ref = cast(&value, &DataType::Utf8)?;
                 let string_array = as_string_array(&string_array_ref)?;
                 let mut builder = FixedSizeBinaryBuilder::new(16);

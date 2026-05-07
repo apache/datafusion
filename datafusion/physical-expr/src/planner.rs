@@ -24,11 +24,9 @@ use crate::{
     expressions::{self, Column, Literal, binary, like, similar_to},
 };
 
-use arrow::compute::CastOptions;
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, TableReference, ToDFSchema, exec_err,
@@ -298,10 +296,6 @@ pub fn create_physical_expr(
         }
         Expr::Cast(Cast { expr, field }) => {
             let (_, src_field) = expr.to_field(input_dfschema)?;
-            const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
-                safe: false,
-                format_options: DEFAULT_FORMAT_OPTIONS,
-            };
 
             if !field.metadata().is_empty() {
                 if let Some(registry) = &execution_props.extension_types
@@ -309,11 +303,7 @@ pub fn create_physical_expr(
                         registry.create_extension_type_for_field(field)?
                 {
                     let cast_extension = extension_type.cast_from()?;
-                    if cast_extension.can_cast(
-                        &src_field,
-                        field,
-                        &DEFAULT_CAST_OPTIONS,
-                    )? {
+                    if cast_extension.can_cast_fields(&src_field, field)? {
                         return expressions::cast_with_extension(
                             create_physical_expr(expr, input_dfschema, execution_props)?,
                             input_schema,
@@ -336,7 +326,7 @@ pub fn create_physical_expr(
                     registry.create_extension_type_for_field(&src_field)?
             {
                 let cast_extension = extension_type.cast_to()?;
-                if cast_extension.can_cast(&src_field, field, &DEFAULT_CAST_OPTIONS)? {
+                if cast_extension.can_cast_fields(&src_field, field)? {
                     return expressions::cast_with_extension(
                         create_physical_expr(expr, input_dfschema, execution_props)?,
                         input_schema,

@@ -201,9 +201,9 @@ pub fn cast_column_fields(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     if let Some(cast_extension) = cast_extension
-        && cast_extension.can_cast_types(source_field, target_field)?
+        && cast_extension.can_cast_fields(source_field, target_field)?
     {
-        return cast_extension.cast_array(
+        return cast_extension.cast_array_fields(
             source_col,
             source_field,
             target_field,
@@ -499,7 +499,7 @@ fn validate_field_compatibility(
     }
 
     if let Some(cast_extension) = cast_extension
-        && cast_extension.can_cast_types(source_field, target_field)?
+        && cast_extension.can_cast_fields(source_field, target_field)?
     {
         return Ok(());
     }
@@ -602,9 +602,10 @@ pub fn has_one_of_more_common_fields(
 }
 
 pub trait CastExtension: std::fmt::Debug + Send + Sync {
-    fn can_cast_types(&self, source_field: &Field, target_field: &Field) -> Result<bool>;
+    fn can_cast_fields(&self, source_field: &Field, target_field: &Field)
+    -> Result<bool>;
 
-    fn cast_array(
+    fn cast_array_fields(
         &self,
         array: &ArrayRef,
         source_field: &Field,
@@ -619,9 +620,13 @@ pub struct VecCastExtension {
 }
 
 impl CastExtension for VecCastExtension {
-    fn can_cast_types(&self, source_field: &Field, target_field: &Field) -> Result<bool> {
+    fn can_cast_fields(
+        &self,
+        source_field: &Field,
+        target_field: &Field,
+    ) -> Result<bool> {
         for extension in &self.extensions {
-            if extension.can_cast_types(source_field, target_field)? {
+            if extension.can_cast_fields(source_field, target_field)? {
                 return Ok(true);
             }
         }
@@ -629,7 +634,7 @@ impl CastExtension for VecCastExtension {
         Ok(false)
     }
 
-    fn cast_array(
+    fn cast_array_fields(
         &self,
         array: &ArrayRef,
         source_field: &Field,
@@ -637,8 +642,8 @@ impl CastExtension for VecCastExtension {
         cast_options: &CastOptions,
     ) -> Result<ArrayRef> {
         for extension in &self.extensions {
-            if extension.can_cast_types(source_field, target_field)? {
-                return extension.cast_array(
+            if extension.can_cast_fields(source_field, target_field)? {
+                return extension.cast_array_fields(
                     array,
                     source_field,
                     target_field,

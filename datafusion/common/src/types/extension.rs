@@ -99,10 +99,10 @@ pub trait DFExtensionType: Debug + Send + Sync {
 }
 
 pub trait CastExtension: Debug + Send + Sync {
-    fn can_cast(&self, from: &Field, to: &Field, options: &CastOptions) -> Result<bool>;
+    fn can_cast_fields(&self, from: &Field, to: &Field) -> Result<bool>;
 
     // None for fallback
-    fn cast(
+    fn cast_array_fields(
         &self,
         value: ArrayRef,
         from: &Field,
@@ -115,11 +115,11 @@ pub trait CastExtension: Debug + Send + Sync {
 struct DefaultExtensionCast {}
 
 impl CastExtension for DefaultExtensionCast {
-    fn can_cast(&self, from: &Field, to: &Field, _options: &CastOptions) -> Result<bool> {
+    fn can_cast_fields(&self, from: &Field, to: &Field) -> Result<bool> {
         Ok(from.data_type() == to.data_type())
     }
 
-    fn cast(
+    fn cast_array_fields(
         &self,
         value: ArrayRef,
         _from: &Field,
