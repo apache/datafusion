@@ -26,6 +26,7 @@ use super::metrics::{
     MetricsSet, RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
     SendableRecordBatchStream, check_if_same_properties,
@@ -392,6 +393,11 @@ impl UnnestStream {
                         self.metrics.baseline_metrics.output_rows(),
                         self.metrics.baseline_metrics.elapsed_compute(),
                     );
+                    if other.is_none() {
+                        // Release the input pipeline's resources.
+                        let input_schema = self.input.schema();
+                        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+                    }
                     other
                 }
             });
