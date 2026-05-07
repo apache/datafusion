@@ -43,16 +43,13 @@ static SQL_BENCHMARK_DIRECTORY: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-#[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
-compile_error!(
-    "feature \"snmalloc\" and feature \"mimalloc\" cannot be enabled at the same time"
-);
-
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-#[cfg(feature = "mimalloc")]
+// `cargo clippy --all-features` enables both allocator features, so prefer
+// `snmalloc` in that case and fall back to `mimalloc` otherwise.
+#[cfg(all(not(feature = "snmalloc"), feature = "mimalloc"))]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

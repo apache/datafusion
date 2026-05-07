@@ -47,7 +47,7 @@ use datafusion_expr::expr_rewriter::rewrite_with_guarantees;
 use datafusion_functions::datetime;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // enable logging so RUST_LOG works
     let _ = env_logger::try_init();
