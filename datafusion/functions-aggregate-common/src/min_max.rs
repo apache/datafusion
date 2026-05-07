@@ -852,13 +852,31 @@ mod tests {
 
     #[test]
     fn min_max_scalar_float_uses_total_cmp_for_nan() -> Result<()> {
+        type F16 =
+            <arrow::datatypes::Float16Type as arrow::datatypes::ArrowPrimitiveType>::Native;
+
         let lhs = ScalarValue::Float64(Some(f64::NAN));
         let rhs = ScalarValue::Float64(Some(1.0));
-
         assert_eq!(min_max_scalar(&lhs, &rhs, Ordering::Greater)?, rhs);
         assert!(matches!(
             min_max_scalar(&lhs, &rhs, Ordering::Less)?,
             ScalarValue::Float64(Some(value)) if value.is_nan()
+        ));
+
+        let lhs = ScalarValue::Float32(Some(f32::NAN));
+        let rhs = ScalarValue::Float32(Some(1.0));
+        assert_eq!(min_max_scalar(&lhs, &rhs, Ordering::Greater)?, rhs);
+        assert!(matches!(
+            min_max_scalar(&lhs, &rhs, Ordering::Less)?,
+            ScalarValue::Float32(Some(value)) if value.is_nan()
+        ));
+
+        let lhs = ScalarValue::Float16(Some(F16::NAN));
+        let rhs = ScalarValue::Float16(Some(F16::from_f32(1.0)));
+        assert_eq!(min_max_scalar(&lhs, &rhs, Ordering::Greater)?, rhs);
+        assert!(matches!(
+            min_max_scalar(&lhs, &rhs, Ordering::Less)?,
+            ScalarValue::Float16(Some(value)) if value.is_nan()
         ));
         Ok(())
     }
@@ -888,6 +906,22 @@ mod tests {
 
         assert!(message.starts_with(
             "Internal error: MIN/MAX is not expected to receive FixedSizeBinary of incompatible sizes (2, 3)"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_mixed_interval_error_is_preserved() -> Result<()> {
+        let lhs = ScalarValue::IntervalYearMonth(Some(1));
+        let rhs = ScalarValue::IntervalDayTime(Some(
+            arrow::datatypes::IntervalDayTime::new(1, 0),
+        ));
+
+        let error = min_max_scalar(&lhs, &rhs, Ordering::Less).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.starts_with(
+            "Internal error: Comparison error while computing interval min/max"
         ));
         Ok(())
     }
