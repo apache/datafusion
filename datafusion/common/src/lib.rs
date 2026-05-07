@@ -43,6 +43,7 @@ pub mod diagnostic;
 pub mod display;
 pub mod encryption;
 pub mod error;
+pub mod extensions;
 pub mod file_options;
 pub mod format;
 pub mod hash_utils;

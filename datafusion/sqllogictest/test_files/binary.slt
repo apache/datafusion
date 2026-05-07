@@ -321,3 +321,40 @@ query T
 SELECT split_part(CAST(binary AS VARCHAR), 'o', 2) FROM t WHERE binary = X'466f6f';
 ----
 (empty)
+
+# Pipe concatenation of binaries always provides a binary
+query ?
+SELECT x'636166c3a9' || x'68656c6c6f';
+----
+636166c3a968656c6c6f
+
+# Pipe concatenation of binary and other kind of binary also provides a binary
+query ?
+SELECT x'636166c3a9' || arrow_cast(x'68656c6c6f', 'LargeBinary');
+----
+636166c3a968656c6c6f
+
+query ?
+SELECT x'636166c3a9' || arrow_cast(arrow_cast(x'68656c6c6f', 'LargeBinary'), 'BinaryView');
+----
+636166c3a968656c6c6f
+
+query ?T
+SELECT x'636166c3a9' || arrow_cast(x'68656c6c6f', 'FixedSizeBinary(5)'), arrow_typeof(x'636166c3a9' || arrow_cast(x'68656c6c6f', 'FixedSizeBinary(5)'));
+----
+636166c3a968656c6c6f Binary
+
+query ?T
+SELECT arrow_cast(x'6361', 'FixedSizeBinary(2)') || arrow_cast(x'68656c6c6f', 'FixedSizeBinary(5)'), arrow_typeof(arrow_cast(x'6361', 'FixedSizeBinary(2)') || arrow_cast(x'68656c6c6f', 'FixedSizeBinary(5)'));
+----
+636168656c6c6f Binary
+
+# Byte pipe operator is forbidden for mixed binary and text
+query error DataFusion error: Error during planning: Cannot infer common string type for string concat operation Binary || Utf8
+SELECT x'c3a9' || 'hello';
+
+query error DataFusion error: Error during planning: Cannot infer common string type for string concat operation Utf8 || LargeBinary
+SELECT 'hello' || arrow_cast(arrow_cast('hello', 'Binary'), 'LargeBinary');
+
+query error DataFusion error: Error during planning: Cannot infer common string type for string concat operation Utf8 || BinaryView
+SELECT 'hello' || arrow_cast(arrow_cast('hello', 'Binary'), 'BinaryView');

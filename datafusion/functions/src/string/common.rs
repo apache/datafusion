@@ -19,7 +19,10 @@
 
 use std::sync::Arc;
 
-use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder, append_view};
+use crate::strings::{
+    GenericStringArrayBuilder, STRING_VIEW_INIT_BLOCK_SIZE, STRING_VIEW_MAX_BLOCK_SIZE,
+    StringViewArrayBuilder, append_view,
+};
 use arrow::array::{
     Array, ArrayRef, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
     StringViewArray, new_null_array,
@@ -323,32 +326,42 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
 }
 
 pub(crate) fn to_lower(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
-    case_conversion(args, |string| string.to_lowercase(), name)
+    case_conversion(args, true, name)
 }
 
 pub(crate) fn to_upper(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
-    case_conversion(args, |string| string.to_uppercase(), name)
+    case_conversion(args, false, name)
 }
 
-fn case_conversion<'a, F>(
-    args: &'a [ColumnarValue],
-    op: F,
+#[inline]
+fn unicode_case(s: &str, lower: bool) -> String {
+    if lower {
+        s.to_lowercase()
+    } else {
+        s.to_uppercase()
+    }
+}
+
+fn case_conversion(
+    args: &[ColumnarValue],
+    lower: bool,
     name: &str,
-) -> Result<ColumnarValue>
-where
-    F: Fn(&'a str) -> String,
-{
+) -> Result<ColumnarValue> {
     match &args[0] {
         ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Utf8 => Ok(ColumnarValue::Array(case_conversion_array::<i32, _>(
-                array, op,
+            DataType::Utf8 => Ok(ColumnarValue::Array(case_conversion_array::<i32>(
+                array, lower,
             )?)),
-            DataType::LargeUtf8 => Ok(ColumnarValue::Array(case_conversion_array::<
-                i64,
-                _,
-            >(array, op)?)),
+            DataType::LargeUtf8 => Ok(ColumnarValue::Array(
+                case_conversion_array::<i64>(array, lower)?,
+            )),
             DataType::Utf8View => {
                 let string_array = as_string_view_array(array)?;
+                if string_array.is_ascii() {
+                    return Ok(ColumnarValue::Array(Arc::new(
+                        case_conversion_utf8view_ascii(string_array, lower),
+                    )));
+                }
                 let item_len = string_array.len();
                 // Null-preserving: reuse the input null buffer as the output null buffer.
                 let nulls = string_array.nulls().cloned();
@@ -361,14 +374,14 @@ where
                         } else {
                             // SAFETY: `n.is_null(i)` was false in the branch above.
                             let s = unsafe { string_array.value_unchecked(i) };
-                            builder.append_value(&op(s));
+                            builder.append_value(&unicode_case(s, lower));
                         }
                     }
                 } else {
                     for i in 0..item_len {
                         // SAFETY: no null buffer means every index is valid.
                         let s = unsafe { string_array.value_unchecked(i) };
-                        builder.append_value(&op(s));
+                        builder.append_value(&unicode_case(s, lower));
                     }
                 }
 
@@ -378,15 +391,15 @@ where
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| op(x));
+                let result = a.as_ref().map(|x| unicode_case(x, lower));
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
             }
             ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| op(x));
+                let result = a.as_ref().map(|x| unicode_case(x, lower));
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
             ScalarValue::Utf8View(a) => {
-                let result = a.as_ref().map(|x| op(x));
+                let result = a.as_ref().map(|x| unicode_case(x, lower));
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
@@ -394,16 +407,15 @@ where
     }
 }
 
-fn case_conversion_array<'a, O, F>(array: &'a ArrayRef, op: F) -> Result<ArrayRef>
-where
-    O: OffsetSizeTrait,
-    F: Fn(&'a str) -> String,
-{
+fn case_conversion_array<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    lower: bool,
+) -> Result<ArrayRef> {
     const PRE_ALLOC_BYTES: usize = 8;
 
     let string_array = as_generic_string_array::<O>(array)?;
     if string_array.is_ascii() {
-        return case_conversion_ascii_array::<O, _>(string_array, op);
+        return case_conversion_ascii_array::<O>(string_array, lower);
     }
 
     // Values contain non-ASCII.
@@ -423,43 +435,164 @@ where
             } else {
                 // SAFETY: `n.is_null(i)` was false in the branch above.
                 let s = unsafe { string_array.value_unchecked(i) };
-                builder.append_value(&op(s));
+                builder.append_value(&unicode_case(s, lower));
             }
         }
     } else {
         for i in 0..item_len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            builder.append_value(&op(s));
+            builder.append_value(&unicode_case(s, lower));
         }
     }
     Ok(Arc::new(builder.finish(nulls)?))
 }
 
+/// Fast path for case conversion on an all-ASCII `StringViewArray`.
+fn case_conversion_utf8view_ascii(
+    array: &StringViewArray,
+    lower: bool,
+) -> StringViewArray {
+    // Specialize per conversion so the byte call inlines in the hot loops below.
+    if lower {
+        case_conversion_utf8view_ascii_inner(array, u8::to_ascii_lowercase)
+    } else {
+        case_conversion_utf8view_ascii_inner(array, u8::to_ascii_uppercase)
+    }
+}
+
+/// Walks the views once and produces a new `StringViewArray` with
+/// case-converted bytes. Inline strings (<= 12 bytes) are converted in-place;
+/// long strings copy-and-convert into output buffers and have their view fields
+/// rewritten to address the new bytes. ASCII case conversion preserves is byte
+/// length, so no row migrates between the inline and long layouts.
+fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
+    array: &StringViewArray,
+    convert: F,
+) -> StringViewArray {
+    let item_len = array.len();
+    let views = array.views();
+    let data_buffers = array.data_buffers();
+    let nulls = array.nulls();
+
+    let mut new_views: Vec<u128> = Vec::with_capacity(item_len);
+    // Long values are packed into `in_progress`; when full it is sealed into
+    // `completed` and a new, larger block is started — same block-doubling
+    // scheme as Arrow's `GenericByteViewBuilder`.
+    let mut in_progress: Vec<u8> = Vec::new();
+    let mut completed: Vec<Buffer> = Vec::new();
+    let mut block_size: u32 = STRING_VIEW_INIT_BLOCK_SIZE;
+
+    for i in 0..item_len {
+        if nulls.is_some_and(|n| n.is_null(i)) {
+            // Zero view = empty, no buffer reference; the null buffer is what
+            // marks the row null, so the view's value is irrelevant.
+            new_views.push(0);
+            continue;
+        }
+        let view = views[i];
+        // Length is the low 32 bits; `as u32` discards the rest of the view.
+        let len = view as u32 as usize;
+        if len == 0 {
+            new_views.push(0);
+            continue;
+        }
+        let mut bytes = view.to_le_bytes();
+        if len <= 12 {
+            // Inline: value is in bytes[4..4+len], no buffer reference. Convert
+            // in place; nothing else in the view needs to change.
+            for b in &mut bytes[4..4 + len] {
+                *b = convert(b);
+            }
+            new_views.push(u128::from_le_bytes(bytes));
+        } else {
+            // Long: input view points into shared `data_buffers` we can't
+            // mutate, so copy-convert into our own buffer and rewrite the
+            // view's prefix/buffer_index/offset (length is preserved).
+
+            // Ensure the current block has room; otherwise flush and grow.
+            let required_cap = in_progress.len() + len;
+            if in_progress.capacity() < required_cap {
+                if !in_progress.is_empty() {
+                    completed.push(Buffer::from_vec(std::mem::take(&mut in_progress)));
+                }
+                if block_size < STRING_VIEW_MAX_BLOCK_SIZE {
+                    block_size = block_size.saturating_mul(2);
+                }
+                let to_reserve = len.max(block_size as usize);
+                in_progress.reserve(to_reserve);
+            }
+
+            // The in-progress block will be sealed at index `completed.len()`,
+            // and our value starts at the current write position within it.
+            let buffer_index: u32 = i32::try_from(completed.len())
+                .expect("buffer count exceeds i32::MAX")
+                as u32;
+            let new_offset: u32 =
+                i32::try_from(in_progress.len()).expect("offset exceeds i32::MAX") as u32;
+
+            // Source location from the input view: bytes 8..12 are buffer
+            // index, bytes 12..16 are the offset within it.
+            let src_buffer_index =
+                u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+            let src_offset =
+                u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+            let src =
+                &data_buffers[src_buffer_index].as_slice()[src_offset..src_offset + len];
+
+            let prefix_start = in_progress.len();
+            in_progress.extend(src.iter().map(&convert));
+
+            // Rewrite the three long-view fields; bytes[0..4] (length) is
+            // left untouched. The prefix is read back from the bytes we just
+            // wrote so the converted value has a single source of truth.
+            let prefix: [u8; 4] = in_progress[prefix_start..prefix_start + 4]
+                .try_into()
+                .unwrap();
+            bytes[4..8].copy_from_slice(&prefix);
+            bytes[8..12].copy_from_slice(&buffer_index.to_le_bytes());
+            bytes[12..16].copy_from_slice(&new_offset.to_le_bytes());
+            new_views.push(u128::from_le_bytes(bytes));
+        }
+    }
+
+    if !in_progress.is_empty() {
+        completed.push(Buffer::from_vec(in_progress));
+    }
+
+    // SAFETY: each long view's buffer_index addresses a buffer we wrote, and
+    // its offset addresses bytes within that buffer; prefixes were copied from
+    // those same bytes; inline views were rewritten from valid inline bytes;
+    // null/empty rows are zero views with no buffer reference; row count is
+    // unchanged.
+    unsafe {
+        StringViewArray::new_unchecked(
+            ScalarBuffer::from(new_views),
+            completed,
+            array.nulls().cloned(),
+        )
+    }
+}
+
 /// Fast path for case conversion on an all-ASCII string array. ASCII case
 /// conversion is byte-length-preserving, so we can convert the entire addressed
-/// range in one call and reuse the offsets and nulls buffers — rebasing the
-/// offsets when the input is a sliced array.
-fn case_conversion_ascii_array<'a, O, F>(
-    string_array: &'a GenericStringArray<O>,
-    op: F,
-) -> Result<ArrayRef>
-where
-    O: OffsetSizeTrait,
-    F: Fn(&'a str) -> String,
-{
+/// byte range in one pass over the value buffer and reuse the offsets and nulls
+/// buffers — rebasing the offsets when the input is a sliced array.
+fn case_conversion_ascii_array<O: OffsetSizeTrait>(
+    string_array: &GenericStringArray<O>,
+    lower: bool,
+) -> Result<ArrayRef> {
     let value_offsets = string_array.value_offsets();
     let start = value_offsets.first().unwrap().as_usize();
     let end = value_offsets.last().unwrap().as_usize();
     let relevant = &string_array.value_data()[start..end];
 
-    // SAFETY: `relevant` is a subslice of the string array's value buffer,
-    // which is valid UTF-8.
-    let str_values = unsafe { std::str::from_utf8_unchecked(relevant) };
-
-    let converted_values = op(str_values);
-    debug_assert_eq!(converted_values.len(), str_values.len());
-    let values = Buffer::from_vec(converted_values.into_bytes());
+    let converted: Vec<u8> = if lower {
+        relevant.iter().map(u8::to_ascii_lowercase).collect()
+    } else {
+        relevant.iter().map(u8::to_ascii_uppercase).collect()
+    };
+    let values = Buffer::from_vec(converted);
 
     // Shift offsets from `start`-based to 0-based so they index into `values`.
     let offsets = if start == 0 {
@@ -468,7 +601,7 @@ where
         let s = O::usize_as(start);
         let rebased: Vec<O> = value_offsets.iter().map(|&o| o - s).collect();
         // SAFETY: subtracting a constant from monotonic offsets preserves
-        // monotonicity, and `start` is the minimum offset so no underflow.
+        // monotonicity, and `start` is the minimum offset, so no underflow.
         unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(rebased)) }
     };
 

@@ -19,7 +19,7 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::PhysicalExpr;
-use crate::expressions::{lit, try_cast};
+use crate::expressions::{LambdaVariable, lit, try_cast};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -33,8 +33,9 @@ use datafusion_common::{
     internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -128,11 +129,16 @@ impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
     fn project(&self) -> Result<ProjectedCaseBody> {
         // Determine the set of columns that are used in all the expressions of the case body.
-        let mut used_column_indices = IndexSet::<usize>::new();
+        // Use an ordered set so lambda variables continue to be positioned after columns
+        let mut used_column_indices = BTreeSet::<usize>::new();
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
                 if let Some(column) = expr.downcast_ref::<Column>() {
                     used_column_indices.insert(column.index());
+                } else if let Some(lambda_variable) =
+                    expr.downcast_ref::<LambdaVariable>()
+                {
+                    used_column_indices.insert(lambda_variable.index());
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
@@ -169,6 +175,17 @@ impl CaseBody {
                             return Ok(Transformed::yes(Arc::new(Column::new(
                                 column.name(),
                                 projected,
+                            ))));
+                        }
+                    } else if let Some(lambda_variable) =
+                        e.downcast_ref::<LambdaVariable>()
+                    {
+                        let original = lambda_variable.index();
+                        let projected = *column_index_map.get(&original).unwrap();
+                        if projected != original {
+                            return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
+                                projected,
+                                Arc::clone(lambda_variable.field()),
                             ))));
                         }
                     }
@@ -793,17 +810,15 @@ impl CaseBody {
                 }
             }?;
 
-            // `true_count` ignores `true` values where the validity bit is not set, so there's
-            // no need to call `prep_null_mask_filter`.
-            let when_true_count = when_value.true_count();
-
-            // If the 'when' predicate did not match any rows, continue to the next branch immediately
-            if when_true_count == 0 {
+            // If the 'when' predicate did not match any rows, continue to the next branch immediately.
+            // Only counts valid slots that are true (masked-null predicate slots are ignored),
+            // so no `prep_null_mask_filter` needed here.
+            if !when_value.has_true() {
                 continue;
             }
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
-            if when_true_count == remainder_batch.num_rows() {
+            if when_value.null_count() == 0 && !when_value.has_false() {
                 let then_expression = &self.when_then_expr[i].1;
                 let then_value = then_expression.evaluate(&remainder_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
@@ -882,17 +897,15 @@ impl CaseBody {
                 internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
 
-            // `true_count` ignores `true` values where the validity bit is not set, so there's
-            // no need to call `prep_null_mask_filter`.
-            let when_true_count = when_value.true_count();
-
-            // If the 'when' predicate did not match any rows, continue to the next branch immediately
-            if when_true_count == 0 {
+            // If the 'when' predicate did not match any rows, continue to the next branch immediately.
+            // Only counts valid slots that are true (masked-null predicate slots are ignored)
+            // so no `prep_null_mask_filter` needed here.
+            if !when_value.has_true() {
                 continue;
             }
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
-            if when_true_count == remainder_batch.num_rows() {
+            if when_value.null_count() == 0 && !when_value.has_false() {
                 let then_expression = &self.when_then_expr[i].1;
                 let then_value = then_expression.evaluate(&remainder_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
@@ -1017,8 +1030,15 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if projected.projection.len() < batch.num_columns() {
-            let projected_batch = batch.project(&projected.projection)?;
+        // projected.projection may include indexes of lambda variables not available on this batch
+        let projection = projected
+            .projection
+            .iter()
+            .copied()
+            .filter(|index| *index < batch.num_columns())
+            .collect::<Vec<_>>();
+        if projection.len() < batch.num_columns() {
+            let projected_batch = batch.project(&projection)?;
             projected
                 .body
                 .case_when_with_expr(&projected_batch, &return_type)
@@ -1040,8 +1060,15 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if projected.projection.len() < batch.num_columns() {
-            let projected_batch = batch.project(&projected.projection)?;
+        // projected.projection may include indexes of lambda variables not available on this batch
+        let projection = projected
+            .projection
+            .iter()
+            .copied()
+            .filter(|index| *index < batch.num_columns())
+            .collect::<Vec<_>>();
+        if projection.len() < batch.num_columns() {
+            let projected_batch = batch.project(&projection)?;
             projected
                 .body
                 .case_when_no_expr(&projected_batch, &return_type)
@@ -1144,11 +1171,10 @@ impl CaseExpr {
             )
         })?;
 
-        let true_count = when_value.true_count();
-        if true_count == when_value.len() {
+        if when_value.null_count() == 0 && !when_value.has_false() {
             // All input rows are true, just call the 'then' expression
             self.body.when_then_expr[0].1.evaluate(batch)
-        } else if true_count == 0 {
+        } else if !when_value.has_true() {
             // All input rows are false/null, just call the 'else' expression
             match &self.body.else_expr {
                 Some(else_expr) => else_expr.evaluate(batch),
@@ -1159,14 +1185,23 @@ impl CaseExpr {
                     )?))
                 }
             }
-        } else if projected.projection.len() < batch.num_columns() {
-            // The case expressions do not use all the columns of the input batch.
-            // Project first to reduce time spent filtering.
-            let projected_batch = batch.project(&projected.projection)?;
-            projected.body.expr_or_expr(&projected_batch, when_value)
         } else {
-            // All columns are used in the case expressions, so there is no need to project.
-            self.body.expr_or_expr(batch, when_value)
+            // projected.projection may include indexes of lambda variables not available on this batch
+            let projection = projected
+                .projection
+                .iter()
+                .copied()
+                .filter(|index| *index < batch.num_columns())
+                .collect::<Vec<_>>();
+            if projection.len() < batch.num_columns() {
+                // The case expressions do not use all the columns of the input batch.
+                // Project first to reduce time spent filtering.
+                let projected_batch = batch.project(&projection)?;
+                projected.body.expr_or_expr(&projected_batch, when_value)
+            } else {
+                // All columns are used in the case expressions, so there is no need to project.
+                self.body.expr_or_expr(batch, when_value)
+            }
         }
     }
 

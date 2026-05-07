@@ -3234,6 +3234,8 @@ _Alias of [current_date](#current_date)._
 
 ## Array Functions
 
+- [any_match](#any_match)
+- [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
 - [array_cat](#array_cat)
@@ -3276,14 +3278,18 @@ _Alias of [current_date](#current_date)._
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
 - [array_to_string](#array_to_string)
+- [array_transform](#array_transform)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
 - [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
 - [cosine_distance](#cosine_distance)
+- [dot_product](#dot_product)
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
+- [inner_product](#inner_product)
+- [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
@@ -3325,6 +3331,7 @@ _Alias of [current_date](#current_date)._
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
+- [list_transform](#list_transform)
 - [list_union](#list_union)
 - [list_zip](#list_zip)
 - [make_array](#make_array)
@@ -3332,6 +3339,39 @@ _Alias of [current_date](#current_date)._
 - [range](#range)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
+
+### `any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
+### `array_any_match`
+
+Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others.
+
+```sql
+any_match(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean
+
+#### Example
+
+```sql
+> select any_match([1, 2, 3], x -> x > 2);
++----------------------------------+
+| any_match([1, 2, 3], x -> x > 2) |
++----------------------------------+
+| true                             |
++----------------------------------+
+```
+
+#### Aliases
+
+- any_match
+- list_any_match
 
 ### `array_any_value`
 
@@ -4376,6 +4416,34 @@ array_to_string(array, delimiter[, null_string])
 - array_join
 - list_join
 
+### `array_transform`
+
+transforms the values of an array
+
+```sql
+array_transform(array, x -> x*2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda
+
+#### Example
+
+```sql
+> select array_transform([1, 2, 3, 4, 5], x -> x*2);
++-------------------------------------------+
+| array_transform([1, 2, 3, 4, 5], x -> x*2)       |
++-------------------------------------------+
+| [2, 4, 6, 8, 10]                          |
++-------------------------------------------+
+```
+
+#### Aliases
+
+- list_transform
+
 ### `array_union`
 
 Returns an array of elements that are present in both arrays (all elements from both arrays) without duplicates.
@@ -4495,6 +4563,10 @@ cosine_distance(array1, array2)
 +-----------------------------------------------+
 ```
 
+### `dot_product`
+
+_Alias of [inner_product](#inner_product)._
+
 ### `empty`
 
 Returns 1 for an empty array or 0 for a non-empty array.
@@ -4576,6 +4648,38 @@ generate_series(start, stop[, step])
 | [1, 2, 3]                          |
 +------------------------------------+
 ```
+
+### `inner_product`
+
+Returns the inner product (dot product) of two input arrays of equal length, computed as `sum(array1[i] * array2[i])`. Returns NULL if either array is NULL or contains NULL elements. Returns 0.0 for two empty arrays.
+
+```sql
+inner_product(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
++-------------------------------------------------------+
+| inner_product(List([1.0,2.0,3.0]),List([4.0,5.0,6.0])) |
++-------------------------------------------------------+
+| 32.0                                                  |
++-------------------------------------------------------+
+```
+
+#### Aliases
+
+- dot_product
+
+### `list_any_match`
+
+_Alias of [array_any_match](#array_any_match)._
 
 ### `list_any_value`
 
@@ -4740,6 +4844,10 @@ _Alias of [array_sort](#array_sort)._
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
+
+### `list_transform`
+
+_Alias of [array_transform](#array_transform)._
 
 ### `list_union`
 
