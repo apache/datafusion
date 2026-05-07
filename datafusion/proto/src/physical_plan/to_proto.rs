@@ -757,6 +757,7 @@ pub fn serialize_file_scan_config(
         constraints: Some(conf.constraints.clone().into()),
         batch_size: conf.batch_size.map(|s| s as u64),
         projection_exprs,
+        partitioned_by_file_group: Some(conf.partitioned_by_file_group),
     })
 }
 
