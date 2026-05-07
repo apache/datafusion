@@ -41,6 +41,7 @@ in the community:
 | `taxi`                | NYC taxi dataset benchmark                                         |
 | `tpcds`               | TPC‑DS queries                                                     |
 | `tpch`                | TPC‑H queries                                                      |
+| `wide_schema`         | Small-projection queries on a wide (1024-col, 256-file) synthetic dataset; runs `wide` + `narrow` subgroups for comparison |
 
 # Running Benchmarks
 
