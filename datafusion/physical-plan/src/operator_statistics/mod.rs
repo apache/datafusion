@@ -86,11 +86,10 @@
 //! let stats = registry.compute(plan.as_ref())?;
 //! ```
 
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
+use datafusion_common::extensions::Extensions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 
@@ -128,7 +127,7 @@ pub struct ExtendedStatistics {
     /// Standard statistics (num_rows, byte_size, column stats)
     base: Arc<Statistics>,
     /// Type-erased extensions for custom statistics
-    extensions: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    extensions: Extensions,
 }
 
 impl ExtendedStatistics {
@@ -136,7 +135,7 @@ impl ExtendedStatistics {
     pub fn new(base: Statistics) -> Self {
         Self {
             base: Arc::new(base),
-            extensions: HashMap::new(),
+            extensions: Extensions::new(),
         }
     }
 
@@ -144,7 +143,7 @@ impl ExtendedStatistics {
     pub fn new_arc(base: Arc<Statistics>) -> Self {
         Self {
             base,
-            extensions: HashMap::new(),
+            extensions: Extensions::new(),
         }
     }
 
@@ -160,26 +159,22 @@ impl ExtendedStatistics {
 
     /// Get a reference to a custom statistics extension by type.
     pub fn get_extension<T: 'static + Send + Sync>(&self) -> Option<&T> {
-        self.extensions
-            .get(&TypeId::of::<T>())
-            .and_then(|ext| ext.downcast_ref())
+        self.extensions.get::<T>()
     }
 
     /// Set a custom statistics extension.
     pub fn set_extension<T: 'static + Send + Sync>(&mut self, value: T) {
-        self.extensions.insert(TypeId::of::<T>(), Arc::new(value));
+        self.extensions.insert(value);
     }
 
     /// Check if an extension of the given type exists.
     pub fn has_extension<T: 'static + Send + Sync>(&self) -> bool {
-        self.extensions.contains_key(&TypeId::of::<T>())
+        self.extensions.contains::<T>()
     }
 
     /// Merge extensions from another ExtendedStatistics (other's extensions take precedence).
     pub fn merge_extensions(&mut self, other: &ExtendedStatistics) {
-        for (type_id, ext) in &other.extensions {
-            self.extensions.insert(*type_id, Arc::clone(ext));
-        }
+        self.extensions.merge(&other.extensions);
     }
 }
 
