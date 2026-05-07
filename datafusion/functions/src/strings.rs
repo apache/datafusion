@@ -17,12 +17,14 @@
 
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::sync::Arc;
 
 use datafusion_common::{Result, exec_datafusion_err, internal_err};
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayDataBuilder, BinaryArray, ByteView, GenericStringArray,
-    LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray, make_view,
+    Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, ByteView,
+    GenericStringArray, LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
+    make_view,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -473,6 +475,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     /// # Panics
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
+    #[inline]
     pub fn append_value(&mut self, value: &str) {
         self.value_buffer.extend_from_slice(value.as_bytes());
         let next_offset =
@@ -482,6 +485,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// Append an empty placeholder row. The corresponding slot must be masked
     /// as null by the null buffer passed to `finish`.
+    #[inline]
     pub fn append_placeholder(&mut self) {
         let next_offset =
             O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
@@ -527,12 +531,12 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     }
 }
 
-/// Starting size for the long-string data block; matches Arrow's
-/// `GenericByteViewBuilder` default.
-const STARTING_BLOCK_SIZE: u32 = 8 * 1024;
-/// Maximum size each long-string data block grows to; matches Arrow's
-/// `GenericByteViewBuilder` default.
-const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
+/// Starting size for the long-string data block used by `StringView`-style
+/// arrays; matches Arrow's `GenericByteViewBuilder` default.
+pub(crate) const STRING_VIEW_INIT_BLOCK_SIZE: u32 = 8 * 1024;
+/// Maximum size each long-string data block in a `StringView`-style array
+/// grows to; matches Arrow's `GenericByteViewBuilder` default.
+pub(crate) const STRING_VIEW_MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
 
 /// Builder for a [`StringViewArray`] that defers null tracking to `finish`.
 ///
@@ -541,13 +545,11 @@ const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
 /// Short strings (≤ 12 bytes) are inlined into the view itself; long strings
 /// are appended into an in-progress data block. When the in-progress block
 /// fills up it is flushed into `completed` and a new block — double the size
-/// of the last, capped at [`MAX_BLOCK_SIZE`] — is started.
+/// of the last, capped at [`STRING_VIEW_MAX_BLOCK_SIZE`] — is started.
 pub(crate) struct StringViewArrayBuilder {
     views: Vec<u128>,
     in_progress: Vec<u8>,
     completed: Vec<Buffer>,
-    /// Current block-size target; doubles each time a block is flushed, up to
-    /// [`MAX_BLOCK_SIZE`].
     block_size: u32,
     placeholder_count: usize,
 }
@@ -558,15 +560,14 @@ impl StringViewArrayBuilder {
             views: Vec::with_capacity(item_capacity),
             in_progress: Vec::new(),
             completed: Vec::new(),
-            block_size: STARTING_BLOCK_SIZE,
+            block_size: STRING_VIEW_INIT_BLOCK_SIZE,
             placeholder_count: 0,
         }
     }
 
-    /// Doubles the block-size target (capped at [`MAX_BLOCK_SIZE`]) and
-    /// returns the new size. The first call returns `2 * STARTING_BLOCK_SIZE`.
+    /// Doubles the block-size target and returns the new size.
     fn next_block_size(&mut self) -> u32 {
-        if self.block_size < MAX_BLOCK_SIZE {
+        if self.block_size < STRING_VIEW_MAX_BLOCK_SIZE {
             self.block_size = self.block_size.saturating_mul(2);
         }
         self.block_size
@@ -669,6 +670,47 @@ impl StringViewArrayBuilder {
             )
         };
         Ok(array)
+    }
+}
+
+/// Trait abstracting over the bulk-NULL string array builders.
+///
+/// Similar to Arrow's `StringLikeArrayBuilder`, this allows generic dispatch
+/// over the three string array types (Utf8, LargeUtf8, Utf8View) when the
+/// function body is uniform across them.
+pub(crate) trait BulkNullStringArrayBuilder {
+    fn append_value(&mut self, value: &str);
+    fn append_placeholder(&mut self);
+    fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef>;
+}
+
+impl<O: OffsetSizeTrait> BulkNullStringArrayBuilder for GenericStringArrayBuilder<O> {
+    #[inline]
+    fn append_value(&mut self, value: &str) {
+        GenericStringArrayBuilder::<O>::append_value(self, value)
+    }
+    #[inline]
+    fn append_placeholder(&mut self) {
+        GenericStringArrayBuilder::<O>::append_placeholder(self)
+    }
+    fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
+        Ok(Arc::new(GenericStringArrayBuilder::<O>::finish(
+            self, nulls,
+        )?))
+    }
+}
+
+impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
+    #[inline]
+    fn append_value(&mut self, value: &str) {
+        StringViewArrayBuilder::append_value(self, value)
+    }
+    #[inline]
+    fn append_placeholder(&mut self) {
+        StringViewArrayBuilder::append_placeholder(self)
+    }
+    fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
+        Ok(Arc::new(StringViewArrayBuilder::finish(self, nulls)?))
     }
 }
 
@@ -943,7 +985,7 @@ mod tests {
 
     #[test]
     fn string_view_array_builder_flushes_full_blocks() {
-        // Each value is 300 bytes. The first data block is 2 × STARTING_BLOCK_SIZE
+        // Each value is 300 bytes. The first data block is 2 × STRING_VIEW_INIT_BLOCK_SIZE
         // = 16 KiB, so ~50 values saturate it and the rest spill into additional
         // blocks.
         let value = "x".repeat(300);
@@ -961,5 +1003,66 @@ mod tests {
         for i in 0..100 {
             assert_eq!(array.value(i), value);
         }
+    }
+
+    /// Build an array via `BulkNullStringArrayBuilder` to verify that the
+    /// trait methods produce the same result as the inherent methods.
+    fn build_via_trait<B: BulkNullStringArrayBuilder>(
+        mut builder: B,
+        nulls: Option<NullBuffer>,
+    ) -> ArrayRef {
+        builder.append_value("a");
+        builder.append_placeholder();
+        builder.append_value("hello world!");
+        builder.finish(nulls).unwrap()
+    }
+
+    #[test]
+    fn bulk_null_trait_string_i32() {
+        let builder = GenericStringArrayBuilder::<i32>::with_capacity(3, 16);
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        let array = build_via_trait(builder, Some(nulls));
+        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value(0), "a");
+        assert!(array.is_null(1));
+        assert_eq!(array.value(2), "hello world!");
+    }
+
+    #[test]
+    fn bulk_null_trait_string_i64() {
+        let builder = GenericStringArrayBuilder::<i64>::with_capacity(3, 16);
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        let array = build_via_trait(builder, Some(nulls));
+        let array = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value(0), "a");
+        assert!(array.is_null(1));
+        assert_eq!(array.value(2), "hello world!");
+    }
+
+    #[test]
+    fn bulk_null_trait_string_view() {
+        let builder = StringViewArrayBuilder::with_capacity(3);
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        let array = build_via_trait(builder, Some(nulls));
+        let array = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value(0), "a");
+        assert!(array.is_null(1));
+        assert_eq!(array.value(2), "hello world!");
+    }
+
+    #[test]
+    fn bulk_null_trait_no_nulls() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(2, 8);
+        BulkNullStringArrayBuilder::append_value(&mut builder, "x");
+        BulkNullStringArrayBuilder::append_value(&mut builder, "yy");
+        let array = BulkNullStringArrayBuilder::finish(builder, None).unwrap();
+        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.value(0), "x");
+        assert_eq!(array.value(1), "yy");
+        assert_eq!(array.null_count(), 0);
     }
 }
