@@ -720,7 +720,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         let offsets = OffsetBuffer::from_repeated_length(1, input.len());
 
         // Filtered rows become null list entries, which merge_batch will skip.
-        let filter_nulls = opt_filter.and_then(filter_to_nulls);
+        let filter_nulls = opt_filter.map(filter_to_nulls);
 
         // With ignore_nulls, null values also become null list entries. Without
         // ignore_nulls, null values stay as [NULL] so merge_batch retains them.
