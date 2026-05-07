@@ -102,8 +102,8 @@ impl ScalarUDFImpl for MapFromEntries {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let last_value_wins = args.config_options.spark.map_key_dedup_policy
-            == MapKeyDedupPolicy::LastWin;
+        let last_value_wins =
+            args.config_options.spark.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
         make_scalar_function(
             move |args: &[ArrayRef]| map_from_entries_inner(args, last_value_wins),
             vec![],

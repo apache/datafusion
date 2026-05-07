@@ -102,8 +102,8 @@ impl ScalarUDFImpl for SparkStrToMap {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let last_value_wins = args.config_options.spark.map_key_dedup_policy
-            == MapKeyDedupPolicy::LastWin;
+        let last_value_wins =
+            args.config_options.spark.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
         let arrays: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args.args)?;
         let result = str_to_map_inner(&arrays, last_value_wins)?;
         Ok(ColumnarValue::Array(result))
