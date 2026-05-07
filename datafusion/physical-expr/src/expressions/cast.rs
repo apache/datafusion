@@ -393,10 +393,15 @@ pub fn cast_with_target_field(
     cast_options: Option<CastOptions<'static>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_field = expr.return_field(input_schema)?;
-    if let Some(cast_extension) = cast_extension.as_deref()
-        && cast_extension.can_cast_fields(&expr_field, target_field.as_ref())?
+    if let Some(cast_extension_ref) = cast_extension.as_deref()
+        && cast_extension_ref.can_cast_fields(&expr_field, target_field.as_ref())?
     {
-        todo!()
+        return Ok(Arc::new(CastExpr::new_with_target_field(
+            expr,
+            target_field,
+            cast_extension,
+            cast_options,
+        )));
     }
 
     let expr_type = expr_field.data_type();
@@ -411,7 +416,9 @@ pub fn cast_with_target_field(
         // applied at planning time (now) to fail fast, rather than deferring errors
         // to execution time. The name-based casting logic will be executed at runtime
         // via ColumnarValue::cast_to.
-        can_cast_named_struct_types(&expr_type, cast_type, cast_extension.as_deref())
+        // TODO: we can pass the cast extension here if we will end up using it for
+        // the nested casting
+        can_cast_named_struct_types(&expr_type, cast_type, None)
     } else {
         can_cast_types(&expr_type, cast_type)
     };
@@ -423,6 +430,7 @@ pub fn cast_with_target_field(
         return not_impl_err!("Unsupported CAST from {source_fmt} to {target_fmt}");
     }
 
+    // TODO: pass the cast extension here anyway so that nested casts work
     Ok(Arc::new(CastExpr::new_with_target_field(
         expr,
         target_field,

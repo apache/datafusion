@@ -20,7 +20,7 @@ mod fixed_shape_tensor;
 mod json;
 mod opaque;
 mod timestamp_with_offset;
-mod uuid;
+pub mod uuid;
 mod variable_shape_tensor;
 
 pub use bool8::DFBool8;

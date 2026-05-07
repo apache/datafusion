@@ -114,7 +114,7 @@ impl DisplayIndex for UuidValueDisplayIndex<'_> {
 }
 
 #[derive(Debug)]
-struct CastFromUuid {}
+pub struct CastFromUuid {}
 
 impl CastExtension for CastFromUuid {
     fn can_cast_fields(&self, _from: &Field, to: &Field) -> Result<bool> {
@@ -177,7 +177,7 @@ impl CastExtension for CastFromUuid {
 }
 
 #[derive(Debug)]
-struct CastToUuid {}
+pub struct CastToUuid {}
 
 impl CastExtension for CastToUuid {
     fn can_cast_fields(&self, from: &Field, to: &Field) -> Result<bool> {

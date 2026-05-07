@@ -619,6 +619,12 @@ pub struct VecCastExtension {
     extensions: Vec<Arc<dyn CastExtension>>,
 }
 
+impl VecCastExtension {
+    pub fn new(extensions: Vec<Arc<dyn CastExtension>>) -> Self {
+        Self { extensions }
+    }
+}
+
 impl CastExtension for VecCastExtension {
     fn can_cast_fields(
         &self,

@@ -27,7 +27,8 @@ use arrow_schema::extension::{
     Bool8, ExtensionType, FixedShapeTensor, Json, Opaque, TimestampWithOffset, Uuid,
     VariableShapeTensor,
 };
-use datafusion_common::nested_struct::CastExtension;
+use datafusion_common::nested_struct::{CastExtension, VecCastExtension};
+use datafusion_common::types::uuid::{CastFromUuid, CastToUuid};
 use datafusion_common::types::{
     DFBool8, DFExtensionTypeRef, DFFixedShapeTensor, DFJson, DFOpaque,
     DFTimestampWithOffset, DFUuid, DFVariableShapeTensor,
@@ -440,6 +441,7 @@ impl Debug for ExtensionTypeRegistration {
 pub struct MemoryExtensionTypeRegistry {
     /// Holds a mapping between the name of an extension type and its logical type.
     extension_types: Arc<RwLock<HashMap<String, ExtensionTypeRegistrationRef>>>,
+    cast_extensions: Arc<VecCastExtension>,
 }
 
 impl Default for MemoryExtensionTypeRegistry {
@@ -453,6 +455,7 @@ impl MemoryExtensionTypeRegistry {
     pub fn new_empty() -> Self {
         Self {
             extension_types: Arc::new(RwLock::new(HashMap::new())),
+            cast_extensions: Arc::new(VecCastExtension::new(vec![])),
         }
     }
 
@@ -514,6 +517,11 @@ impl MemoryExtensionTypeRegistry {
             ),
         ];
 
+        let cast_extensions = vec![
+            Arc::new(CastFromUuid {}) as Arc<dyn CastExtension>,
+            Arc::new(CastToUuid {}) as Arc<dyn CastExtension>,
+        ];
+
         let mut extension_types = HashMap::new();
         for registration in mapping.into_iter() {
             extension_types.insert(registration.type_name().to_owned(), registration);
@@ -521,14 +529,11 @@ impl MemoryExtensionTypeRegistry {
 
         Self {
             extension_types: Arc::new(RwLock::new(HashMap::from(extension_types))),
+            cast_extensions: Arc::new(VecCastExtension::new(cast_extensions)),
         }
     }
 
     /// Creates a new [MemoryExtensionTypeRegistry] with the provided `types`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if one of the `types` is a native type.
     pub fn new_with_types(
         types: impl IntoIterator<Item = ExtensionTypeRegistrationRef>,
     ) -> Result<Self> {
@@ -538,6 +543,7 @@ impl MemoryExtensionTypeRegistry {
             .collect::<HashMap<_, _>>();
         Ok(Self {
             extension_types: Arc::new(RwLock::new(extension_types)),
+            cast_extensions: Arc::new(VecCastExtension::new(vec![])),
         })
     }
 
@@ -595,12 +601,29 @@ impl ExtensionTypeRegistry for MemoryExtensionTypeRegistry {
             .expect("Extension type registry lock poisoned")
             .remove(name))
     }
+
+    fn cast_extension(
+        &self,
+        source_field: &Field,
+        target_field: &Field,
+    ) -> Option<Arc<dyn CastExtension>> {
+        if self
+            .cast_extensions
+            .can_cast_fields(source_field, target_field)
+            .unwrap_or(false)
+        {
+            Some(self.cast_extensions.clone())
+        } else {
+            None
+        }
+    }
 }
 
 impl From<HashMap<String, ExtensionTypeRegistrationRef>> for MemoryExtensionTypeRegistry {
     fn from(value: HashMap<String, ExtensionTypeRegistrationRef>) -> Self {
         Self {
             extension_types: Arc::new(RwLock::new(value)),
+            cast_extensions: Arc::new(VecCastExtension::new(vec![])),
         }
     }
 }
