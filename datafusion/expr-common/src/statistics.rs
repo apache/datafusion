@@ -15,6 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Probabilistic distributions for expression-level statistics.
+//!
+//! All public items in this module are **deprecated** as of `54.0.0`.
+//!
+//! The "Statistics V2" framework introduced in
+//! <https://github.com/apache/datafusion/pull/14699> was never wired into
+//! query planning or execution and the project is moving to a simpler,
+//! pluggable expression-level statistics API tracked in
+//! <https://github.com/apache/datafusion/issues/21120>. Do not build new
+//! code on these types.
+
+// The whole module is deprecated; suppress warnings from intra-module uses
+// of the deprecated types so the module continues to compile.
+#![allow(deprecated)]
+
 use std::f64::consts::LN_2;
 
 use crate::interval_arithmetic::{Interval, apply_operator};
@@ -37,6 +52,12 @@ use datafusion_common::{
 /// is the main unit of calculus when evaluating expressions in a statistical
 /// context. Notions like column and table statistics are built on top of this
 /// object and the operations it supports.
+#[deprecated(
+    since = "54.0.0",
+    note = "The Statistics V2 framework (PR #14699) was never integrated into planning or execution. \
+            DataFusion is moving to a simpler pluggable expression-level statistics API; see \
+            https://github.com/apache/datafusion/issues/21120 for the new direction."
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Distribution {
     Uniform(UniformDistribution),
@@ -214,6 +235,10 @@ impl Distribution {
 ///
 /// <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>
 /// <https://en.wikipedia.org/wiki/Prior_probability#Improper_priors>
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UniformDistribution {
     interval: Interval,
@@ -236,6 +261,10 @@ pub struct UniformDistribution {
 /// For more information, see:
 ///
 /// <https://en.wikipedia.org/wiki/Exponential_distribution>
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExponentialDistribution {
     rate: ScalarValue,
@@ -249,6 +278,10 @@ pub struct ExponentialDistribution {
 /// For a more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Normal_distribution>
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct GaussianDistribution {
     mean: ScalarValue,
@@ -259,6 +292,10 @@ pub struct GaussianDistribution {
 /// the success probability is unknown. For a more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Bernoulli_distribution>
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct BernoulliDistribution {
     p: ScalarValue,
@@ -268,6 +305,10 @@ pub struct BernoulliDistribution {
 /// approximated via some summary statistics. For a more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Summary_statistics>
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct GenericDistribution {
     mean: ScalarValue,
@@ -594,6 +635,10 @@ impl GenericDistribution {
 /// This function takes a logical operator and two Bernoulli distributions,
 /// and it returns a new Bernoulli distribution that represents the result of
 /// the operation. Currently, only `AND` and `OR` operations are supported.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 pub fn combine_bernoullis(
     op: &Operator,
     left: &BernoulliDistribution,
@@ -649,6 +694,10 @@ pub fn combine_bernoullis(
 /// see:
 ///
 /// <https://en.wikipedia.org/wiki/Sum_of_normally_distributed_random_variables>
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 pub fn combine_gaussians(
     op: &Operator,
     left: &GaussianDistribution,
@@ -673,6 +722,10 @@ pub fn combine_gaussians(
 /// Expects `op` to be a comparison operator, with `left` and `right` having
 /// numeric distributions. The resulting distribution has the `Float64` data
 /// type.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 pub fn create_bernoulli_from_comparison(
     op: &Operator,
     left: &Distribution,
@@ -751,6 +804,10 @@ pub fn create_bernoulli_from_comparison(
 /// given binary operation on two unknown quantities represented by their
 /// [`Distribution`] objects. The function computes the mean, median and
 /// variance if possible.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 pub fn new_generic_from_binary_op(
     op: &Operator,
     left: &Distribution,
@@ -766,6 +823,10 @@ pub fn new_generic_from_binary_op(
 
 /// Computes the mean value for the result of the given binary operation on
 /// two unknown quantities represented by their [`Distribution`] objects.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 pub fn compute_mean(
     op: &Operator,
     left: &Distribution,
@@ -798,6 +859,10 @@ pub fn compute_mean(
 /// the median is calculable only for addition and subtraction operations on:
 /// - [`Uniform`] and [`Uniform`] distributions, and
 /// - [`Gaussian`] and [`Gaussian`] distributions.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 pub fn compute_median(
     op: &Operator,
     left: &Distribution,
@@ -835,6 +900,10 @@ pub fn compute_median(
 
 /// Computes the variance value for the result of the given binary operation on
 /// two unknown quantities represented by their [`Distribution`] objects.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+)]
 pub fn compute_variance(
     op: &Operator,
     left: &Distribution,
