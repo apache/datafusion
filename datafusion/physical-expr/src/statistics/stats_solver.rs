@@ -18,10 +18,7 @@
 //! DAG-based statistics propagation for the Statistics V2 framework.
 //!
 //! All public items in this module are **deprecated** as of `54.0.0`.
-//! The Statistics V2 framework introduced in
-//! <https://github.com/apache/datafusion/pull/14699> was never integrated
-//! into planning or execution; see
-//! <https://github.com/apache/datafusion/issues/21120> for the new direction.
+//! See <https://github.com/apache/datafusion/pull/22071> for details
 
 #![allow(deprecated)]
 
@@ -47,7 +44,7 @@ use petgraph::visit::DfsPostOrder;
 /// is used to compute statistics/distributions for expressions hierarchically.
 #[deprecated(
     since = "54.0.0",
-    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
 )]
 #[derive(Clone, Debug)]
 pub struct ExprStatisticsGraph {
@@ -59,7 +56,7 @@ pub struct ExprStatisticsGraph {
 /// [`PhysicalExpr`] as well as its statistics/distribution.
 #[deprecated(
     since = "54.0.0",
-    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/issues/21120"
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
 )]
 #[derive(Clone, Debug)]
 pub struct ExprStatisticsGraphNode {

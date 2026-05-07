@@ -18,9 +18,7 @@
 //! FFI types for the deprecated Statistics V2 [`Distribution`] framework.
 //!
 //! These FFI types mirror the deprecated probabilistic distribution types
-//! introduced in <https://github.com/apache/datafusion/pull/14699>; see
-//! <https://github.com/apache/datafusion/issues/21120> for the new direction.
-
+//! See <https://github.com/apache/datafusion/pull/22071> for details
 #![allow(deprecated)]
 
 use datafusion_common::DataFusionError;

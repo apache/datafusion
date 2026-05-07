@@ -17,9 +17,7 @@
 
 //! Statistics and constraint propagation library.
 //!
-//! All items exported from this module are part of the **deprecated**
-//! Statistics V2 framework introduced in
-//! <https://github.com/apache/datafusion/pull/14699>. See
-//! <https://github.com/apache/datafusion/issues/21120> for the new direction.
+//! All items exported from this module are  **deprecated**;
+//! See <https://github.com/apache/datafusion/pull/22071> for details
 
 pub mod stats_solver;

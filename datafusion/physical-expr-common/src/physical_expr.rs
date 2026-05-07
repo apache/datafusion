@@ -253,10 +253,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// distribution information, but is a safe default.
     #[deprecated(
         since = "54.0.0",
-        note = "Part of the unused Statistics V2 framework introduced in PR #14699. \
-                DataFusion is moving to a simpler pluggable expression-level statistics \
-                API; see https://github.com/apache/datafusion/issues/21120 for the new \
-                direction."
+        note = "Part of the unused Statistics V2 framework; See https://github.com/apache/datafusion/pull/22071"
     )]
     #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
@@ -309,10 +306,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// information, but is a safe default.
     #[deprecated(
         since = "54.0.0",
-        note = "Part of the unused Statistics V2 framework introduced in PR #14699. \
-                DataFusion is moving to a simpler pluggable expression-level statistics \
-                API; see https://github.com/apache/datafusion/issues/21120 for the new \
-                direction."
+        note = "Part of the unused Statistics V2 framework; See https://github.com/apache/datafusion/pull/22071"
     )]
     #[expect(deprecated)]
     fn propagate_statistics(
