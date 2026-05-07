@@ -238,6 +238,18 @@ SELECT COUNT(*) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING
 ----
 0
 
+# rollup_empty_input: ROLLUP includes the empty grouping set and must produce one row
+query II
+SELECT SUM(v1), COUNT(*) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY ROLLUP(v1)
+----
+NULL 0
+
+# cube_empty_input: CUBE includes the empty grouping set and must produce one row
+query II
+SELECT SUM(v1), COUNT(*) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY CUBE(v1)
+----
+NULL 0
+
 # grouping_sets_mixed_empty_and_non_empty: only the empty set (()) produces a row on empty input
 query II
 SELECT SUM(v1), COUNT(*) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS((), (v1))
