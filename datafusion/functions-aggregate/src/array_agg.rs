@@ -436,7 +436,7 @@ impl Accumulator for ArrayAggAccumulator {
 
         let val = &values[0];
         let mut to_retract = if self.ignore_nulls {
-            val.len() - val.null_count()
+            val.len() - val.logical_null_count()
         } else {
             val.len()
         };
@@ -2191,6 +2191,92 @@ mod tests {
 
         let acc_ignore = ArrayAggAccumulator::try_new(&DataType::Utf8, true)?;
         assert!(acc_ignore.supports_retract_batch());
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_ignore_nulls_logical_vs_physical() -> Result<()> {
+        // Regression test: DictionaryArray where logical nulls differ from physical nulls.
+        // Indices are all valid (physical null_count = 0) but some point to null
+        // dictionary values (logical_null_count > 0).
+        use arrow::array::StringDictionaryBuilder;
+
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let mut acc = ArrayAggAccumulator::try_new(&dict_type, true)?;
+
+        // Build a DictionaryArray: ["hello", NULL, "world", NULL]
+        // All indices valid → physical null_count = 0
+        // Indices 1,3 point to null → logical_null_count = 2
+        let mut builder = StringDictionaryBuilder::<arrow::datatypes::Int32Type>::new();
+        builder.append_value("hello");
+        builder.append_null();
+        builder.append_value("world");
+        builder.append_null();
+        let dict_array: ArrayRef = Arc::new(builder.finish());
+
+        assert_eq!(dict_array.null_count(), 2);
+        assert_eq!(dict_array.logical_null_count(), 2);
+
+        // update_batch uses logical_nulls() → stores only ["hello", "world"]
+        acc.update_batch(std::slice::from_ref(&dict_array))?;
+
+        // Verify 2 elements stored
+        let result = acc.evaluate()?;
+        match &result {
+            ScalarValue::List(arr) => {
+                let values = arr.value(0);
+                assert_eq!(values.len(), 2);
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+
+        // retract_batch with same array: should retract 2 (not 4)
+        acc.retract_batch(&[dict_array])?;
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list after full retract, got {result:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_ignore_nulls_dict_partial() -> Result<()> {
+        // Partial retraction with DictionaryArray where logical != physical nulls
+        use arrow::array::StringDictionaryBuilder;
+
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let mut acc = ArrayAggAccumulator::try_new(&dict_type, true)?;
+
+        // update with ["A", "B", "C"] (no nulls)
+        let mut builder = StringDictionaryBuilder::<arrow::datatypes::Int32Type>::new();
+        builder.append_value("A");
+        builder.append_value("B");
+        builder.append_value("C");
+        let update_array: ArrayRef = Arc::new(builder.finish());
+        acc.update_batch(&[update_array])?;
+
+        // retract with ["A", NULL, NULL] — only 1 non-null logically
+        let mut builder = StringDictionaryBuilder::<arrow::datatypes::Int32Type>::new();
+        builder.append_value("A");
+        builder.append_null();
+        builder.append_null();
+        let retract_array: ArrayRef = Arc::new(builder.finish());
+        acc.retract_batch(&[retract_array])?;
+
+        // Should have retracted only 1 element, leaving ["B", "C"]
+        let result = acc.evaluate()?;
+        match &result {
+            ScalarValue::List(arr) => {
+                let values = arr.value(0);
+                assert_eq!(values.len(), 2);
+            }
+            other => panic!("expected List with 2 elements, got {other:?}"),
+        }
 
         Ok(())
     }
