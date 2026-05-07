@@ -1407,6 +1407,19 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
         }
     }
+
+    /// Release the right input pipeline's resources.
+    fn cleanup_depleted_right_stream(&mut self) {
+        let right_schema = self.right_stream.schema();
+        self.right_stream = Box::pin(EmptyRecordBatchStream::new(right_schema));
+    }
+
+    /// Release the left input pipeline's resources.
+    fn cleanup_depleted_left_stream(&mut self) {
+        let left_schema = self.left_stream.schema();
+        self.left_stream = Box::pin(EmptyRecordBatchStream::new(left_schema));
+    }
+
     /// Asynchronously pulls the next batch from the right stream.
     ///
     /// This default implementation checks for the next value in the right stream.
@@ -1430,9 +1443,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
-                // Release the right input pipeline's resources.
-                let right_schema = self.right_stream.schema();
-                self.right_stream = Box::pin(EmptyRecordBatchStream::new(right_schema));
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::RightExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1462,9 +1473,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
-                // Release the left input pipeline's resources.
-                let left_schema = self.left_stream.schema();
-                self.left_stream = Box::pin(EmptyRecordBatchStream::new(left_schema));
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::LeftExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1494,9 +1503,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
-                // Release the left input pipeline's resources.
-                let left_schema = self.left_stream.schema();
-                self.left_stream = Box::pin(EmptyRecordBatchStream::new(left_schema));
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });
@@ -1528,9 +1535,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
-                // Release the right input pipeline's resources.
-                let right_schema = self.right_stream.schema();
-                self.right_stream = Box::pin(EmptyRecordBatchStream::new(right_schema));
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });
