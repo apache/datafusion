@@ -50,7 +50,7 @@ const DEFAULT_KV_DELIM: &str = ":";
 ///
 /// # Duplicate Key Handling
 /// Mirrors Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4502-L4511),
-/// wired through DataFusion's `datafusion.execution.map_key_dedup_policy`:
+/// wired through DataFusion's `datafusion.spark.map_key_dedup_policy`:
 /// - `EXCEPTION` (default): error on duplicate keys.
 /// - `LAST_WIN`: keep the last occurrence of each duplicate key.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -102,7 +102,7 @@ impl ScalarUDFImpl for SparkStrToMap {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let last_value_wins = args.config_options.execution.map_key_dedup_policy
+        let last_value_wins = args.config_options.spark.map_key_dedup_policy
             == MapKeyDedupPolicy::LastWin;
         let arrays: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args.args)?;
         let result = str_to_map_inner(&arrays, last_value_wins)?;
@@ -289,7 +289,7 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
                         "[DUPLICATED_MAP_KEY] Duplicate map key '{key}' was found, \
                          please check the input data. To allow duplicate keys with \
                          last-value-wins semantics, set \
-                         `datafusion.execution.map_key_dedup_policy` to `LAST_WIN`."
+                         `datafusion.spark.map_key_dedup_policy` to `LAST_WIN`."
                     );
                 }
 

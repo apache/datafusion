@@ -151,7 +151,7 @@ SELECT map_from_arrays(arrow_cast(array('a', 'b', 'c'), 'FixedSizeList(3, Utf8)'
 
 # LAST_WIN policy: duplicates are allowed; later occurrences overwrite earlier ones.
 statement ok
-set datafusion.execution.map_key_dedup_policy = 'LAST_WIN';
+set datafusion.spark.map_key_dedup_policy = 'LAST_WIN';
 
 query ?
 SELECT map_from_arrays(array(1, 2, 1), array('a', 'b', 'c'));
@@ -184,4 +184,4 @@ AS tab(a, b);
 NULL
 
 statement ok
-set datafusion.execution.map_key_dedup_policy = 'EXCEPTION';
+set datafusion.spark.map_key_dedup_policy = 'EXCEPTION';

@@ -129,7 +129,7 @@ NULL
 
 # LAST_WIN policy: duplicates are allowed; later occurrences overwrite earlier ones.
 statement ok
-set datafusion.execution.map_key_dedup_policy = 'LAST_WIN';
+set datafusion.spark.map_key_dedup_policy = 'LAST_WIN';
 
 query ?
 SELECT str_to_map('a:1,b:2,a:3');
@@ -156,8 +156,8 @@ SELECT str_to_map(col) FROM (VALUES ('a:1,b:2'), ('a:3,a:4')) AS t(col);
 {a: 4}
 
 statement ok
-set datafusion.execution.map_key_dedup_policy = 'EXCEPTION';
+set datafusion.spark.map_key_dedup_policy = 'EXCEPTION';
 
 # Invalid policy values are rejected at SET time with a clear message.
 statement error DataFusion error: Invalid or Unsupported Configuration: Invalid MapKeyDedupPolicy: BOGUS\. Expected one of: EXCEPTION, LAST_WIN
-set datafusion.execution.map_key_dedup_policy = 'BOGUS';
+set datafusion.spark.map_key_dedup_policy = 'BOGUS';

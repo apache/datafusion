@@ -739,17 +739,6 @@ config_namespace! {
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
 
-        /// Policy for handling duplicate keys in Spark-compatible map-construction
-        /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`).
-        ///
-        /// Mirrors Spark's
-        /// [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961):
-        /// - `EXCEPTION` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
-        /// - `LAST_WIN`: keep the last occurrence of each duplicate key.
-        ///
-        /// Values are case-insensitive. Only affects functions under `datafusion/spark`.
-        pub map_key_dedup_policy: MapKeyDedupPolicy, default = MapKeyDedupPolicy::Exception
-
         /// How many bytes to buffer in the probe side of hash joins while the build side is
         /// concurrently being built.
         ///
@@ -1519,6 +1508,24 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
     }
 }
 
+config_namespace! {
+    /// Options controlling DataFusion's Spark-compatibility layer (functions
+    /// under `datafusion/spark`). Keys here mirror their `spark.sql.*`
+    /// equivalents in Apache Spark.
+    pub struct SparkOptions {
+        /// Policy for handling duplicate keys in Spark-compatible map-construction
+        /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`).
+        ///
+        /// Mirrors Spark's
+        /// [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961):
+        /// - `EXCEPTION` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
+        /// - `LAST_WIN`: keep the last occurrence of each duplicate key.
+        ///
+        /// Values are case-insensitive.
+        pub map_key_dedup_policy: MapKeyDedupPolicy, default = MapKeyDedupPolicy::Exception
+    }
+}
+
 /// A key value pair, with a corresponding description
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
@@ -1550,6 +1557,8 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
+    /// Spark-compatibility options (functions under `datafusion/spark`)
+    pub spark: SparkOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -1560,6 +1569,7 @@ impl ConfigField for ConfigOptions {
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
         self.format.visit(v, "datafusion.format", "");
+        self.spark.visit(v, "datafusion.spark", "");
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -1572,6 +1582,7 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
             "format" => self.format.set(rem, value),
+            "spark" => self.spark.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -1611,6 +1622,7 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.reset(rem),
             "sql_parser" => self.sql_parser.reset(rem),
             "format" => self.format.reset(rem),
+            "spark" => self.spark.reset(rem),
             other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
     }

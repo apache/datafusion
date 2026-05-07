@@ -179,7 +179,7 @@ AS tab(data);
 
 # LAST_WIN policy: duplicates are allowed; later occurrences overwrite earlier ones.
 statement ok
-set datafusion.execution.map_key_dedup_policy = 'LAST_WIN';
+set datafusion.spark.map_key_dedup_policy = 'LAST_WIN';
 
 query ?
 SELECT map_from_entries(array(
@@ -214,4 +214,4 @@ AS tab(data);
 {1: y}
 
 statement ok
-set datafusion.execution.map_key_dedup_policy = 'EXCEPTION';
+set datafusion.spark.map_key_dedup_policy = 'EXCEPTION';
