@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{_plan_err, Result};
+use crate::{
+    datatype::DataTypeExt,
+    error::{_internal_err, _plan_err, Result},
+    metadata::format_type_and_metadata,
+};
 use arrow::{
     array::{
         Array, ArrayRef, DictionaryArray, GenericListArray, GenericListViewArray,
@@ -173,7 +177,34 @@ pub fn cast_column(
     target_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    match (source_col.data_type(), target_type) {
+    cast_column_fields(
+        source_col,
+        &source_col.data_type().clone().into_nullable_field(),
+        &target_type.clone().into_nullable_field(),
+        None,
+        cast_options,
+    )
+}
+
+pub fn cast_column_fields(
+    source_col: &ArrayRef,
+    source_field: &Field,
+    target_field: &Field,
+    cast_extension: Option<&dyn CastExtension>,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    if let Some(cast_extension) = cast_extension
+        && cast_extension.can_cast_types(source_field, target_field, cast_options)?
+    {
+        return cast_extension.cast_array(
+            source_col,
+            source_field,
+            target_field,
+            cast_options,
+        );
+    }
+
+    match (source_field.data_type(), target_field.data_type()) {
         (_, Struct(target_fields)) => {
             cast_struct_column(source_col, target_fields, cast_options)
         }
@@ -199,7 +230,11 @@ pub fn cast_column(
             target_value_type,
             cast_options,
         ),
-        _ => Ok(cast_with_options(source_col, target_type, cast_options)?),
+        _ => Ok(cast_with_options(
+            source_col,
+            target_field.data_type(),
+            cast_options,
+        )?),
     }
 }
 
@@ -500,6 +535,76 @@ pub fn has_one_of_more_common_fields(
     target_fields
         .iter()
         .any(|field| source_names.contains(field.name().as_str()))
+}
+
+pub trait CastExtension: std::fmt::Debug + Send + Sync {
+    fn can_cast_types(
+        &self,
+        source_field: &Field,
+        target_field: &Field,
+        cast_options: &CastOptions,
+    ) -> Result<bool>;
+
+    fn cast_array(
+        &self,
+        array: &ArrayRef,
+        source_field: &Field,
+        target_field: &Field,
+        cast_options: &CastOptions,
+    ) -> Result<ArrayRef>;
+}
+
+#[derive(Debug)]
+pub struct VecCastExtension {
+    extensions: Vec<Arc<dyn CastExtension>>,
+}
+
+impl CastExtension for VecCastExtension {
+    fn can_cast_types(
+        &self,
+        source_field: &Field,
+        target_field: &Field,
+        cast_options: &CastOptions,
+    ) -> Result<bool> {
+        for extension in &self.extensions {
+            if extension.can_cast_types(source_field, target_field, cast_options)? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn cast_array(
+        &self,
+        array: &ArrayRef,
+        source_field: &Field,
+        target_field: &Field,
+        cast_options: &CastOptions,
+    ) -> Result<ArrayRef> {
+        for extension in &self.extensions {
+            if extension.can_cast_types(source_field, target_field, cast_options)? {
+                return extension.cast_array(
+                    array,
+                    source_field,
+                    target_field,
+                    cast_options,
+                );
+            }
+        }
+
+        let source_display = format_type_and_metadata(
+            source_field.data_type(),
+            Some(source_field.metadata()),
+        );
+        let target_display = format_type_and_metadata(
+            target_field.data_type(),
+            Some(target_field.metadata()),
+        );
+        _internal_err!(
+            "Can't resolve extension to cast from {source_display} to {target_display}"
+        )
+    }
 }
 
 #[cfg(test)]
