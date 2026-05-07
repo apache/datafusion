@@ -208,3 +208,163 @@ FROM VALUES
 ('abc'::string)
 ----
 (empty)
+
+# ----------------------------------------------------------------------
+# Binary / LargeBinary / BinaryView support
+# ----------------------------------------------------------------------
+
+# 'Spark SQL' bytes => 53 70 61 72 6b 20 53 51 4c
+# byte 1..9 => 's' 'p' 'a' 'r' 'k' ' ' 'S' 'Q' 'L'
+
+# Binary: basic substring with only pos
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), 5::int);
+----
+6b2053514c
+
+# Binary: substring with pos and length
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), 3::int, 1::int);
+----
+61
+
+# Binary: zero pos is treated as 1
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), 0::int);
+----
+537061726b2053514c
+
+# Binary: negative pos counts from the end
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), -3::int);
+----
+53514c
+
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), -3::int, 2::int);
+----
+5351
+
+# Binary: length exceeding input length
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), 2::int, 700::int);
+----
+7061726b2053514c
+
+# Binary: pos beyond end returns empty binary
+query I
+SELECT character_length(substring(arrow_cast('Spark SQL', 'Binary'), 30::int));
+----
+0
+
+# Binary: large negative pos returns the full value
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), -30::int);
+----
+537061726b2053514c
+
+# Binary: negative length returns empty binary
+query I
+SELECT character_length(substring(arrow_cast('Spark SQL', 'Binary'), 3::int, -1::int));
+----
+0
+
+# Binary: zero length returns empty binary
+query I
+SELECT character_length(substring(arrow_cast('Spark SQL', 'Binary'), 3::int, 0::int));
+----
+0
+
+# Binary: NULL handling
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), NULL::int);
+----
+NULL
+
+query ?
+SELECT substring(arrow_cast(NULL, 'Binary'), 5::int);
+----
+NULL
+
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), NULL::int, 1::int);
+----
+NULL
+
+query ?
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), 3::int, NULL::int);
+----
+NULL
+
+# Binary: return type matches input type
+query ?T
+SELECT substring(arrow_cast('Spark SQL', 'Binary'), 3::int, 2::int),
+       arrow_typeof(substring(arrow_cast('Spark SQL', 'Binary'), 3::int, 2::int));
+----
+6172 Binary
+
+# LargeBinary: return type is preserved
+query ?T
+SELECT substring(arrow_cast('Spark SQL', 'LargeBinary'), 3::int, 2::int),
+       arrow_typeof(substring(arrow_cast('Spark SQL', 'LargeBinary'), 3::int, 2::int));
+----
+6172 LargeBinary
+
+# BinaryView: return type is preserved
+query ?T
+SELECT substring(arrow_cast('Spark SQL', 'BinaryView'), 3::int, 2::int),
+       arrow_typeof(substring(arrow_cast('Spark SQL', 'BinaryView'), 3::int, 2::int));
+----
+6172 BinaryView
+
+# Binary with non-UTF-8 bytes: byte-level slicing is preserved
+# X'ff00aabb1122' has 6 bytes and is typed as Binary by default
+query ?
+SELECT substring(X'ff00aabb1122', 2::int, 3::int);
+----
+00aabb
+
+query ?
+SELECT substring(X'ff00aabb1122', -2::int, 2::int);
+----
+1122
+
+# substr alias works with binary input
+query ?
+SELECT substr(arrow_cast('Spark SQL', 'Binary'), 5::int);
+----
+6b2053514c
+
+query ?
+SELECT substr(arrow_cast('Spark SQL', 'LargeBinary'), 3::int, 1::int);
+----
+61
+
+# Array input (Binary column) produces per-row byte-level substrings.
+# The second column is the byte length of the result so empty-binary
+# rows remain unambiguous in the expected output.
+query ?I
+SELECT substring(column1, column2, column3),
+       character_length(substring(column1, column2, column3))
+FROM VALUES
+(arrow_cast('Spark SQL', 'Binary'), -3::int, 2::int),
+(arrow_cast('Spark SQL', 'Binary'), 3::int, 1::int),
+(arrow_cast('Spark SQL', 'Binary'), 3::int, 700::int),
+(arrow_cast('Spark SQL', 'Binary'), 3::int, -1::int),
+(arrow_cast('Spark SQL', 'Binary'), 3::int, 0::int),
+(arrow_cast('Spark SQL', 'Binary'), 300::int, 3::int),
+(arrow_cast('Spark SQL', 'Binary'), -300::int, 3::int),
+(arrow_cast(NULL, 'Binary'), 3::int, 1::int),
+(arrow_cast('Spark SQL', 'Binary'), NULL::int, 1::int),
+(arrow_cast('Spark SQL', 'Binary'), 3::int, NULL::int);
+----
+5351 2
+61 1
+61726b2053514c 7
+ 0
+ 0
+ 0
+ 0
+NULL NULL
+NULL NULL
+NULL NULL

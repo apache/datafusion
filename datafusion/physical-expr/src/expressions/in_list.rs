@@ -123,6 +123,23 @@ fn try_evaluate_constant_list(
     }
 }
 
+/// Asserts that the InList expression's data type matches a list element's
+/// data type. `DataType::Null` list elements are accepted unconditionally so
+/// that null literals and `NullArray` haystacks remain compatible with any
+/// expression type.
+fn assert_inlist_data_types_match(
+    expr_data_type: &DataType,
+    list_data_type: &DataType,
+) -> Result<()> {
+    if *list_data_type != DataType::Null {
+        assert_or_internal_err!(
+            DFSchema::datatype_is_logically_equal(expr_data_type, list_data_type),
+            "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_data_type}"
+        );
+    }
+    Ok(())
+}
+
 impl InListExpr {
     /// Create a new InList expression
     fn new(
@@ -164,20 +181,28 @@ impl InListExpr {
 
     /// Create a new InList expression directly from an array, bypassing expression evaluation.
     ///
-    /// This is more efficient than `in_list()` when you already have the list as an array,
-    /// as it avoids the conversion: `ArrayRef -> Vec<PhysicalExpr> -> ArrayRef -> StaticFilter`.
-    /// Instead it goes directly: `ArrayRef -> StaticFilter`.
+    /// This is more efficient than [`InListExpr::try_new`] when you already have the list
+    /// as an array, as it builds the static filter directly from the array instead of
+    /// reconstructing an intermediate array from literal expressions.
     ///
-    /// The `list` field will be empty when using this constructor, as the array is stored
-    /// directly in the static filter.
+    /// The `list` field is populated with literal expressions extracted from
+    /// the array, and the array is used to build a static filter for
+    /// efficient set membership evaluation.
     ///
-    /// This does not make the expression any more performant at runtime, but it does make it slightly
-    /// cheaper to build.
+    /// The `array` may be dictionary-encoded — it will be flattened to its
+    /// value type such that specialized filters are used.
+    ///
+    /// Returns an error if the expression's data type and the array's data type
+    /// are not logically equal. Null arrays are always accepted.
     pub fn try_new_from_array(
         expr: Arc<dyn PhysicalExpr>,
         array: ArrayRef,
         negated: bool,
+        schema: &Schema,
     ) -> Result<Self> {
+        let expr_data_type = expr.data_type(schema)?;
+        assert_inlist_data_types_match(&expr_data_type, array.data_type())?;
+
         let list = (0..array.len())
             .map(|i| {
                 let scalar = ScalarValue::try_from_array(array.as_ref(), i)?;
@@ -210,13 +235,7 @@ impl InListExpr {
         let expr_data_type = expr.data_type(schema)?;
         for list_expr in list.iter() {
             let list_expr_data_type = list_expr.data_type(schema)?;
-            assert_or_internal_err!(
-                DFSchema::datatype_is_logically_equal(
-                    &expr_data_type,
-                    &list_expr_data_type
-                ),
-                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-            );
+            assert_inlist_data_types_match(&expr_data_type, &list_expr_data_type)?;
         }
 
         // Try to create a static filter if all list expressions are constants
@@ -1835,6 +1854,7 @@ mod tests {
             Arc::clone(&col_a),
             array,
             false,
+            &schema,
         )?) as Arc<dyn PhysicalExpr>;
 
         // Create test data: [1, 2, 3, 4, null]
@@ -1964,6 +1984,7 @@ mod tests {
             Arc::clone(&col_a),
             null_array,
             false,
+            &schema,
         )?) as Arc<dyn PhysicalExpr>;
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
@@ -1992,6 +2013,7 @@ mod tests {
             Arc::clone(&col_a),
             null_array,
             false,
+            &schema,
         )?) as Arc<dyn PhysicalExpr>;
 
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
@@ -3428,8 +3450,9 @@ mod tests {
         let schema =
             Schema::new(vec![Field::new("a", needle.data_type().clone(), false)]);
         let col_a = col("a", &schema)?;
-        let expr = Arc::new(InListExpr::try_new_from_array(col_a, in_array, false)?)
-            as Arc<dyn PhysicalExpr>;
+        let expr = Arc::new(InListExpr::try_new_from_array(
+            col_a, in_array, false, &schema,
+        )?) as Arc<dyn PhysicalExpr>;
         let batch = RecordBatch::try_new(Arc::new(schema), vec![needle])?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         Ok(as_boolean_array(&result).clone())
@@ -3562,41 +3585,237 @@ mod tests {
         Ok(())
     }
 
+    fn make_int32_dict_array(values: Vec<Option<i32>>) -> ArrayRef {
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+        for v in values {
+            match v {
+                Some(val) => builder.append_value(val),
+                None => builder.append_null(),
+            }
+        }
+        Arc::new(builder.finish())
+    }
+
+    fn make_f64_dict_array(values: Vec<Option<f64>>) -> ArrayRef {
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Float64Type>::new();
+        for v in values {
+            match v {
+                Some(val) => builder.append_value(val),
+                None => builder.append_null(),
+            }
+        }
+        Arc::new(builder.finish())
+    }
+
     #[test]
-    fn test_in_list_from_array_type_mismatch_errors() -> Result<()> {
-        // Utf8 needle, Dict(Utf8) in_array
-        let err = eval_in_list_from_array(
-            Arc::new(StringArray::from(vec!["a", "d", "b"])),
-            wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            err.contains("Can't compare arrays of different types"),
-            "{err}"
+    fn test_try_new_from_array_dict_haystack_int32() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let needle = Int32Array::from(vec![1, 2, 3, 4]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let haystack = make_int32_dict_array(vec![Some(1), None, Some(3)]);
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), None, Some(true), None])
         );
 
-        // Dict(Utf8) needle, Int64 in_array: specialized Int64StaticFilter
-        // rejects the Utf8 dictionary values at construction time
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_from_array_type_mismatch_errors() -> Result<()> {
+        // Utf8 needle, Dict(Utf8) in_array: now works with dict haystack support
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), Some(false), Some(true)]),
+            eval_in_list_from_array(
+                Arc::new(StringArray::from(vec!["a", "d", "b"])),
+                wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
+            )?
+        );
+
+        // Dict(Utf8) needle, Int64 in_array: type validation rejects at construction
         let err = eval_in_list_from_array(
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "d", "b"]))),
             Arc::new(Int64Array::from(vec![1, 2, 3])),
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("Failed to downcast"), "{err}");
+        assert!(err.contains("The data type inlist should be same"), "{err}");
 
         // Dict(Int64) needle, Dict(Utf8) in_array: both Dict but different
-        // value types, make_comparator rejects the comparison
+        // value types, type validation rejects at construction
         let err = eval_in_list_from_array(
             wrap_in_dict(Arc::new(Int64Array::from(vec![1, 4, 2]))),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
         )
         .unwrap_err()
         .to_string();
-        assert!(
-            err.contains("Can't compare arrays of different types"),
-            "{err}"
+        assert!(err.contains("The data type inlist should be same"), "{err}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_negated() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let needle = Int32Array::from(vec![1, 2, 3, 4]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let haystack = make_int32_dict_array(vec![Some(1), None, Some(3)]);
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, true, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(false), None, Some(false), None])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_utf8() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let needle = StringArray::from(vec!["a", "b", "c"]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let dict_builder = StringDictionaryBuilder::<Int8Type>::new();
+        let mut builder = dict_builder;
+        builder.append_value("a");
+        builder.append_value("c");
+        let haystack: ArrayRef = Arc::new(builder.finish());
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_needle_and_plain_haystack() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            false,
+        )]);
+
+        let needle = make_int32_dict_array(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::clone(&needle)])?;
+
+        let haystack: ArrayRef = Arc::new(Int32Array::from(vec![1, 3]));
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(false)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_float64() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let needle = Float64Array::from(vec![1.0, 2.0, 3.0]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let haystack = make_f64_dict_array(vec![Some(1.0), Some(3.0)]);
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_type_mismatch_rejects() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let col_a = col("a", &schema)?;
+        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+
+        let result = InListExpr::try_new_from_array(col_a, haystack, false, &schema);
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_struct_haystack() -> Result<()> {
+        let struct_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
+        ]);
+        let struct_dt = DataType::Struct(struct_fields.clone());
+        let schema = Schema::new(vec![Field::new("a", struct_dt, true)]);
+
+        // Needle: [{1,"a"}, {2,"b"}, NULL, {4,"d"}]
+        let needle = Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            ],
+            Some(vec![true, true, false, true].into()),
+        ));
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![needle])?;
+
+        // Haystack: [{1,"a"}, {4,"d"}]
+        let haystack: ArrayRef = Arc::new(StructArray::new(
+            struct_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 4])),
+                Arc::new(StringArray::from(vec!["a", "d"])),
+            ],
+            None,
+        ));
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(
+            Arc::clone(&col_a),
+            Arc::clone(&haystack),
+            false,
+            &schema,
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        // {1,"a"} -> true, {2,"b"} -> false, NULL -> NULL, {4,"d"} -> true
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), None, Some(true)])
+        );
+
+        // Negated path
+        let expr = InListExpr::try_new_from_array(col_a, haystack, true, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(false), Some(true), None, Some(false)])
         );
 
         Ok(())
