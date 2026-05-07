@@ -18,7 +18,7 @@
 //! DAG-based statistics propagation for the Statistics V2 framework.
 //!
 //! All public items in this module are **deprecated** as of `54.0.0`.
-//! See <https://github.com/apache/datafusion/pull/22071> for details
+//! See <https://github.com/apache/datafusion/pull/22071> for details.
 
 #![allow(deprecated)]
 

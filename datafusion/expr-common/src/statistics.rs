@@ -19,7 +19,7 @@
 //!
 //! Note: All public items in this module are **deprecated** as of `54.0.0`.
 //!
-//! See <https://github.com/apache/datafusion/pull/22071> for details
+//! See <https://github.com/apache/datafusion/pull/22071> for details.
 
 // The whole module is deprecated; suppress warnings from intra-module uses
 // of the deprecated types so the module continues to compile.
