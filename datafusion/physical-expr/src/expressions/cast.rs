@@ -52,7 +52,7 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 /// instead of deferring errors to execution. Handles structs at any nesting level
 /// (e.g., `List<Struct>`, `Dictionary<_, Struct>`).
 fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> bool {
-    validate_data_type_compatibility("", source, target).is_ok()
+    validate_data_type_compatibility("", source, target, None).is_ok()
 }
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
