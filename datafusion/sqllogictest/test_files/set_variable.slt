@@ -632,7 +632,7 @@ SHOW datafusion.runtime.list_files_cache_ttl
 ----
 datafusion.runtime.list_files_cache_ttl 1m30s
 
-# Test SET and SHOW for `0`
+# Test SET and SHOW for limit 0
 statement ok
 SET datafusion.runtime.list_files_cache_limit = '0'
 
