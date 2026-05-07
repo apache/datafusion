@@ -602,9 +602,63 @@ pub(crate) struct GenericStringWriter<'a> {
 }
 
 impl StringWriter for GenericStringWriter<'_> {
-    #[inline]
+    #[inline(always)]
     fn write_str(&mut self, s: &str) {
-        self.value_buffer.extend_from_slice(s.as_bytes());
+        push_bytes_to_mutable_buffer(self.value_buffer, s.as_bytes());
+    }
+
+    #[inline(always)]
+    fn write_char(&mut self, c: char) {
+        push_char_to_mutable_buffer(self.value_buffer, c);
+    }
+}
+
+/// Write `bytes` into `value_buffer`. For runtime lengths, `copy_nonoverlapping`
+/// emits a `_memcpy` call regardless of how small the copy is — and the call
+/// dispatch dominates the actual byte movement for tiny writes. The match on
+/// small sizes lets LLVM inline `copy_nonoverlapping` with a compile-time
+/// constant length, which lowers to direct loads/stores.
+#[inline(always)]
+fn push_bytes_to_mutable_buffer(value_buffer: &mut MutableBuffer, bytes: &[u8]) {
+    let n = bytes.len();
+    let old_len = value_buffer.len();
+    value_buffer.reserve(n);
+    // SAFETY: we reserved `n` bytes; the source and destination do not alias
+    // because `bytes` was passed in by the caller and `value_buffer` is owned.
+    unsafe {
+        let dst = value_buffer.as_mut_ptr().add(old_len);
+        let src = bytes.as_ptr();
+        match n {
+            0 => {}
+            1 => std::ptr::copy_nonoverlapping(src, dst, 1),
+            2 => std::ptr::copy_nonoverlapping(src, dst, 2),
+            3 => std::ptr::copy_nonoverlapping(src, dst, 3),
+            4 => std::ptr::copy_nonoverlapping(src, dst, 4),
+            5 => std::ptr::copy_nonoverlapping(src, dst, 5),
+            6 => std::ptr::copy_nonoverlapping(src, dst, 6),
+            7 => std::ptr::copy_nonoverlapping(src, dst, 7),
+            8 => std::ptr::copy_nonoverlapping(src, dst, 8),
+            _ => std::ptr::copy_nonoverlapping(src, dst, n),
+        }
+        value_buffer.set_len(old_len + n);
+    }
+}
+
+#[inline(always)]
+fn push_char_to_mutable_buffer(value_buffer: &mut MutableBuffer, c: char) {
+    let len = c.len_utf8();
+    let old_len = value_buffer.len();
+    value_buffer.reserve(len);
+    // SAFETY: we reserved `len` bytes above, write valid UTF-8 into those
+    // bytes, then update the initialized length to include them.
+    unsafe {
+        let dst = value_buffer.as_mut_ptr().add(old_len);
+        if len == 1 {
+            *dst = c as u8;
+        } else {
+            c.encode_utf8(std::slice::from_raw_parts_mut(dst, len));
+        }
+        value_buffer.set_len(old_len + len);
     }
 }
 
@@ -907,6 +961,50 @@ impl StringWriter for StringViewWriter<'_> {
                 self.builder.in_progress.extend_from_slice(bytes);
             }
         }
+    }
+
+    #[inline]
+    fn write_char(&mut self, c: char) {
+        let len = c.len_utf8();
+        match self.spill_cursor {
+            None => {
+                let inline_len = self.inline_len as usize;
+                let new_len = inline_len + len;
+                if new_len <= 12 {
+                    c.encode_utf8(&mut self.inline_buf[inline_len..new_len]);
+                    self.inline_len = new_len as u8;
+                } else {
+                    self.builder.ensure_long_capacity(new_len as u32);
+                    let cursor = self.builder.in_progress.len();
+                    self.builder
+                        .in_progress
+                        .extend_from_slice(&self.inline_buf[..inline_len]);
+                    push_char_to_vec(&mut self.builder.in_progress, c);
+                    self.spill_cursor = Some(cursor);
+                }
+            }
+            Some(_) => {
+                push_char_to_vec(&mut self.builder.in_progress, c);
+            }
+        }
+    }
+}
+
+#[inline]
+fn push_char_to_vec(v: &mut Vec<u8>, c: char) {
+    let len = c.len_utf8();
+    let old_len = v.len();
+    v.reserve(len);
+    // SAFETY: we reserved `len` bytes above, write valid UTF-8 into those
+    // bytes, then update the initialized length to include them.
+    unsafe {
+        let dst = v.as_mut_ptr().add(old_len);
+        if len == 1 {
+            *dst = c as u8;
+        } else {
+            c.encode_utf8(std::slice::from_raw_parts_mut(dst, len));
+        }
+        v.set_len(old_len + len);
     }
 }
 
