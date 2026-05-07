@@ -560,6 +560,76 @@ impl ParquetSource {
     }
 }
 
+/// Threshold (fraction in `[0, 1]`) for the overlap guard in
+/// [`ParquetSource::reorder_files`]. When at least this fraction of
+/// adjacent file pairs (in sorted-by-min order) have overlapping
+/// `[min, max]` ranges, file reorder is skipped — file-level pruning
+/// cannot help and the reorder cost would dominate.
+const FILE_REORDER_OVERLAP_SKIP_THRESHOLD: f64 = 0.5;
+
+/// Returns `true` when adjacent file `[min, max]` ranges (in sorted-by-min
+/// order) overlap above [`FILE_REORDER_OVERLAP_SKIP_THRESHOLD`].
+///
+/// Files lacking statistics are conservatively treated as overlapping —
+/// missing stats discourage rather than silently disable the guard.
+fn files_have_heavy_overlap(
+    files: &[datafusion_datasource::PartitionedFile],
+    col_idx: usize,
+) -> bool {
+    if files.len() < 2 {
+        return false;
+    }
+
+    // Collect per-file (min, max). `None` propagates as an unknown bound.
+    let intervals: Vec<(
+        Option<datafusion_common::ScalarValue>,
+        Option<datafusion_common::ScalarValue>,
+    )> = files
+        .iter()
+        .map(|f| {
+            let col_stats = f
+                .statistics
+                .as_ref()
+                .and_then(|s| s.column_statistics.get(col_idx));
+            (
+                col_stats.and_then(|cs| cs.min_value.get_value().cloned()),
+                col_stats.and_then(|cs| cs.max_value.get_value().cloned()),
+            )
+        })
+        .collect();
+
+    // Sort by min. `None` mins go to the end so they form trailing "unknown"
+    // pairs that count as overlaps.
+    let mut order: Vec<usize> = (0..intervals.len()).collect();
+    order.sort_by(|&a, &b| match (&intervals[a].0, &intervals[b].0) {
+        (Some(x), Some(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+
+    let mut overlaps = 0usize;
+    for window in order.windows(2) {
+        let (_, prev_max) = &intervals[window[0]];
+        let (next_min, _) = &intervals[window[1]];
+        let pair_overlaps = match (prev_max, next_min) {
+            (Some(pm), Some(nm)) => {
+                // Overlap when next_min <= prev_max.
+                nm.partial_cmp(pm)
+                    .is_some_and(|ord| ord != std::cmp::Ordering::Greater)
+            }
+            // Either bound unknown — conservatively treat as overlap.
+            _ => true,
+        };
+        if pair_overlaps {
+            overlaps += 1;
+        }
+    }
+
+    let total_pairs = order.len() - 1;
+    (overlaps as f64) / (total_pairs as f64) >= FILE_REORDER_OVERLAP_SKIP_THRESHOLD
+}
+
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
 pub(crate) fn parse_coerce_int96_string(
     str_setting: &str,
@@ -675,6 +745,19 @@ impl FileSource for ParquetSource {
             Ok(idx) => idx,
             Err(_) => return files,
         };
+
+        // Skip when adjacent file [min, max] ranges overlap heavily —
+        // reordering cannot enable file-level pruning and the reorder cost
+        // (CPU sort + lost IO sequential locality + parallel scheduling
+        // pessimization across workers all pulling "best" files first)
+        // dominates. Same rationale as the RG-level guard in
+        // `PreparedAccessPlan::reorder_by_statistics`.
+        if files_have_heavy_overlap(&files, col_idx) {
+            log::debug!(
+                "Skipping file reorder for {col_name}: file stats overlap >= 50%"
+            );
+            return files;
+        }
 
         files.sort_by(|a, b| {
             let key_a = Self::sort_key_for_file(a, col_idx, descending);
@@ -974,7 +1057,96 @@ impl FileSource for ParquetSource {
 mod tests {
     use super::*;
     use arrow::datatypes::Schema;
+    use datafusion_common::ScalarValue;
+    use datafusion_common::stats::Precision;
+    use datafusion_datasource::PartitionedFile;
     use datafusion_physical_expr::expressions::lit;
+
+    fn file_with_min_max(min: Option<i32>, max: Option<i32>) -> PartitionedFile {
+        let mut pf = PartitionedFile::new("test".to_string(), 0);
+        let col_stats = datafusion_common::ColumnStatistics {
+            null_count: Precision::Absent,
+            max_value: max
+                .map(|v| Precision::Exact(ScalarValue::Int32(Some(v))))
+                .unwrap_or(Precision::Absent),
+            min_value: min
+                .map(|v| Precision::Exact(ScalarValue::Int32(Some(v))))
+                .unwrap_or(Precision::Absent),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            byte_size: Precision::Absent,
+        };
+        let stats = datafusion_common::Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![col_stats],
+        };
+        pf.statistics = Some(Arc::new(stats));
+        pf
+    }
+
+    #[test]
+    fn files_overlap_disjoint_sorted() {
+        let files = vec![
+            file_with_min_max(Some(0), Some(10)),
+            file_with_min_max(Some(20), Some(30)),
+            file_with_min_max(Some(40), Some(50)),
+        ];
+        assert!(!files_have_heavy_overlap(&files, 0));
+    }
+
+    #[test]
+    fn files_overlap_disjoint_after_reorder() {
+        // Original order is shuffled but ranges themselves are disjoint.
+        let files = vec![
+            file_with_min_max(Some(40), Some(50)),
+            file_with_min_max(Some(0), Some(10)),
+            file_with_min_max(Some(20), Some(30)),
+        ];
+        assert!(!files_have_heavy_overlap(&files, 0));
+    }
+
+    #[test]
+    fn files_overlap_fully() {
+        let files = vec![
+            file_with_min_max(Some(0), Some(100)),
+            file_with_min_max(Some(0), Some(100)),
+            file_with_min_max(Some(0), Some(100)),
+        ];
+        assert!(files_have_heavy_overlap(&files, 0));
+    }
+
+    #[test]
+    fn files_overlap_partial_below_threshold() {
+        // Sorted-by-min: [0,15] [20,25] [30,40] [45,50]
+        //   pair 0: 20 <= 15 → no
+        //   pair 1: 30 <= 25 → no
+        //   pair 2: 45 <= 40 → no
+        // Ratio 0/3 → no skip.
+        let files = vec![
+            file_with_min_max(Some(0), Some(15)),
+            file_with_min_max(Some(20), Some(25)),
+            file_with_min_max(Some(30), Some(40)),
+            file_with_min_max(Some(45), Some(50)),
+        ];
+        assert!(!files_have_heavy_overlap(&files, 0));
+    }
+
+    #[test]
+    fn files_overlap_missing_stats_treated_as_overlap() {
+        let files = vec![
+            file_with_min_max(Some(0), Some(10)),
+            file_with_min_max(None, None),
+            file_with_min_max(Some(20), Some(30)),
+        ];
+        assert!(files_have_heavy_overlap(&files, 0));
+    }
+
+    #[test]
+    fn files_overlap_too_few_files() {
+        let files = vec![file_with_min_max(Some(0), Some(10))];
+        assert!(!files_have_heavy_overlap(&files, 0));
+    }
 
     #[test]
     #[expect(deprecated)]
