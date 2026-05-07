@@ -40,6 +40,7 @@ pub mod macros;
 #[macro_use]
 pub mod macros_lambda;
 
+pub mod array_any_match;
 pub mod array_compact;
 pub mod array_has;
 pub mod array_transform;
@@ -54,6 +55,7 @@ pub mod except;
 pub mod expr_ext;
 pub mod extract;
 pub mod flatten;
+pub mod inner_product;
 pub mod length;
 pub mod make_array;
 pub mod map;
@@ -83,6 +85,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::array_any_match::array_any_match;
     pub use super::array_compact::array_compact;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
@@ -105,6 +108,7 @@ pub mod expr_fn {
     pub use super::extract::array_pop_front;
     pub use super::extract::array_slice;
     pub use super::flatten::flatten;
+    pub use super::inner_product::inner_product;
     pub use super::length::array_length;
     pub use super::make_array::make_array;
     pub use super::map_entries::map_entries;
@@ -161,6 +165,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         empty::array_empty_udf(),
         length::array_length_udf(),
         cosine_distance::cosine_distance_udf(),
+        inner_product::inner_product_udf(),
         distance::array_distance_udf(),
         flatten::flatten_udf(),
         min_max::array_max_udf(),
@@ -190,7 +195,10 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
 }
 
 pub fn all_default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
-    vec![array_transform::array_transform_higher_order_function()]
+    vec![
+        array_any_match::array_any_match_higher_order_function(),
+        array_transform::array_transform_higher_order_function(),
+    ]
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
