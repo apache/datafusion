@@ -266,11 +266,39 @@ impl LambdaArgument {
     /// so they align with the evaluation batch. Captures are snapshotted from the
     /// outer batch at construction time, giving one value per outer row, but the
     /// function may evaluate the lambda body over a batch with a different number
-    /// of rows. It is the function responsibility to provide the appropriate `spread_captures`
-    /// closure to expand (or otherwise reshape) the captures to match.
-    /// Function working on lists, for example `array_transform(arr, v -> v + 1)`
-    /// flattens all list elements into a single batch, duplicating captured
-    /// values for rows with multiple elements and dropping them for empty lists.
+    /// of rows. It is the function's responsibility to provide the appropriate
+    /// `spread_captures` closure to expand (or otherwise reshape) the captures
+    /// to match.
+    ///
+    /// Taking as an example the following table:
+    ///
+    /// ```sql
+    /// CREATE TABLE t (arr INT[], a INT) AS VALUES
+    ///   ([1, 2, 3], 10),
+    ///   ([],        20),
+    ///   ([4],       30);
+    /// ```
+    ///
+    /// `SELECT array_transform(arr, v -> v + a) from t` would execute over three outer rows:
+    ///
+    /// ```text
+    /// arr (ListArray):  [[1, 2, 3], [], [4]]   -- 3 outer rows, 4 total elements
+    /// a   (captured):   [10,        20,  30]   -- one value per outer row
+    /// ```
+    ///
+    /// `array_transform` flattens the list elements into a single batch of 4 rows,
+    /// so `spread_captures` must repeat/drop captured values to match:
+    ///
+    /// ```text
+    /// v (flattened args): [1,  2,  3,  4]
+    /// a (spread):         [10, 10, 10, 30]  -- 10 repeated for 3 elements in row 0,
+    ///                                        -- 20 dropped for the empty sublist in row 1,
+    ///                                        -- 30 once for the single element in row 2
+    /// ```
+    ///
+    /// The lambda body `v + a` then evaluates element-wise over these 4-row arrays,
+    /// producing `[11, 12, 13, 34]`, which `array_transform` reassembles into `[[11, 12, 13], [], [34]]`.
+    ///
     /// If the lambda has no captures, `spread_captures` is never called.
     pub fn evaluate(
         &self,
