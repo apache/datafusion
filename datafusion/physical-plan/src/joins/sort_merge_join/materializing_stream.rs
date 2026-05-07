@@ -274,7 +274,7 @@ impl BufferedBatch {
             .iter()
             .map(|arr| arr.get_array_memory_size())
             .sum();
-        
+
         let size_estimation = batch.get_array_memory_size()
             + join_arrays_mem
             + batch.num_rows().next_power_of_two() * size_of::<usize>()
