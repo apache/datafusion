@@ -79,13 +79,11 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0,
 ----
 [1, 2, 3, 4, 5] [h, e, l, l, o]
 
-# TODO make error message nicer: https://github.com/apache/datafusion/issues/19004
-# Expected output (once supported):
-# ----
-# [1, 2, 3, 4, 5] [h, e, l, l, o]
-query error Failed to coerce arguments to satisfy a call to 'array_slice' function:
-select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'ListView(Int64)'), 0, 6),
-       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'ListView(Utf8)'), 0, 5);
+query ??
+select array_slice(arrow_cast([1, 2, 3, 4, 5], 'ListView(Int64)'), 0, 6),
+       array_slice(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'ListView(Utf8)'), 0, 5);
+----
+[1, 2, 3, 4, 5] [h, e, l, l, o]
 
 query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 0, 6),
@@ -126,13 +124,11 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2,
 ----
 [2, 3, 4, 5] [l, l, o]
 
-# TODO: Enable once array_slice supports LargeListView types.
-# Expected output (once supported):
-# ----
-# [2, 3, 4, 5] [l, l, o]
-query error Failed to coerce arguments to satisfy a call to 'array_slice' function:
-select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeListView(Int64)'), 2, 6),
-       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeListView(Utf8)'), 3, 7);
+query ??
+select array_slice(arrow_cast([1, 2, 3, 4, 5], 'LargeListView(Int64)'), 2, 6),
+       array_slice(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeListView(Utf8)'), 3, 7);
+----
+[2, 3, 4, 5] [l, l, o]
 
 
 # array_slice scalar function #6 (with positive indexes; nested array)

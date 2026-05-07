@@ -48,7 +48,7 @@ use datafusion_sql::sqlparser::parser::Parser;
 use insta::assert_snapshot;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // enable logging so RUST_LOG works
     let _ = env_logger::try_init();
@@ -879,6 +879,13 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
+    fn get_higher_order_meta(
+        &self,
+        _name: &str,
+    ) -> Option<Arc<dyn datafusion_expr::HigherOrderUDF>> {
+        None
+    }
+
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.udafs.get(name).cloned()
     }
@@ -904,6 +911,10 @@ impl ContextProvider for MyContextProvider {
     }
 
     fn udf_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn higher_order_function_names(&self) -> Vec<String> {
         Vec::new()
     }
 
