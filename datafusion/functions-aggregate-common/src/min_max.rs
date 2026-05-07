@@ -50,17 +50,17 @@ macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{ min_max_scalar($VALUE, $DELTA, choose_min_max!($OP)) }};
 }
 
-fn min_max_option<T: Copy + Ord>(
+fn min_max_option<T: Clone + Ord>(
     lhs: &Option<T>,
     rhs: &Option<T>,
     ordering: Ordering,
 ) -> Option<T> {
     match (lhs, rhs) {
         (None, None) => None,
-        (Some(a), None) => Some(*a),
-        (None, Some(b)) => Some(*b),
-        (Some(a), Some(b)) if a.cmp(b) == ordering => Some(*b),
-        (Some(a), Some(_)) => Some(*a),
+        (Some(a), None) => Some(a.clone()),
+        (None, Some(b)) => Some(b.clone()),
+        (Some(a), Some(b)) if a.cmp(b) == ordering => Some(b.clone()),
+        (Some(a), Some(_)) => Some(a.clone()),
     }
 }
 
@@ -79,29 +79,13 @@ fn min_max_float_option<T: Copy>(
     }
 }
 
-fn min_max_clone_option<T: Clone + Ord>(
-    lhs: &Option<T>,
-    rhs: &Option<T>,
-    ordering: Ordering,
-) -> Option<T> {
-    match (lhs, rhs) {
-        (None, None) => None,
-        (Some(a), None) => Some(a.clone()),
-        (None, Some(b)) => Some(b.clone()),
-        (Some(a), Some(b)) if a.cmp(b) == ordering => Some(b.clone()),
-        (Some(a), Some(_)) => Some(a.clone()),
-    }
-}
-
 fn ensure_decimal_compatibility(
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-    lhs_precision: u8,
-    lhs_scale: i8,
-    rhs_precision: u8,
-    rhs_scale: i8,
+    lhs_type: (u8, i8),
+    rhs_type: (u8, i8),
 ) -> Result<()> {
-    if lhs_precision == rhs_precision && lhs_scale == rhs_scale {
+    if lhs_type == rhs_type {
         Ok(())
     } else {
         internal_err!(
@@ -174,12 +158,12 @@ fn min_max_dictionary_scalar(
                 Box::new(result),
             )))
         }
-        (ScalarValue::Dictionary(_, lhs_dict_value), rhs_scalar) => Ok(Some(
-            min_max_scalar(lhs_dict_value.as_ref(), rhs_scalar, ordering)?,
-        )),
-        (lhs_scalar, ScalarValue::Dictionary(_, rhs_dict_value)) => Ok(Some(
-            min_max_scalar(lhs_scalar, rhs_dict_value.as_ref(), ordering)?,
-        )),
+        (ScalarValue::Dictionary(_, lhs_dict_value), rhs_scalar) => {
+            min_max_scalar(lhs_dict_value.as_ref(), rhs_scalar, ordering).map(Some)
+        }
+        (lhs_scalar, ScalarValue::Dictionary(_, rhs_dict_value)) => {
+            min_max_scalar(lhs_scalar, rhs_dict_value.as_ref(), ordering).map(Some)
+        }
         _ => Ok(None),
     }
 }
@@ -215,28 +199,28 @@ fn min_max_scalar_same_variant(
             ScalarValue::Decimal32(lhsv, lhsp, lhss),
             ScalarValue::Decimal32(rhsv, rhsp, rhss),
         ) => {
-            ensure_decimal_compatibility(lhs, rhs, *lhsp, *lhss, *rhsp, *rhss)?;
+            ensure_decimal_compatibility(lhs, rhs, (*lhsp, *lhss), (*rhsp, *rhss))?;
             ScalarValue::Decimal32(min_max_option(lhsv, rhsv, ordering), *lhsp, *lhss)
         }
         (
             ScalarValue::Decimal64(lhsv, lhsp, lhss),
             ScalarValue::Decimal64(rhsv, rhsp, rhss),
         ) => {
-            ensure_decimal_compatibility(lhs, rhs, *lhsp, *lhss, *rhsp, *rhss)?;
+            ensure_decimal_compatibility(lhs, rhs, (*lhsp, *lhss), (*rhsp, *rhss))?;
             ScalarValue::Decimal64(min_max_option(lhsv, rhsv, ordering), *lhsp, *lhss)
         }
         (
             ScalarValue::Decimal128(lhsv, lhsp, lhss),
             ScalarValue::Decimal128(rhsv, rhsp, rhss),
         ) => {
-            ensure_decimal_compatibility(lhs, rhs, *lhsp, *lhss, *rhsp, *rhss)?;
+            ensure_decimal_compatibility(lhs, rhs, (*lhsp, *lhss), (*rhsp, *rhss))?;
             ScalarValue::Decimal128(min_max_option(lhsv, rhsv, ordering), *lhsp, *lhss)
         }
         (
             ScalarValue::Decimal256(lhsv, lhsp, lhss),
             ScalarValue::Decimal256(rhsv, rhsp, rhss),
         ) => {
-            ensure_decimal_compatibility(lhs, rhs, *lhsp, *lhss, *rhsp, *rhss)?;
+            ensure_decimal_compatibility(lhs, rhs, (*lhsp, *lhss), (*rhsp, *rhss))?;
             ScalarValue::Decimal256(min_max_option(lhsv, rhsv, ordering), *lhsp, *lhss)
         }
         (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
@@ -278,29 +262,26 @@ fn min_max_scalar_same_variant(
             ScalarValue::Int8(min_max_option(lhs, rhs, ordering))
         }
         (ScalarValue::Utf8(lhs), ScalarValue::Utf8(rhs)) => {
-            ScalarValue::Utf8(min_max_clone_option(lhs, rhs, ordering))
+            ScalarValue::Utf8(min_max_option(lhs, rhs, ordering))
         }
         (ScalarValue::LargeUtf8(lhs), ScalarValue::LargeUtf8(rhs)) => {
-            ScalarValue::LargeUtf8(min_max_clone_option(lhs, rhs, ordering))
+            ScalarValue::LargeUtf8(min_max_option(lhs, rhs, ordering))
         }
         (ScalarValue::Utf8View(lhs), ScalarValue::Utf8View(rhs)) => {
-            ScalarValue::Utf8View(min_max_clone_option(lhs, rhs, ordering))
+            ScalarValue::Utf8View(min_max_option(lhs, rhs, ordering))
         }
         (ScalarValue::Binary(lhs), ScalarValue::Binary(rhs)) => {
-            ScalarValue::Binary(min_max_clone_option(lhs, rhs, ordering))
+            ScalarValue::Binary(min_max_option(lhs, rhs, ordering))
         }
         (ScalarValue::LargeBinary(lhs), ScalarValue::LargeBinary(rhs)) => {
-            ScalarValue::LargeBinary(min_max_clone_option(lhs, rhs, ordering))
+            ScalarValue::LargeBinary(min_max_option(lhs, rhs, ordering))
         }
         (
             ScalarValue::FixedSizeBinary(lsize, lhs),
             ScalarValue::FixedSizeBinary(rsize, rhs),
         ) => {
             if lsize == rsize {
-                ScalarValue::FixedSizeBinary(
-                    *lsize,
-                    min_max_clone_option(lhs, rhs, ordering),
-                )
+                ScalarValue::FixedSizeBinary(*lsize, min_max_option(lhs, rhs, ordering))
             } else {
                 return internal_err!(
                     "MIN/MAX is not expected to receive FixedSizeBinary of incompatible sizes {:?}",
@@ -309,7 +290,7 @@ fn min_max_scalar_same_variant(
             }
         }
         (ScalarValue::BinaryView(lhs), ScalarValue::BinaryView(rhs)) => {
-            ScalarValue::BinaryView(min_max_clone_option(lhs, rhs, ordering))
+            ScalarValue::BinaryView(min_max_option(lhs, rhs, ordering))
         }
         (
             ScalarValue::TimestampSecond(lhs, l_tz),
@@ -888,8 +869,9 @@ mod tests {
         let rhs = ScalarValue::Decimal128(Some(2), 11, 2);
 
         let error = min_max_scalar(&lhs, &rhs, Ordering::Less).unwrap_err();
+        let message = error.to_string();
 
-        assert!(error.to_string().starts_with(&format!(
+        assert!(message.starts_with(&format!(
             "Internal error: MIN/MAX is not expected to receive scalars of incompatible types {:?}",
             (&lhs, &rhs)
         )));
@@ -902,8 +884,9 @@ mod tests {
         let rhs = ScalarValue::FixedSizeBinary(3, Some(vec![1, 2, 3]));
 
         let error = min_max_scalar(&lhs, &rhs, Ordering::Less).unwrap_err();
+        let message = error.to_string();
 
-        assert!(error.to_string().starts_with(
+        assert!(message.starts_with(
             "Internal error: MIN/MAX is not expected to receive FixedSizeBinary of incompatible sizes (2, 3)"
         ));
         Ok(())
