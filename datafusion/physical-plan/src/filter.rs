@@ -903,7 +903,7 @@ fn collect_new_statistics(
                         min_value: Precision::Exact(typed_null.clone()),
                         sum_value: Precision::Exact(typed_null),
                         distinct_count: Precision::Exact(0),
-                        byte_size: input_column_stats[idx].byte_size,
+                        byte_size: Precision::Exact(0),
                     };
                 };
                 let (lower, upper) = interval.into_bounds();
@@ -1621,7 +1621,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
-                    byte_size: Precision::Absent,
+                    byte_size: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     min_value: Precision::Exact(ScalarValue::Int32(None)),
@@ -1629,7 +1629,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
-                    byte_size: Precision::Absent,
+                    byte_size: Precision::Exact(0),
                 },
             ]
         );

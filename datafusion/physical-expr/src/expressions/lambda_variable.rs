@@ -107,7 +107,8 @@ impl PhysicalExpr for LambdaVariable {
 
         if self.field.as_ref() != batch.schema_ref().field(self.index) {
             return exec_err!(
-                "Physical LambdaVariable field doesn't match batch field during evaluation {} != {}",
+                "Field of physical LambdaVariable with index {} doesn't match batch field during evaluation {} != {}",
+                self.index,
                 self.field,
                 batch.schema_ref().field(self.index)
             );

@@ -1,5 +1,5 @@
 data
 data_csv
-./results/
+results
 venv
 !sql_benchmarks/**/results/

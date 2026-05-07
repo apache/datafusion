@@ -19,11 +19,14 @@
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, LargeListArray, ListArray},
+    compute::take_arrays,
     datatypes::{DataType, Field, FieldRef},
 };
 use datafusion_common::{
     Result, ScalarValue, exec_err, plan_err,
-    utils::{adjust_offsets_for_slice, list_values, take_function_args},
+    utils::{
+        adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
+    },
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
@@ -203,7 +206,12 @@ impl HigherOrderUDF for ArrayTransform {
 
         // call the transforming lambda
         let transformed_values = lambda
-            .evaluate(&[&values_param])?
+            .evaluate(&[&values_param], |arrays| {
+                // if any column got captured, we need to adjust it to the values arrays,
+                // duplicating values of list with multitple values and removing values of empty lists
+                let indices = list_values_row_number(&list_array)?;
+                Ok(take_arrays(arrays, &indices, None)?)
+            })?
             .into_array(list_values.len())?;
 
         let field = match args.return_field.data_type() {
