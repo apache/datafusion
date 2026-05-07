@@ -27,21 +27,6 @@ use arrow::compute::{filter, take};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{Result, ScalarValue, exec_err};
 
-/// Parse a `map_key_dedup_policy` config string into a `last_value_wins` bool.
-///
-/// Mirrors Spark's `spark.sql.mapKeyDedupPolicy` (case-insensitive):
-/// - `"EXCEPTION"` — raise on any duplicate key (default).
-/// - `"LAST_WIN"` — keep the last occurrence of each duplicate key.
-pub fn parse_map_key_dedup_policy(policy: &str) -> Result<bool> {
-    match policy.to_ascii_uppercase().as_str() {
-        "EXCEPTION" => Ok(false),
-        "LAST_WIN" => Ok(true),
-        other => exec_err!(
-            "Unknown map_key_dedup_policy '{other}', expected 'EXCEPTION' or 'LAST_WIN'"
-        ),
-    }
-}
-
 /// Helper function to get element [`DataType`]
 /// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
 /// [`Null`](DataType::Null) can be coerced to `ListType`([`Null`](DataType::Null)), so [`Null`](DataType::Null) is returned<br>
@@ -264,11 +249,7 @@ fn map_deduplicate_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, MapArray, StringArray};
-
-    fn as_map(array: &ArrayRef) -> &MapArray {
-        array.as_any().downcast_ref::<MapArray>().expect("MapArray")
-    }
+    use arrow::array::{Int32Array, StringArray};
 
     fn int32_utf8_inputs(
         keys: Vec<i32>,
@@ -277,20 +258,6 @@ mod tests {
         let keys: ArrayRef = Arc::new(Int32Array::from(keys));
         let values: ArrayRef = Arc::new(StringArray::from(values));
         (keys, values)
-    }
-
-    #[test]
-    fn parse_policy_accepts_both_values_case_insensitively() {
-        assert!(!parse_map_key_dedup_policy("EXCEPTION").unwrap());
-        assert!(!parse_map_key_dedup_policy("exception").unwrap());
-        assert!(parse_map_key_dedup_policy("LAST_WIN").unwrap());
-        assert!(parse_map_key_dedup_policy("last_win").unwrap());
-    }
-
-    #[test]
-    fn parse_policy_rejects_unknown() {
-        let err = parse_map_key_dedup_policy("BOGUS").unwrap_err().to_string();
-        assert!(err.contains("Unknown map_key_dedup_policy"), "{err}");
     }
 
     #[test]
@@ -304,7 +271,7 @@ mod tests {
         )
         .unwrap();
 
-        let map = as_map(&result);
+        let map = result.as_map();
         assert_eq!(map.len(), 2);
         assert_eq!(map.value_offsets(), &[0, 2, 3]);
     }
@@ -338,7 +305,7 @@ mod tests {
         )
         .unwrap();
 
-        let map = as_map(&result);
+        let map = result.as_map();
         assert_eq!(map.len(), 1);
         // 5 entries in, 3 unique keys -> offsets [0, 3]
         assert_eq!(map.value_offsets(), &[0, 3]);
@@ -371,7 +338,7 @@ mod tests {
         )
         .unwrap();
 
-        let map = as_map(&result);
+        let map = result.as_map();
         assert_eq!(map.len(), 1);
         assert_eq!(map.value_offsets(), &[0, 0]);
     }
@@ -398,7 +365,7 @@ mod tests {
         )
         .unwrap();
 
-        let map = as_map(&result);
+        let map = result.as_map();
         assert_eq!(map.len(), 2);
         // First row is NULL (no entries emitted), second row keeps both entries.
         assert_eq!(map.value_offsets(), &[0, 0, 2]);

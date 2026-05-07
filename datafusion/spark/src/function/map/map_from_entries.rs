@@ -19,11 +19,12 @@ use std::sync::Arc;
 
 use crate::function::map::utils::{
     get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
-    map_type_from_key_value_types, parse_map_key_dedup_policy,
+    map_type_from_key_value_types,
 };
 use arrow::array::{Array, ArrayRef, NullBufferBuilder, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::config::MapKeyDedupPolicy;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
@@ -101,9 +102,8 @@ impl ScalarUDFImpl for MapFromEntries {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let last_value_wins = parse_map_key_dedup_policy(
-            &args.config_options.execution.map_key_dedup_policy,
-        )?;
+        let last_value_wins = args.config_options.execution.map_key_dedup_policy
+            == MapKeyDedupPolicy::LastWin;
         make_scalar_function(
             move |args: &[ArrayRef]| map_from_entries_inner(args, last_value_wins),
             vec![],

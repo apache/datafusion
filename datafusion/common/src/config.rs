@@ -456,6 +456,53 @@ impl Display for SpillCompression {
     }
 }
 
+/// Policy for handling duplicate keys in Spark-compatible map-construction
+/// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
+/// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum MapKeyDedupPolicy {
+    /// Raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
+    #[default]
+    Exception,
+    /// Keep the last occurrence of each duplicate key.
+    LastWin,
+}
+
+impl FromStr for MapKeyDedupPolicy {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "EXCEPTION" => Ok(Self::Exception),
+            "LAST_WIN" => Ok(Self::LastWin),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid MapKeyDedupPolicy: {other}. Expected one of: EXCEPTION, LAST_WIN"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for MapKeyDedupPolicy {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = MapKeyDedupPolicy::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for MapKeyDedupPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Exception => "EXCEPTION",
+            Self::LastWin => "LAST_WIN",
+        };
+        write!(f, "{str}")
+    }
+}
+
 impl From<SpillCompression> for Option<CompressionType> {
     fn from(c: SpillCompression) -> Self {
         match c {
@@ -697,11 +744,11 @@ config_namespace! {
         ///
         /// Mirrors Spark's
         /// [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961):
-        /// - `"EXCEPTION"` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
-        /// - `"LAST_WIN"`: keep the last occurrence of each duplicate key.
+        /// - `EXCEPTION` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
+        /// - `LAST_WIN`: keep the last occurrence of each duplicate key.
         ///
         /// Values are case-insensitive. Only affects functions under `datafusion/spark`.
-        pub map_key_dedup_policy: String, default = "EXCEPTION".to_string()
+        pub map_key_dedup_policy: MapKeyDedupPolicy, default = MapKeyDedupPolicy::Exception
 
         /// How many bytes to buffer in the probe side of hash joins while the build side is
         /// concurrently being built.

@@ -32,9 +32,8 @@ use datafusion_expr::{
     TypeSignature, Volatility,
 };
 
-use crate::function::map::utils::{
-    map_type_from_key_value_types, parse_map_key_dedup_policy,
-};
+use crate::function::map::utils::map_type_from_key_value_types;
+use datafusion_common::config::MapKeyDedupPolicy;
 
 const DEFAULT_PAIR_DELIM: &str = ",";
 const DEFAULT_KV_DELIM: &str = ":";
@@ -103,9 +102,8 @@ impl ScalarUDFImpl for SparkStrToMap {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let last_value_wins = parse_map_key_dedup_policy(
-            &args.config_options.execution.map_key_dedup_policy,
-        )?;
+        let last_value_wins = args.config_options.execution.map_key_dedup_policy
+            == MapKeyDedupPolicy::LastWin;
         let arrays: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args.args)?;
         let result = str_to_map_inner(&arrays, last_value_wins)?;
         Ok(ColumnarValue::Array(result))

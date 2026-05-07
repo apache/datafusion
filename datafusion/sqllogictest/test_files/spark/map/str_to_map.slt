@@ -158,12 +158,6 @@ SELECT str_to_map(col) FROM (VALUES ('a:1,b:2'), ('a:3,a:4')) AS t(col);
 statement ok
 set datafusion.execution.map_key_dedup_policy = 'EXCEPTION';
 
-# Invalid policy values raise an error with a clear message.
-statement ok
+# Invalid policy values are rejected at SET time with a clear message.
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid MapKeyDedupPolicy: BOGUS\. Expected one of: EXCEPTION, LAST_WIN
 set datafusion.execution.map_key_dedup_policy = 'BOGUS';
-
-query error DataFusion error: Execution error: Unknown map_key_dedup_policy 'BOGUS', expected 'EXCEPTION' or 'LAST_WIN'
-SELECT str_to_map('a:1,b:2');
-
-statement ok
-set datafusion.execution.map_key_dedup_policy = 'EXCEPTION';
