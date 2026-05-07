@@ -404,10 +404,93 @@ fn nested_benchmarks(c: &mut Criterion) {
     drop(temp_file);
 }
 
+fn flat_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("large_string", DataType::Utf8, false),
+        Field::new("small_int", DataType::Int32, false),
+    ]))
+}
+
+fn flat_batch(batch_id: usize) -> RecordBatch {
+    let schema = flat_schema();
+    let len = WRITE_RECORD_BATCH_SIZE;
+
+    let base_id = (batch_id * len) as i32;
+    let id_values: Vec<i32> = (0..len).map(|i| base_id + i as i32).collect();
+    let id_array = Arc::new(Int32Array::from(id_values.clone()));
+    let small_int_array = Arc::new(Int32Array::from(id_values));
+
+    let large_string: String = "x".repeat(LARGE_STRING_LEN);
+    let mut string_builder = StringBuilder::new();
+    for _ in 0..len {
+        string_builder.append_value(&large_string);
+    }
+    let large_string_array = Arc::new(string_builder.finish());
+
+    RecordBatch::try_new(
+        schema,
+        vec![id_array, large_string_array as ArrayRef, small_int_array],
+    )
+    .unwrap()
+}
+
+/// Compare selecting a small field from a flat (top-level) schema vs from
+/// inside a struct. Both files contain the same logical data — the only
+/// difference is whether `small_int` lives at the top level or nested inside
+/// a struct column.
+fn flat_vs_struct_benchmarks(c: &mut Criterion) {
+    let flat_file = generate_file(flat_schema(), flat_batch, "flat");
+    let flat_path = flat_file.path().display().to_string();
+    assert!(Path::new(&flat_path).exists(), "path not found");
+
+    let struct_file = generate_file(narrow_schema(), narrow_batch, "narrow_struct_cmp");
+    let struct_path = struct_file.path().display().to_string();
+    assert!(Path::new(&struct_path).exists(), "path not found");
+
+    let rt = Runtime::new().unwrap();
+    let flat_ctx = create_context(&rt, &flat_path, "t");
+    let struct_ctx = create_context(&rt, &struct_path, "t");
+
+    let mut group = c.benchmark_group("flat_vs_struct");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+
+    // small int: top-level vs struct field
+    group.bench_function("flat_select_small_int", |b| {
+        b.iter(|| query(&flat_ctx, &rt, "SELECT small_int FROM t"))
+    });
+    group.bench_function("struct_select_small_int", |b| {
+        b.iter(|| query(&struct_ctx, &rt, "SELECT s['small_int'] FROM t"))
+    });
+
+    // large string: top-level vs struct field
+    group.bench_function("flat_select_large_string", |b| {
+        b.iter(|| query(&flat_ctx, &rt, "SELECT large_string FROM t"))
+    });
+    group.bench_function("struct_select_large_string", |b| {
+        b.iter(|| query(&struct_ctx, &rt, "SELECT s['large_string'] FROM t"))
+    });
+
+    // aggregation: SUM of small int
+    group.bench_function("flat_sum_small_int", |b| {
+        b.iter(|| query(&flat_ctx, &rt, "SELECT SUM(small_int) FROM t"))
+    });
+    group.bench_function("struct_sum_small_int", |b| {
+        b.iter(|| query(&struct_ctx, &rt, "SELECT SUM(s['small_int']) FROM t"))
+    });
+
+    group.finish();
+    drop(flat_file);
+    drop(struct_file);
+}
+
 criterion_group!(
     benches,
     narrow_benchmarks,
     wide_benchmarks,
-    nested_benchmarks
+    nested_benchmarks,
+    flat_vs_struct_benchmarks,
 );
 criterion_main!(benches);

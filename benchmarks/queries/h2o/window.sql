@@ -110,3 +110,10 @@ SELECT
     v2,
     sum(v2) OVER (PARTITION BY id2 ORDER BY v2 RANGE BETWEEN 3 PRECEDING AND CURRENT ROW) AS my_range_between_by_id2
 FROM large;
+
+-- Window Top-N (ROW_NUMBER top-2 per partition)
+SELECT id2, largest2_v2 FROM (
+    SELECT id2, v2 AS largest2_v2,
+           ROW_NUMBER() OVER (PARTITION BY id2 ORDER BY v2 DESC) AS order_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE order_v2 <= 2;

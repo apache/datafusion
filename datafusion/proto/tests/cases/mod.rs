@@ -26,7 +26,6 @@ use datafusion_expr::{
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -102,10 +101,6 @@ impl MyAggregateUDF {
 }
 
 impl AggregateUDFImpl for MyAggregateUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "aggregate_udf"
     }
@@ -148,10 +143,6 @@ impl CustomUDWF {
 }
 
 impl WindowUDFImpl for CustomUDWF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "custom_udwf"
     }

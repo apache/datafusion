@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray};
+use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::error::ArrowError;
@@ -126,18 +126,23 @@ fn compute_gcd_for_arrays(a: &ArrayRef, b: &ArrayRef) -> Result<ColumnarValue> {
 }
 
 fn compute_gcd_with_scalar(arr: &ArrayRef, scalar: Option<i64>) -> Result<ColumnarValue> {
+    let prim = arr.as_primitive::<Int64Type>();
     match scalar {
+        Some(scalar_value) if scalar_value != 0 && scalar_value != i64::MIN => {
+            // The gcd result divides both inputs' absolute values. When the
+            // scalar is neither 0 nor i64::MIN, the gcd's absolute value fits
+            // in i64, so the cast to i64 below cannot overflow. This allows us
+            // to use `unary` instead of `try_unary`, which allows LLVM to
+            // vectorize more effectively.
+            let sv = scalar_value.unsigned_abs();
+            let result: PrimitiveArray<Int64Type> =
+                prim.unary(|val| unsigned_gcd(val.unsigned_abs(), sv) as i64);
+            Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
+        }
         Some(scalar_value) => {
-            let result: Result<Int64Array> = arr
-                .as_primitive::<Int64Type>()
-                .iter()
-                .map(|val| match val {
-                    Some(val) => Ok(Some(compute_gcd(val, scalar_value)?)),
-                    _ => Ok(None),
-                })
-                .collect();
-
-            result.map(|arr| ColumnarValue::Array(Arc::new(arr) as ArrayRef))
+            let result: PrimitiveArray<Int64Type> =
+                prim.try_unary(|val| compute_gcd(val, scalar_value))?;
+            Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
         }
         None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
     }
@@ -171,7 +176,8 @@ pub fn compute_gcd(x: i64, y: i64) -> Result<i64, ArrowError> {
     let a = x.unsigned_abs();
     let b = y.unsigned_abs();
     let r = unsigned_gcd(a, b);
-    // gcd(i64::MIN, i64::MIN) = i64::MIN.unsigned_abs() cannot fit into i64
+    // The result can be up to 2^63 (e.g. gcd(i64::MIN, 0) or
+    // gcd(i64::MIN, i64::MIN)), which does not fit into i64.
     r.try_into().map_err(|_| {
         ArrowError::ComputeError(format!("Signed integer overflow in GCD({x}, {y})"))
     })

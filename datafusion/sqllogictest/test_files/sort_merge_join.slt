@@ -941,6 +941,36 @@ WHERE t2.a > 3 OR t2.a IN (SELECT t3.x FROM t3 WHERE t2.b < 150)
 ----
 4 101 1001
 
+# Regression test for https://github.com/apache/datafusion/issues/21197
+# LeftMark join with cross-table join filter on non-nullable columns.
+# The OR forces a LeftMark join. The cross-table filter (t2_data <> t1_data)
+# becomes a join filter referencing both sides. At scale, unmatched rows in
+# the mark join produce null right-side indices, and fetch_right_columns_by_idxs
+# maps those to null values in columns the schema declares non-nullable,
+# causing RecordBatch::try_new to fail.
+query I
+WITH t1_sorted AS (
+    SELECT value % 1000 as key, value as data
+    FROM range(10000)
+    ORDER BY key, data
+),
+t2_sorted AS (
+    SELECT value % 1000 as key, value as data
+    FROM range(100000)
+    ORDER BY key, data
+)
+SELECT count(*)
+FROM t1_sorted
+WHERE t1_sorted.data < 0
+   OR EXISTS (
+    SELECT 1 FROM t2_sorted
+    WHERE t2_sorted.key = t1_sorted.key
+      AND t2_sorted.data <> t1_sorted.data
+      AND t2_sorted.data % 100 = 0
+)
+----
+100
+
 # Config reset
 statement ok
 RESET datafusion.optimizer.prefer_hash_join;

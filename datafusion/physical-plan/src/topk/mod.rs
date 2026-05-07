@@ -27,7 +27,8 @@ use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    RecordOutput,
 };
 use crate::spill::get_record_batch_memory_size;
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
@@ -162,7 +163,7 @@ impl TopKDynamicFilters {
 // Guesstimate for memory allocation: estimated number of bytes used per row in the RowConverter
 const ESTIMATED_BYTES_PER_ROW: usize = 20;
 
-fn build_sort_fields(
+pub(crate) fn build_sort_fields(
     ordering: &[PhysicalSortExpr],
     schema: &SchemaRef,
 ) -> Result<Vec<SortField>> {
@@ -253,13 +254,12 @@ impl TopK {
         let num_rows = batch.num_rows();
         let array = filtered.into_array(num_rows)?;
         let mut filter = array.as_boolean().clone();
-        let true_count = filter.true_count();
-        if true_count == 0 {
+        if !filter.has_true() {
             // nothing to filter, so no need to update
             return Ok(());
         }
         // only update the keys / rows if the filter does not match all rows
-        if true_count < num_rows {
+        if filter.null_count() > 0 || filter.has_false() {
             // Indices in `set_indices` should be correct if filter contains nulls
             // So we prepare the filter here. Note this is also done in the `FilterBuilder`
             // so there is no overhead to do this here.
@@ -647,6 +647,7 @@ impl TopKMetrics {
         Self {
             baseline: BaselineMetrics::new(metrics, partition),
             row_replacements: MetricBuilder::new(metrics)
+                .with_category(MetricCategory::Rows)
                 .counter("row_replacements", partition),
         }
     }

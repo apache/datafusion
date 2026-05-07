@@ -19,9 +19,10 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Capacities, ListArray, MutableArrayData, StructArray, new_null_array,
+    Array, ArrayRef, Capacities, ListArray, MutableArrayData, NullBufferBuilder,
+    StructArray, new_null_array,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::cast::{
@@ -42,8 +43,14 @@ struct ListColumnView {
     values: ArrayRef,
     /// Pre-computed per-row start offsets (length = num_rows + 1).
     offsets: Vec<usize>,
-    /// Pre-computed null bitmap: true means the row is null.
-    is_null: Vec<bool>,
+    /// Null bitmap from the input array (None means no nulls).
+    nulls: Option<arrow::buffer::NullBuffer>,
+}
+
+impl ListColumnView {
+    fn is_null(&self, idx: usize) -> bool {
+        self.nulls.as_ref().is_some_and(|n| n.is_null(idx))
+    }
 }
 
 make_udf_expr_and_func!(
@@ -170,12 +177,11 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let raw_offsets = arr.value_offsets();
                 let offsets: Vec<usize> =
                     raw_offsets.iter().map(|&o| o as usize).collect();
-                let is_null = (0..num_rows).map(|row| arr.is_null(row)).collect();
                 element_types.push(field.data_type().clone());
                 views.push(Some(ListColumnView {
                     values: Arc::clone(arr.values()),
                     offsets,
-                    is_null,
+                    nulls: arr.nulls().cloned(),
                 }));
             }
             LargeList(field) => {
@@ -183,24 +189,22 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let raw_offsets = arr.value_offsets();
                 let offsets: Vec<usize> =
                     raw_offsets.iter().map(|&o| o as usize).collect();
-                let is_null = (0..num_rows).map(|row| arr.is_null(row)).collect();
                 element_types.push(field.data_type().clone());
                 views.push(Some(ListColumnView {
                     values: Arc::clone(arr.values()),
                     offsets,
-                    is_null,
+                    nulls: arr.nulls().cloned(),
                 }));
             }
             FixedSizeList(field, size) => {
                 let arr = as_fixed_size_list_array(arg)?;
                 let size = *size as usize;
                 let offsets: Vec<usize> = (0..=num_rows).map(|row| row * size).collect();
-                let is_null = (0..num_rows).map(|row| arr.is_null(row)).collect();
                 element_types.push(field.data_type().clone());
                 views.push(Some(ListColumnView {
                     values: Arc::clone(arr.values()),
                     offsets,
-                    is_null,
+                    nulls: arr.nulls().cloned(),
                 }));
             }
             Null => {
@@ -239,7 +243,7 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
     offsets.push(0);
-    let mut null_mask: Vec<bool> = Vec::with_capacity(num_rows);
+    let mut null_builder = NullBufferBuilder::new(num_rows);
     let mut total_values: usize = 0;
 
     // Process each row: compute per-array lengths, then copy values
@@ -249,7 +253,7 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         let mut all_null = true;
 
         for view in views.iter().flatten() {
-            if !view.is_null[row_idx] {
+            if !view.is_null(row_idx) {
                 all_null = false;
                 let len = view.offsets[row_idx + 1] - view.offsets[row_idx];
                 max_len = max_len.max(len);
@@ -257,16 +261,16 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
 
         if all_null {
-            null_mask.push(true);
+            null_builder.append_null();
             offsets.push(*offsets.last().unwrap());
             continue;
         }
-        null_mask.push(false);
+        null_builder.append_non_null();
 
         // Extend each column builder for this row.
         for (col_idx, view) in views.iter().enumerate() {
             match view {
-                Some(v) if !v.is_null[row_idx] => {
+                Some(v) if !v.is_null(row_idx) => {
                     let start = v.offsets[row_idx];
                     let end = v.offsets[row_idx + 1];
                     let len = end - start;
@@ -309,13 +313,7 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let struct_array = StructArray::try_new(struct_fields, struct_columns, None)?;
 
-    let null_buffer = if null_mask.iter().any(|&v| v) {
-        Some(NullBuffer::from(
-            null_mask.iter().map(|v| !v).collect::<Vec<bool>>(),
-        ))
-    } else {
-        None
-    };
+    let null_buffer = null_builder.finish();
 
     let result = ListArray::try_new(
         Arc::new(Field::new_list_field(

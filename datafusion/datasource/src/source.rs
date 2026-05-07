@@ -20,14 +20,16 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
 use datafusion_physical_plan::metrics::SplitMetrics;
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
@@ -35,6 +37,7 @@ use datafusion_physical_plan::{
 };
 use itertools::Itertools;
 
+use crate::file::FileSource;
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -120,13 +123,22 @@ use datafusion_physical_plan::filter_pushdown::{
 ///    │                     │
 ///    └─────────────────────┘
 /// ```
-pub trait DataSource: Send + Sync + Debug {
+pub trait DataSource: Any + Send + Sync + Debug {
+    /// Open the specified output partition and return its stream of
+    /// [`RecordBatch`]es.
+    ///
+    /// This should be used by data sources that do not need any sibling
+    /// coordination. Data sources that want to use per-execution shared state
+    /// (for example, to reorder work across partitions at runtime) should
+    /// implement [`Self::open_with_args`] instead.
+    ///
+    /// [`RecordBatch`]: arrow::record_batch::RecordBatch
     fn open(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream>;
-    fn as_any(&self) -> &dyn Any;
+
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
@@ -244,6 +256,65 @@ pub trait DataSource: Send + Sync + Debug {
     ) -> Option<Arc<dyn DataSource>> {
         None
     }
+
+    /// Create per execution state to share across sibling instances of this
+    /// data source during one execution.
+    ///
+    /// Returns `None` (the default) if this data source has
+    /// no sibling-shared execution state.
+    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
+
+    /// Open a partition using optional sibling-shared execution state.
+    ///
+    /// The default implementation ignores the additional state and delegates to
+    /// [`Self::open`].
+    fn open_with_args(&self, args: OpenArgs) -> Result<SendableRecordBatchStream> {
+        self.open(args.partition, args.context)
+    }
+}
+
+/// Arguments for [`DataSource::open_with_args`]
+#[derive(Debug, Clone)]
+pub struct OpenArgs {
+    /// Which partition to open
+    pub partition: usize,
+    /// The task context for execution
+    pub context: Arc<TaskContext>,
+    /// Optional sibling-shared execution state, see
+    /// [`DataSource::create_sibling_state`] for details.
+    pub sibling_state: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl OpenArgs {
+    /// Create a new OpenArgs with required arguments
+    pub fn new(partition: usize, context: Arc<TaskContext>) -> Self {
+        Self {
+            partition,
+            context,
+            sibling_state: None,
+        }
+    }
+
+    /// Set sibling shared state
+    pub fn with_shared_state(
+        mut self,
+        sibling_state: Option<Arc<dyn Any + Send + Sync>>,
+    ) -> Self {
+        self.sibling_state = sibling_state;
+        self
+    }
+}
+
+impl dyn DataSource {
+    pub fn is<T: DataSource>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    pub fn downcast_ref<T: DataSource>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }
 
 /// [`ExecutionPlan`] that reads one or more files
@@ -264,6 +335,12 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: Arc<PlanProperties>,
+    /// Per execution state shared across partitions of this plan.
+    ///
+    /// Created by [`DataSource::create_sibling_state`]
+    /// and then passed to
+    /// [`DataSource::open_with_args`].
+    execution_state: Arc<OnceLock<Option<Arc<dyn Any + Send + Sync>>>>,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -281,10 +358,6 @@ impl DisplayAs for DataSourceExec {
 impl ExecutionPlan for DataSourceExec {
     fn name(&self) -> &'static str {
         "DataSourceExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -341,8 +414,15 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.data_source.open(partition, Arc::clone(&context))?;
+        let shared_state = self
+            .execution_state
+            .get_or_init(|| self.data_source.create_sibling_state())
+            .clone();
+        let args = OpenArgs::new(partition, Arc::clone(&context))
+            .with_shared_state(shared_state);
+        let stream = self.data_source.open_with_args(args)?;
         let batch_size = context.session_config().batch_size();
+
         log::debug!(
             "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
         );
@@ -356,7 +436,19 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.data_source.metrics().clone_inner())
+        let mut metrics = self.data_source.metrics().clone_inner();
+
+        // Add `output_rows_skew` metric to the metrics set.
+        // Done here because it's a derived metric from output_rows metric.
+        if let Some(file_scan_config) = self.data_source.downcast_ref::<FileScanConfig>()
+            && file_scan_config.file_source().file_type() == "parquet"
+            && let Some(output_rows_skew) =
+                BaselineMetrics::output_rows_skew_metric(&metrics)
+        {
+            metrics.push(output_rows_skew);
+        }
+
+        Some(metrics)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
@@ -366,8 +458,13 @@ impl ExecutionPlan for DataSourceExec {
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = Arc::clone(&self.cache);
+        let execution_state = Arc::new(OnceLock::new());
 
-        Some(Arc::new(Self { data_source, cache }))
+        Some(Arc::new(Self {
+            data_source,
+            cache,
+            execution_state,
+        }))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -460,6 +557,12 @@ impl ExecutionPlan for DataSourceExec {
                     as Arc<dyn ExecutionPlan>
             })
     }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut new_exec = Arc::unwrap_or_clone(self);
+        new_exec.execution_state = Arc::new(OnceLock::new());
+        Ok(Arc::new(new_exec))
+    }
 }
 
 impl DataSourceExec {
@@ -473,6 +576,7 @@ impl DataSourceExec {
         Self {
             data_source,
             cache: Arc::new(cache),
+            execution_state: Arc::new(OnceLock::new()),
         }
     }
 
@@ -484,6 +588,7 @@ impl DataSourceExec {
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
         self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
+        self.execution_state = Arc::new(OnceLock::new());
         self
     }
 
@@ -514,14 +619,14 @@ impl DataSourceExec {
     /// Returns `None` if
     /// 1. the datasource is not scanning files (`FileScanConfig`)
     /// 2. The [`FileScanConfig::file_source`] is not of type `T`
-    pub fn downcast_to_file_source<T: 'static>(&self) -> Option<(&FileScanConfig, &T)> {
+    pub fn downcast_to_file_source<T: FileSource>(
+        &self,
+    ) -> Option<(&FileScanConfig, &T)> {
         self.data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .and_then(|file_scan_conf| {
                 file_scan_conf
                     .file_source()
-                    .as_any()
                     .downcast_ref::<T>()
                     .map(|source| (file_scan_conf, source))
             })

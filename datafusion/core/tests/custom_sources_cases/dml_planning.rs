@@ -17,7 +17,6 @@
 
 //! Tests for DELETE, UPDATE, and TRUNCATE planning to verify filter and assignment extraction.
 
-use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -91,10 +90,6 @@ impl std::fmt::Debug for CaptureDeleteProvider {
 
 #[async_trait]
 impl TableProvider for CaptureDeleteProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -191,10 +186,6 @@ impl std::fmt::Debug for CaptureUpdateProvider {
 
 #[async_trait]
 impl TableProvider for CaptureUpdateProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -269,10 +260,6 @@ impl std::fmt::Debug for CaptureTruncateProvider {
 
 #[async_trait]
 impl TableProvider for CaptureTruncateProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

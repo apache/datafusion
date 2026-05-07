@@ -17,7 +17,6 @@
 
 //! EmptyRelation with produce_one_row=false execution plan
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
@@ -112,10 +111,6 @@ impl ExecutionPlan for EmptyExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }

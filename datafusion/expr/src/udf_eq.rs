@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{AggregateUDFImpl, ScalarUDFImpl, WindowUDFImpl};
+use crate::{AggregateUDFImpl, HigherOrderUDF, ScalarUDFImpl, WindowUDFImpl};
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -94,9 +94,21 @@ impl UdfPointer for Arc<dyn ScalarUDFImpl + '_> {
     }
 }
 
+impl UdfPointer for Arc<dyn HigherOrderUDF + '_> {
+    fn equals(&self, other: &Self::Target) -> bool {
+        self.as_ref().dyn_eq(other)
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.as_ref().dyn_hash(hasher);
+        hasher.finish()
+    }
+}
+
 impl UdfPointer for Arc<dyn AggregateUDFImpl + '_> {
     fn equals(&self, other: &(dyn AggregateUDFImpl + '_)) -> bool {
-        self.as_ref().dyn_eq(other.as_any())
+        self.as_ref().dyn_eq(other)
     }
 
     fn hash_value(&self) -> u64 {
@@ -108,7 +120,7 @@ impl UdfPointer for Arc<dyn AggregateUDFImpl + '_> {
 
 impl UdfPointer for Arc<dyn WindowUDFImpl + '_> {
     fn equals(&self, other: &(dyn WindowUDFImpl + '_)) -> bool {
-        self.as_ref().dyn_eq(other.as_any())
+        self.as_ref().dyn_eq(other as &dyn Any)
     }
 
     fn hash_value(&self) -> u64 {

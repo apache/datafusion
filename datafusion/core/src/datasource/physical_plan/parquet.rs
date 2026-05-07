@@ -234,7 +234,8 @@ mod tests {
             let analyze_exec = Arc::new(AnalyzeExec::new(
                 false,
                 false,
-                vec![MetricType::SUMMARY, MetricType::DEV],
+                vec![MetricType::Summary, MetricType::Dev],
+                None,
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
                     file_group.clone(),
@@ -1703,7 +1704,7 @@ mod tests {
         let state = session_ctx.state();
         let location = Path::from_filesystem_path(".")
             .unwrap()
-            .child("invalid.parquet");
+            .join("invalid.parquet");
 
         let partitioned_file = PartitionedFile::new_from_meta(ObjectMeta {
             location,
@@ -1797,6 +1798,73 @@ mod tests {
             get_pruning_metric(&metrics, "page_index_pages_pruned");
         assert_eq!(page_index_pages_pruned, 3);
         assert_eq!(page_index_pages_matched, 1);
+    }
+
+    #[tokio::test]
+    async fn parquet_page_index_exec_metrics_multiple_predicates() {
+        let c1: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]));
+        let c2: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(11),
+            Some(12),
+            Some(13),
+            Some(14),
+        ]));
+        let batch = create_batch(vec![("a", c1), ("b", c2)]);
+
+        // matches the last page
+        let filter = col("a").gt_eq(lit(3)).and(col("b").lt_eq(lit(13)));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip(vec![batch.clone()])
+            .await;
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        let (page_index_rows_pruned, page_index_rows_matched) =
+            get_pruning_metric(&metrics, "page_index_rows_pruned");
+        assert_eq!(page_index_rows_pruned, 2);
+        assert_eq!(page_index_rows_matched, 2);
+        let (page_index_pages_pruned, page_index_pages_matched) =
+            get_pruning_metric(&metrics, "page_index_pages_pruned");
+        assert_eq!(page_index_pages_pruned, 1);
+        assert_eq!(page_index_pages_matched, 1);
+
+        // matches no pages
+        let filter = col("a").gt_eq(lit(3)).and(col("b").lt_eq(lit(12)));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip(vec![batch.clone()])
+            .await;
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        let (page_index_rows_pruned, page_index_rows_matched) =
+            get_pruning_metric(&metrics, "page_index_rows_pruned");
+        assert_eq!(page_index_rows_pruned, 4);
+        assert_eq!(page_index_rows_matched, 0);
+        let (page_index_pages_pruned, page_index_pages_matched) =
+            get_pruning_metric(&metrics, "page_index_pages_pruned");
+        assert_eq!(page_index_pages_pruned, 2);
+        assert_eq!(page_index_pages_matched, 0);
+
+        // matches both pages
+        let filter = col("a").gt_eq(lit(2)).and(col("b").lt_eq(lit(13)));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip(vec![batch.clone()])
+            .await;
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        let (page_index_rows_pruned, page_index_rows_matched) =
+            get_pruning_metric(&metrics, "page_index_rows_pruned");
+        assert_eq!(page_index_rows_pruned, 0);
+        assert_eq!(page_index_rows_matched, 4);
+        let (page_index_pages_pruned, page_index_pages_matched) =
+            get_pruning_metric(&metrics, "page_index_pages_pruned");
+        assert_eq!(page_index_pages_pruned, 0);
+        assert_eq!(page_index_pages_matched, 2);
     }
 
     /// Returns a string array with contents:

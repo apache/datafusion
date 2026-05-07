@@ -45,7 +45,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_value(
         &self,
         value: Value,
-        param_data_types: &[FieldRef],
+        param_data_types: &[Option<FieldRef>],
     ) -> Result<Expr> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
@@ -105,7 +105,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Both named (`$foo`) and positional (`$1`, `$2`, ...) placeholder styles are supported.
     fn create_placeholder_expr(
         param: String,
-        param_data_types: &[FieldRef],
+        param_data_types: &[Option<FieldRef>],
     ) -> Result<Expr> {
         // Try to parse the placeholder as a number. If the placeholder does not have a valid
         // positional value, assume we have a named placeholder.
@@ -124,13 +124,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // FIXME: This branch is shared by params from PREPARE and CREATE FUNCTION, but
                     // only CREATE FUNCTION currently supports named params. For now, we rewrite
                     // these to positional params.
-                    let named_param_pos = param_data_types
-                        .iter()
-                        .position(|v| v.name() == &param[1..]);
+                    let named_param_pos = param_data_types.iter().position(|v| {
+                        v.as_ref().is_some_and(|field| field.name() == &param[1..])
+                    });
                     match named_param_pos {
                         Some(pos) => Ok(Expr::Placeholder(Placeholder::new_with_field(
                             format!("${}", pos + 1),
-                            param_data_types.get(pos).cloned(),
+                            param_data_types.get(pos).and_then(|v| v.clone()),
                         ))),
                         None => plan_err!("Unknown placeholder: {param}"),
                     }
@@ -139,13 +139,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
         // Check if the placeholder is in the parameter list
         // FIXME: In the CREATE FUNCTION branch, param_type = None should raise an error
-        let param_type = param_data_types.get(idx);
+        let param_type = param_data_types.get(idx).and_then(|v| v.clone());
         // Data type of the parameter
         debug!("type of param {param} param_data_types[idx]: {param_type:?}");
 
         Ok(Expr::Placeholder(Placeholder::new_with_field(
-            param,
-            param_type.cloned(),
+            param, param_type,
         )))
     }
 

@@ -36,7 +36,24 @@ Returns the current timestamp in the system configured timezone (None by default
 
 The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
 "#,
-    syntax_example = "now()"
+    syntax_example = "now()",
+    sql_example = r#"```sql
+> SELECT now();
++----------------------------------+
+| now()                            |
++----------------------------------+
+| 2024-12-23T06:30:00.123456789    |
++----------------------------------+
+
+-- The timezone of the returned timestamp depends on the session time zone
+> SET datafusion.execution.time_zone = 'America/New_York';
+> SELECT now();
++--------------------------------------+
+| now()                                |
++--------------------------------------+
+| 2024-12-23T01:30:00.123456789-05:00  |
++--------------------------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NowFunc {
