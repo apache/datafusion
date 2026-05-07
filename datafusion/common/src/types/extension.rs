@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::error::Result;
+use crate::nested_struct::CastExtension;
 use arrow::array::{Array, ArrayRef};
 use arrow::compute::CastOptions;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
@@ -98,19 +99,6 @@ pub trait DFExtensionType: Debug + Send + Sync {
     }
 }
 
-pub trait CastExtension: Debug + Send + Sync {
-    fn can_cast_fields(&self, from: &Field, to: &Field) -> Result<bool>;
-
-    // None for fallback
-    fn cast_array_fields(
-        &self,
-        value: ArrayRef,
-        from: &Field,
-        to: &Field,
-        options: &CastOptions,
-    ) -> Result<ArrayRef>;
-}
-
 #[derive(Debug)]
 struct DefaultExtensionCast {}
 
@@ -121,11 +109,11 @@ impl CastExtension for DefaultExtensionCast {
 
     fn cast_array_fields(
         &self,
-        value: ArrayRef,
+        value: &ArrayRef,
         _from: &Field,
         _to: &Field,
         _options: &CastOptions,
     ) -> Result<ArrayRef> {
-        Ok(value)
+        Ok(value.clone())
     }
 }

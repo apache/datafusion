@@ -27,9 +27,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::nested_struct::{
-    requires_nested_struct_cast, validate_data_type_compatibility,
+    CastExtension, requires_nested_struct_cast, validate_data_type_compatibility,
 };
-use datafusion_common::types::CastExtension;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -275,7 +274,7 @@ impl PhysicalExpr for CastExpr {
             match value {
                 ColumnarValue::Array(array) => {
                     Ok(ColumnarValue::Array(cast_extension.cast_array_fields(
-                        array,
+                        &array,
                         &from_field,
                         &to_field,
                         &self.cast_options,
@@ -284,7 +283,7 @@ impl PhysicalExpr for CastExpr {
                 ColumnarValue::Scalar(scalar_value) => {
                     let array = scalar_value.to_array()?;
                     let array_result = cast_extension.cast_array_fields(
-                        array,
+                        &array,
                         &from_field,
                         &to_field,
                         &self.cast_options,

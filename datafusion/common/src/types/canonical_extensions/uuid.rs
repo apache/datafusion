@@ -18,7 +18,7 @@
 use crate::Result;
 use crate::cast::{as_fixed_size_binary_array, as_string_array};
 use crate::error::{_exec_err, _internal_err};
-use crate::types::CastExtension;
+use crate::nested_struct::CastExtension;
 use crate::types::extension::DFExtensionType;
 use arrow::array::{
     Array, ArrayRef, FixedSizeBinaryArray, StringBuilder, builder::FixedSizeBinaryBuilder,
@@ -133,7 +133,7 @@ impl CastExtension for CastFromUuid {
 
     fn cast_array_fields(
         &self,
-        value: ArrayRef,
+        value: &ArrayRef,
         from: &Field,
         to: &Field,
         options: &CastOptions,
@@ -168,7 +168,7 @@ impl CastExtension for CastFromUuid {
                 let string_array = Arc::new(builder.finish()) as ArrayRef;
                 return Ok(cast(&string_array, to.data_type())?);
             }
-            DataType::FixedSizeBinary(16) => return Ok(value),
+            DataType::FixedSizeBinary(16) => return Ok(value.clone()),
             _ => {}
         }
 
@@ -186,7 +186,7 @@ impl CastExtension for CastToUuid {
 
     fn cast_array_fields(
         &self,
-        value: ArrayRef,
+        value: &ArrayRef,
         from: &Field,
         to: &Field,
         options: &CastOptions,
@@ -223,7 +223,7 @@ impl CastExtension for CastToUuid {
                 return Ok(Arc::new(builder.finish()));
             }
             // Can implicitly cast from storage
-            DataType::FixedSizeBinary(16) => return Ok(value),
+            DataType::FixedSizeBinary(16) => return Ok(value.clone()),
             _ => {}
         }
 
