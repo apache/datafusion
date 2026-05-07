@@ -38,7 +38,7 @@ pub(crate) fn compute_null_mask(args: &[ColumnarValue]) -> NullMaskResolution {
     for arg in args {
         match arg {
             ColumnarValue::Array(array) => {
-                array_len.get_or_insert(array.len());
+                array_len.get_or_insert_with(|| array.len());
             }
             ColumnarValue::Scalar(scalar) => {
                 has_null_scalar |= scalar.is_null();
