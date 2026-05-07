@@ -442,7 +442,7 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
                     && (!DataType::is_nested(return_type)
                         || self.is_nested_type_supported(return_type))
                 {
-                    // try to resolve all field name arguments to strinrg literals
+                    // try to resolve all field name arguments to string literals
                     // if any argument is not a string literal, we can not determine the exact
                     // leaf path so we fall back to reading the entire struct root column
                     let field_path = args[1..]
@@ -766,11 +766,7 @@ fn resolve_struct_field_leaves(
 
             // A leaf matches if its path starts with our prefix.
             // e.g., prefix=["s", "value"] matches leaf path ["s", "value"]
-            // prefix=["s", "outer"] matches ["s", "outer", "inner"]
-
-            // a leaf matches if its path starts with our prefix
-            // for example: prefix=["s", "value"] matches leaf path ["s", "value"]
-            //              prefix=["s", "outer"] matches ["s", "outer", "inner"]
+            //       prefix=["s", "outer"] matches ["s", "outer", "inner"]
             let leaf_matches_path = col_path.len() >= prefix.len()
                 && col_path.iter().zip(prefix.iter()).all(|(a, b)| a == b);
 
@@ -1523,9 +1519,8 @@ mod test {
     }
 
     /// Regression test: when a schema has Struct columns, Arrow field indices diverge
-    /// from Parquet leaf indices (Struct children become separate leaves). The
-    /// `PrimitiveOnly` fast-path in `leaf_indices_for_roots` assumes they are equal,
-    /// so a filter on a primitive column *after* a Struct gets the wrong leaf index.
+    /// from Parquet leaf indices (Struct children become separate leaves).
+    /// A filter on a primitive column *after* a Struct must use the correct leaf index.
     ///
     /// Schema:
     ///   Arrow indices:   col_a=0  struct_col=1  col_b=2
@@ -2045,7 +2040,7 @@ mod test {
             ),
         );
 
-        // all3 Parquet leaves should be in the projection mask
+        // all 3 Parquet leaves should be in the projection mask
         let expected_mask = ProjectionMask::leaves(schema_descr, [0, 1, 2]);
         assert_eq!(read_plan.projection_mask, expected_mask,);
     }
