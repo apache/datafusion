@@ -1394,8 +1394,10 @@ FROM (
 3
 3
 
-# Counterexample with data-dependent empty/null arrays: current unnest semantics drop
-# rows for the empty and NULL arrays in this dataset. Removing UNNEST would return ids 2 and 3 too.
+# Counterexample with data-dependent empty/null arrays: current select-list
+# UNNEST semantics drop rows for the empty and NULL arrays in this dataset.
+# This documents the preserve-nulls/cardinality contract that follow-up optimizer
+# rules must preserve; removing UNNEST here would return ids 2 and 3 too.
 query II rowsort
 SELECT id, elem
 FROM (
