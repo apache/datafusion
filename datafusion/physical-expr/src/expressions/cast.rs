@@ -406,7 +406,7 @@ pub fn cast_with_target_field(
         return Ok(Arc::clone(&expr));
     }
 
-    let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
+    let can_build_cast = if requires_nested_struct_cast(expr_type, cast_type) {
         // Allow casts involving structs (including nested inside Lists, Dictionaries,
         // etc.) that pass name-based compatibility validation. This validation is
         // applied at planning time (now) to fail fast, rather than deferring errors
@@ -414,9 +414,9 @@ pub fn cast_with_target_field(
         // via ColumnarValue::cast_to.
         // TODO: we can pass the cast extension here if we will end up using it for
         // the nested casting
-        can_cast_named_struct_types(&expr_type, cast_type, None)
+        can_cast_named_struct_types(expr_type, cast_type, None)
     } else {
-        can_cast_types(&expr_type, cast_type)
+        can_cast_types(expr_type, cast_type)
     };
 
     let source_fmt = format_type_and_metadata(expr_type, Some(expr_field.metadata()));
