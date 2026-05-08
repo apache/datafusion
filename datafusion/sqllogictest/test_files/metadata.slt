@@ -225,9 +225,9 @@ SELECT
     arrow_metadata(CAST(ts AS DATE), 'metadata_key')
 FROM table_with_metadata;
 ----
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
+2020-09-08 ts NULL
+2020-09-08 ts NULL
+2020-09-08 ts NULL
 
 # CAST should not preserve metadata on integer column
 query IT
@@ -244,7 +244,7 @@ NULL NULL
 query ?
 select arrow_metadata(CAST(id AS BIGINT)) from table_with_metadata limit 1;
 ----
-NULL
+{}
 
 # Regression test: distinct with cast
 query D

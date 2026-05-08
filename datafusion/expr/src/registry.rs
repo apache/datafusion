@@ -607,7 +607,7 @@ impl ExtensionTypeRegistry for MemoryExtensionTypeRegistry {
             .can_cast_fields(source_field, target_field)
             .unwrap_or(false)
         {
-            Some(self.cast_extensions.clone())
+            Some(Arc::clone(&self.cast_extensions) as Arc<dyn CastExtension>)
         } else {
             None
         }
