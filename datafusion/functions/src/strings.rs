@@ -582,9 +582,6 @@ pub(crate) const STRING_VIEW_INIT_BLOCK_SIZE: u32 = 8 * 1024;
 pub(crate) const STRING_VIEW_MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
 
 /// Append-only writer handed to closures passed to `append_with`.
-///
-/// Writes are committed without per-row heap allocation; the builder
-/// finalizes the row when the closure returns.
 pub(crate) trait StringWriter {
     fn write_str(&mut self, s: &str);
 
@@ -613,11 +610,9 @@ impl StringWriter for GenericStringWriter<'_> {
     }
 }
 
-/// Write `bytes` into `value_buffer`. For runtime lengths, `copy_nonoverlapping`
-/// emits a `_memcpy` call regardless of how small the copy is — and the call
-/// dispatch dominates the actual byte movement for tiny writes. The match on
-/// small sizes lets LLVM inline `copy_nonoverlapping` with a compile-time
-/// constant length, which lowers to direct loads/stores.
+/// Write `bytes` into `value_buffer`. For repeated small writes,
+/// MutableBuffer::extend_from_slice is quite slow (memcpy per call), so we
+/// extend the buffer here directly.
 #[inline(always)]
 fn push_bytes_to_mutable_buffer(value_buffer: &mut MutableBuffer, bytes: &[u8]) {
     let n = bytes.len();
@@ -1026,11 +1021,6 @@ pub(crate) trait BulkNullStringArrayBuilder {
     fn append_with<F>(&mut self, f: F)
     where
         F: for<'a> FnOnce(&mut Self::Writer<'a>);
-    /// # Safety
-    ///
-    /// See [`StringViewArrayBuilder::append_byte_map`] /
-    /// [`GenericStringArrayBuilder::append_byte_map`] — the bytes produced
-    /// by `map` over `src.iter()` must form valid UTF-8.
     unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F);
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef>;
 }
