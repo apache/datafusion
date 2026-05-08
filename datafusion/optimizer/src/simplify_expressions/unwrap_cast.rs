@@ -187,19 +187,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
     true
 }
 
-/// Tries to move a cast from an expression (such as column) to the literal other side of a comparison operator.
-///
-/// Specifically, rewrites
-/// ```sql
-/// cast(col) <op> <literal>
-/// ```
-///
-/// To
-///
-/// ```sql
-/// col <op> cast(<literal>)
-/// col <op> <casted_literal>
-/// ```
+/// Tries to move a cast from an expression to the literal side of a comparison.
 fn comparison_unwrap_literal(
     lit_value: &ScalarValue,
     from_type: &DataType,
@@ -268,19 +256,15 @@ mod tests {
         let expected = col("c1").lt(lit(16i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
-        // cast(c2, INT32) = INT32(16) is not safe to unwrap because the
-        // Int64 source domain is wider than Int32. Out-of-range source values
-        // would fail or produce NULL before comparison rather than `false`.
+        // Int64 source domain is wider than Int32.
         let c2_eq_lit = cast(col("c2"), DataType::Int32).eq(lit(16i32));
         assert_eq!(optimize_test(c2_eq_lit.clone(), &schema), c2_eq_lit);
 
-        // cast(c1, UINT32) = UINT32(16) is not safe to unwrap because Int32
-        // contains negative values that are outside the UInt32 target domain.
+        // Int32 contains negative values outside the UInt32 target domain.
         let c1_eq_lit = cast(col("c1"), DataType::UInt32).eq(lit(16u32));
         assert_eq!(optimize_test(c1_eq_lit.clone(), &schema), c1_eq_lit);
 
-        // cast(c8, INT64) < INT64(16) is not safe to unwrap because UInt64 has
-        // values above Int64::MAX.
+        // UInt64 has values above Int64::MAX.
         let c8_lt_lit = cast(col("c8"), DataType::Int64).lt(lit(16i64));
         assert_eq!(optimize_test(c8_lt_lit.clone(), &schema), c8_lt_lit);
 
@@ -397,8 +381,7 @@ mod tests {
             cast(col("c1"), DataType::Decimal128(10, 2)).eq(lit_decimal(1230, 10, 2));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
-        // Int64 to Decimal(10, 2) is partial because the decimal target cannot
-        // represent the full Int64 domain after scaling.
+        // Decimal(10, 2) cannot represent the scaled Int64 domain.
         let expr_lt =
             cast(col("c2"), DataType::Decimal128(10, 2)).lt(lit_decimal(12300, 10, 2));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
@@ -407,8 +390,7 @@ mod tests {
     #[test]
     fn test_unwrap_cast_with_decimal_lit_comparison() {
         let schema = expr_test_schema();
-        // decimal with fractional scale to integer is lossy. Keep the casted
-        // predicate intact instead of unwrapping it to a raw decimal comparison.
+        // Fractional decimal -> integer is lossy.
         let expr_lt = try_cast(col("c3"), DataType::Int64).lt(lit(16i64));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
@@ -417,28 +399,22 @@ mod tests {
         let expected = null_bool();
         assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
 
-        // decimal scale downcast is lossy. Keep the casted predicate intact
-        // instead of unwrapping it to a raw decimal comparison.
+        // Decimal scale downcast is lossy.
         let expr_lt =
             cast(col("c3"), DataType::Decimal128(10, 0)).lt(lit_decimal(123, 10, 0));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
-        // Increasing scale can still be unsafe when it reduces the number of
-        // integer digits. Keep the casted predicate intact instead of
-        // unwrapping Decimal(18, 2) to the narrower Decimal(10, 3) domain.
+        // Increasing scale can still reduce the integer range.
         let expr_lt =
             cast(col("c3"), DataType::Decimal128(10, 3)).lt(lit_decimal(1230, 10, 3));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
-        // integer to decimal is only safe to unwrap when the decimal target can
-        // represent the full source integer domain. Decimal(10, 2) cannot hold
-        // every Int32 value after scaling, so keep the casted predicate intact.
+        // Decimal(10, 2) cannot hold the scaled Int32 domain.
         let expr_lt =
             cast(col("c1"), DataType::Decimal128(10, 2)).lt(lit_decimal(12300, 10, 2));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
-        // Decimal(12, 2) can represent the full Int32 domain, so the cast can
-        // be safely moved to the literal.
+        // Decimal(12, 2) can hold the scaled Int32 domain.
         let expr_lt =
             cast(col("c1"), DataType::Decimal128(12, 2)).lt(lit_decimal(12300, 12, 2));
         let expected = col("c1").lt(lit(123i32));
@@ -490,9 +466,7 @@ mod tests {
             false,
         );
         assert_eq!(optimize_test(expr_lt, &schema), expected);
-        // INT32(C2) IN (INT64(NULL),INT64(24),INT64(34),INT64(56),INT64(78))
-        // is not safe to unwrap because C2 is Int64 and the cast target Int32
-        // cannot represent the full source domain.
+        // Int32 cannot represent the full Int64 source domain.
         let expr_lt = cast(col("c2"), DataType::Int32).in_list(
             vec![null_i32(), lit(24i32), lit(34i64), lit(56i64), lit(78i64)],
             false,
@@ -591,9 +565,7 @@ mod tests {
     fn test_not_unwrap_cast_with_timestamp_precision_downcast() {
         let schema = expr_test_schema();
 
-        // Casting nanoseconds to milliseconds loses precision. Unwrapping
-        // `CAST(ts AS timestamp(ms)) = literal_ms` to `ts = literal_ns` would
-        // narrow the predicate and change semantics.
+        // Nanoseconds -> milliseconds loses precision.
         for op in [
             Operator::Eq,
             Operator::NotEq,
@@ -674,16 +646,12 @@ mod tests {
     fn test_not_unwrap_cast_with_lossy_decimal_precision_casts() {
         let schema = expr_test_schema();
 
-        // Casting Decimal(18, 2) to Decimal(18, 1) loses fractional precision.
-        // Unwrapping equality to an exact Decimal(18, 2) literal would narrow
-        // the predicate instead of preserving the decimal bucket semantics.
+        // Decimal scale downcast loses fractional precision.
         let expr =
             cast(col("c3"), DataType::Decimal128(18, 1)).eq(lit_decimal(123, 18, 1));
         assert_eq!(optimize_test(expr.clone(), &schema), expr);
 
-        // Keeping the same scale but reducing precision narrows the representable
-        // integer range, so successful casts are not equivalent to the original
-        // Decimal(18, 2) domain.
+        // Precision downcast narrows the integer range.
         let precision_downcast =
             cast(col("c3"), DataType::Decimal128(10, 2)).eq(lit_decimal(12345, 10, 2));
         assert_eq!(
@@ -763,7 +731,7 @@ mod tests {
     fn test_not_unwrap_cast_with_lossy_float_casts() {
         let schema = expr_test_schema();
 
-        // Float64 to Float32 loses precision, so keep the casted predicate.
+        // Float64 -> Float32 loses precision.
         let float_precision_downcast =
             cast(col("c7"), DataType::Float32).eq(lit(ScalarValue::Float32(Some(1.25))));
         assert_eq!(
@@ -771,7 +739,7 @@ mod tests {
             float_precision_downcast
         );
 
-        // Float32 to integer truncates fractional values and is many-to-one.
+        // Float32 -> integer is lossy.
         let float_to_integer = cast(col("c5"), DataType::Int32).lt(lit(1i32));
         assert_eq!(
             optimize_test(float_to_integer.clone(), &schema),

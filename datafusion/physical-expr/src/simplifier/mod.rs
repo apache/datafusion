@@ -147,19 +147,16 @@ mod tests {
         let schema = test_schema();
         let simplifier = PhysicalExprSimplifier::new(&schema);
 
-        // Create: cast(c1 as INT64) != INT64(99)
         let column_expr = col("c1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
         let literal_expr = lit(ScalarValue::Int64(Some(99)));
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::NotEq, literal_expr));
 
-        // Apply full simplification (uses TreeNodeRewriter)
         let optimized = simplifier.simplify(binary_expr).unwrap();
 
         let optimized_binary = as_binary(&optimized);
 
-        // Should be optimized to: c1 != INT32(99) (c1 is INT32, literal cast to match)
         let left_expr = optimized_binary.left();
         assert!(
             left_expr.downcast_ref::<CastExpr>().is_none()
@@ -174,7 +171,6 @@ mod tests {
         let schema = test_schema();
         let simplifier = PhysicalExprSimplifier::new(&schema);
 
-        // Create nested expression: (cast(c1 as INT64) > INT64(5)) OR (cast(c2 as INT32) <= INT32(10))
         let c1_expr = col("c1", &schema).unwrap();
         let c1_cast = Arc::new(CastExpr::new(c1_expr, DataType::Int64, None));
         let c1_literal = lit(ScalarValue::Int64(Some(5)));
@@ -187,12 +183,10 @@ mod tests {
 
         let or_expr = Arc::new(BinaryExpr::new(c1_binary, Operator::Or, c2_binary));
 
-        // Apply simplification
         let optimized = simplifier.simplify(or_expr).unwrap();
 
         let or_binary = as_binary(&optimized);
 
-        // Verify left side: c1 > INT32(5)
         let left_binary = as_binary(or_binary.left());
         let left_left_expr = left_binary.left();
         assert!(
@@ -202,7 +196,7 @@ mod tests {
         let left_literal = as_literal(left_binary.right());
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(5)));
 
-        // Verify right side keeps the source-domain-reducing cast: cast(c2 as INT32) <= INT32(10)
+        // The Int64 -> Int32 cast still narrows the source domain.
         let right_binary = as_binary(or_binary.right());
         let right_left_expr = right_binary.left();
         assert!(right_left_expr.downcast_ref::<CastExpr>().is_some());

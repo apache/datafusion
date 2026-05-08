@@ -88,29 +88,15 @@ fn is_date_type(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Date32 | DataType::Date64)
 }
 
-/// Returns true when unwrapping a date/timestamp cast could change comparison
-/// semantics.
-///
-/// A `Date` stores only a calendar day, while a `Timestamp` stores a specific
-/// instant or wall-clock time. `Timestamp -> Date` is lossy because it drops the
-/// time-of-day. `Date -> Timestamp` is also lossy in this optimizer context
-/// because there is no unique inverse: converting a date to a timestamp has to
-/// invent a time component such as midnight.
-///
-/// For example, `CAST(ts AS DATE) = DATE '2024-01-01'` means "any timestamp
-/// during that day", but unwrapping it to `ts = TIMESTAMP '2024-01-01
-/// 00:00:00'` matches only midnight.
+/// Returns true when date/temporal casts can change comparison semantics.
+/// Date casts drop or invent a time component, so they have no exact inverse.
 fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     (is_date_type(from_type) && to_type.is_temporal())
         || (is_date_type(to_type) && from_type.is_temporal())
 }
 
-/// Rewrite produced when a comparison against a cast expression can be safely
-/// unwrapped.
-///
-/// Currently only simple literal rewrites are supported. Future variants may
-/// represent guarded/preimage rewrites for source-domain narrowing casts, but
-/// they must preserve NULL and cast-error semantics in non-filter contexts.
+/// Rewrite produced when a casted comparison can be safely unwrapped.
+/// Currently this supports only simple literal rewrites.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CastComparisonRewrite {
     /// Replace `CAST(expr AS to_type) <op> literal` with
@@ -127,14 +113,9 @@ impl CastComparisonRewrite {
     }
 }
 
-/// Tries to rewrite a comparison literal so a cast can be removed from the
-/// expression side of the comparison.
-///
-/// This helper intentionally takes the comparison operator and literal value,
-/// not just the source and cast types. Literal-dependent cases such as
-/// `CAST(int_col AS Utf8) = '123'` require a round-trip check, while lossy or
-/// partial casts such as integer narrowing still cannot be represented by a
-/// simple literal rewrite.
+/// Tries to rewrite the literal so a cast can be removed from the expression.
+/// Operator and literal checks are needed for round-trips such as
+/// `CAST(int_col AS Utf8) = '123'`; lossy or partial casts are rejected.
 pub fn try_cast_literal_for_comparison_unwrap(
     lit_value: &ScalarValue,
     from_type: &DataType,
@@ -168,20 +149,9 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
     )
 }
 
-/// Returns true when a cast is unsafe for a simple single-literal comparison
-/// unwrap based on the source and cast domains alone.
-///
-/// This is intentionally a type-level check. A literal may cast back into the
-/// source type while the cast still narrows the set of source values that have
-/// defined comparison semantics. For example, `10` can be cast to `Int64`, but
-/// `TRY_CAST(i64_col AS Int32) < 10` cannot be simplified to `i64_col < 10`:
-/// source values below `Int32::MIN` would become `NULL` before the comparison,
-/// while the unwrapped predicate would match them. Preserving that case would
-/// require a guarded or preimage rewrite, not the simple `Literal` rewrite this
-/// API currently returns.
-///
-/// Literal-dependent checks, such as exact numeric casts or string round-trips,
-/// are performed by `try_cast_literal_for_comparison_unwrap` after this guard.
+/// Returns true when source/cast domains make a simple literal rewrite unsafe.
+/// Partial casts need guarded/preimage rewrites to preserve NULL and cast-error
+/// semantics; literal-specific checks run after this guard.
 fn is_cast_unsafe_for_simple_comparison_unwrap(
     from_type: &DataType,
     to_type: &DataType,
@@ -1042,9 +1012,7 @@ mod tests {
 
     #[test]
     fn test_temporal_precision_downcast_guard() {
-        // Duration and Time32/Time64 are not currently public unwrap-supported
-        // types, but this locks the shared precision guard behavior if future
-        // changes add support for them.
+        // Lock precision guard behavior for temporal types not yet unwrap-supported.
         assert!(is_temporal_precision_downcast(
             &DataType::Duration(TimeUnit::Nanosecond),
             &DataType::Duration(TimeUnit::Millisecond)
