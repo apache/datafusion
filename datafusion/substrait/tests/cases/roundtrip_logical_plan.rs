@@ -1897,20 +1897,7 @@ async fn roundtrip_placeholder_typed_utf8() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
-    let mut ctx = create_context().await?;
-
-    ctx.register_higher_order_function(Arc::new(ArrayTransform::new()))
-        .unwrap();
-
-    let data3_fields = vec![
-        Field::new("p1", DataType::Int64, true), // lambda parameters should not conflict with this column
-    ];
-    let data3 = Schema::new(data3_fields);
-    let mut data3_options = CsvReadOptions::new();
-    data3_options.schema = Some(&data3);
-    data3_options.has_header = false;
-    ctx.register_csv("data3", "tests/testdata/empty.csv", data3_options)
-        .await?;
+    let ctx = higher_order_function_ctx().await?;
 
     // simple
     roundtrip_with_ctx(
@@ -1951,26 +1938,12 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
     roundtrip_with_ctx("SELECT array_transform2([[data3.p1]], p0 -> array_transform2(p0, p2 -> p2 * 2)) from data3", ctx.clone())
         .await?;
 
-    // there's no support for lambda capturing columns or variables of outer lambdas yet so assert the plans instead of round tripping
-    // also, since substrait doesn't encode lambda parameters names, they got generated, non-conflicting names during consumption
-    // testing name shadowing requires to assert against the generated plan and check the correct parameter usage instead of round tripping
-
     // nested with multiple parameters without variable shadowing
-    let plan = generate_plan_from_sql_with_ctx(
-        "SELECT array_transform2([[data3.p1]], (a, ai) -> array_transform2(a, (v, vi) -> ai * v * vi)) from data3",
-        true,
-        true,
-        &ctx,
-    )
-    .await?;
+    roundtrip_with_ctx("SELECT array_transform2([[data3.p1]], (p0, p2) -> array_transform2(p0, (p3, p4) -> p2 * p3 * p4)) from data3", ctx.clone())
+        .await?;
 
-    assert_snapshot!(
-    plan,
-    @"
-    Projection: array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_transform2(p0, (p3, p4) -> p2 * p3 * p4)) AS array_transform2(make_array(make_array(data3.p1)),(a, ai) -> array_transform2(a,(v, vi) -> ai * v * vi))
-      TableScan: data3 projection=[p1]
-    "
-    );
+    // since substrait doesn't encode lambda parameters names, they got generated, non-conflicting names during consumption
+    // testing name shadowing requires to assert against the generated plan and check the correct parameter usage instead of round tripping
 
     // nested with variable shadowing.
     let plan = generate_plan_from_sql_with_ctx(
@@ -2034,14 +2007,33 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn higher_order_function_ctx() -> Result<SessionContext> {
+    let mut ctx = create_context().await?;
+
+    ctx.register_higher_order_function(Arc::new(ArrayTransform::new()))
+        .unwrap();
+
+    let data3_fields = vec![
+        Field::new("p1", DataType::Int64, true), // lambda parameters should not conflict with this column
+    ];
+    let data3 = Schema::new(data3_fields);
+    let mut data3_options = CsvReadOptions::new();
+    data3_options.schema = Some(&data3);
+    data3_options.has_header = false;
+    ctx.register_csv("data3", "tests/testdata/empty.csv", data3_options)
+        .await?;
+
+    Ok(ctx)
+}
+
 // todo use core array_transform when it supports multiple lambda parameters
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ArrayTransform {
+struct ArrayTransform {
     signature: HigherOrderSignature,
 }
 
 impl ArrayTransform {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
         }
