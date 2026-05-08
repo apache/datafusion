@@ -1054,6 +1054,24 @@ pub struct SessionStateBuilder {
     physical_optimizer_rules: Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
 }
 
+fn collect_registry_values_by_canonical_name<T: ?Sized, F>(
+    entries: HashMap<String, Arc<T>>,
+    canonical_name: F,
+) -> Vec<Arc<T>>
+where
+    F: Fn(&Arc<T>) -> String,
+{
+    let mut canonical_entries = entries
+        .into_iter()
+        .filter(|(key, value)| key == &canonical_name(value))
+        .collect_vec();
+    canonical_entries.sort_unstable_by(|(key_a, _), (key_b, _)| key_a.cmp(key_b));
+    canonical_entries
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect()
+}
+
 impl SessionStateBuilder {
     /// Returns a new empty [`SessionStateBuilder`].
     ///
@@ -1132,14 +1150,22 @@ impl SessionStateBuilder {
             query_planner: Some(existing.query_planner),
             catalog_list: Some(existing.catalog_list),
             table_functions: Some(existing.table_functions),
-            scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
-            higher_order_functions: Some(
-                existing.higher_order_functions.into_values().collect_vec(),
-            ),
-            aggregate_functions: Some(
-                existing.aggregate_functions.into_values().collect_vec(),
-            ),
-            window_functions: Some(existing.window_functions.into_values().collect_vec()),
+            scalar_functions: Some(collect_registry_values_by_canonical_name(
+                existing.scalar_functions,
+                |udf| udf.name().to_string(),
+            )),
+            higher_order_functions: Some(collect_registry_values_by_canonical_name(
+                existing.higher_order_functions,
+                |udf| udf.name().to_string(),
+            )),
+            aggregate_functions: Some(collect_registry_values_by_canonical_name(
+                existing.aggregate_functions,
+                |udaf| udaf.name().to_string(),
+            )),
+            window_functions: Some(collect_registry_values_by_canonical_name(
+                existing.window_functions,
+                |udwf| udwf.name().to_string(),
+            )),
             extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
@@ -2368,6 +2394,7 @@ mod tests {
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
+    use itertools::Itertools;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2526,6 +2553,60 @@ mod tests {
             state.optimizers().len(),
             Optimizer::default().rules.len() + 1
         );
+    }
+
+    #[test]
+    fn test_new_from_existing_deduplicates_and_sorts_function_registries() {
+        let state = SessionStateBuilder::new().with_default_features().build();
+        let builder = SessionStateBuilder::new_from_existing(state.clone());
+
+        let scalar_names = builder
+            .scalar_functions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|udf| udf.name().to_string())
+            .collect_vec();
+        let mut expected_scalar_names = state
+            .scalar_functions
+            .iter()
+            .filter(|(key, udf)| *key == udf.name())
+            .map(|(key, _)| key.to_string())
+            .collect_vec();
+        expected_scalar_names.sort_unstable();
+        assert_eq!(scalar_names, expected_scalar_names);
+
+        let aggregate_names = builder
+            .aggregate_functions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|udaf| udaf.name().to_string())
+            .collect_vec();
+        let mut expected_aggregate_names = state
+            .aggregate_functions
+            .iter()
+            .filter(|(key, udaf)| *key == udaf.name())
+            .map(|(key, _)| key.to_string())
+            .collect_vec();
+        expected_aggregate_names.sort_unstable();
+        assert_eq!(aggregate_names, expected_aggregate_names);
+
+        let window_names = builder
+            .window_functions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|udwf| udwf.name().to_string())
+            .collect_vec();
+        let mut expected_window_names = state
+            .window_functions
+            .iter()
+            .filter(|(key, udwf)| *key == udwf.name())
+            .map(|(key, _)| key.to_string())
+            .collect_vec();
+        expected_window_names.sort_unstable();
+        assert_eq!(window_names, expected_window_names);
     }
 
     #[test]
