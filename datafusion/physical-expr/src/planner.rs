@@ -298,7 +298,7 @@ pub fn create_physical_expr(
             let (_, src_field) = expr.to_field(input_dfschema)?;
             let cast_extension =
                 if let Some(extension_types) = &execution_props.extension_types {
-                    extension_types.cast_extension(&src_field, &field)
+                    extension_types.cast_extension(&src_field, field)
                 } else {
                     None
                 };
