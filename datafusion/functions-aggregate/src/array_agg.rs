@@ -2198,26 +2198,32 @@ mod tests {
     #[test]
     fn retract_ignore_nulls_logical_vs_physical() -> Result<()> {
         // Regression test: DictionaryArray where logical nulls differ from physical nulls.
-        // Indices are all valid (physical null_count = 0) but some point to null
-        // dictionary values (logical_null_count > 0).
-        use arrow::array::StringDictionaryBuilder;
+        // Manually construct a DictionaryArray where all indices are valid
+        // (physical null_count = 0) but some point to null dictionary values
+        // (logical_null_count > 0).
+        use arrow::array::{DictionaryArray, Int32Array, StringArray};
 
         let dict_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let mut acc = ArrayAggAccumulator::try_new(&dict_type, true)?;
 
-        // Build a DictionaryArray: ["hello", NULL, "world", NULL]
-        // All indices valid → physical null_count = 0
-        // Indices 1,3 point to null → logical_null_count = 2
-        let mut builder = StringDictionaryBuilder::<arrow::datatypes::Int32Type>::new();
-        builder.append_value("hello");
-        builder.append_null();
-        builder.append_value("world");
-        builder.append_null();
-        let dict_array: ArrayRef = Arc::new(builder.finish());
+        // Dictionary values: ["hello", NULL, "world"]
+        // Keys: [0, 1, 2, 1] — all valid, but keys 1 and 3 point to null value
+        let values = StringArray::from(vec![Some("hello"), None, Some("world")]);
+        let keys = Int32Array::from(vec![0, 1, 2, 1]);
+        let dict_array: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
 
-        assert_eq!(dict_array.null_count(), 2);
-        assert_eq!(dict_array.logical_null_count(), 2);
+        // Confirm the divergence this test exists to exercise
+        assert_eq!(
+            dict_array.null_count(),
+            0,
+            "physical nulls: none in keys bitmap"
+        );
+        assert_eq!(
+            dict_array.logical_null_count(),
+            2,
+            "logical nulls: keys pointing to null values"
+        );
 
         // update_batch uses logical_nulls() → stores only ["hello", "world"]
         acc.update_batch(std::slice::from_ref(&dict_array))?;
@@ -2232,7 +2238,7 @@ mod tests {
             other => panic!("expected List, got {other:?}"),
         }
 
-        // retract_batch with same array: should retract 2 (not 4)
+        // retract_batch with same array: should retract 2 (logical non-nulls), not 4 (len) or 0 (physical non-nulls would be len-0=4)
         acc.retract_batch(&[dict_array])?;
         let result = acc.evaluate()?;
         assert!(
@@ -2245,27 +2251,41 @@ mod tests {
 
     #[test]
     fn retract_ignore_nulls_dict_partial() -> Result<()> {
-        // Partial retraction with DictionaryArray where logical != physical nulls
-        use arrow::array::StringDictionaryBuilder;
+        // Partial retraction with DictionaryArray where logical != physical nulls.
+        // Manually construct so keys are all valid but some point to null values.
+        use arrow::array::{DictionaryArray, Int32Array, StringArray};
 
         let dict_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let mut acc = ArrayAggAccumulator::try_new(&dict_type, true)?;
 
         // update with ["A", "B", "C"] (no nulls)
-        let mut builder = StringDictionaryBuilder::<arrow::datatypes::Int32Type>::new();
-        builder.append_value("A");
-        builder.append_value("B");
-        builder.append_value("C");
-        let update_array: ArrayRef = Arc::new(builder.finish());
+        let values = StringArray::from(vec!["A", "B", "C"]);
+        let keys = Int32Array::from(vec![0, 1, 2]);
+        let update_array: ArrayRef =
+            Arc::new(DictionaryArray::new(keys, Arc::new(values)));
         acc.update_batch(&[update_array])?;
 
-        // retract with ["A", NULL, NULL] — only 1 non-null logically
-        let mut builder = StringDictionaryBuilder::<arrow::datatypes::Int32Type>::new();
-        builder.append_value("A");
-        builder.append_null();
-        builder.append_null();
-        let retract_array: ArrayRef = Arc::new(builder.finish());
+        // retract with dict ["A", NULL, NULL]:
+        //   keys [0, 1, 1] all valid → physical null_count = 0
+        //   keys 1,2 point to null value → logical_null_count = 2
+        //   non-null count = 3 - 2 = 1 → retract 1 element
+        let values = StringArray::from(vec![Some("A"), None]);
+        let keys = Int32Array::from(vec![0, 1, 1]);
+        let retract_array: ArrayRef =
+            Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+
+        assert_eq!(
+            retract_array.null_count(),
+            0,
+            "physical nulls: none in keys bitmap"
+        );
+        assert_eq!(
+            retract_array.logical_null_count(),
+            2,
+            "logical nulls: keys pointing to null values"
+        );
+
         acc.retract_batch(&[retract_array])?;
 
         // Should have retracted only 1 element, leaving ["B", "C"]
