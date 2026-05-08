@@ -28,7 +28,6 @@ use arrow_schema::extension::{
     VariableShapeTensor,
 };
 use datafusion_common::nested_struct::{CastExtension, VecCastExtension};
-use datafusion_common::types::uuid::{CastFromUuid, CastToUuid};
 use datafusion_common::types::{
     DFBool8, DFExtensionTypeRef, DFFixedShapeTensor, DFJson, DFOpaque,
     DFTimestampWithOffset, DFUuid, DFVariableShapeTensor,
@@ -517,10 +516,7 @@ impl MemoryExtensionTypeRegistry {
             ),
         ];
 
-        let cast_extensions = vec![
-            Arc::new(CastFromUuid {}) as Arc<dyn CastExtension>,
-            Arc::new(CastToUuid {}) as Arc<dyn CastExtension>,
-        ];
+        let cast_extensions = DFUuid::cast_extensions();
 
         let mut extension_types = HashMap::new();
         for registration in mapping.into_iter() {

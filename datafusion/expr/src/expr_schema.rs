@@ -73,17 +73,21 @@ pub trait ExprSchemable {
 /// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
 fn cast_output_field(
     source_field: &FieldRef,
-    target_type: &DataType,
+    target_field: &FieldRef,
     force_nullable: bool,
 ) -> Arc<Field> {
-    let mut f = source_field
+    // Do not propagate metadata through casts because extension metadata (1)
+    // should be derived from the target_field and (2) source extension metadata
+    // may become non-sensical if applied to an unrelated storage output type.
+    let mut f = target_field
         .as_ref()
         .clone()
-        .with_data_type(target_type.clone())
-        .with_metadata(source_field.metadata().clone());
+        .with_nullable(source_field.is_nullable());
+
     if force_nullable {
         f = f.with_nullable(true);
     }
+
     Arc::new(f)
 }
 
@@ -594,21 +598,16 @@ impl ExprSchemable for Expr {
 
                 func.return_field_from_args(args)
             }
-            // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), false)
-                })
-            }
+            Expr::Cast(Cast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, false)),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
-            Expr::TryCast(TryCast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), true)
-                })
-            }
+            Expr::TryCast(TryCast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, true)),
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),

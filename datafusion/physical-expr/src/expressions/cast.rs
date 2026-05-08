@@ -233,6 +233,7 @@ pub(crate) fn cast_expr_properties(
     child: &ExprProperties,
     target_type: &DataType,
 ) -> Result<ExprProperties> {
+    // TODO check the cast extension for this property
     let unbounded = Interval::make_unbounded(target_type)?;
     if is_order_preserving_cast_family(&child.range.data_type(), target_type) {
         Ok(child.clone().with_range(unbounded))
@@ -292,6 +293,8 @@ impl PhysicalExpr for CastExpr {
                 }
             }
         } else {
+            // TODO: this should use the struct casting directly so we can pass on the
+            // cast extension
             value.cast_to(self.cast_type(), Some(&self.cast_options))
         }
     }
@@ -318,6 +321,7 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         // Cast current node's interval to the right type:
+        // TODO: check the cast extension or cast the interval
         children[0].cast_to(self.cast_type(), &self.cast_options)
     }
 
@@ -326,6 +330,7 @@ impl PhysicalExpr for CastExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
+        // Check cast extension for this
         let child_interval = children[0];
         // Get child's datatype:
         let cast_type = child_interval.data_type();
@@ -416,7 +421,7 @@ pub fn cast_with_target_field(
 
     let source_fmt = format_type_and_metadata(expr_type, Some(expr_field.metadata()));
     let target_fmt =
-        format_type_and_metadata(target_field.data_type(), Some(expr_field.metadata()));
+        format_type_and_metadata(target_field.data_type(), Some(target_field.metadata()));
     if !can_build_cast {
         return not_impl_err!("Unsupported CAST from {source_fmt} to {target_fmt}");
     }

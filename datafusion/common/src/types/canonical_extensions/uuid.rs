@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::Result;
-use crate::cast::{as_fixed_size_binary_array, as_string_array};
+use crate::cast::as_string_array;
 use crate::error::{_exec_err, _internal_err};
 use crate::nested_struct::CastExtension;
+use crate::types::DefaultExtensionCast;
 use crate::types::extension::DFExtensionType;
 use arrow::array::{
-    Array, ArrayRef, FixedSizeBinaryArray, StringBuilder, builder::FixedSizeBinaryBuilder,
+    Array, ArrayRef, FixedSizeBinaryArray, builder::FixedSizeBinaryBuilder,
 };
 use arrow::compute::{CastOptions, cast};
 use arrow::datatypes::DataType;
@@ -52,6 +53,13 @@ impl DFUuid {
     ) -> Result<Self> {
         Ok(Self(<Uuid as ExtensionType>::try_new(data_type, metadata)?))
     }
+
+    pub fn cast_extensions() -> Vec<Arc<dyn CastExtension>> {
+        vec![
+            Arc::new(DefaultExtensionCast::new(Uuid::NAME)),
+            Arc::new(ParseUuid),
+        ]
+    }
 }
 
 impl DFExtensionType for DFUuid {
@@ -81,14 +89,6 @@ impl DFExtensionType for DFUuid {
             options.safe(),
         )))
     }
-
-    fn cast_from(&self) -> Result<Arc<dyn CastExtension>> {
-        Ok(Arc::new(CastToUuid {}))
-    }
-
-    fn cast_to(&self) -> Result<Arc<dyn CastExtension>> {
-        Ok(Arc::new(CastFromUuid {}))
-    }
 }
 
 /// Pretty printer for binary UUID values.
@@ -114,74 +114,24 @@ impl DisplayIndex for UuidValueDisplayIndex<'_> {
 }
 
 #[derive(Debug)]
-pub struct CastFromUuid {}
+pub struct ParseUuid;
 
-impl CastExtension for CastFromUuid {
-    fn can_cast_fields(&self, _from: &Field, to: &Field) -> Result<bool> {
-        if to.extension_type_name().is_some() {
+impl CastExtension for ParseUuid {
+    fn can_cast_fields(&self, from: &Field, to: &Field) -> Result<bool> {
+        if from.extension_type_name().is_some() {
             return Ok(false);
         }
 
-        match to.data_type() {
-            // Only explicit casts to string
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(true),
-            // Can implicitly cast to storage
-            DataType::FixedSizeBinary(16) => Ok(true),
-            _ => Ok(false),
+        if let Some(to_extension_name) = to.extension_type_name()
+            && to_extension_name == Uuid::NAME
+        {
+            Ok(matches!(
+                from.data_type(),
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+            ))
+        } else {
+            Ok(false)
         }
-    }
-
-    fn cast_array_fields(
-        &self,
-        value: &ArrayRef,
-        from: &Field,
-        to: &Field,
-        options: &CastOptions,
-    ) -> Result<ArrayRef> {
-        if !self.can_cast_fields(from, to)? {
-            return _internal_err!("Unhandled cast");
-        }
-
-        let storage = as_fixed_size_binary_array(&value)?;
-        match to.data_type() {
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-                if options.safe {
-                    return _exec_err!("Cast from string to UUID must be explicit");
-                }
-
-                let mut builder =
-                    StringBuilder::with_capacity(storage.len(), storage.len() * 36);
-                for bytes_opt in storage {
-                    match bytes_opt {
-                        Some(bytes) => {
-                            let bytes16 = Bytes::try_from(bytes).map_err(|e| {
-                                crate::DataFusionError::Execution(e.to_string())
-                            })?;
-                            let uuid = uuid::Uuid::from_bytes(bytes16);
-                            write!(builder, "{uuid}")?;
-                            builder.append_value("");
-                        }
-                        None => builder.append_null(),
-                    }
-                }
-
-                let string_array = Arc::new(builder.finish()) as ArrayRef;
-                return Ok(cast(&string_array, to.data_type())?);
-            }
-            DataType::FixedSizeBinary(16) => return Ok(value.clone()),
-            _ => {}
-        }
-
-        _internal_err!("Unexpected difference between can_cast()")
-    }
-}
-
-#[derive(Debug)]
-pub struct CastToUuid {}
-
-impl CastExtension for CastToUuid {
-    fn can_cast_fields(&self, from: &Field, to: &Field) -> Result<bool> {
-        CastFromUuid {}.can_cast_fields(to, from)
     }
 
     fn cast_array_fields(
