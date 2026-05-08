@@ -68,19 +68,17 @@ fn try_unwrap_cast_binary(
     if let (Some(literal), Some((inner_expr, cast_type))) = (
         binary.left().downcast_ref::<Literal>(),
         extract_cast_info(binary.right()),
-    ) {
-        if let Some(swapped_op) = binary.op().swap()
-            && binary.op().supports_propagation()
-            && let Some(unwrapped) = try_unwrap_cast_comparison(
-                Arc::clone(inner_expr),
-                cast_type,
-                literal.value(),
-                swapped_op,
-                schema,
-            )?
-        {
-            return Ok(Some(unwrapped));
-        }
+    ) && let Some(swapped_op) = binary.op().swap()
+        && binary.op().supports_propagation()
+        && let Some(unwrapped) = try_unwrap_cast_comparison(
+            Arc::clone(inner_expr),
+            cast_type,
+            literal.value(),
+            swapped_op,
+            schema,
+        )?
+    {
+        return Ok(Some(unwrapped));
     }
 
     Ok(None)
