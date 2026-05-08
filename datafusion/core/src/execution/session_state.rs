@@ -1395,7 +1395,7 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Sets the [`ExtensionTypeRegistry`](datafusion_expr::registry::ExtensionTypeRegistry).
+    /// Sets the [`ExtensionTypeRegistry`]
     pub fn with_extension_type_registry(
         mut self,
         registry: ExtensionTypeRegistryRef,
