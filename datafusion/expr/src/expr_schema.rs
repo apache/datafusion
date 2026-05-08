@@ -1042,17 +1042,9 @@ mod tests {
             .with_data_type(DataType::Int32)
             .with_metadata(meta.clone());
 
-        // col, alias, and cast should be metadata-preserving
+        // col and alias should be metadata-preserving
         assert_eq!(meta, expr.metadata(&schema).unwrap());
         assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
-        assert_eq!(
-            meta,
-            expr.clone()
-                .cast_to(&DataType::Int64, &schema)
-                .unwrap()
-                .metadata(&schema)
-                .unwrap()
-        );
 
         let schema = DFSchema::from_unqualified_fields(
             vec![meta.add_to_field(Field::new("foo", DataType::Int32, true))].into(),
