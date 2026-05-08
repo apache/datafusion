@@ -292,8 +292,7 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
             // Rebuild the buffer each iteration as `vectorized_equal_to` mutates
             // it, and without a fresh buffer all iterations after the first one
             // would not be meaningful.
-            let mut equal_to_buffer =
-                BooleanBufferBuilder::new(equal_to_results.len());
+            let mut equal_to_buffer = BooleanBufferBuilder::new(equal_to_results.len());
             for &v in &equal_to_results {
                 equal_to_buffer.append(v);
             }
