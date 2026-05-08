@@ -148,9 +148,11 @@ impl Unparser<'_> {
                 ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
-            Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if *op == Operator::IsDistinctFrom =>
-            {
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsDistinctFrom,
+                right,
+            }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
 
@@ -159,9 +161,11 @@ impl Unparser<'_> {
                     Box::new(r),
                 ))))
             }
-            Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if *op == Operator::IsNotDistinctFrom =>
-            {
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsNotDistinctFrom,
+                right,
+            }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
 
