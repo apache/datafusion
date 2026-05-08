@@ -45,6 +45,11 @@ use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::Session;
 use prost::Message;
 
+use stabby::str::Str as SStr;
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
+use tokio::runtime::Handle;
+
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;
@@ -56,10 +61,6 @@ use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
 use crate::util::FFI_Result;
 use crate::{df_result, sresult, sresult_return};
-use stabby::str::Str as SStr;
-use stabby::string::String as SString;
-use stabby::vec::Vec as SVec;
-use tokio::runtime::Handle;
 
 pub mod config;
 

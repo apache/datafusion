@@ -461,7 +461,6 @@ impl MemoryExtensionTypeRegistry {
     /// Pre-registers the [canonical extension types](https://arrow.apache.org/docs/format/CanonicalExtensions.html)
     /// in the extension type registry.
     pub fn new_with_canonical_extension_types() -> Self {
-        // Figure out what happened here
         let mapping = [
             ExtensionTypeRegistration::new_arc(
                 FixedShapeTensor::NAME,
