@@ -22,14 +22,18 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, Unnest};
+use arrow::compute::can_cast_types;
+use arrow::datatypes::FieldRef;
+
+use crate::expr::{Alias, Cast, Sort, Unnest};
+use crate::expr_schema::cast_subquery;
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
 use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, DFSchema, Result};
+use datafusion_common::{Column, DFSchema, ExprSchema, Result, plan_err};
 
 mod guarantees;
 pub use guarantees::GuaranteeRewriter;
@@ -252,11 +256,14 @@ fn coerce_exprs_for_schema(
         .into_iter()
         .enumerate()
         .map(|(idx, expr)| {
-            let new_type = dst_schema.field(idx).data_type();
+            let dst_field = dst_schema.field(idx);
+            let new_type = dst_field.data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
                     Expr::Alias(Alias { expr, name, .. }) => {
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                        // Use new_from_field to preserve metadata from dst_schema
+                        Ok(cast_to_field(*expr, Arc::clone(dst_field), src_schema)?
+                            .alias(name))
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
@@ -267,9 +274,18 @@ fn coerce_exprs_for_schema(
                             // (see: https://github.com/apache/datafusion/issues/18818)
                             Expr::Column(ref column) => {
                                 let name = column.name().to_owned();
-                                Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                                // Use new_from_field to preserve metadata from dst_schema
+                                Ok(cast_to_field(
+                                    expr,
+                                    Arc::clone(dst_field),
+                                    src_schema,
+                                )?
+                                .alias(name))
                             }
-                            _ => Ok(expr.cast_to(new_type, src_schema)?),
+                            _ => {
+                                // Use new_from_field to preserve metadata from dst_schema
+                                cast_to_field(expr, Arc::clone(dst_field), src_schema)
+                            }
                         }
                     }
                 }
@@ -278,6 +294,48 @@ fn coerce_exprs_for_schema(
             }
         })
         .collect::<Result<_>>()
+}
+
+// TODO: move to `ExprSchemable::cast_to_field`?
+
+/// Cast an expression to a target field, preserving field metadata.
+/// This is similar to `ExprSchemable::cast_to` but uses the full field
+/// (including metadata) rather than just the data type.
+fn cast_to_field(
+    expr: Expr,
+    target_field: FieldRef,
+    schema: &dyn ExprSchema,
+) -> Result<Expr> {
+    use arrow::datatypes::DataType;
+
+    let this_type = expr.get_type(schema)?;
+    let cast_to_type = target_field.data_type();
+    if &this_type == cast_to_type {
+        return Ok(expr);
+    }
+
+    // Special handling for struct-to-struct casts with name-based field matching
+    let can_cast = match (&this_type, cast_to_type) {
+        (DataType::Struct(_), DataType::Struct(_)) => {
+            // Always allow struct-to-struct casts; field matching happens at runtime
+            true
+        }
+        _ => can_cast_types(&this_type, cast_to_type),
+    };
+
+    if can_cast {
+        match expr {
+            Expr::ScalarSubquery(subquery) => {
+                Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
+            }
+            _ => Ok(Expr::Cast(Cast::new_from_field(
+                Box::new(expr),
+                target_field,
+            ))),
+        }
+    } else {
+        plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")
+    }
 }
 
 /// Recursively un-alias an expressions

@@ -1223,6 +1223,7 @@ fn coerce_union_schema_with_schema(
             );
         }
 
+        // TODO: this type coercsion was causing an issue in one of the benchmark bits
         // coerce data type and nullability for each field
         for (union_datatype, union_nullable, union_field_map, plan_field) in izip!(
             union_datatypes.iter_mut(),
