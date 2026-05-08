@@ -351,6 +351,8 @@ pub struct ExplainNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "2")]
     pub verbose: bool,
+    #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "3")]
+    pub format: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateNode {

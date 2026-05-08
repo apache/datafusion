@@ -229,6 +229,7 @@ message AnalyzeNode {
 message ExplainNode {
   LogicalPlanNode input = 1;
   bool verbose = 2;
+  datafusion_common.ExplainFormat format = 3;
 }
 
 message AggregateNode {

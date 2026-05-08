@@ -6197,12 +6197,20 @@ impl serde::Serialize for ExplainNode {
         if self.verbose {
             len += 1;
         }
+        if self.format != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ExplainNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
         if self.verbose {
             struct_ser.serialize_field("verbose", &self.verbose)?;
+        }
+        if self.format != 0 {
+            let v = super::datafusion_common::ExplainFormat::try_from(self.format)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.format)))?;
+            struct_ser.serialize_field("format", &v)?;
         }
         struct_ser.end()
     }
@@ -6216,12 +6224,14 @@ impl<'de> serde::Deserialize<'de> for ExplainNode {
         const FIELDS: &[&str] = &[
             "input",
             "verbose",
+            "format",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             Verbose,
+            Format,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6245,6 +6255,7 @@ impl<'de> serde::Deserialize<'de> for ExplainNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "verbose" => Ok(GeneratedField::Verbose),
+                            "format" => Ok(GeneratedField::Format),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6266,6 +6277,7 @@ impl<'de> serde::Deserialize<'de> for ExplainNode {
             {
                 let mut input__ = None;
                 let mut verbose__ = None;
+                let mut format__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -6280,11 +6292,18 @@ impl<'de> serde::Deserialize<'de> for ExplainNode {
                             }
                             verbose__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Format => {
+                            if format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("format"));
+                            }
+                            format__ = Some(map_.next_value::<super::datafusion_common::ExplainFormat>()? as i32);
+                        }
                     }
                 }
                 Ok(ExplainNode {
                     input: input__,
                     verbose: verbose__.unwrap_or_default(),
+                    format: format__.unwrap_or_default(),
                 })
             }
         }
