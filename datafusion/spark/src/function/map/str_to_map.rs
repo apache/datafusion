@@ -185,14 +185,13 @@ fn str_to_map_impl<'a, V: StringArrayType<'a> + Copy>(
     let num_rows = text_array.len();
 
     // Precompute combined null buffer from all input arrays.
-    // NullBuffer::union performs a bitmap-level AND, which is more efficient
-    // than checking per-row nullability inline.
-    let text_nulls = text_array.nulls().cloned();
-    let pair_nulls = pair_delim_array.and_then(|a| a.nulls().cloned());
-    let kv_nulls = kv_delim_array.and_then(|a| a.nulls().cloned());
-    let combined_nulls = [text_nulls.as_ref(), pair_nulls.as_ref(), kv_nulls.as_ref()]
-        .into_iter()
-        .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls));
+    // NullBuffer::union_many performs a bitmap-level AND, which is more
+    // efficient than checking per-row nullability inline.
+    let combined_nulls = NullBuffer::union_many([
+        text_array.nulls(),
+        pair_delim_array.as_ref().and_then(|a| a.nulls()),
+        kv_delim_array.as_ref().and_then(|a| a.nulls()),
+    ]);
 
     // Use field names matching map_type_from_key_value_types: "key" and "value"
     let field_names = MapFieldNames {

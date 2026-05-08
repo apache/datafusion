@@ -3814,6 +3814,71 @@ Simpsons Lisa 710 1
 Simpsons Marge 990 1
 Simpsons Bart 2010 1
 
+# Regression: when num_rows is not a multiple of n, the SQL standard requires the
+# first `num_rows mod n` buckets to be the larger ones. Earlier the formula
+# `i * n / num_rows` produced sizes 3,2,3,2 for NTILE(4) over 10 rows; the
+# correct sizes are 3,3,2,2.
+query I
+SELECT NTILE(4) OVER (ORDER BY column1)
+FROM (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10));
+----
+1
+1
+1
+2
+2
+2
+3
+3
+4
+4
+
+# 7 rows / 3 buckets -> sizes 3,2,2
+query I
+SELECT NTILE(3) OVER (ORDER BY column1)
+FROM (VALUES (1),(2),(3),(4),(5),(6),(7));
+----
+1
+1
+1
+2
+2
+3
+3
+
+# Same regression with PARTITION BY: every 10-row partition must produce 3,3,2,2.
+query III
+SELECT a, b,
+       NTILE(4) OVER (PARTITION BY a ORDER BY b) AS ntile_4
+FROM (VALUES
+        (0, 0), (0, 1), (0, 2), (0, 3), (0, 4),
+        (0, 5), (0, 6), (0, 7), (0, 8), (0, 9),
+        (1, 0), (1, 1), (1, 2), (1, 3), (1, 4),
+        (1, 5), (1, 6), (1, 7), (1, 8), (1, 9))
+     t(a, b)
+ORDER BY a, b;
+----
+0 0 1
+0 1 1
+0 2 1
+0 3 2
+0 4 2
+0 5 2
+0 6 3
+0 7 3
+0 8 4
+0 9 4
+1 0 1
+1 1 1
+1 2 1
+1 3 2
+1 4 2
+1 5 2
+1 6 3
+1 7 3
+1 8 4
+1 9 4
+
 # incorrect number of parameters for ntile
 query error DataFusion error: Execution error: NTILE requires a positive integer, but finds NULL
 SELECT
