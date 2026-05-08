@@ -56,7 +56,10 @@ impl DFUuid {
 
     pub fn cast_extensions() -> Vec<Arc<dyn CastExtension>> {
         vec![
-            Arc::new(DefaultExtensionCast::new(Uuid::NAME)),
+            Arc::new(
+                DefaultExtensionCast::new(Uuid::NAME)
+                    .with_default_cast_to_string(Some(Arc::new(DFUuid(Uuid)))),
+            ),
             Arc::new(ParseUuid),
         ]
     }
@@ -172,8 +175,6 @@ impl CastExtension for ParseUuid {
 
                 return Ok(Arc::new(builder.finish()));
             }
-            // Can implicitly cast from storage
-            DataType::FixedSizeBinary(16) => return Ok(value.clone()),
             _ => {}
         }
 

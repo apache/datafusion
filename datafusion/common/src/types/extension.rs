@@ -18,7 +18,7 @@
 use crate::error::{_exec_err, _internal_err, Result};
 use crate::metadata::format_type_and_metadata;
 use crate::nested_struct::CastExtension;
-use arrow::array::{Array, ArrayRef};
+use arrow::array::{Array, ArrayRef, StringBuilder};
 use arrow::compute::CastOptions;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::{DataType, Field};
@@ -112,6 +112,15 @@ impl DefaultExtensionCast {
         }
     }
 
+    pub fn with_default_cast_to_string(
+        mut self,
+        instance: Option<Arc<dyn DFExtensionType>>,
+    ) -> Self {
+        self.use_default_cast_to_string = true;
+        self.instance = instance;
+        self
+    }
+
     fn is_cast_to_storage(&self, from: &Field, to: &Field) -> bool {
         self.is_this_extension(from)
             && !Self::is_any_extension(to)
@@ -149,11 +158,34 @@ impl DefaultExtensionCast {
 
     fn default_cast_to_string(
         &self,
-        _value: &ArrayRef,
-        _to: &DataType,
+        value: &ArrayRef,
+        to: &DataType,
     ) -> Result<ArrayRef> {
-        // Use the array formatter
-        todo!()
+        let format_options = FormatOptions::default();
+
+        // Try to get a custom formatter from the extension type instance,
+        // otherwise fall back to the default formatter for the storage type
+        let formatter = if let Some(instance) = &self.instance {
+            match instance.create_array_formatter(value.as_ref(), &format_options)? {
+                Some(f) => f,
+                None => ArrayFormatter::try_new(value.as_ref(), &format_options)?,
+            }
+        } else {
+            ArrayFormatter::try_new(value.as_ref(), &format_options)?
+        };
+
+        // Format each value into a string type and cast to the target
+        let len = value.len();
+        let mut builder = StringBuilder::with_capacity(len, len * 16);
+        for i in 0..len {
+            if value.is_null(i) {
+                builder.append_null();
+            } else {
+                builder.append_value(formatter.value(i).to_string());
+            }
+        }
+
+        Ok(arrow::compute::cast(&builder.finish(), to)?)
     }
 }
 
@@ -192,11 +224,11 @@ impl CastExtension for DefaultExtensionCast {
         }
 
         if self.can_cast_to_storage && self.is_cast_to_storage(from, to) {
-            return Ok(value.clone());
+            return Ok(Arc::clone(value));
         }
 
         if self.can_cast_from_storage && self.is_cast_from_storage(from, to) {
-            return Ok(value.clone());
+            return Ok(Arc::clone(value));
         }
 
         if self.use_default_cast_to_string && self.is_cast_to_string(from, to) {
