@@ -34,7 +34,6 @@ use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
-use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter;
@@ -197,10 +196,6 @@ fn get_percent_rank_doc() -> &'static Documentation {
 }
 
 impl WindowUDFImpl for Rank {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }

@@ -1318,25 +1318,25 @@ statement error
 SELECT * EXCLUDE(a, a)
 FROM table1
 
-# if EXCEPT all the columns, query should still succeed but return empty
-statement ok
+# if EXCEPT all the columns, query should return an error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT(a, b, c, d)
 FROM table1
 
-# try zero column with LIMIT, 1 row but empty
-statement ok
+# try zero column with LIMIT, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (a, b, c, d)
 FROM table1
 LIMIT 1
 
-# try zero column with GROUP BY, 2 row but empty
-statement ok
+# try zero column with GROUP BY, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (a, b, c, d)
 FROM table1
 GROUP BY a
 
-# try zero column with WHERE, 1 row but empty
-statement ok
+# try zero column with WHERE, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (a, b, c, d)
 FROM table1
 WHERE a = 1
@@ -1352,15 +1352,15 @@ CREATE TABLE table2 (
   (1, 10, 100, 1000),
   (2, 20, 200, 2000);
 
-# try zero column with inner JOIN, 2 row but empty
-statement ok
+# try zero column with inner JOIN, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 WITH t1 AS (SELECT a AS t1_a FROM table1), t2 AS (SELECT a AS t2_a FROM table2)
 SELECT * EXCEPT (t1_a, t2_a)
 FROM t1
 JOIN t2 ON (t1_a = t2_a)
 
-# try zero column with more JOIN, 2 row but empty
-statement ok
+# try zero column with more JOIN, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (b1, b2)
 FROM (
   SELECT b AS b1 FROM table1
@@ -1369,8 +1369,8 @@ JOIN (
   SELECT b AS b2 FROM table2
 ) ON b1 = b2
 
-# try zero column with Window, 2 row but empty
-statement ok
+# try zero column with Window, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (a, b, row_num)
 FROM (
     SELECT

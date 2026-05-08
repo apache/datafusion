@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -153,7 +154,7 @@ impl From<Arc<dyn PhysicalExpr>> for ConstExpr {
         // By default, assume constant expressions are not same across partitions.
         // However, if we have a literal, it will have a single value that is the
         // same across all partitions.
-        let across = if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+        let across = if let Some(lit) = expr.downcast_ref::<Literal>() {
             AcrossPartitions::Uniform(Some(lit.value().clone()))
         } else {
             AcrossPartitions::Heterogeneous
@@ -201,7 +202,7 @@ impl EquivalenceClass {
     /// Insert the expression into this class, meaning it is known to be equal to
     /// all other expressions in this class.
     pub fn push(&mut self, expr: Arc<dyn PhysicalExpr>) {
-        if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(lit) = expr.downcast_ref::<Literal>() {
             let expr_across = AcrossPartitions::Uniform(Some(lit.value().clone()));
             if let Some(across) = self.constant.as_mut() {
                 // TODO: Return an error if constant values do not agree.
@@ -591,7 +592,7 @@ impl EquivalenceGroup {
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // Literals don't need to be projected
-        if expr.as_any().downcast_ref::<Literal>().is_some() {
+        if expr.downcast_ref::<Literal>().is_some() {
             return Some(Arc::clone(expr));
         }
 
@@ -734,7 +735,7 @@ impl EquivalenceGroup {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<AcrossPartitions> {
-        if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(lit) = expr.downcast_ref::<Literal>() {
             return Some(AcrossPartitions::Uniform(Some(lit.value().clone())));
         }
         if let Some(cls) = self.get_equivalence_class(expr)
@@ -841,7 +842,7 @@ impl EquivalenceGroup {
         }
 
         // Type equality check through reflection
-        if left.as_any().type_id() != right.as_any().type_id() {
+        if (left as &dyn Any).type_id() != (right as &dyn Any).type_id() {
             return false;
         }
 

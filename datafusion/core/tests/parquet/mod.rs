@@ -44,6 +44,7 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+mod content_defined_chunking;
 mod custom_reader;
 #[cfg(feature = "parquet_encryption")]
 mod encryption;
@@ -59,7 +60,7 @@ mod schema_coercion;
 mod utils;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();

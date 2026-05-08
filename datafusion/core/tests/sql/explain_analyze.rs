@@ -139,14 +139,14 @@ async fn explain_analyze_baseline_metrics() {
         use datafusion::physical_plan;
         use datafusion::physical_plan::sorts;
 
-        plan.as_any().downcast_ref::<sorts::sort::SortExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::aggregates::AggregateExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::limit::LocalLimitExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::coalesce_partitions::CoalescePartitionsExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::union::UnionExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::windows::WindowAggExec>().is_some()
+        plan.is::<sorts::sort::SortExec>()
+            || plan.is::<physical_plan::aggregates::AggregateExec>()
+            || plan.is::<physical_plan::filter::FilterExec>()
+            || plan.is::<physical_plan::limit::LocalLimitExec>()
+            || plan.is::<physical_plan::projection::ProjectionExec>()
+            || plan.is::<physical_plan::coalesce_partitions::CoalescePartitionsExec>()
+            || plan.is::<physical_plan::union::UnionExec>()
+            || plan.is::<physical_plan::windows::WindowAggExec>()
     }
 
     // Validate that the recorded elapsed compute time was more than
@@ -1019,7 +1019,7 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
               RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
                 DataSourceExec: file_groups={1 group: [[TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
         CoalescePartitionsExec
-          ProjectionExec: expr=[id@0 + 1 as ns.id + Int64(1), level@1 + 1 as ns.level + Int64(1)]
+          ProjectionExec: expr=[id@0 + 1 as id, level@1 + 1 as level]
             FilterExec: id@0 < 10
               RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
                 WorkTableExec: name=number_series
