@@ -20,10 +20,13 @@
 
 use datafusion_common::{Result, internal_datafusion_err};
 use std::fmt::Display;
+use std::future::Future;
 use std::hash::{Hash, Hasher};
+use std::pin::Pin;
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
 mod pool;
+mod reclaimer;
 
 #[cfg(feature = "arrow_buffer_pool")]
 pub mod arrow;
@@ -36,6 +39,7 @@ pub use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size, units,
 };
 pub use pool::*;
+pub use reclaimer::MemoryReclaimer;
 
 /// Tracks and potentially limits memory use across operators during execution.
 ///
@@ -209,6 +213,17 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug + Display {
     /// On error the `allocation` will not be increased in size
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()>;
 
+    /// Async variant of [`Self::try_grow`]. Default delegates to the
+    /// sync version; reclaim-aware pools (e.g. [`TrackConsumersPool`])
+    /// override to invoke registered [`MemoryReclaimer`]s on OOM.
+    fn try_grow_async<'a>(
+        &'a self,
+        reservation: &'a MemoryReservation,
+        additional: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move { self.try_grow(reservation, additional) })
+    }
+
     /// Return the total amount of memory reserved
     fn reserved(&self) -> usize;
 
@@ -249,6 +264,9 @@ pub struct MemoryConsumer {
     name: String,
     can_spill: bool,
     id: usize,
+    /// Reclaimer collected by reclaim-aware pools at register time. Not
+    /// part of consumer identity (excluded from `Eq`/`Hash`).
+    reclaimer: Option<Arc<dyn MemoryReclaimer>>,
 }
 
 impl PartialEq for MemoryConsumer {
@@ -287,18 +305,37 @@ impl MemoryConsumer {
             name: name.into(),
             can_spill: false,
             id: Self::new_unique_id(),
+            reclaimer: None,
         }
     }
 
-    /// Returns a clone of this [`MemoryConsumer`] with a new unique id,
-    /// which can be registered with a [`MemoryPool`],
-    /// This new consumer is separate from the original.
+    /// Clone this [`MemoryConsumer`] with a new unique id.
+    ///
+    /// Drops any attached reclaimer: it is bound to the original operator's
+    /// state and would target the wrong owner under a new id (and bypass
+    /// the id-keyed requestor-self-skip in `try_grow_async`).
     pub fn clone_with_new_id(&self) -> Self {
         Self {
             name: self.name.clone(),
             can_spill: self.can_spill,
             id: Self::new_unique_id(),
+            reclaimer: None,
         }
+    }
+
+    /// Attach a [`MemoryReclaimer`] and mark this consumer spill-capable.
+    /// Pools without reclaim support ignore the reclaimer.
+    pub fn with_reclaimer(self, reclaimer: Arc<dyn MemoryReclaimer>) -> Self {
+        Self {
+            can_spill: true,
+            reclaimer: Some(reclaimer),
+            ..self
+        }
+    }
+
+    /// Returns the attached [`MemoryReclaimer`], if any.
+    pub fn reclaimer(&self) -> Option<&Arc<dyn MemoryReclaimer>> {
+        self.reclaimer.as_ref()
     }
 
     /// Return the unique id of this [`MemoryConsumer`]
@@ -457,6 +494,17 @@ impl MemoryReservation {
     /// in the pool.
     pub fn try_grow(&self, capacity: usize) -> Result<()> {
         self.registration.pool.try_grow(self, capacity)?;
+        self.size.fetch_add(capacity, atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Async variant of [`Self::try_grow`]. On a reclaim-aware pool,
+    /// triggers registered [`MemoryReclaimer`]s before surfacing OOM.
+    pub async fn try_grow_async(&self, capacity: usize) -> Result<()> {
+        self.registration
+            .pool
+            .try_grow_async(self, capacity)
+            .await?;
         self.size.fetch_add(capacity, atomic::Ordering::Relaxed);
         Ok(())
     }

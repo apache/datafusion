@@ -16,13 +16,17 @@
 // under the License.
 
 use crate::memory_pool::{
-    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation, human_readable_size,
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReclaimer, MemoryReservation,
+    human_readable_size,
 };
 use datafusion_common::HashMap;
 use datafusion_common::{DataFusionError, Result, resources_datafusion_err};
 use log::debug;
 use parking_lot::{Mutex, RwLock};
 use std::fmt::{Display, Formatter};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::{
     num::NonZeroUsize,
     sync::atomic::{AtomicUsize, Ordering},
@@ -324,6 +328,7 @@ struct TrackedConsumer {
     can_spill: bool,
     reserved: AtomicUsize,
     peak: AtomicUsize,
+    reclaimer: Option<Arc<dyn MemoryReclaimer>>,
 }
 
 impl TrackedConsumer {
@@ -559,6 +564,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 can_spill: consumer.can_spill(),
                 reserved: Default::default(),
                 peak: Default::default(),
+                reclaimer: consumer.reclaimer().cloned(),
             },
         );
 
@@ -620,6 +626,76 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             tracked.grow(additional);
         }
         Ok(())
+    }
+
+    fn try_grow_async<'a>(
+        &'a self,
+        reservation: &'a MemoryReservation,
+        additional: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // Fast path.
+            let initial_err = match self.try_grow(reservation, additional) {
+                Ok(()) => return Ok(()),
+                Err(e) => e,
+            };
+
+            // Snapshot reclaimers. Skip the requestor (self-reclaim risks
+            // deadlock) and zero-byte consumers. Drop the read guard
+            // before awaiting any reclaim.
+            let requestor_id = reservation.consumer().id();
+            let mut candidates = {
+                let guard = self.tracked_consumers.read();
+                guard
+                    .iter()
+                    .filter_map(|(cid, tc)| {
+                        let reclaimer = tc.reclaimer.as_ref()?;
+                        if *cid == requestor_id || tc.reserved() == 0 {
+                            return None;
+                        }
+                        Some((tc.reserved(), Arc::clone(reclaimer)))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            // Order: priority desc, then reservation size desc.
+            candidates.sort_by(|(left_reserved, left), (right_reserved, right)| {
+                right
+                    .priority()
+                    .cmp(&left.priority())
+                    .then_with(|| right_reserved.cmp(left_reserved))
+            });
+
+            // Reclaim, retry after each, exit on success. The retry
+            // path goes through `self.try_grow`, which already updates
+            // the tracked consumer's atomic reservation — no manual
+            // accounting needed here.
+            for (_, reclaimer) in candidates {
+                if let Err(e) = reclaimer.reclaim(additional).await {
+                    debug!("memory reclaimer returned error: {e}");
+                    continue;
+                }
+                if self.try_grow(reservation, additional).is_ok() {
+                    return Ok(());
+                }
+            }
+
+            // Fall through to the inner pool's own reclaim path, if any.
+            // The default impl just re-runs `inner.try_grow`, which
+            // bypasses `TrackConsumersPool::try_grow`, so the
+            // consumer-side update is still required.
+            self.inner
+                .try_grow_async(reservation, additional)
+                .await
+                .map_err(|_| initial_err)?;
+            if let Some(tracked) = self
+                .tracked_consumers
+                .read()
+                .get(&reservation.consumer().id())
+            {
+                tracked.grow(additional);
+            }
+            Ok(())
+        })
     }
 
     fn reserved(&self) -> usize {
