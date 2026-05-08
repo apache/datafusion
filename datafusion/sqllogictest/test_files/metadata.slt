@@ -225,9 +225,9 @@ SELECT
     arrow_metadata(CAST(ts AS DATE), 'metadata_key')
 FROM table_with_metadata;
 ----
-2020-09-08 ts NULL
-2020-09-08 ts NULL
-2020-09-08 ts NULL
+2020-09-08 NULL
+2020-09-08 NULL
+2020-09-08 NULL
 
 # CAST should not preserve metadata on integer column
 query IT
