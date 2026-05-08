@@ -74,11 +74,11 @@ pub fn from_higher_order_function(
 
                     producer.push_lambda_parameters(named_lambda_parameters)?;
 
-                    let arg = producer.handle_expr(arg, schema)?;
+                    let arg = producer.handle_lambda(l, schema);
 
                     producer.pop_lambda_parameters()?;
 
-                    Ok(arg)
+                    arg
                 }
                 _ => producer.handle_expr(arg, schema),
             }?;

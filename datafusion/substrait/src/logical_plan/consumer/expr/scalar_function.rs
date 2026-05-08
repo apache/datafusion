@@ -30,7 +30,6 @@ pub async fn from_scalar_function(
     f: &ScalarFunction,
     input_schema: &DFSchema,
 ) -> Result<Expr> {
-    //TODO: handle higher order functions, as they are also encoded as scalar functions
     let Some(fn_signature) = consumer
         .get_extensions()
         .functions
@@ -45,7 +44,7 @@ pub async fn from_scalar_function(
     let fn_name = substrait_fun_name(fn_signature);
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
-    let udlf_func = consumer
+    let higher_order_func = consumer
         .get_function_registry()
         .higher_order_function(fn_name)
         .or_else(|e| {
@@ -67,9 +66,9 @@ pub async fn from_scalar_function(
         }
     });
 
-    // try to first match the requested function into registered udlfs, then udfs, built-in ops
+    // try to first match the requested function into registered higher-order functions, then udfs, built-in ops
     // and finally built-in expressions
-    if let Ok(func) = udlf_func {
+    if let Ok(func) = higher_order_func {
         Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
             func.to_owned(),
             args,

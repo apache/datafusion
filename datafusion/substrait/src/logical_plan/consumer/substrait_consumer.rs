@@ -698,7 +698,11 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
 ///
 /// Can be embedded into a custom [SubstraitConsumer] to implement them
 pub struct DefaultSubstraitLambdaConsumer {
-    lambdas_parameters: VecDeque<Vec<FieldRef>>,
+    /// Parameters of the lambdas currently in scope, ordered from innermost
+    /// to outermost. Index 0 is the lambda being consumed; higher indices
+    /// are enclosing lambdas, matching the `steps_out` value used by
+    /// [`Self::lambda_variable`] and `LambdaParameterReference`.
+    lambda_parameters: VecDeque<Vec<FieldRef>>,
     next_lambda_parameter: usize,
 }
 
@@ -711,7 +715,7 @@ impl Default for DefaultSubstraitLambdaConsumer {
 impl DefaultSubstraitLambdaConsumer {
     pub fn new() -> Self {
         Self {
-            lambdas_parameters: VecDeque::new(),
+            lambda_parameters: VecDeque::new(),
             next_lambda_parameter: 0,
         }
     }
@@ -727,30 +731,26 @@ impl DefaultSubstraitLambdaConsumer {
         let lambda_parameters = lambda_parameters
             .iter()
             .map(|ty| {
-                loop {
-                    let default_name = format!("p{next_lambda_parameter}");
+                let (assigned_number, default_name) =
+                    next_lambda_parameter_name(next_lambda_parameter, input_schema);
 
-                    next_lambda_parameter += 1;
+                next_lambda_parameter = assigned_number + 1;
 
-                    // avoid conflicts with column names
-                    if !input_schema.has_column_with_unqualified_name(&default_name) {
-                        break Ok(field_from_substrait_type_without_names(consumer, ty)?
-                            .renamed(&default_name));
-                    }
-                }
+                Ok(field_from_substrait_type_without_names(consumer, ty)?
+                    .renamed(&default_name))
             })
             .collect::<datafusion::common::Result<Vec<_>>>()?;
 
         let names = lambda_parameters.iter().map(|f| f.name().clone()).collect();
 
-        let mut lambdas_parameters = self.lambdas_parameters.clone();
+        let mut new_lambda_parameters = self.lambda_parameters.clone();
 
-        lambdas_parameters.push_front(lambda_parameters);
+        new_lambda_parameters.push_front(lambda_parameters);
 
         Ok((
             names,
             Self {
-                lambdas_parameters,
+                lambda_parameters: new_lambda_parameters,
                 next_lambda_parameter,
             },
         ))
@@ -761,10 +761,10 @@ impl DefaultSubstraitLambdaConsumer {
         steps_out: usize,
         field_idx: usize,
     ) -> datafusion::common::Result<Expr> {
-        let Some(lambda_parameters) = &self.lambdas_parameters.get(steps_out) else {
+        let Some(lambda_parameters) = &self.lambda_parameters.get(steps_out) else {
             return substrait_err!(
                 "No lambda at {steps_out} steps out, got only {}",
-                self.lambdas_parameters.len()
+                self.lambda_parameters.len()
             );
         };
 
@@ -779,6 +779,27 @@ impl DefaultSubstraitLambdaConsumer {
             var.name().clone(),
             Some(Arc::clone(var)),
         )))
+    }
+}
+
+/// Returns the next available lambda parameter name and the index it was assigned.
+///
+/// Names follow the pattern `pN` where `N` starts at `next_lambda_parameter`. If `pN`
+/// conflicts with an existing column name in `input_schema`, `N` is incremented until
+/// a free name is found.
+fn next_lambda_parameter_name(
+    mut next_lambda_parameter: usize,
+    input_schema: &DFSchema,
+) -> (usize, String) {
+    loop {
+        let name = format!("p{next_lambda_parameter}");
+
+        // avoid conflicts with column names
+        if !input_schema.has_column_with_unqualified_name(&name) {
+            return (next_lambda_parameter, name);
+        }
+
+        next_lambda_parameter += 1;
     }
 }
 
