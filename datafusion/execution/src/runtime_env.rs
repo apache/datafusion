@@ -139,7 +139,7 @@ fn create_runtime_config_entries(
         ConfigEntry {
             key: "datafusion.runtime.file_statistics_cache_limit".to_string(),
             value: file_statistics_cache_limit,
-            description: "Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
     ]
 }
