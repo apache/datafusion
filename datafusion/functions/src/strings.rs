@@ -584,12 +584,7 @@ pub(crate) const STRING_VIEW_MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024;
 /// Append-only writer handed to closures passed to `append_with`.
 pub(crate) trait StringWriter {
     fn write_str(&mut self, s: &str);
-
-    #[inline]
-    fn write_char(&mut self, c: char) {
-        let mut buf = [0u8; 4];
-        self.write_str(c.encode_utf8(&mut buf));
-    }
+    fn write_char(&mut self, c: char);
 }
 
 /// [`StringWriter`] for [`GenericStringArrayBuilder`]. Writes go straight to
