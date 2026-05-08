@@ -29,7 +29,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{
     num::NonZeroUsize,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 /// A [`MemoryPool`] that enforces no limit
@@ -329,6 +329,35 @@ struct TrackedConsumer {
     reserved: AtomicUsize,
     peak: AtomicUsize,
     reclaimer: Option<Arc<dyn MemoryReclaimer>>,
+    /// Set to `true` while a reclaim is in-flight on this consumer, so
+    /// concurrent `try_grow_async` callers skip this victim instead of
+    /// double-reclaiming. Reset via [`ReclaimInFlightGuard`] on drop
+    /// (cancel-safe).
+    reclaim_in_flight: Arc<AtomicBool>,
+}
+
+/// RAII guard that clears [`TrackedConsumer::reclaim_in_flight`] on drop.
+struct ReclaimInFlightGuard {
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for ReclaimInFlightGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Release);
+    }
+}
+
+impl ReclaimInFlightGuard {
+    /// Atomically claims the in-flight slot, returning `Some(guard)` on
+    /// success or `None` if another reclaim is already running on this
+    /// consumer.
+    fn try_acquire(flag: &Arc<AtomicBool>) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .ok()
+            .map(|_| Self {
+                flag: Arc::clone(flag),
+            })
+    }
 }
 
 impl TrackedConsumer {
@@ -565,6 +594,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 reserved: Default::default(),
                 peak: Default::default(),
                 reclaimer: consumer.reclaimer().cloned(),
+                reclaim_in_flight: Arc::new(AtomicBool::new(false)),
             },
         );
 
@@ -642,9 +672,12 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 
             // Snapshot reclaimers. Skip the requestor (self-reclaim risks
             // deadlock) and zero-byte consumers. Drop the read guard
-            // before awaiting any reclaim.
+            // before awaiting any reclaim. Also clone each victim's
+            // `reclaim_in_flight` flag so concurrent `try_grow_async`
+            // callers dedup against in-flight reclaims on the same
+            // victim.
             let requestor_id = reservation.consumer().id();
-            let mut candidates = {
+            let mut candidates: Vec<(usize, Arc<dyn MemoryReclaimer>, Arc<AtomicBool>)> = {
                 let guard = self.tracked_consumers.read();
                 guard
                     .iter()
@@ -653,23 +686,35 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                         if *cid == requestor_id || tc.reserved() == 0 {
                             return None;
                         }
-                        Some((tc.reserved(), Arc::clone(reclaimer)))
+                        Some((
+                            tc.reserved(),
+                            Arc::clone(reclaimer),
+                            Arc::clone(&tc.reclaim_in_flight),
+                        ))
                     })
-                    .collect::<Vec<_>>()
+                    .collect()
             };
             // Order: priority desc, then reservation size desc.
-            candidates.sort_by(|(left_reserved, left), (right_reserved, right)| {
-                right
-                    .priority()
-                    .cmp(&left.priority())
-                    .then_with(|| right_reserved.cmp(left_reserved))
+            candidates.sort_by(|(lr, l, _), (rr, r, _)| {
+                r.priority().cmp(&l.priority()).then_with(|| rr.cmp(lr))
             });
 
-            // Reclaim, retry after each, exit on success. The retry
-            // path goes through `self.try_grow`, which already updates
-            // the tracked consumer's atomic reservation — no manual
-            // accounting needed here.
-            for (_, reclaimer) in candidates {
+            // For each candidate: try to claim its in-flight slot
+            // (skip on contention so we work on a different victim
+            // rather than serializing behind a sibling's reclaim);
+            // re-check `try_grow` before reclaiming in case a sibling
+            // already freed enough; reclaim; retry `try_grow`. The
+            // retry path goes through `self.try_grow`, which already
+            // updates the tracked consumer's atomic reservation — no
+            // manual accounting needed here.
+            for (_, reclaimer, in_flight) in candidates {
+                let _g = match ReclaimInFlightGuard::try_acquire(&in_flight) {
+                    Some(g) => g,
+                    None => continue,
+                };
+                if self.try_grow(reservation, additional).is_ok() {
+                    return Ok(());
+                }
                 if let Err(e) = reclaimer.reclaim(additional).await {
                     debug!("memory reclaimer returned error: {e}");
                     continue;
