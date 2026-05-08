@@ -3309,7 +3309,7 @@ mod tests {
         )]));
         let expr = sum(col("column1")).alias_with_metadata("agg", Some(metadata));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let (aggregate_expr, _, _) = create_aggregate_expr_and_maybe_filter(
             &expr,
             &logical_schema,
