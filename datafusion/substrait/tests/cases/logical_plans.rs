@@ -19,6 +19,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
     use datafusion::common::test_util::format_batches;
     use std::collections::HashSet;
@@ -291,6 +292,27 @@ mod tests {
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn higher_order_function() -> Result<()> {
+        let proto_plan =
+            read_json("tests/testdata/test_plans/higher_order_function.json");
+        // ctx already contains the queried table
+        let ctx = higher_order_function_ctx().await?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @"
+        Projection: array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_concat(array_transform2(p0, (p3, p4) -> p3 * p2 * p4), array_transform2(p0, (p3, p4) -> p3 * p2 * p4))) AS array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_concat(array_transform2(v,(v, j) -> v * i * j),array_transform2(v,(v, j) -> v * i * j)))
+          TableScan: data3
+        "
+        );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
         Ok(())
     }
 }

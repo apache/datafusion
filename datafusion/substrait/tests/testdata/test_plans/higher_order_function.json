@@ -1,0 +1,338 @@
+{
+  "version": {
+    "minorNumber": 85,
+    "producer": "datafusion"
+  },
+  "extensions": [
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 4294967295,
+        "functionAnchor": 2,
+        "name": "array_transform2"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 4294967295,
+        "name": "make_array"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 4294967295,
+        "functionAnchor": 3,
+        "name": "array_concat"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 4294967295,
+        "functionAnchor": 1,
+        "name": "multiply"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [
+                  1
+                ]
+              }
+            },
+            "input": {
+              "read": {
+                "baseSchema": {
+                  "names": [
+                    "p1"
+                  ],
+                  "struct": {
+                    "types": [
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      }
+                    ],
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "projection": {
+                  "select": {
+                    "structItems": [
+                      {}
+                    ]
+                  }
+                },
+                "namedTable": {
+                  "names": [
+                    "data3"
+                  ]
+                }
+              }
+            },
+            "expressions": [
+              {
+                "scalarFunction": {
+                  "functionReference": 2,
+                  "arguments": [
+                    {
+                      "value": {
+                        "scalarFunction": {
+                          "arguments": [
+                            {
+                              "value": {
+                                "scalarFunction": {
+                                  "arguments": [
+                                    {
+                                      "value": {
+                                        "selection": {
+                                          "directReference": {
+                                            "structField": {}
+                                          },
+                                          "rootReference": {}
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "lambda": {
+                          "parameters": {
+                            "types": [
+                              {
+                                "list": {
+                                  "type": {
+                                    "i64": {
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  },
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              },
+                              {
+                                "i64": {
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }
+                            ],
+                            "nullability": "NULLABILITY_REQUIRED"
+                          },
+                          "body": {
+                            "scalarFunction": {
+                              "functionReference": 3,
+                              "arguments": [
+                                {
+                                  "value": {
+                                    "scalarFunction": {
+                                      "functionReference": 2,
+                                      "arguments": [
+                                        {
+                                          "value": {
+                                            "selection": {
+                                              "directReference": {
+                                                "structField": {}
+                                              },
+                                              "lambdaParameterReference": {}
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "value": {
+                                            "lambda": {
+                                              "parameters": {
+                                                "types": [
+                                                  {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  },
+                                                  {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  }
+                                                ],
+                                                "nullability": "NULLABILITY_REQUIRED"
+                                              },
+                                              "body": {
+                                                "scalarFunction": {
+                                                  "functionReference": 1,
+                                                  "arguments": [
+                                                    {
+                                                      "value": {
+                                                        "scalarFunction": {
+                                                          "functionReference": 1,
+                                                          "arguments": [
+                                                            {
+                                                              "value": {
+                                                                "selection": {
+                                                                  "directReference": {
+                                                                    "structField": {}
+                                                                  },
+                                                                  "lambdaParameterReference": {}
+                                                                }
+                                                              }
+                                                            },
+                                                            {
+                                                              "value": {
+                                                                "selection": {
+                                                                  "directReference": {
+                                                                    "structField": {
+                                                                      "field": 1
+                                                                    }
+                                                                  },
+                                                                  "lambdaParameterReference": {
+                                                                    "stepsOut": 1
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          ]
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "value": {
+                                                        "selection": {
+                                                          "directReference": {
+                                                            "structField": {
+                                                              "field": 1
+                                                            }
+                                                          },
+                                                          "lambdaParameterReference": {}
+                                                        }
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "value": {
+                                    "scalarFunction": {
+                                      "functionReference": 2,
+                                      "arguments": [
+                                        {
+                                          "value": {
+                                            "selection": {
+                                              "directReference": {
+                                                "structField": {}
+                                              },
+                                              "lambdaParameterReference": {}
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "value": {
+                                            "lambda": {
+                                              "parameters": {
+                                                "types": [
+                                                  {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  },
+                                                  {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  }
+                                                ],
+                                                "nullability": "NULLABILITY_REQUIRED"
+                                              },
+                                              "body": {
+                                                "scalarFunction": {
+                                                  "functionReference": 1,
+                                                  "arguments": [
+                                                    {
+                                                      "value": {
+                                                        "scalarFunction": {
+                                                          "functionReference": 1,
+                                                          "arguments": [
+                                                            {
+                                                              "value": {
+                                                                "selection": {
+                                                                  "directReference": {
+                                                                    "structField": {}
+                                                                  },
+                                                                  "lambdaParameterReference": {}
+                                                                }
+                                                              }
+                                                            },
+                                                            {
+                                                              "value": {
+                                                                "selection": {
+                                                                  "directReference": {
+                                                                    "structField": {
+                                                                      "field": 1
+                                                                    }
+                                                                  },
+                                                                  "lambdaParameterReference": {
+                                                                    "stepsOut": 1
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          ]
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "value": {
+                                                        "selection": {
+                                                          "directReference": {
+                                                            "structField": {
+                                                              "field": 1
+                                                            }
+                                                          },
+                                                          "lambdaParameterReference": {}
+                                                        }
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "names": [
+          "array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_concat(array_transform2(v,(v, j) -> v * i * j),array_transform2(v,(v, j) -> v * i * j)))"
+        ]
+      }
+    }
+  ]
+}
