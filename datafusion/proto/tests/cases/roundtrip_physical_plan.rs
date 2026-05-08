@@ -2219,6 +2219,95 @@ fn test_round_trip_aliased_reverse_human_display() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_round_trip_human_display_alias_with_colon() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+    let agg_expr =
+        AggregateExprBuilder::new(first_value_udaf(), vec![col("b", &schema)?])
+            .order_by(vec![PhysicalSortExpr {
+                expr: col("b", &schema)?,
+                options: SortOptions::new(false, false),
+            }])
+            .schema(Arc::clone(&schema))
+            .alias("agg:one")
+            .human_display("first_value(b) ORDER BY [b ASC NULLS LAST]")
+            .human_display_alias("agg:one")
+            .build()
+            .map(Arc::new)?;
+
+    let plan = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
+        vec![agg_expr],
+        vec![None],
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        schema,
+    )?);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtrip_plan = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+    let aggregate = roundtrip_plan
+        .as_ref()
+        .downcast_ref::<AggregateExec>()
+        .expect("expected AggregateExec after roundtrip");
+    let aggregate_expr = &aggregate.aggr_expr()[0];
+
+    assert_eq!(aggregate_expr.name(), "agg:one");
+    assert_eq!(aggregate_expr.human_display_alias(), Some("agg:one"));
+    assert_eq!(
+        aggregate_expr.human_display(),
+        Some("first_value(b) ORDER BY [b ASC NULLS LAST]")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_round_trip_non_aliased_human_display_ending_like_alias() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+    let agg_expr =
+        AggregateExprBuilder::new(first_value_udaf(), vec![col("b", &schema)?])
+            .order_by(vec![PhysicalSortExpr {
+                expr: col("b", &schema)?,
+                options: SortOptions::new(false, false),
+            }])
+            .schema(Arc::clone(&schema))
+            .alias("agg")
+            .human_display("first_value(b) as agg")
+            .build()
+            .map(Arc::new)?;
+
+    let plan = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
+        vec![agg_expr],
+        vec![None],
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        schema,
+    )?);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtrip_plan = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+    let aggregate = roundtrip_plan
+        .as_ref()
+        .downcast_ref::<AggregateExec>()
+        .expect("expected AggregateExec after roundtrip");
+    let aggregate_expr = &aggregate.aggr_expr()[0];
+
+    assert_eq!(aggregate_expr.name(), "agg");
+    assert_eq!(
+        aggregate_expr.human_display(),
+        Some("first_value(b) as agg")
+    );
+    assert_eq!(aggregate_expr.human_display_alias(), None);
+
+    Ok(())
+}
+
 // Bug 2 of https://github.com/apache/datafusion/issues/16772
 /// Test that PhysicalGroupBy groups field is correctly serialized/deserialized
 /// for simple aggregates (no GROUP BY clause).

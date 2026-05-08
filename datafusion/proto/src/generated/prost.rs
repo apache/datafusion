@@ -1435,8 +1435,6 @@ pub struct PhysicalAggregateExprNode {
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(string, tag = "8")]
     pub human_display: ::prost::alloc::string::String,
-    #[prost(string, optional, tag = "9")]
-    pub human_display_alias: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,

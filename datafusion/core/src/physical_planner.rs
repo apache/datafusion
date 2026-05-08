@@ -81,8 +81,8 @@ use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_expr::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, GroupingSet, NullTreatment,
-    WindowFunction, WindowFunctionParams, physical_name,
+    Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams,
+    physical_name,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::Subquery;
@@ -93,7 +93,9 @@ use datafusion_expr::{
     FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
     WindowFrame, WindowFrameBound, WriteOp,
 };
-use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
+use datafusion_physical_expr::aggregate::{
+    AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
+};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
@@ -1062,12 +1064,14 @@ impl DefaultPhysicalPlanner {
                 let agg_filter = aggr_expr
                     .iter()
                     .map(|e| {
-                        create_aggregate_expr_and_maybe_filter(
+                        LoweredAggregateBuilder::new(
                             e,
                             logical_input_schema,
                             &physical_input_schema,
                             execution_props,
                         )
+                        .build()
+                        .map(lowered_aggregate_to_tuple)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -2490,124 +2494,73 @@ type AggregateExprWithOptionalArgs = (
 );
 
 /// Create an aggregate expression with a name from a logical expression
+#[deprecated(note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
-    human_display: Option<String>,
-    human_display_alias: Option<String>,
+    human_display: String,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    match e {
-        Expr::AggregateFunction(AggregateFunction {
-            func,
-            params:
-                AggregateFunctionParams {
-                    args,
-                    distinct,
-                    filter,
-                    order_by,
-                    null_treatment,
-                },
-        }) => {
-            let name = if let Some(name) = name {
-                name
-            } else {
-                physical_name(e)?
-            };
+    let mut builder = LoweredAggregateBuilder::new(
+        e,
+        logical_input_schema,
+        physical_input_schema,
+        execution_props,
+    )
+    .with_human_display(human_display);
 
-            let physical_args =
-                create_physical_exprs(args, logical_input_schema, execution_props)?;
-            let filter = match filter {
-                Some(e) => Some(create_physical_expr(
-                    e,
-                    logical_input_schema,
-                    execution_props,
-                )?),
-                None => None,
-            };
-
-            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
-                == NullTreatment::IgnoreNulls;
-
-            let (agg_expr, filter, order_bys) = {
-                let order_bys = create_physical_sort_exprs(
-                    order_by,
-                    logical_input_schema,
-                    execution_props,
-                )?;
-
-                let mut builder =
-                    AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(order_bys.clone())
-                        .schema(Arc::new(physical_input_schema.to_owned()))
-                        .alias(name)
-                        .with_ignore_nulls(ignore_nulls)
-                        .with_distinct(*distinct);
-                if let Some(human_display) = human_display {
-                    builder = builder.human_display(human_display);
-                }
-                if let Some(alias) = human_display_alias {
-                    builder = builder.human_display_alias(alias);
-                }
-                let agg_expr = builder.build().map(Arc::new)?;
-
-                (agg_expr, filter, order_bys)
-            };
-
-            Ok((agg_expr, filter, order_bys))
-        }
-        other => internal_err!("Invalid aggregate expression '{other:?}'"),
+    if let Some(name) = name {
+        builder = builder.with_name(name);
     }
+
+    builder.build().map(lowered_aggregate_to_tuple)
 }
 
 /// Create an aggregate expression from a logical expression or an alias
+#[deprecated(note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    // Unpack (potentially nested) aliased logical expressions, e.g. "sum(col) as total".
-    // Physical explain prefers the lowered aggregate form, so unwrap all alias
-    // layers to recover the underlying aggregate function and then re-attach
-    // only the visible output alias.
-    let (name, human_display, human_display_alias, e) = match e {
-        Expr::Alias(alias) => {
-            let unaliased = e.clone().unalias_nested().data;
-            let human_display = unaliased.human_display().to_string();
-            let (human_display, human_display_alias) =
-                if human_display.is_empty() || human_display == alias.name {
-                    (alias.name.clone(), None)
-                } else {
-                    (human_display, Some(alias.name.clone()))
-                };
-            (
-                Some(alias.name.clone()),
-                Some(human_display),
-                human_display_alias,
-                unaliased,
-            )
-        }
-        Expr::AggregateFunction(_) => (
-            Some(e.schema_name().to_string()),
-            Some(e.human_display().to_string()),
-            None,
+    // Preserve the pre-builder behavior for callers that still use this helper:
+    // use a single display string and do not attach a separate display alias.
+    let (name, human_display, e) = match e {
+        Expr::Alias(alias) => (
+            Some(alias.name.clone()),
+            e.human_display().to_string(),
             e.clone(),
         ),
-        _ => (None, None, None, e.clone()),
+        Expr::AggregateFunction(_) => (
+            Some(e.schema_name().to_string()),
+            e.human_display().to_string(),
+            e.clone(),
+        ),
+        _ => (None, String::default(), e.clone()),
     };
 
-    create_aggregate_expr_with_name_and_maybe_filter(
+    let mut builder = LoweredAggregateBuilder::new(
         &e,
-        name,
-        human_display,
-        human_display_alias,
         logical_input_schema,
         physical_input_schema,
         execution_props,
     )
+    .with_human_display(human_display);
+
+    if let Some(name) = name {
+        builder = builder.with_name(name);
+    }
+
+    builder.build().map(lowered_aggregate_to_tuple)
+}
+
+fn lowered_aggregate_to_tuple(
+    lowered: LoweredAggregate,
+) -> AggregateExprWithOptionalArgs {
+    (lowered.aggregate, lowered.filter, lowered.order_bys)
 }
 
 impl DefaultPhysicalPlanner {
@@ -3271,6 +3224,7 @@ mod tests {
     use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::builder::subquery_alias;
+    use datafusion_expr::expr::AggregateFunctionParams;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
         Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, LogicalPlanBuilder,
@@ -3334,6 +3288,38 @@ mod tests {
             create_window_expr(&expr, &logical_schema, &ExecutionProps::new())?;
 
         assert_eq!(window_expr.name(), "window_alias");
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_aggregate_expr_unwraps_alias_with_metadata() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion_common::metadata::FieldMetadata;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "column1",
+            DataType::Int64,
+            true,
+        )]));
+        let logical_schema = schema.as_ref().clone().to_dfschema_ref()?;
+        let metadata = FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]));
+        let expr = sum(col("column1")).alias_with_metadata("agg", Some(metadata));
+
+        #[allow(deprecated)]
+        let (aggregate_expr, _, _) = create_aggregate_expr_and_maybe_filter(
+            &expr,
+            &logical_schema,
+            schema.as_ref(),
+            &ExecutionProps::new(),
+        )?;
+
+        assert_eq!(aggregate_expr.name(), "agg");
+        assert!(aggregate_expr.field().metadata().get("some_key").is_none());
+
         Ok(())
     }
 

@@ -118,6 +118,58 @@ use crate::{convert_required, into_required};
 pub mod from_proto;
 pub mod to_proto;
 
+const HUMAN_DISPLAY_ALIAS_PREFIX: &str = "\u{1f}datafusion_human_display_alias_v1:";
+
+fn encode_human_display_alias(human_display: &str, alias: &str) -> String {
+    format!(
+        "{HUMAN_DISPLAY_ALIAS_PREFIX}{}:{alias}{human_display}",
+        alias.len()
+    )
+}
+
+fn split_human_display_alias<'a>(
+    human_display: &'a str,
+    name: &'a str,
+) -> (&'a str, Option<&'a str>) {
+    if let Some(encoded) = human_display.strip_prefix(HUMAN_DISPLAY_ALIAS_PREFIX)
+        && let Some((alias_len, encoded)) = encoded.split_once(':')
+        && let Ok(alias_len) = alias_len.parse::<usize>()
+        && let Some(alias) = encoded.get(..alias_len)
+        && let Some(human_display) = encoded.get(alias_len..)
+        && alias == name
+        && !human_display.is_empty()
+    {
+        return (human_display, Some(alias));
+    }
+
+    (human_display, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_human_display_alias_ignores_mismatched_alias() {
+        let encoded = encode_human_display_alias("sum(value)", "revenue");
+
+        assert_eq!(
+            split_human_display_alias(&encoded, "other"),
+            (encoded.as_str(), None)
+        );
+    }
+
+    #[test]
+    fn split_human_display_alias_keeps_malformed_prefix_literal() {
+        let display = format!("{HUMAN_DISPLAY_ALIAS_PREFIX}not-an-encoding");
+
+        assert_eq!(
+            split_human_display_alias(&display, "agg"),
+            (display.as_str(), None)
+        );
+    }
+}
+
 /// Context threaded through physical-plan deserialization.
 ///
 /// This bundles the stable per-call inputs for deserialization and the
@@ -1259,6 +1311,11 @@ impl protobuf::PhysicalPlanNode {
                                         )?,
                                     };
 
+                                    let (human_display, human_display_alias) =
+                                        split_human_display_alias(
+                                            &agg_node.human_display,
+                                            name,
+                                        );
                                     let builder = AggregateExprBuilder::new(
                                         agg_udf,
                                         input_phy_expr,
@@ -1268,11 +1325,10 @@ impl protobuf::PhysicalPlanNode {
                                     .with_ignore_nulls(agg_node.ignore_nulls)
                                     .with_distinct(agg_node.distinct)
                                     .order_by(order_bys)
-                                    .human_display(agg_node.human_display.clone());
-                                    let builder = if let Some(alias) =
-                                        &agg_node.human_display_alias
+                                    .human_display(human_display);
+                                    let builder = if let Some(alias) = human_display_alias
                                     {
-                                        builder.human_display_alias(alias.as_str())
+                                        builder.human_display_alias(alias)
                                     } else {
                                         builder
                                     };
