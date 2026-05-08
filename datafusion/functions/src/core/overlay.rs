@@ -134,8 +134,10 @@ fn overlay_one(
     characters: &str,
     start_pos: i64,
     replace_len: i64,
-) -> String {
-    debug_assert!(start_pos >= 1);
+) -> Result<String> {
+    if start_pos < 1 {
+        return exec_err!("negative substring length not allowed");
+    }
 
     let is_ascii = string.is_ascii();
     let string_char_len = if is_ascii {
@@ -166,7 +168,7 @@ fn overlay_one(
         let suffix_start_byte = byte_index_for_char(string, suffix_char_idx, is_ascii);
         res.push_str(&string[suffix_start_byte..]);
     }
-    res
+    Ok(res)
 }
 
 macro_rules! process_overlay {
@@ -179,16 +181,8 @@ macro_rules! process_overlay {
             .map(|((string, characters), start_pos)| {
                 match (string, characters, start_pos) {
                     (Some(string), Some(characters), Some(start_pos)) => {
-                        if start_pos < 1 {
-                            return exec_err!("negative substring length not allowed");
-                        }
                         let replace_len = characters.chars().count() as i64;
-                        Ok(Some(overlay_one(
-                            string,
-                            characters,
-                            start_pos,
-                            replace_len,
-                        )))
+                        overlay_one(string, characters, start_pos, replace_len).map(Some)
                     }
                     _ => Ok(None),
                 }
@@ -203,20 +197,15 @@ macro_rules! process_overlay {
             .zip($characters_array.iter())
             .zip($pos_array.iter())
             .zip($len_array.iter())
-            .map(|(((string, characters), start_pos), len)| {
-                match (string, characters, start_pos, len) {
-                    (Some(string), Some(characters), Some(start_pos), Some(len)) => {
-                        if start_pos < 1 {
-                            return exec_err!("negative substring length not allowed");
-                        }
-                        let string_char_len = string.chars().count() as i64;
-                        let replace_len = len.min(string_char_len);
-                        Ok(Some(overlay_one(
-                            string,
-                            characters,
-                            start_pos,
-                            replace_len,
-                        )))
+            .map(|(((string, characters), start_pos), replace_len)| {
+                match (string, characters, start_pos, replace_len) {
+                    (
+                        Some(string),
+                        Some(characters),
+                        Some(start_pos),
+                        Some(replace_len),
+                    ) => {
+                        overlay_one(string, characters, start_pos, replace_len).map(Some)
                     }
                     _ => Ok(None),
                 }
