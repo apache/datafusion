@@ -620,6 +620,9 @@ SHOW datafusion.runtime.file_statistics_cache_limit
 ----
 datafusion.runtime.file_statistics_cache_limit 42M
 
+statement ok
+RESET datafusion.runtime.file_statistics_cache_limit
+
 # Test SET and SHOW runtime.metadata_cache_limit
 statement ok
 SET datafusion.runtime.metadata_cache_limit = '200M'
