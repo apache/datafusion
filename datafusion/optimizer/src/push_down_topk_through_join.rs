@@ -1008,6 +1008,61 @@ mod test {
         let resolved = resolve_sort_exprs_through_subquery_alias(&sort_exprs, sq)?;
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].expr.to_string(), "t1.b");
+        assert!(resolved[0].asc);
+        assert!(!resolved[0].nulls_first);
+        Ok(())
+    }
+
+    /// Multi-column SubqueryAlias resolution preserves direction per column.
+    #[test]
+    fn resolve_through_subquery_alias_multi_column() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let plan = LogicalPlanBuilder::from(t1).alias("sub")?.build()?;
+        let LogicalPlan::SubqueryAlias(sq) = &plan else {
+            panic!("expected SubqueryAlias");
+        };
+        let sort_exprs = vec![
+            col("sub.a").sort(true, false),
+            col("sub.b").sort(false, true),
+        ];
+        let resolved = resolve_sort_exprs_through_subquery_alias(&sort_exprs, sq)?;
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].expr.to_string(), "t1.a");
+        assert!(resolved[0].asc);
+        assert_eq!(resolved[1].expr.to_string(), "t1.b");
+        assert!(!resolved[1].asc);
+        assert!(resolved[1].nulls_first);
+        Ok(())
+    }
+
+    /// SubqueryAlias with a different alias name (foo ≠ t1).
+    #[test]
+    fn resolve_through_subquery_alias_different_name() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let plan = LogicalPlanBuilder::from(t1).alias("foo")?.build()?;
+        let LogicalPlan::SubqueryAlias(sq) = &plan else {
+            panic!("expected SubqueryAlias");
+        };
+        let sort_exprs = vec![col("foo.b").sort(true, false)];
+        let resolved = resolve_sort_exprs_through_subquery_alias(&sort_exprs, sq)?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].expr.to_string(), "t1.b");
+        Ok(())
+    }
+
+    /// SubqueryAlias with nested expression: (- sub.b) → (- t1.b).
+    #[test]
+    fn resolve_through_subquery_alias_nested_expr() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let plan = LogicalPlanBuilder::from(t1).alias("sub")?.build()?;
+        let LogicalPlan::SubqueryAlias(sq) = &plan else {
+            panic!("expected SubqueryAlias");
+        };
+        let sort_exprs = vec![Expr::Negative(Box::new(col("sub.b"))).sort(true, false)];
+        let resolved = resolve_sort_exprs_through_subquery_alias(&sort_exprs, sq)?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].expr.to_string(), "(- t1.b)");
+        assert!(resolved[0].asc);
         Ok(())
     }
 
