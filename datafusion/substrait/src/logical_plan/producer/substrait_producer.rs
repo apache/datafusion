@@ -28,7 +28,9 @@ use crate::logical_plan::producer::{
     to_substrait_type_from_field,
 };
 use datafusion::arrow::datatypes::FieldRef;
-use datafusion::common::{Column, DFSchemaRef, HashMap, ScalarValue, substrait_err};
+use datafusion::common::{
+    Column, DFSchemaRef, HashMap, ScalarValue, not_impl_err, substrait_err,
+};
 use datafusion::execution::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::logical_expr::Subquery;
@@ -462,27 +464,35 @@ pub trait SubstraitProducer: Send + Sync + Sized {
     /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaProducer] and forward this method to it
     fn push_lambda_parameters(
         &mut self,
-        lambda_parameters: Vec<FieldRef>,
-    ) -> datafusion::common::Result<()>;
+        _lambda_parameters: Vec<FieldRef>,
+    ) -> datafusion::common::Result<()> {
+        not_impl_err!("SubstraitProducer::push_lambda_parameters")
+    }
 
     /// Pop the last pushed `lambda_parameters` so that it unshadow any previously shadowed lambda parameter
     ///
     /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaProducer] and forward this method to it
-    fn pop_lambda_parameters(&mut self) -> datafusion::common::Result<()>;
+    fn pop_lambda_parameters(&mut self) -> datafusion::common::Result<()> {
+        not_impl_err!("SubstraitProducer::pop_lambda_parameters")
+    }
 
     /// Get the (`steps_out`, `field_idx`) of the lambda variable with the given `name`. `steps_out` refers to the number
     /// of lambda boundaries to traverse (0 = current lambda), and `field_idx` refers to the index within the lambda parameters
     ///
     /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaProducer] and forward this method to it
-    fn lambda_variable(&self, name: &str) -> datafusion::common::Result<(u32, i32)>;
+    fn lambda_variable(&self, _name: &str) -> datafusion::common::Result<(u32, i32)> {
+        not_impl_err!("SubstraitProducer::lambda_variable")
+    }
 
     /// Get the type of the lambda parameter with the given `name`
     ///
     /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaProducer] and forward this method to it
     fn lambda_parameter_type(
         &self,
-        name: &str,
-    ) -> datafusion::common::Result<substrait::proto::Type>;
+        _name: &str,
+    ) -> datafusion::common::Result<substrait::proto::Type> {
+        not_impl_err!("SubstraitProducer::lambda_parameter_type")
+    }
 }
 
 pub struct DefaultSubstraitProducer<'a> {

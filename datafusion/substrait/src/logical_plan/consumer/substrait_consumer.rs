@@ -534,9 +534,11 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaConsumer] and forward this method to it
     fn with_lambda_parameters(
         &self,
-        lambda_parameters: &[Type],
-        input_schema: &DFSchema,
-    ) -> datafusion::common::Result<(Vec<String>, Self)>;
+        _lambda_parameters: &[Type],
+        _input_schema: &DFSchema,
+    ) -> datafusion::common::Result<(Vec<String>, Self)> {
+        not_impl_err!("SubstraitConsumer::with_lambda_parameters")
+    }
 
     /// Returns an expression corresponding to the lambda variable with the given field_idx within the lambda it originates from,
     /// at the lambda `step_outs` of the current scope
@@ -544,9 +546,11 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaConsumer] and forward this method to it
     fn lambda_variable(
         &self,
-        steps_out: usize,
-        field_idx: usize,
-    ) -> datafusion::common::Result<Expr>;
+        _steps_out: usize,
+        _field_idx: usize,
+    ) -> datafusion::common::Result<Expr> {
+        not_impl_err!("SubstraitConsumer::lambda_variable")
+    }
 }
 
 /// Default SubstraitConsumer for converting standard Substrait without user-defined extensions.
