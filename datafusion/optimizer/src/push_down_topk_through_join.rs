@@ -188,28 +188,31 @@ impl OptimizerRule for PushDownTopKThroughJoin {
             &join.right
         };
 
-        // Resolve sort exprs further through any SubqueryAlias wrapping the
-        // preserved child, so we can compare with the inner Sort's expressions.
-        //
-        // After intermediate resolution, resolved_sort_exprs = [t1.b ASC].
-        // The inner Sort uses [orders.b ASC].  This step maps t1.b → orders.b.
-        //
-        // ```text
-        // Sort(sub.b ASC, fetch=2)
-        //   SubqueryAlias(sub)              ← intermediate, already resolved
-        //     Left Join
-        //       SubqueryAlias(t1)           ← preserved child, resolve here
-        //         Sort(orders.b ASC, fetch=5)
-        //           TableScan: orders
-        // ```
-        let (inner_child, child_resolved_exprs) = match preserved_child.as_ref() {
-            LogicalPlan::SubqueryAlias(sq) => {
-                let exprs =
-                    resolve_sort_exprs_through_subquery_alias(&resolved_sort_exprs, sq)?;
-                (sq.input.as_ref(), exprs)
+        // Scan deep inside the preserved child (through SubqueryAlias and
+        // Projection layers) to find an existing Sort. If found with same
+        // exprs, tighten its fetch in-place. Otherwise, insert a new Sort
+        // directly below the join as the preserved child's wrapper.
+        let mut inner_child = preserved_child.as_ref();
+        let mut deep_resolved_exprs = resolved_sort_exprs.clone();
+        loop {
+            match inner_child {
+                LogicalPlan::SubqueryAlias(sq) => {
+                    deep_resolved_exprs = resolve_sort_exprs_through_subquery_alias(
+                        &deep_resolved_exprs,
+                        sq,
+                    )?;
+                    inner_child = sq.input.as_ref();
+                }
+                LogicalPlan::Projection(proj) => {
+                    deep_resolved_exprs = resolve_sort_exprs_through_projection(
+                        &deep_resolved_exprs,
+                        proj,
+                    )?;
+                    inner_child = proj.input.as_ref();
+                }
+                _ => break,
             }
-            _ => (preserved_child.as_ref(), resolved_sort_exprs.clone()),
-        };
+        }
 
         // If the inner child is a Limit (PushDownLimit hasn't merged it with
         // the Sort yet), skip this iteration.  PushDownLimit will merge
@@ -218,19 +221,24 @@ impl OptimizerRule for PushDownTopKThroughJoin {
             return Ok(Transformed::no(plan));
         }
 
-        // Push through when the preserved child has no Sort, or has a Sort
-        // with a larger/no fetch limit (our tighter limit reduces data further).
+        // Determine action based on existing inner Sort:
+        // - Same exprs, tighter fetch → skip (already optimal)
+        // - Same exprs, larger/no fetch → tighten in-place
+        // - Different exprs or no Sort → insert new Sort below the join
         //
-        // Example (push): Sort(a ASC, fetch=5) → Join → Sort(a ASC, fetch=10)
-        //   Child limits to 10, our tighter fetch=5 reduces data further.
+        // Example (tighten): Sort(a ASC, fetch=5) → Join → Sort(a ASC, fetch=10)
+        //   Child limits to 10, our tighter fetch=5 tightens it in-place.
         //
-        // Example (push): Sort(a ASC, fetch=5) → Join → Sort(a ASC)
-        //   Child has no fetch (full sort), adding fetch=5 limits early.
+        // Example (tighten): Sort(a ASC, fetch=5) → Join → Sort(a ASC)
+        //   Child has no fetch (full sort), tighten to fetch=5.
         //
         // Example (skip): Sort(a ASC, fetch=5) → Join → Sort(a ASC, fetch=3)
         //   Child already limits to 3 rows, pushing fetch=5 won't help.
-        if let LogicalPlan::Sort(child_sort) = inner_child {
-            let same_exprs = sort_exprs_equal(&child_sort.expr, &child_resolved_exprs);
+        //
+        // Example (new): Sort(b ASC, fetch=5) → Join → Sort(a ASC, fetch=10)
+        //   Different exprs, insert Sort(b, fetch=5) above preserved child.
+        let new_preserved_child = if let LogicalPlan::Sort(child_sort) = inner_child {
+            let same_exprs = sort_exprs_equal(&child_sort.expr, &deep_resolved_exprs);
             let child_fetch_tighter = match child_sort.fetch {
                 Some(child_fetch) => child_fetch <= fetch,
                 None => false,
@@ -238,45 +246,28 @@ impl OptimizerRule for PushDownTopKThroughJoin {
             if same_exprs && child_fetch_tighter {
                 return Ok(Transformed::no(plan));
             }
-        }
-
-        // Create the new Sort(fetch) on the preserved child.
-        // Use the resolved expressions for the pushed Sort.
-        //
-        // If the inner child is already a Sort with the same expressions but a
-        // larger fetch, tighten its fetch in-place instead of stacking a
-        // redundant Sort on top.
-        //
-        // When the preserved child is wrapped in SubqueryAlias, the new Sort
-        // must sit INSIDE the SubqueryAlias (between it and its input), using
-        // inner-schema column names.
-        let inner_input: &Arc<LogicalPlan> = match preserved_child.as_ref() {
-            LogicalPlan::SubqueryAlias(sq) => &sq.input,
-            _ => preserved_child,
-        };
-        let new_inner_child = match inner_child {
-            LogicalPlan::Sort(child_sort)
-                if sort_exprs_equal(&child_sort.expr, &child_resolved_exprs) =>
-            {
+            if same_exprs {
+                // Tighten existing Sort in-place by rebuilding the path
+                // from preserved child down to the Sort.
+                rebuild_with_tightened_sort(preserved_child.as_ref(), child_sort, fetch)?
+            } else {
+                // Different exprs — insert new Sort above the preserved child.
+                // If the inner Sort has no fetch, our pushed Sort is the only
+                // row reduction. If it has a fetch, re-sorting a small set is
+                // cheap and still reduces rows entering the join.
                 Arc::new(LogicalPlan::Sort(SortPlan {
-                    expr: child_sort.expr.clone(),
-                    input: Arc::clone(&child_sort.input),
+                    expr: resolved_sort_exprs,
+                    input: Arc::clone(preserved_child),
                     fetch: Some(fetch),
                 }))
             }
-            _ => Arc::new(LogicalPlan::Sort(SortPlan {
-                expr: child_resolved_exprs,
-                input: Arc::clone(inner_input),
+        } else {
+            // No existing Sort — insert new Sort below the join.
+            Arc::new(LogicalPlan::Sort(SortPlan {
+                expr: resolved_sort_exprs,
+                input: Arc::clone(preserved_child),
                 fetch: Some(fetch),
-            })),
-        };
-
-        // Wrap the new Sort back in SubqueryAlias if the preserved child had one.
-        let new_preserved_child = match preserved_child.as_ref() {
-            LogicalPlan::SubqueryAlias(sq) => Arc::new(LogicalPlan::SubqueryAlias(
-                SubqueryAlias::try_new(new_inner_child, sq.alias.clone())?,
-            )),
-            _ => new_inner_child,
+            }))
         };
 
         // Reconstruct the join with the new child
@@ -440,6 +431,56 @@ fn resolve_sort_exprs_through_subquery_alias(
         .collect();
 
     replace_columns_in_sort_exprs(sort_exprs, &replace_map)
+}
+
+/// Rebuild the tree from `root` down to an existing Sort, tightening the
+/// Sort's fetch to `new_fetch`. The path from `root` to the target Sort
+/// may contain Projections and SubqueryAliases.
+///
+/// Before (new_fetch=2):
+/// ```text
+/// SubqueryAlias(t1)
+///   Projection(a, b AS renamed_b)
+///     Sort(t1.b ASC, fetch=10)       ← target, fetch too large
+///       TableScan: t1
+/// ```
+///
+/// After:
+/// ```text
+/// SubqueryAlias(t1)                  ← rebuilt
+///   Projection(a, b AS renamed_b)    ← rebuilt
+///     Sort(t1.b ASC, fetch=2)        ← tightened
+///       TableScan: t1
+/// ```
+fn rebuild_with_tightened_sort(
+    root: &LogicalPlan,
+    target_sort: &SortPlan,
+    new_fetch: usize,
+) -> Result<Arc<LogicalPlan>> {
+    match root {
+        LogicalPlan::Sort(s) if std::ptr::eq(s, target_sort) => {
+            Ok(Arc::new(LogicalPlan::Sort(SortPlan {
+                expr: s.expr.clone(),
+                input: Arc::clone(&s.input),
+                fetch: Some(new_fetch),
+            })))
+        }
+        LogicalPlan::Projection(proj) => {
+            let new_input =
+                rebuild_with_tightened_sort(proj.input.as_ref(), target_sort, new_fetch)?;
+            let mut new_proj = proj.clone();
+            new_proj.input = new_input;
+            Ok(Arc::new(LogicalPlan::Projection(new_proj)))
+        }
+        LogicalPlan::SubqueryAlias(sq) => {
+            let new_input =
+                rebuild_with_tightened_sort(sq.input.as_ref(), target_sort, new_fetch)?;
+            Ok(Arc::new(LogicalPlan::SubqueryAlias(
+                SubqueryAlias::try_new(new_input, sq.alias.clone())?,
+            )))
+        }
+        _ => unreachable!("rebuild_with_tightened_sort: unexpected node"),
+    }
 }
 
 #[cfg(test)]
@@ -868,37 +909,28 @@ mod test {
         )
     }
 
-    // ---------------------------------------------------------------
-    // Unit tests for resolve_sort_exprs_through_projection
-    // ---------------------------------------------------------------
-
-    /// Simple passthrough: sort on a column that projection passes through.
-    /// Projection: [t1.a, t1.b] → sort on t1.b resolves to t1.b
+    /// Projection passthrough: sort expr matches a projected column directly.
     #[test]
     fn resolve_through_projection_passthrough() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
-
         let plan = LogicalPlanBuilder::from(t1)
             .project(vec![col("t1.a"), col("t1.b")])?
             .build()?;
         let LogicalPlan::Projection(proj) = &plan else {
             panic!("expected Projection");
         };
-
         let sort_exprs = vec![col("t1.b").sort(true, false)];
         let resolved = resolve_sort_exprs_through_projection(&sort_exprs, proj)?;
-
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].expr.to_string(), "t1.b");
         assert!(resolved[0].asc);
         Ok(())
     }
 
-    /// Aliased expression: sort on neg_b resolves to (- t1.b)
+    /// Projection alias: sort expr references an alias that maps to a negation.
     #[test]
     fn resolve_through_projection_alias() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
-
         let plan = LogicalPlanBuilder::from(t1)
             .project(vec![
                 col("t1.a"),
@@ -908,31 +940,26 @@ mod test {
         let LogicalPlan::Projection(proj) = &plan else {
             panic!("expected Projection");
         };
-
         let sort_exprs = vec![col("neg_b").sort(true, false)];
         let resolved = resolve_sort_exprs_through_projection(&sort_exprs, proj)?;
-
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].expr.to_string(), "(- t1.b)");
         Ok(())
     }
 
-    /// Multiple columns through projection: sort on (t1.a, t1.b)
+    /// Multi-column resolution preserves direction and nulls_first per column.
     #[test]
     fn resolve_through_projection_multi_column() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
-
         let plan = LogicalPlanBuilder::from(t1)
             .project(vec![col("t1.a"), col("t1.b"), col("t1.c")])?
             .build()?;
         let LogicalPlan::Projection(proj) = &plan else {
             panic!("expected Projection");
         };
-
         let sort_exprs =
             vec![col("t1.a").sort(true, false), col("t1.b").sort(false, true)];
         let resolved = resolve_sort_exprs_through_projection(&sort_exprs, proj)?;
-
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].expr.to_string(), "t1.a");
         assert!(resolved[0].asc);
@@ -942,12 +969,10 @@ mod test {
         Ok(())
     }
 
-    /// Projection + SubqueryAlias stacked: sort resolves through both.
-    /// neg_b → (- sub.b) through Projection → (- t1.b) through SubqueryAlias
+    /// Stacked Projection + SubqueryAlias: resolve through both layers.
     #[test]
     fn resolve_through_projection_and_subquery_alias() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
-
         let plan = LogicalPlanBuilder::from(t1)
             .alias("sub")?
             .project(vec![
@@ -955,116 +980,104 @@ mod test {
                 (Expr::Negative(Box::new(col("sub.b")))).alias("neg_b"),
             ])?
             .build()?;
-
-        // Peel: Projection then SubqueryAlias
         let LogicalPlan::Projection(proj) = &plan else {
             panic!("expected Projection");
         };
         let LogicalPlan::SubqueryAlias(sq) = proj.input.as_ref() else {
             panic!("expected SubqueryAlias");
         };
-
         let sort_exprs = vec![col("neg_b").sort(true, false)];
-
-        // Resolve through Projection: neg_b → (- sub.b)
         let after_proj = resolve_sort_exprs_through_projection(&sort_exprs, proj)?;
         assert_eq!(after_proj[0].expr.to_string(), "(- sub.b)");
-
-        // Resolve through SubqueryAlias: (- sub.b) → (- t1.b)
         let after_sq = resolve_sort_exprs_through_subquery_alias(&after_proj, sq)?;
         assert_eq!(after_sq[0].expr.to_string(), "(- t1.b)");
         assert!(after_sq[0].asc);
         assert!(!after_sq[0].nulls_first);
-
         Ok(())
     }
 
-    // ---------------------------------------------------------------
-    // Unit tests for resolve_sort_exprs_through_subquery_alias
-    // ---------------------------------------------------------------
-
-    /// Simple column rename: sub.b → t1.b
+    /// Simple SubqueryAlias resolution: sub.b → t1.b.
     #[test]
     fn resolve_through_subquery_alias_simple() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
-
         let plan = LogicalPlanBuilder::from(t1).alias("sub")?.build()?;
         let LogicalPlan::SubqueryAlias(sq) = &plan else {
             panic!("expected SubqueryAlias");
         };
-
         let sort_exprs = vec![col("sub.b").sort(true, false)];
         let resolved = resolve_sort_exprs_through_subquery_alias(&sort_exprs, sq)?;
-
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].expr.to_string(), "t1.b");
-        assert!(resolved[0].asc);
-        assert!(!resolved[0].nulls_first);
-        Ok(())
-    }
-
-    /// Multiple sort columns: sub.a ASC, sub.b DESC → t1.a ASC, t1.b DESC
-    #[test]
-    fn resolve_through_subquery_alias_multi_column() -> Result<()> {
-        let t1 = test_table_scan_with_name("t1")?;
-
-        let plan = LogicalPlanBuilder::from(t1).alias("sub")?.build()?;
-        let LogicalPlan::SubqueryAlias(sq) = &plan else {
-            panic!("expected SubqueryAlias");
-        };
-
-        let sort_exprs = vec![
-            col("sub.a").sort(true, false),
-            col("sub.b").sort(false, true),
-        ];
-        let resolved = resolve_sort_exprs_through_subquery_alias(&sort_exprs, sq)?;
-
-        assert_eq!(resolved.len(), 2);
-        assert_eq!(resolved[0].expr.to_string(), "t1.a");
-        assert!(resolved[0].asc);
-        assert_eq!(resolved[1].expr.to_string(), "t1.b");
-        assert!(!resolved[1].asc);
-        assert!(resolved[1].nulls_first);
-        Ok(())
-    }
-
-    /// Alias name differs from table name: foo.b → t1.b
-    #[test]
-    fn resolve_through_subquery_alias_different_name() -> Result<()> {
-        let t1 = test_table_scan_with_name("t1")?;
-
-        let plan = LogicalPlanBuilder::from(t1).alias("foo")?.build()?;
-        let LogicalPlan::SubqueryAlias(sq) = &plan else {
-            panic!("expected SubqueryAlias");
-        };
-
-        let sort_exprs = vec![col("foo.b").sort(true, false)];
-        let resolved = resolve_sort_exprs_through_subquery_alias(&sort_exprs, sq)?;
-
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].expr.to_string(), "t1.b");
         Ok(())
     }
 
-    /// Nested expression: (- sub.b) ASC → (- t1.b) ASC
+    /// Inner Sort has different exprs WITH fetch → stacked sorts.
+    /// Sort(b, fetch=2) is inserted above Sort(a, fetch=5). Re-sorting
+    /// 5 rows is cheap and reduces join input from 5 to 2.
     #[test]
-    fn resolve_through_subquery_alias_nested_expr() -> Result<()> {
+    fn topk_stacked_when_child_has_different_exprs_with_fetch() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
 
-        let plan = LogicalPlanBuilder::from(t1).alias("sub")?.build()?;
-        let LogicalPlan::SubqueryAlias(sq) = &plan else {
-            panic!("expected SubqueryAlias");
-        };
+        let t1_with_sort = LogicalPlanBuilder::from(t1)
+            .sort_with_limit(vec![col("t1.a").sort(true, false)], Some(5))?
+            .build()?;
 
-        let sort_exprs = vec![SortExpr {
-            expr: Expr::Negative(Box::new(col("sub.b"))),
-            asc: true,
-            nulls_first: false,
-        }];
-        let resolved = resolve_sort_exprs_through_subquery_alias(&sort_exprs, sq)?;
+        let plan = LogicalPlanBuilder::from(t1_with_sort)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(2))?
+            .build()?;
 
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].expr.to_string(), "(- t1.b)");
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.b ASC NULLS LAST, fetch=2
+          Left Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=2
+              Sort: t1.a ASC NULLS LAST, fetch=5
+                TableScan: t1
+            TableScan: t2
+        "
+        )
+    }
+
+    /// Inner Sort has different exprs WITHOUT fetch → stacked sorts.
+    /// Full sort doesn't limit rows, so pushed Sort(fetch=2) is the
+    /// only row reduction before the join.
+    #[test]
+    fn topk_stacked_when_child_has_different_exprs_no_fetch() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let t1_with_sort = LogicalPlanBuilder::from(t1)
+            .sort(vec![col("t1.a").sort(true, false)])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(t1_with_sort)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(2))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.b ASC NULLS LAST, fetch=2
+          Left Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=2
+              Sort: t1.a ASC NULLS LAST
+                TableScan: t1
+            TableScan: t2
+        "
+        )
     }
 }

@@ -54,8 +54,8 @@ Rule order matters. The default pipeline may change between releases.
 | 15    | `filter_null_join_keys`                   | Adds `IS NOT NULL` filters to nullable equijoin keys that can never match.                                                  |
 | 16    | `eliminate_outer_join`                    | Rewrites outer joins to inner joins when later filters reject the NULL-extended rows.                                       |
 | 17    | `push_down_limit`                         | Moves literal limits closer to scans and unions and merges adjacent limits.                                                 |
-| 18    | `push_down_topk_through_join`             | Pushes Sort with LIMIT through joins when sort columns come from the preserved side.                                        |
-| 19    | `push_down_filter`                        | Moves filters as early as possible through filter-commutative operators.                                                    |
+| 18    | `push_down_filter`                        | Moves filters as early as possible through filter-commutative operators.                                                    |
+| 19    | `push_down_topk_through_join`             | Pushes Sort with LIMIT through joins when sort columns come from the preserved side.                                        |
 | 20    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
 | 21    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
 | 22    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
