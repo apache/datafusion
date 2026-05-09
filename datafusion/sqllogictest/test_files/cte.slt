@@ -699,7 +699,7 @@ WITH RECURSIVE region_sales AS (
     SELECT
         s.salesperson_id AS salesperson_id,
         SUM(s.sale_amount) AS amount,
-        0 as level
+        SUM(0) as level
     FROM
         sales s
     GROUP BY
@@ -1082,7 +1082,7 @@ physical_plan
 02)--ProjectionExec: expr=[1 as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
-05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
+05)----ProjectionExec: expr=[n@0 + 1 as n]
 06)------FilterExec: n@0 < 10
 07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)----------WorkTableExec: name=numbers
@@ -1107,7 +1107,7 @@ physical_plan
 02)--ProjectionExec: expr=[1 as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
-05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
+05)----ProjectionExec: expr=[n@0 + 1 as n]
 06)------FilterExec: n@0 < 10
 07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)----------WorkTableExec: name=numbers

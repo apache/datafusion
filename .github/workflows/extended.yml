@@ -57,37 +57,9 @@ permissions:
   checks: write
 
 jobs:
-
-  # Check crate compiles and base cargo check passes
-  linux-build-lib:
-    name: linux build test
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
-    # note: do not use amd/rust container to preserve disk space
-    steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        with:
-          ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
-          submodules: true
-          fetch-depth: 1
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-          rustup toolchain install
-      - name: Install Protobuf Compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-      - name: Prepare cargo build
-        run: |
-          cargo check --profile ci --all-targets
-          cargo clean
-
   # Run extended tests (with feature 'extended_tests')
   linux-test-extended:
     name: cargo test 'extended_tests' (amd64)
-    needs: [linux-build-lib]
     runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:

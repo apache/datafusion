@@ -632,6 +632,15 @@ SHOW datafusion.runtime.list_files_cache_ttl
 ----
 datafusion.runtime.list_files_cache_ttl 1m30s
 
+# Test SET and SHOW for limit 0
+statement ok
+SET datafusion.runtime.list_files_cache_limit = '0'
+
+query TT
+SHOW datafusion.runtime.list_files_cache_limit
+----
+datafusion.runtime.list_files_cache_limit 0
+
 # Note: runtime.temp_directory shows the actual temp directory path with a unique suffix,
 # so we cannot test the exact value. We verify it exists in information_schema instead.
 
