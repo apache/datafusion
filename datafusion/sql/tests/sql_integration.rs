@@ -4966,7 +4966,7 @@ fn assert_field_not_found(mut err: DataFusionError, name: &str) {
 }
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for tests
     let _ = env_logger::try_init();

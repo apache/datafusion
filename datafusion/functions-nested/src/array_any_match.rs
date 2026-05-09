@@ -20,11 +20,14 @@
 use arrow::{
     array::{Array, AsArray, BooleanArray, BooleanBuilder, new_null_array},
     buffer::NullBuffer,
+    compute::take_arrays,
     datatypes::{ArrowNativeType, DataType, Field, FieldRef},
 };
 use datafusion_common::{
     Result, exec_datafusion_err, exec_err, plan_err,
-    utils::{adjust_offsets_for_slice, list_values, take_function_args},
+    utils::{
+        adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
+    },
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
@@ -196,7 +199,10 @@ impl HigherOrderUDF for ArrayAnyMatch {
         let values_param = || Ok(Arc::clone(&list_values));
 
         let predicate_results = lambda
-            .evaluate(&[&values_param])?
+            .evaluate(&[&values_param], |arrays| {
+                let indices = list_values_row_number(&list_array)?;
+                Ok(take_arrays(arrays, &indices, None)?)
+            })?
             .into_array(list_values.len())?;
 
         let predicate_bool = predicate_results
