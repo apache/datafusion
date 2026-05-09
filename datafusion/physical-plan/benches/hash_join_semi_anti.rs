@@ -16,6 +16,19 @@
 // under the License.
 
 //! Criterion benchmarks for Hash Join with RightSemi/RightAnti joins with Int32 keys.
+//!
+//! ## Key Benchmark Axes
+//!
+//! - **Density**: The ratio of distinct key values to the key range span.
+//!   For example, keys [0, 2, 4, 6, 8] have density = 5/9 ≈ 55% (5 distinct values
+//!   in a range of 9). Density affects hash table memory layout and cache behavior.
+//!   Lower density means keys are more spread out, leading to more cache misses.
+//!
+//! - **Hit Rate**: The percentage of probe rows that find a match in the build side.
+//!   This controls how often the join produces output rows.
+//!
+//! Semi/anti joins can short-circuit after finding the first match, so these
+//! benchmarks help evaluate optimization strategies for existence checks.
 
 use std::sync::Arc;
 
@@ -157,6 +170,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     let mut group = c.benchmark_group("hash_join_semi_anti");
 
     // Build side: 100K rows, Probe side: 1M rows
+    // Matching ratio: 1:1 (build keys are unique, each probe matches at most 1 build row)
     let build_rows = 100_000;
     let probe_rows = 1_000_000;
 
@@ -165,6 +179,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     // =========================================================================
 
     // RightSemi - 100% Density, 100% hit rate
+    // Keys: 0..100K contiguous, all probe rows find a match
     {
         let left_batches = build_batches(build_rows, build_rows, 0, &s);
         let right_batches = build_batches(probe_rows, build_rows, 0, &s);
@@ -178,6 +193,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightSemi - 100% Density, 10% hit rate
+    // Keys: 0..100K contiguous, only 10% of probe rows find a match
     {
         let left_batches = build_batches(build_rows, build_rows, 0, &s);
         let right_batches = build_batches(probe_rows, build_rows * 10, 0, &s);
@@ -191,6 +207,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightSemi - 50% Density, 100% hit rate
+    // Keys: 0, 2, 4, ... (sparse, multiplier=2), all probe rows find a match
     {
         let left_batches = build_batches_sparse(build_rows, build_rows, 0, 2, &s);
         let right_batches = build_batches_sparse(probe_rows, build_rows, 0, 2, &s);
@@ -204,6 +221,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightSemi - 50% Density, 10% hit rate
+    // Keys: 0, 2, 4, ... (sparse), only 10% of probe rows find a match
     {
         let left_batches = build_batches_sparse(build_rows, build_rows, 0, 2, &s);
         let right_batches = build_batches_sparse(probe_rows, build_rows * 10, 0, 2, &s);
@@ -217,6 +235,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightSemi - 10% Density, 100% hit rate
+    // Keys: 0, 10, 20, ... (very sparse, multiplier=10), all probe rows find a match
     {
         let left_batches = build_batches_sparse(build_rows, build_rows, 0, 10, &s);
         let right_batches = build_batches_sparse(probe_rows, build_rows, 0, 10, &s);
@@ -230,6 +249,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightSemi - 10% Density, 10% hit rate
+    // Keys: 0, 10, 20, ... (very sparse), only 10% of probe rows find a match
     {
         let left_batches = build_batches_sparse(build_rows, build_rows, 0, 10, &s);
         let right_batches = build_batches_sparse(probe_rows, build_rows * 10, 0, 10, &s);
@@ -247,6 +267,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     // =========================================================================
 
     // RightAnti - 100% Density, 100% hit rate (no output)
+    // Keys: 0..100K contiguous, all probe rows find a match -> no output
     {
         let left_batches = build_batches(build_rows, build_rows, 0, &s);
         let right_batches = build_batches(probe_rows, build_rows, 0, &s);
@@ -260,6 +281,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightAnti - 100% Density, 10% hit rate (90% output)
+    // Keys: 0..100K contiguous, only 10% of probe rows find a match -> 90% output
     {
         let left_batches = build_batches(build_rows, build_rows, 0, &s);
         let right_batches = build_batches(probe_rows, build_rows * 10, 0, &s);
@@ -273,6 +295,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightAnti - 50% Density, 100% hit rate (no output)
+    // Keys: 0, 2, 4, ... (sparse), all probe rows find a match -> no output
     {
         let left_batches = build_batches_sparse(build_rows, build_rows, 0, 2, &s);
         let right_batches = build_batches_sparse(probe_rows, build_rows, 0, 2, &s);
@@ -286,6 +309,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightAnti - 50% Density, 10% hit rate (90% output)
+    // Keys: 0, 2, 4, ... (sparse), only 10% of probe rows find a match -> 90% output
     {
         let left_batches = build_batches_sparse(build_rows, build_rows, 0, 2, &s);
         let right_batches = build_batches_sparse(probe_rows, build_rows * 10, 0, 2, &s);
@@ -299,6 +323,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightAnti - 10% Density, 100% hit rate (no output)
+    // Keys: 0, 10, 20, ... (very sparse), all probe rows find a match -> no output
     {
         let left_batches = build_batches_sparse(build_rows, build_rows, 0, 10, &s);
         let right_batches = build_batches_sparse(probe_rows, build_rows, 0, 10, &s);
@@ -312,6 +337,7 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     }
 
     // RightAnti - 10% Density, 10% hit rate (90% output)
+    // Keys: 0, 10, 20, ... (very sparse), only 10% of probe rows find a match -> 90% output
     {
         let left_batches = build_batches_sparse(build_rows, build_rows, 0, 10, &s);
         let right_batches = build_batches_sparse(probe_rows, build_rows * 10, 0, 10, &s);

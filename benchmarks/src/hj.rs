@@ -302,7 +302,8 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "60M",
     },
     // RightSemi Join benchmarks with Int32 keys
-    // Fanout: N/A for semi joins (returns at most one row per probe key)
+    // Matching ratio: 1:1 (build keys are unique, each probe matches at most 1 build row)
+    // Semi joins can short-circuit after first match, so hit rate affects performance.
     //
     // Q16: RightSemi, Small build (25 rows), 100% Hit rate
     // Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
@@ -344,7 +345,8 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "60M_RightSemi",
     },
     // RightAnti Join benchmarks with Int32 keys
-    // Fanout: N/A for anti joins (returns at most one row per probe key)
+    // Matching ratio: 1:1 (build keys are unique, each probe matches at most 1 build row)
+    // Anti joins can short-circuit after first match, so hit rate affects performance.
     //
     // Q19: RightAnti, Small build (25 rows), 100% Hit rate (no output)
     // Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
