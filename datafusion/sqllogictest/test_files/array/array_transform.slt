@@ -23,11 +23,11 @@ statement ok
 set datafusion.sql_parser.dialect = databricks;
 
 statement ok
-CREATE TABLE t (list array<int>, number int)
+CREATE TABLE t (text varchar, list array<int>, number int)
 AS VALUES
-([1, 50], 10),
-([4, 50], 40),
-([7, 50], 60);
+('a', [1, 50], 10),
+('b', [4, 50], 40),
+('c', [7, 50], 60);
 
 statement ok
 CREATE TABLE with_null_list (list array<int>)
@@ -99,7 +99,7 @@ logical_plan
 01)Projection: array_transform(make_array(t.number), (v) -> CAST(v AS Float64) + Float64(3))
 02)--TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> CAST(v@0 AS Float64) + 3) as array_transform(make_array(t.number),(v) -> v + Float64(3))]
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> CAST(v@1 AS Float64) + 3) as array_transform(make_array(t.number),(v) -> v + Float64(3))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 #cse should not eliminate subtrees containing lambdas
@@ -122,7 +122,7 @@ logical_plan
 02)--Projection: make_array(t.number) AS __common_expr_1
 03)----TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[array_transform(__common_expr_1@0, (v) -> CAST(v@0 AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(__common_expr_1@0, (v) -> CAST(v@0 AS Int64) * 2 - 1) as array_transform(make_array(t.number),(v) -> v * Int64(2) - Int64(1))]
+01)ProjectionExec: expr=[array_transform(__common_expr_1@0, (v) -> CAST(v@1 AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(__common_expr_1@0, (v) -> CAST(v@1 AS Int64) * 2 - 1) as array_transform(make_array(t.number),(v) -> v * Int64(2) - Int64(1))]
 02)--ProjectionExec: expr=[make_array(number@0) as __common_expr_1]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -142,7 +142,7 @@ logical_plan
 01)Projection: array_transform(make_array(t.number), (v) -> v IS NOT NULL OR Boolean(NULL)) AS array_transform(make_array(t.number),(v) -> v = v)
 02)--TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> v@0 IS NOT NULL OR NULL) as array_transform(make_array(t.number),(v) -> v = v)]
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> v@1 IS NOT NULL OR NULL) as array_transform(make_array(t.number),(v) -> v = v)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -154,7 +154,7 @@ logical_plan
 01)Projection: array_transform(CAST(CAST(t.list AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a AS Int64) + Int64(1)) AS array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))
 02)--TableScan: t projection=[list]
 physical_plan
-01)ProjectionExec: expr=[array_transform(CAST(CAST(list@0 AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a@0 AS Int64) + 1) as array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))]
+01)ProjectionExec: expr=[array_transform(CAST(CAST(list@0 AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a@1 AS Int64) + 1) as array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ?
@@ -166,11 +166,11 @@ select array_transform(arrow_cast(t.list, 'ListView(Int32)'), a -> a+1) from t;
 
 # higher order function with inner case using lambda variables only
 query ?
-select array_transform([3, 5, 0], v -> case when v > 1 then 2 when v > 4 then 6 else 8 end);
+select array_transform([1, 5, 9], v -> case when v = 1 then 2 when v = 5 then 6 else 8 end);
 ----
-[2, 2, 8]
+[2, 6, 8]
 
-#case with inner higher order function
+#case with inner higher order function (case EvalMethod::ExpressionOrExpression)
 query I??
 select
     t.number,
@@ -186,6 +186,108 @@ order by t.number;
 40 [4, 50] [5, 51]
 60 [7, 50] [8, 51]
 
+# case with inner nested higher order function (case EvalMethod::ExpressionOrExpression)
+query T?I?
+select
+    t.text,
+    t.list,
+    t.number,
+    case
+        when t.number > 30 then array_transform(
+                [[t.list]],
+                list -> array_transform(
+                    list,
+                    list -> array_transform(
+                        list,
+                        v -> number + v + list[1]
+                    )
+                )
+            )
+        else array_transform(
+                [[t.list]],
+                list -> array_transform(
+                    list,
+                    list -> array_transform(
+                        list,
+                        v -> number + list[1]
+                    )
+                )
+            )
+    end
+from t
+order by t.number;
+----
+a [1, 50] 10 [[[11, 11]]]
+b [4, 50] 40 [[[48, 94]]]
+c [7, 50] 60 [[[74, 117]]]
+
+# case with inner nested higher order function where the condition is a lambda function
+# (case EvalMethod::ExpressionOrExpression)
+query T?I?
+select
+    t.text,
+    t.list,
+    t.number,
+    case
+        when array_any_match(t.list, v -> v = 7) then array_transform(
+                [[t.list]],
+                list -> array_transform(
+                    list,
+                    list -> array_transform(
+                        list,
+                        v -> number + v + list[1]
+                    )
+                )
+            )
+        else array_transform(
+                [[t.list]],
+                list -> array_transform(
+                    list,
+                    list -> array_transform(
+                        list,
+                        v -> number + list[1]
+                    )
+                )
+            )
+    end
+from t
+order by t.number;
+----
+a [1, 50] 10 [[[11, 11]]]
+b [4, 50] 40 [[[44, 44]]]
+c [7, 50] 60 [[[74, 117]]]
+
+# case with condition (case EvalMethod::WithExpression)
+query ?IB
+select
+    t.list,
+    t.number,
+    case array_transform(t.list, v -> v + t.number)[1]
+    when array_transform(t.list, v -> v + 10)[1] then array_any_match(t.list, v -> v == 1)
+    when array_transform(t.list, v -> v + 40)[1] then array_any_match(t.list, v -> v == 4)
+    when array_transform(t.list, v -> v + 60)[1] then array_any_match(t.list, v -> v == 7)
+    end
+from t;
+----
+[1, 50] 10 true
+[4, 50] 40 true
+[7, 50] 60 true
+
+# case without condition and multiple when/then pairs (case EvalMethod::NoExpression)
+query ??
+select
+    t.list,
+    case
+    when array_any_match(t.list, v -> v == 1) then array_transform(t.list, v -> v + 1)
+    when array_any_match(t.list, v -> v == 4) then array_transform(t.list, v -> v + 2)
+    when array_any_match(t.list, v -> v == 7) then array_transform(t.list, v -> v + 3)
+    end
+from t;
+----
+[1, 50] [2, 51]
+[4, 50] [6, 52]
+[7, 50] [10, 53]
+
 # array_transform coercion rules
 query TT
 explain select array_transform(arrow_cast(t.list, 'FixedSizeList(2, Int32)'), a -> a+1) from t;
@@ -194,7 +296,7 @@ logical_plan
 01)Projection: array_transform(CAST(CAST(t.list AS FixedSizeList(2 x Int32)) AS List(Int32)), (a) -> CAST(a AS Int64) + Int64(1)) AS array_transform(arrow_cast(t.list,Utf8("FixedSizeList(2, Int32)")),(a) -> a + Int64(1))
 02)--TableScan: t projection=[list]
 physical_plan
-01)ProjectionExec: expr=[array_transform(CAST(CAST(list@0 AS FixedSizeList(2 x Int32)) AS List(Int32)), (a) -> CAST(a@0 AS Int64) + 1) as array_transform(arrow_cast(t.list,Utf8("FixedSizeList(2, Int32)")),(a) -> a + Int64(1))]
+01)ProjectionExec: expr=[array_transform(CAST(CAST(list@0 AS FixedSizeList(2 x Int32)) AS List(Int32)), (a) -> CAST(a@1 AS Int64) + 1) as array_transform(arrow_cast(t.list,Utf8("FixedSizeList(2, Int32)")),(a) -> a + Int64(1))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ?
@@ -235,13 +337,61 @@ select array_transform(list, v -> v+1) from fully_null_list;
 NULL
 NULL
 
-# higher order function with inner case using lambda variables and captured column(capture not supported yet)
-query error DataFusion error: Error during planning: lambda doesn't support column capture
-select array_transform([3, 5, 9], v -> case when v > 1 then t.number when v > 4 then 6 else 8 end) from t;
+# higher order function with inner case using lambda variables and captured column
+query ?
+select array_transform([1, 5, 9], v -> case when v = 1 then t.number when v = 5 then 6 else 8 end) from t;
+----
+[10, 6, 8]
+[40, 6, 8]
+[60, 6, 8]
 
-# higher order function with inner case using captured column only(capture not supported yet)
-query error DataFusion error: Error during planning: lambda doesn't support column capture
-select array_transform([3, 5, 9], v -> case when t.number > 1 then 2 when t.number > 4 then 6 else 8 end) from t;
+# higher order function with inner case using captured column only
+query ?
+select array_transform([3, 5, 9], v -> case when t.number = 10 then 2 when t.number = 40 then 6 else 8 end) from t;
+----
+[2, 2, 2]
+[6, 6, 6]
+[8, 8, 8]
+
+# explain case with inner nested higher order function
+query TT
+explain select
+    t.text,
+    t.list,
+    t.number,
+    case
+        when t.number > 30 then array_transform(
+                [[t.list]],
+                list -> array_transform(
+                    list,
+                    list -> array_transform(
+                        list,
+                        v -> number + v + list[1]
+                    )
+                )
+            )
+        else array_transform(
+                [[t.list]],
+                list -> array_transform(
+                    list,
+                    list -> array_transform(
+                        list,
+                        v -> number + list[1]
+                    )
+                )
+            )
+    end
+from t
+order by t.number;
+----
+logical_plan
+01)Sort: t.number ASC NULLS LAST
+02)--Projection: t.text, t.list, t.number, CASE WHEN t.number > Int32(30) THEN array_transform(make_array(make_array(t.list)), (list) -> array_transform(list, (list) -> array_transform(list, (v) -> t.number + v + array_element(list, Int64(1))))) ELSE array_transform(make_array(make_array(t.list)), (list) -> array_transform(list, (list) -> array_transform(list, (v) -> t.number + array_element(list, Int64(1))))) END AS CASE WHEN t.number > Int64(30) THEN array_transform(make_array(make_array(t.list)),(list) -> array_transform(list,(list) -> array_transform(list,(v) -> t.number + v + list[Int64(1)]))) ELSE array_transform(make_array(make_array(t.list)),(list) -> array_transform(list,(list) -> array_transform(list,(v) -> t.number + list[Int64(1)]))) END
+03)----TableScan: t projection=[text, list, number]
+physical_plan
+01)SortExec: expr=[number@2 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[text@0 as text, list@1 as list, number@2 as number, CASE WHEN number@2 > 30 THEN array_transform(make_array(make_array(list@1)), (list) -> array_transform(list@3, (list) -> array_transform(list@4, (v) -> number@2 + v@5 + array_element(list@4, 1)))) ELSE array_transform(make_array(make_array(list@1)), (list) -> array_transform(list@3, (list) -> array_transform(list@4, (v) -> number@2 + array_element(list@4, 1)))) END as CASE WHEN t.number > Int64(30) THEN array_transform(make_array(make_array(t.list)),(list) -> array_transform(list,(list) -> array_transform(list,(v) -> t.number + v + list[Int64(1)]))) ELSE array_transform(make_array(make_array(t.list)),(list) -> array_transform(list,(list) -> array_transform(list,(v) -> t.number + list[Int64(1)]))) END]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query error
 select array_transform();

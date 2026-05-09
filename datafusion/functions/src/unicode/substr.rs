@@ -279,10 +279,11 @@ fn string_view_substr(
         enable_ascii_fast_path(&string_view_array, start_array, count_array_opt);
 
     // Combine null bitmaps from all inputs in bulk.
-    let nulls = NullBuffer::union(
-        NullBuffer::union(string_view_array.nulls(), start_array.nulls()).as_ref(),
+    let nulls = NullBuffer::union_many([
+        string_view_array.nulls(),
+        start_array.nulls(),
         count_array_opt.and_then(|a| a.nulls()),
-    );
+    ]);
 
     let mut views_buf = Vec::with_capacity(string_view_array.len());
 
@@ -363,10 +364,11 @@ fn generic_string_substr<T: OffsetSizeTrait>(
     let mut has_out_of_line = false;
 
     // Combine null bitmaps from all inputs in bulk.
-    let nulls = NullBuffer::union(
-        NullBuffer::union(string_array.nulls(), start_array.nulls()).as_ref(),
+    let nulls = NullBuffer::union_many([
+        string_array.nulls(),
+        start_array.nulls(),
         count_array_opt.and_then(|a| a.nulls()),
-    );
+    ]);
 
     for i in 0..string_array.len() {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
@@ -418,10 +420,11 @@ fn generic_string_substr_copy<T: OffsetSizeTrait>(
     let is_ascii = enable_ascii_fast_path(&string_array, start_array, count_array_opt);
 
     // Combine null bitmaps from all inputs in bulk.
-    let nulls = NullBuffer::union(
-        NullBuffer::union(string_array.nulls(), start_array.nulls()).as_ref(),
+    let nulls = NullBuffer::union_many([
+        string_array.nulls(),
+        start_array.nulls(),
         count_array_opt.and_then(|a| a.nulls()),
-    );
+    ]);
 
     let mut result_builder = StringViewBuilder::new();
 
