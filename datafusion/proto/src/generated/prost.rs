@@ -1518,6 +1518,12 @@ pub struct PhysicalBinaryExprNode {
     /// When present, `l` and `r` are ignored and `operands` holds the flattened list.
     #[prost(message, repeated, tag = "4")]
     pub operands: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Optional pre-selection threshold for AND operations. When absent, the
+    /// default threshold is used on decode. Stored as a scalar-wrapped float so
+    /// it can round-trip distinguishably from "unset" while remaining
+    /// backwards-compatible with existing plans.
+    #[prost(float, optional, tag = "5")]
+    pub preselection_threshold: ::core::option::Option<f32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {

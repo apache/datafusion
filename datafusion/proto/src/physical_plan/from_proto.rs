@@ -275,6 +275,17 @@ pub fn parse_physical_expr_with_converter(
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(binary_expr) => {
             let op = logical_plan::from_proto::from_proto_binary_op(&binary_expr.op)?;
+            let threshold = binary_expr.preselection_threshold;
+            let build_binary = |left: Arc<dyn PhysicalExpr>,
+                                right: Arc<dyn PhysicalExpr>|
+             -> Arc<dyn PhysicalExpr> {
+                let mut expr = BinaryExpr::new(left, op, right);
+                if let Some(t) = threshold {
+                    expr = expr.with_preselection_threshold(t);
+                }
+                Arc::new(expr)
+            };
+
             if !binary_expr.operands.is_empty() {
                 // New linearized format: reduce the flat operands list back into
                 // a nested binary expression tree.
@@ -290,15 +301,12 @@ pub fn parse_physical_expr_with_converter(
                     ));
                 }
 
-                operands
-                    .into_iter()
-                    .reduce(|left, right| Arc::new(BinaryExpr::new(left, op, right)))
-                    .expect(
-                        "Binary expression could not be reduced to a single expression.",
-                    )
+                operands.into_iter().reduce(&build_binary).expect(
+                    "Binary expression could not be reduced to a single expression.",
+                )
             } else {
                 // Legacy format with l/r fields
-                Arc::new(BinaryExpr::new(
+                build_binary(
                     parse_required_physical_expr(
                         binary_expr.l.as_deref(),
                         ctx,
@@ -306,7 +314,6 @@ pub fn parse_physical_expr_with_converter(
                         input_schema,
                         proto_converter,
                     )?,
-                    op,
                     parse_required_physical_expr(
                         binary_expr.r.as_deref(),
                         ctx,
@@ -314,7 +321,7 @@ pub fn parse_physical_expr_with_converter(
                         input_schema,
                         proto_converter,
                     )?,
-                ))
+                )
             }
         }
         ExprType::AggregateExpr(_) => {

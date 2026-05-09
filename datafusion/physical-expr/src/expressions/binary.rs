@@ -55,6 +55,9 @@ use kernels::{
 /// Default threshold for pre-selection optimization in AND operations.
 /// When the ratio of true values in the left-hand side is below this threshold,
 /// the RecordBatch will be filtered before evaluating the right-hand side.
+///
+/// Note: this constant is intended as a sensible default and may be tuned in
+/// future releases. Downstream code should avoid depending on the exact value.
 pub const DEFAULT_PRESELECTION_THRESHOLD: f32 = 0.2;
 
 /// Binary expression
@@ -79,7 +82,10 @@ impl PartialEq for BinaryExpr {
             && self.op.eq(&other.op)
             && self.right.eq(&other.right)
             && self.fail_on_overflow.eq(&other.fail_on_overflow)
-            && self.preselection_threshold == other.preselection_threshold
+            // Compare bit patterns so NaN thresholds compare equal to themselves,
+            // keeping `PartialEq` consistent with the `Hash` implementation below.
+            && self.preselection_threshold.to_bits()
+                == other.preselection_threshold.to_bits()
     }
 }
 impl Eq for BinaryExpr {}
@@ -127,9 +133,50 @@ impl BinaryExpr {
     /// - Set to `0.0` to disable pre-selection optimization
     /// - Set to `1.0` to always apply pre-selection for AND operations
     /// - Default is [`DEFAULT_PRESELECTION_THRESHOLD`] (0.2)
+    ///
+    /// # Panics
+    ///
+    /// Panics (in debug builds) if `threshold` is not a finite value in the
+    /// range `[0.0, 1.0]`. In release builds the value is clamped to that
+    /// range, with `NaN` replaced by [`DEFAULT_PRESELECTION_THRESHOLD`].
+    ///
+    /// # Example
+    ///
+    /// Because this option is not currently exposed through `SessionConfig`,
+    /// callers typically apply it by transforming the physical plan and
+    /// rebuilding any [`BinaryExpr`] nodes with the desired threshold:
+    ///
+    /// ```ignore
+    /// use std::sync::Arc;
+    /// use datafusion_physical_expr::expressions::BinaryExpr;
+    /// use datafusion_physical_expr::PhysicalExpr;
+    ///
+    /// fn tune_threshold(expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+    ///     if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+    ///         return Arc::new(
+    ///             BinaryExpr::new(
+    ///                 Arc::clone(binary.left()),
+    ///                 *binary.op(),
+    ///                 Arc::clone(binary.right()),
+    ///             )
+    ///             .with_preselection_threshold(1.0),
+    ///         );
+    ///     }
+    ///     expr
+    /// }
+    /// ```
     pub fn with_preselection_threshold(self, threshold: f32) -> Self {
+        debug_assert!(
+            threshold.is_finite() && (0.0..=1.0).contains(&threshold),
+            "preselection_threshold must be a finite value in [0.0, 1.0], got {threshold}",
+        );
+        let preselection_threshold = if threshold.is_nan() {
+            DEFAULT_PRESELECTION_THRESHOLD
+        } else {
+            threshold.clamp(0.0, 1.0)
+        };
         Self {
-            preselection_threshold: threshold,
+            preselection_threshold,
             ..self
         }
     }
@@ -433,7 +480,8 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(
             BinaryExpr::new(Arc::clone(&children[0]), self.op, Arc::clone(&children[1]))
-                .with_fail_on_overflow(self.fail_on_overflow),
+                .with_fail_on_overflow(self.fail_on_overflow)
+                .with_preselection_threshold(self.preselection_threshold),
         ))
     }
 
@@ -5290,6 +5338,90 @@ mod tests {
             check_short_circuit(&value, &Operator::And, 1.0),
             ShortCircuitStrategy::PreSelection(_)
         ));
+    }
+
+    /// Verify that `with_preselection_threshold` clamps out-of-range values in
+    /// release builds (debug builds panic via `debug_assert!`).
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn test_preselection_threshold_clamping() {
+        let build = |threshold: f32| {
+            BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::And,
+                Arc::new(Column::new("b", 1)),
+            )
+            .with_preselection_threshold(threshold)
+            .preselection_threshold()
+        };
+
+        assert_eq!(build(-0.5), 0.0);
+        assert_eq!(build(1.5), 1.0);
+        assert_eq!(build(f32::INFINITY), 1.0);
+        assert_eq!(build(f32::NEG_INFINITY), 0.0);
+        assert_eq!(build(f32::NAN), DEFAULT_PRESELECTION_THRESHOLD);
+    }
+
+    /// Exercise the full `evaluate` path with a custom `preselection_threshold`,
+    /// including a round-trip through `with_new_children`, to ensure the
+    /// threshold is honored end-to-end rather than only within
+    /// `check_short_circuit`.
+    #[test]
+    fn test_preselection_threshold_evaluate() -> Result<()> {
+        use arrow::array::Int32Array;
+        use datafusion_common::cast::as_boolean_array;
+
+        // Schema: a BOOLEAN, b INT32
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        // Left side: 40% true values (2/5). This is above the default threshold
+        // of 0.2 but below a custom threshold of 0.5.
+        let a = Arc::new(BooleanArray::from(vec![true, false, false, true, false]));
+        let b = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![a, b])?;
+
+        // Expression: a AND (b > 15)
+        let a_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let b_gt_15: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", 1)),
+            Operator::Gt,
+            lit(15i32),
+        ));
+
+        // Sanity: default threshold should not trigger pre-selection for 40% true.
+        let default_expr =
+            BinaryExpr::new(Arc::clone(&a_col), Operator::And, Arc::clone(&b_gt_15));
+        let default_result = default_expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())?;
+        let default_bool = as_boolean_array(&default_result)?;
+        let expected = BooleanArray::from(vec![false, false, false, true, false]);
+        assert_eq!(default_bool, &expected);
+
+        // Custom threshold of 1.0 should force pre-selection through `evaluate`.
+        let custom_expr =
+            BinaryExpr::new(Arc::clone(&a_col), Operator::And, Arc::clone(&b_gt_15))
+                .with_preselection_threshold(1.0);
+        let custom_result = custom_expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let custom_bool = as_boolean_array(&custom_result)?;
+        assert_eq!(custom_bool, &expected);
+
+        // `with_new_children` must preserve the custom threshold so repeated
+        // plan rewrites do not silently reset it back to the default.
+        let rebuilt = Arc::new(custom_expr).with_new_children(vec![a_col, b_gt_15])?;
+        let rebuilt_binary = rebuilt
+            .downcast_ref::<BinaryExpr>()
+            .expect("rebuilt expression should still be a BinaryExpr");
+        assert_eq!(rebuilt_binary.preselection_threshold(), 1.0);
+
+        let rebuilt_result = rebuilt.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let rebuilt_bool = as_boolean_array(&rebuilt_result)?;
+        assert_eq!(rebuilt_bool, &expected);
+
+        Ok(())
     }
 
     /// Test for [pre_selection_scatter]

@@ -36,9 +36,9 @@ use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, DynamicFilterPhysicalExpr, InListExpr,
-    IsNotNullExpr, IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr,
-    UnKnownColumn,
+    BinaryExpr, CaseExpr, CastExpr, Column, DEFAULT_PRESELECTION_THRESHOLD,
+    DynamicFilterPhysicalExpr, InListExpr, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
+    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -307,12 +307,19 @@ pub fn serialize_physical_expr_with_converter(
     } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
         // Linearize a nested binary expression tree of the same operator
         // into a flat vector of operands to avoid deep recursion in proto.
+        //
+        // When linearizing we only fold children that share both the same
+        // operator *and* the same `preselection_threshold`, so the threshold
+        // survives a round trip through protobuf even for nested AND chains.
         let op = expr.op();
+        let threshold = expr.preselection_threshold();
         let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![expr.right()];
         let mut current_expr: &BinaryExpr = expr;
         loop {
             match current_expr.left().downcast_ref::<BinaryExpr>() {
-                Some(bin) if bin.op() == op => {
+                Some(bin)
+                    if bin.op() == op && bin.preselection_threshold() == threshold =>
+                {
                     operand_refs.push(bin.right());
                     current_expr = bin;
                 }
@@ -331,11 +338,20 @@ pub fn serialize_physical_expr_with_converter(
             .map(|e| proto_converter.physical_expr_to_proto(e, codec))
             .collect::<Result<Vec<_>>>()?;
 
+        // Only emit the threshold if it differs from the default, so plans
+        // produced by older encoders still deserialize identically.
+        let preselection_threshold = if threshold == DEFAULT_PRESELECTION_THRESHOLD {
+            None
+        } else {
+            Some(threshold)
+        };
+
         let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
             l: None,
             r: None,
             op: format!("{:?}", op),
             operands,
+            preselection_threshold,
         });
 
         Ok(protobuf::PhysicalExprNode {
