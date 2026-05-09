@@ -39,7 +39,7 @@ pub use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size, units,
 };
 pub use pool::*;
-pub use reclaimer::MemoryReclaimer;
+pub use reclaimer::{MemoryReclaimer, reclaimer_state};
 
 /// Tracks and potentially limits memory use across operators during execution.
 ///

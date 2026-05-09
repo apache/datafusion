@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::memory_pool::reclaimer::reclaimer_state;
 use crate::memory_pool::{
     MemoryConsumer, MemoryLimit, MemoryPool, MemoryReclaimer, MemoryReservation,
     human_readable_size,
@@ -29,7 +30,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::{
     num::NonZeroUsize,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
 
 /// A [`MemoryPool`] that enforces no limit
@@ -329,34 +330,49 @@ struct TrackedConsumer {
     reserved: AtomicUsize,
     peak: AtomicUsize,
     reclaimer: Option<Arc<dyn MemoryReclaimer>>,
-    /// Set to `true` while a reclaim is in-flight on this consumer, so
-    /// concurrent `try_grow_async` callers skip this victim instead of
-    /// double-reclaiming. Reset via [`ReclaimInFlightGuard`] on drop
-    /// (cancel-safe).
-    reclaim_in_flight: Arc<AtomicBool>,
+    /// Tri-state eligibility flag for [`reclaimer`], encoded per
+    /// [`reclaimer_state`]. The pool flips `AVAILABLE` ↔ `IN_FLIGHT`
+    /// for dedup; the reclaimer's owner may sticky-set `DISABLED` once
+    /// it can no longer free memory. Shared `Arc` so the reclaimer
+    /// side and the pool see the same cell. `None` reclaimer ⇒ flag
+    /// is unused but still allocated.
+    reclaimer_state: Arc<AtomicU8>,
 }
 
-/// RAII guard that clears [`TrackedConsumer::reclaim_in_flight`] on drop.
-struct ReclaimInFlightGuard {
-    flag: Arc<AtomicBool>,
+/// RAII guard for the [`IN_FLIGHT`] slot of a [`TrackedConsumer`]'s
+/// `reclaimer_state` flag. `Drop` only restores `AVAILABLE` if the
+/// state is still `IN_FLIGHT` — leaves a sticky `DISABLED` alone.
+///
+/// [`IN_FLIGHT`]: reclaimer_state::IN_FLIGHT
+struct ReclaimerStateGuard {
+    flag: Arc<AtomicU8>,
 }
 
-impl Drop for ReclaimInFlightGuard {
+impl Drop for ReclaimerStateGuard {
     fn drop(&mut self) {
-        self.flag.store(false, Ordering::Release);
+        let _ = self.flag.compare_exchange(
+            reclaimer_state::IN_FLIGHT,
+            reclaimer_state::AVAILABLE,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        );
     }
 }
 
-impl ReclaimInFlightGuard {
-    /// Atomically claims the in-flight slot, returning `Some(guard)` on
-    /// success or `None` if another reclaim is already running on this
-    /// consumer.
-    fn try_acquire(flag: &Arc<AtomicBool>) -> Option<Self> {
-        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-            .ok()
-            .map(|_| Self {
-                flag: Arc::clone(flag),
-            })
+impl ReclaimerStateGuard {
+    /// Try to transition the flag from `AVAILABLE` to `IN_FLIGHT`.
+    /// Fails on contention or on a sticky `DISABLED`.
+    fn try_acquire(flag: &Arc<AtomicU8>) -> Option<Self> {
+        flag.compare_exchange(
+            reclaimer_state::AVAILABLE,
+            reclaimer_state::IN_FLIGHT,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        )
+        .ok()
+        .map(|_| Self {
+            flag: Arc::clone(flag),
+        })
     }
 }
 
@@ -598,6 +614,16 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
     fn register(&self, consumer: &MemoryConsumer) {
         self.inner.register(consumer);
 
+        let reclaimer = consumer.reclaimer().cloned();
+        // Reuse the reclaimer's own flag when it provides one — that
+        // way the reclaimer side can sticky-set `DISABLED` and the
+        // pool sees it on the next filter pass. Otherwise allocate a
+        // fresh `AVAILABLE` flag for in-flight dedup only.
+        let state = reclaimer
+            .as_ref()
+            .and_then(|r| r.reclaimer_state())
+            .unwrap_or_else(|| Arc::new(AtomicU8::new(reclaimer_state::AVAILABLE)));
+
         let mut guard = self.tracked_consumers.write();
         let existing = guard.insert(
             consumer.id(),
@@ -606,8 +632,8 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 can_spill: consumer.can_spill(),
                 reserved: Default::default(),
                 peak: Default::default(),
-                reclaimer: consumer.reclaimer().cloned(),
-                reclaim_in_flight: Arc::new(AtomicBool::new(false)),
+                reclaimer,
+                reclaimer_state: state,
             },
         );
 
@@ -690,11 +716,10 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             // mutual-reclaim cycle (A targets B while B targets A) — at
             // most one side of any pair can hold strictly more memory,
             // so the other side has no candidates and surfaces an error
-            // for the caller's self-spill fallback. Skip zero-byte
-            // consumers and drop the read guard before awaiting any
-            // reclaim. Clone each victim's `reclaim_in_flight` flag so
-            // concurrent `try_grow_async` callers dedup against in-flight
-            // reclaims on the same victim.
+            // for the caller's self-spill fallback. Filter out anyone
+            // whose `reclaimer_state` flag is not `AVAILABLE` (in-flight or
+            // sticky-disabled). Drop the read guard before awaiting any
+            // reclaim.
             let requestor_id = reservation.consumer().id();
             let requestor_reserved = {
                 let guard = self.tracked_consumers.read();
@@ -703,7 +728,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                     .map(|tc| tc.reserved())
                     .unwrap_or(0)
             };
-            let mut candidates: Vec<(usize, Arc<dyn MemoryReclaimer>, Arc<AtomicBool>)> = {
+            let mut candidates: Vec<(usize, Arc<dyn MemoryReclaimer>, Arc<AtomicU8>)> = {
                 let guard = self.tracked_consumers.read();
                 guard
                     .iter()
@@ -712,10 +737,15 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                         if *cid == requestor_id || tc.reserved() <= requestor_reserved {
                             return None;
                         }
+                        if tc.reclaimer_state.load(Ordering::Acquire)
+                            != reclaimer_state::AVAILABLE
+                        {
+                            return None;
+                        }
                         Some((
                             tc.reserved(),
                             Arc::clone(reclaimer),
-                            Arc::clone(&tc.reclaim_in_flight),
+                            Arc::clone(&tc.reclaimer_state),
                         ))
                     })
                     .collect()
@@ -728,15 +758,15 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             candidates.truncate(self.reclaim_candidate_limit.get());
 
             // For each candidate: try to claim its in-flight slot
-            // (skip on contention so we work on a different victim
-            // rather than serializing behind a sibling's reclaim);
-            // re-check `try_grow` before reclaiming in case a sibling
-            // already freed enough; reclaim; retry `try_grow`. The
-            // retry path goes through `self.try_grow`, which already
-            // updates the tracked consumer's atomic reservation — no
-            // manual accounting needed here.
-            for (_, reclaimer, in_flight) in candidates {
-                let _g = match ReclaimInFlightGuard::try_acquire(&in_flight) {
+            // (skip on contention or sticky-disabled so we work on a
+            // different victim rather than serializing behind a
+            // sibling's reclaim); re-check `try_grow` before reclaiming
+            // in case a sibling already freed enough; reclaim; retry
+            // `try_grow`. The retry path goes through `self.try_grow`,
+            // which already updates the tracked consumer's atomic
+            // reservation — no manual accounting needed here.
+            for (_, reclaimer, flag) in candidates {
+                let _g = match ReclaimerStateGuard::try_acquire(&flag) {
                     Some(g) => g,
                     None => continue,
                 };

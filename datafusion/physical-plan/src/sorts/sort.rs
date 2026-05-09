@@ -66,7 +66,7 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryReclaimer, MemoryReservation,
+    MemoryConsumer, MemoryReclaimer, MemoryReservation, reclaimer_state,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
@@ -82,6 +82,10 @@ use log::{debug, trace};
 #[derive(Debug)]
 struct ExternalSorterReclaimer {
     tx: tokio::sync::mpsc::Sender<tokio::sync::oneshot::Sender<usize>>,
+    /// Shared with the pool's `TrackedConsumer` entry. Stream loop
+    /// flips it to `DISABLED` on merge entry so the pool stops
+    /// targeting this consumer.
+    reclaimer_state: Arc<std::sync::atomic::AtomicU8>,
 }
 
 #[async_trait::async_trait]
@@ -93,6 +97,10 @@ impl MemoryReclaimer for ExternalSorterReclaimer {
             return Ok(0);
         }
         Ok(resp_rx.await.unwrap_or(0))
+    }
+
+    fn reclaimer_state(&self) -> Option<Arc<std::sync::atomic::AtomicU8>> {
+        Some(Arc::clone(&self.reclaimer_state))
     }
 }
 
@@ -1282,8 +1290,14 @@ impl ExecutionPlan for SortExec {
                 // Spill-request channel; drained by the stream loop below.
                 let (reclaim_tx, mut reclaim_rx) =
                     tokio::sync::mpsc::channel::<tokio::sync::oneshot::Sender<usize>>(4);
+                let state = Arc::new(std::sync::atomic::AtomicU8::new(
+                    reclaimer_state::AVAILABLE,
+                ));
                 let reclaimer: Arc<dyn MemoryReclaimer> =
-                    Arc::new(ExternalSorterReclaimer { tx: reclaim_tx });
+                    Arc::new(ExternalSorterReclaimer {
+                        tx: reclaim_tx,
+                        reclaimer_state: Arc::clone(&state),
+                    });
 
                 let mut sorter = ExternalSorter::new(
                     partition,
@@ -1338,7 +1352,17 @@ impl ExecutionPlan for SortExec {
                                 }
                             }
                         }
-                        // Late reclaim requests now resolve to Ok(0).
+                        // Sticky-disable so concurrent `try_grow_async`
+                        // callers stop targeting this consumer once we
+                        // enter the merge phase. Set before dropping
+                        // the receiver to close any window where the
+                        // pool would observe `AVAILABLE` after the
+                        // channel is gone (and hence get `Ok(0)` from a
+                        // wasted `reclaim`).
+                        state.store(
+                            reclaimer_state::DISABLED,
+                            std::sync::atomic::Ordering::Release,
+                        );
                         drop(reclaim_rx);
                         sorter.sort().await
                     })

@@ -22,6 +22,22 @@
 
 use datafusion_common::Result;
 use std::fmt::Debug;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
+
+/// Encoded values stored in the [`reclaimer_state`] tri-state.
+///
+/// [`reclaimer_state`]: MemoryReclaimer::reclaimer_state
+pub mod reclaimer_state {
+    /// Reclaimer is idle and may be selected as a victim.
+    pub const AVAILABLE: u8 = 0;
+    /// A pool task is currently driving `reclaim` on this reclaimer.
+    pub const IN_FLIGHT: u8 = 1;
+    /// Reclaimer has been retired (e.g. operator entered a phase where
+    /// it can no longer free memory). Sticky — never returns to
+    /// `AVAILABLE`.
+    pub const DISABLED: u8 = 2;
+}
 
 /// Hook attached to a [`MemoryConsumer`] via
 /// [`MemoryConsumer::with_reclaimer`]. On
@@ -57,5 +73,16 @@ pub trait MemoryReclaimer: Send + Sync + Debug {
     /// Higher priorities reclaim first. Negative = last resort.
     fn priority(&self) -> i32 {
         0
+    }
+
+    /// Optional shared tri-state flag controlling whether the pool
+    /// currently considers this reclaimer eligible. Values are defined
+    /// in [`reclaimer_state`]. Returning `Some(arc)` lets the
+    /// reclaimer's owner flip itself to `DISABLED` once it can no
+    /// longer free memory (e.g., on entering a merge phase), which
+    /// the pool observes immediately. Returning `None` lets the pool
+    /// allocate its own private flag — used only for in-flight dedup.
+    fn reclaimer_state(&self) -> Option<Arc<AtomicU8>> {
+        None
     }
 }
