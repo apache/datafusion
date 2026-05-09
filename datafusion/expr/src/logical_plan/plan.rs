@@ -2510,12 +2510,90 @@ impl Filter {
         }
     }
 
+    /// Returns true if the predicate's boolean/null output type is obvious from
+    /// expression shape alone.
+    ///
+    /// This is a cheap syntactic fast path. It intentionally does not validate
+    /// child operand types and only skips the more expensive `get_type` call
+    /// when the top-level filter result type is already clear.
+    fn has_obvious_filter_type(predicate: &Expr) -> bool {
+        match predicate {
+            Expr::Alias(Alias { expr, .. }) => Self::has_obvious_filter_type(expr),
+            Expr::Literal(scalar, _) => Self::is_allowed_filter_type(&scalar.data_type()),
+            Expr::OuterReferenceColumn(field, _) | Expr::ScalarVariable(field, _) => {
+                Self::is_allowed_filter_type(field.data_type())
+            }
+            Expr::Placeholder(Placeholder {
+                field: Some(field), ..
+            }) => Self::is_allowed_filter_type(field.data_type()),
+            Expr::Placeholder(_) => true,
+            Expr::Cast(cast) => Self::is_allowed_filter_type(cast.field.data_type()),
+            Expr::TryCast(cast) => Self::is_allowed_filter_type(cast.field.data_type()),
+            Expr::ScalarSubquery(subquery) => Self::is_allowed_filter_type(
+                subquery.subquery.schema().field(0).data_type(),
+            ),
+            Expr::Not(expr) => Self::has_obvious_filter_type(expr),
+            Expr::IsNull(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Exists { .. }
+            | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
+            | Expr::Between(_)
+            | Expr::InList(_)
+            | Expr::Like(_)
+            | Expr::SimilarTo(_) => true,
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
+                Operator::And | Operator::Or => {
+                    Self::has_obvious_filter_type(left)
+                        && Self::has_obvious_filter_type(right)
+                }
+                Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::LtEq
+                | Operator::Gt
+                | Operator::GtEq
+                | Operator::IsDistinctFrom
+                | Operator::IsNotDistinctFrom
+                | Operator::RegexMatch
+                | Operator::RegexIMatch
+                | Operator::RegexNotMatch
+                | Operator::RegexNotIMatch
+                | Operator::LikeMatch
+                | Operator::ILikeMatch
+                | Operator::NotLikeMatch
+                | Operator::NotILikeMatch
+                | Operator::AtArrow
+                | Operator::ArrowAt
+                | Operator::AtAt => true,
+                _ => false,
+            },
+            Expr::Column(_)
+            | Expr::Case(_)
+            | Expr::ScalarFunction(_)
+            | Expr::AggregateFunction(_)
+            | Expr::WindowFunction(_)
+            | Expr::Unnest(_)
+            | Expr::Negative(_)
+            | Expr::GroupingSet(_) => false,
+            #[expect(deprecated)]
+            Expr::Wildcard { .. } => false,
+        }
+    }
+
     fn try_new_internal(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
-        if let Ok(predicate_type) = predicate.get_type(input.schema())
+        if !Self::has_obvious_filter_type(&predicate)
+            && let Ok(predicate_type) = predicate.get_type(input.schema())
             && !Filter::is_allowed_filter_type(&predicate_type)
         {
             return plan_err!(
@@ -5164,6 +5242,40 @@ mod tests {
         let filter =
             Filter::try_new(Expr::Column(col.into()).eq(lit(1i32)), scan).unwrap();
         assert!(filter.is_scalar());
+    }
+
+    #[test]
+    fn test_filter_try_new_strips_aliases() {
+        let scan = Arc::new(
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0]))
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        let predicate = col("id").alias("employee_id").eq(lit(1i32)).alias("pred");
+        let filter = Filter::try_new(predicate, scan).unwrap();
+
+        assert_eq!(filter.predicate, col("id").eq(lit(1i32)));
+    }
+
+    #[test]
+    fn test_filter_try_new_rejects_non_boolean_predicate() {
+        let scan = Arc::new(
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0]))
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        let predicate = col("id") + lit(1i32);
+
+        let err = Filter::try_new(predicate.clone(), Arc::clone(&scan)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot create filter with non-boolean predicate"),
+            "{err}"
+        );
     }
 
     #[test]
