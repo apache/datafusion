@@ -302,6 +302,7 @@ impl LogicalPlanBuilder {
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
             let mut common_metadata: Option<FieldMetadata> = None;
+            let mut nullable = false;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
                 let metadata = value.metadata(&schema)?;
@@ -315,6 +316,9 @@ impl LogicalPlanBuilder {
                     }
                 } else {
                     common_metadata = Some(metadata.clone());
+                }
+                if !nullable && value.nullable(&schema)? {
+                    nullable = true;
                 }
                 let data_type = value.get_type(&schema)?;
                 if data_type == DataType::Null {
@@ -338,7 +342,7 @@ impl LogicalPlanBuilder {
             // since the code loop skips NULL
             fields.push_with_metadata(
                 common_type.unwrap_or(DataType::Null),
-                true,
+                nullable,
                 common_metadata,
             );
         }
