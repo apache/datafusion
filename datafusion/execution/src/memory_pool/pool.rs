@@ -461,6 +461,11 @@ pub struct TrackConsumersPool<I> {
     inner: I,
     /// The amount of consumers to report(ordered top to bottom by reservation size)
     top: NonZeroUsize,
+    /// Cap on the number of reclaim candidates considered per
+    /// [`try_grow_async`] call. Bounds reclaim work when many consumers
+    /// are registered. Defaults to 4; override with
+    /// [`Self::with_reclaim_candidate_limit`].
+    reclaim_candidate_limit: NonZeroUsize,
     /// Maps consumer_id --> TrackedConsumer.
     ///
     /// Protected by an [`RwLock`] rather than a [`Mutex`]: registration
@@ -524,8 +529,16 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
         Self {
             inner,
             top,
+            reclaim_candidate_limit: NonZeroUsize::new(4).unwrap(),
             tracked_consumers: Default::default(),
         }
+    }
+
+    /// Override the cap on reclaim candidates considered per
+    /// [`try_grow_async`] call (default `4`).
+    pub fn with_reclaim_candidate_limit(mut self, n: NonZeroUsize) -> Self {
+        self.reclaim_candidate_limit = n;
+        self
     }
 
     /// Returns a reference to the wrapped inner [`MemoryPool`].
@@ -670,20 +683,33 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 Err(e) => e,
             };
 
-            // Snapshot reclaimers. Skip the requestor (self-reclaim risks
-            // deadlock) and zero-byte consumers. Drop the read guard
-            // before awaiting any reclaim. Also clone each victim's
-            // `reclaim_in_flight` flag so concurrent `try_grow_async`
-            // callers dedup against in-flight reclaims on the same
-            // victim.
+            // Snapshot reclaimers. Only consumers strictly larger than
+            // the requestor are eligible: smaller-or-equal siblings would
+            // free less than the requestor itself can, so the requestor
+            // should self-spill instead. This rule also breaks the
+            // mutual-reclaim cycle (A targets B while B targets A) — at
+            // most one side of any pair can hold strictly more memory,
+            // so the other side has no candidates and surfaces an error
+            // for the caller's self-spill fallback. Skip zero-byte
+            // consumers and drop the read guard before awaiting any
+            // reclaim. Clone each victim's `reclaim_in_flight` flag so
+            // concurrent `try_grow_async` callers dedup against in-flight
+            // reclaims on the same victim.
             let requestor_id = reservation.consumer().id();
+            let requestor_reserved = {
+                let guard = self.tracked_consumers.read();
+                guard
+                    .get(&requestor_id)
+                    .map(|tc| tc.reserved())
+                    .unwrap_or(0)
+            };
             let mut candidates: Vec<(usize, Arc<dyn MemoryReclaimer>, Arc<AtomicBool>)> = {
                 let guard = self.tracked_consumers.read();
                 guard
                     .iter()
                     .filter_map(|(cid, tc)| {
                         let reclaimer = tc.reclaimer.as_ref()?;
-                        if *cid == requestor_id || tc.reserved() == 0 {
+                        if *cid == requestor_id || tc.reserved() <= requestor_reserved {
                             return None;
                         }
                         Some((
@@ -698,6 +724,8 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             candidates.sort_by(|(lr, l, _), (rr, r, _)| {
                 r.priority().cmp(&l.priority()).then_with(|| rr.cmp(lr))
             });
+            // Cap reclaim work — only consider the top-ranked candidates.
+            candidates.truncate(self.reclaim_candidate_limit.get());
 
             // For each candidate: try to claim its in-flight slot
             // (skip on contention so we work on a different victim
