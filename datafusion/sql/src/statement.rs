@@ -43,6 +43,7 @@ use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
+use datafusion_common::metadata::check_metadata_with_storage_equal;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     Analyze, Cast, CreateCatalog, CreateCatalogSchema,
@@ -530,23 +531,40 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 .fields()
                                 .iter()
                                 .zip(input_fields)
-                                .map(|(field, input_field)| {
-                                    let metadata =
-                                        FieldMetadata::new_from_field(field.as_ref());
-                                    let alias_metadata = if metadata.is_empty() {
-                                        None
-                                    } else {
-                                        Some(metadata)
-                                    };
-                                    Expr::Cast(Cast::new_from_field(
-                                        Box::new(col(input_field.name())),
-                                        Arc::clone(field),
-                                    ))
-                                    .alias_with_metadata(field.name(), alias_metadata)
-                                })
-                                .collect::<Vec<_>>();
+                                .map(|(field, input_field)| -> Result<Expr> {
+                                    let input_meta = input_field.metadata();
+                                    let target_meta = field.metadata();
+                                    
+                                    let is_target_ext = target_meta.contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
+                                    let is_input_ext = input_meta.contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
 
-                            LogicalPlanBuilder::from(plan.clone())
+                                    if !is_target_ext && !is_input_ext {
+                                        return if input_field.data_type() == field.data_type() {
+                                            Ok(col(input_field.name()).alias(field.name()))
+                                        } else {
+                                            Ok(col(input_field.name())
+                                                .cast_to(field.data_type(), input_schema)?
+                                                .alias(field.name()))
+                                        };
+                                    }
+
+                                    let metadata_matches = check_metadata_with_storage_equal(
+                                        (input_field.data_type(), Some(input_meta)),
+                                        (field.data_type(), Some(target_meta)),
+                                        "input", "target"
+                                    ).is_ok();
+
+                                    if metadata_matches {
+                                        Ok(col(input_field.name()).alias(field.name()))
+                                    } else {
+                                        Ok(Expr::Cast(datafusion_expr::Cast::new_from_field(
+                                            Box::new(col(input_field.name())),
+                                            Arc::clone(field),
+                                        )).alias(field.name()))
+                                    }
+                                }).collect::<Result<Vec<_>>>()?;
+
+                                LogicalPlanBuilder::from(plan.clone())
                                 .project(project_exprs)?
                                 .build()?
                         } else {

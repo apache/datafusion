@@ -22,6 +22,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
 use std::sync::Arc;
+use datafusion_common::metadata::check_metadata_with_storage_equal;
 
 use crate::dml::CopyTo;
 use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
@@ -274,28 +275,42 @@ impl LogicalPlanBuilder {
         for j in 0..n_cols {
             let field = schema.field(j);
             let field_type = field.data_type();
-            let field_nullable = field.is_nullable();
-            let field_metadata = FieldMetadata::new_from_field(field);
+            let field_metadata = field.metadata();
+            let is_target_ext = field_metadata.contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
+            let column_name = format!("column {}", j);
             for row in values.iter() {
                 let value = &row[j];
-                let data_type = value.get_type(schema)?;
+                let value_type = value.get_type(schema)?;
+                if value_type == DataType::Null { continue; }
 
-                if !data_type.equals_datatype(field_type)
-                    && !can_cast_types(&data_type, field_type)
-                {
-                    return exec_err!(
-                        "type mismatch and can't cast to got {} and {}",
-                        data_type,
-                        field_type
-                    );
+                if is_target_ext {
+                    let value_meta = value.metadata(schema)?;
+                    let value_meta_map = value_meta.to_hashmap();
+                    let is_value_ext = value_meta_map.contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
+
+                    if is_value_ext && value_type == *field_type {
+                        check_metadata_with_storage_equal(
+                            (&value_type, Some(&value_meta_map)),
+                            (field_type, Some(field_metadata)),
+                            &column_name,
+                            " in VALUES list",
+                        )?;
+                    } else if !can_cast_types(&value_type, field_type) {
+                        return plan_err!("Cannot cast {} to extension type at column {}", value_type, column_name);
+                    }
+                } else {
+                    // Optimized path for standard types
+                    if !value_type.equals_datatype(field_type) && !can_cast_types(&value_type, field_type) {
+                        return plan_err!("Cannot cast {} to {} for column {}", value_type, field_type, column_name);
+                    }
                 }
             }
-            let metadata = if field_metadata.is_empty() {
-                None
-            } else {
-                Some(field_metadata)
-            };
-            fields.push_with_metadata(field_type.to_owned(), field_nullable, metadata);
+
+            fields.push_with_metadata(
+                field_type.clone(), 
+                field.is_nullable(), 
+                Some(FieldMetadata::new_from_field(field))
+            );
         }
 
         Self::infer_inner(values, fields, schema)
