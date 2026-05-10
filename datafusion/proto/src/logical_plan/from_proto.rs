@@ -58,8 +58,20 @@ use super::{AsLogicalPlan, LogicalExtensionCodec};
 
 impl From<&protobuf::UnnestOptions> for UnnestOptions {
     fn from(opts: &protobuf::UnnestOptions) -> Self {
+        use datafusion_common::NullHandling;
+        use protobuf::unnest_options::NullHandling as ProtoNullHandling;
+        let null_handling = match ProtoNullHandling::try_from(opts.null_handling) {
+            Ok(ProtoNullHandling::Preserve) => NullHandling::Preserve,
+            Ok(ProtoNullHandling::Drop) => NullHandling::Drop,
+            Ok(ProtoNullHandling::PreserveAndExpandEmpty) => {
+                NullHandling::PreserveAndExpandEmpty
+            }
+            // Unknown enum values fall back to the default (Preserve), which
+            // matches DataFusion's historical behavior.
+            Err(_) => NullHandling::Preserve,
+        };
         Self {
-            preserve_nulls: opts.preserve_nulls,
+            null_handling,
             recursions: opts
                 .recursions
                 .iter()

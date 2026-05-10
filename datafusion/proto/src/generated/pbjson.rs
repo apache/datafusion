@@ -25005,18 +25005,20 @@ impl serde::Serialize for UnnestOptions {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.preserve_nulls {
+        if !self.recursions.is_empty() {
             len += 1;
         }
-        if !self.recursions.is_empty() {
+        if self.null_handling != 0 {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.UnnestOptions", len)?;
-        if self.preserve_nulls {
-            struct_ser.serialize_field("preserveNulls", &self.preserve_nulls)?;
-        }
         if !self.recursions.is_empty() {
             struct_ser.serialize_field("recursions", &self.recursions)?;
+        }
+        if self.null_handling != 0 {
+            let v = unnest_options::NullHandling::try_from(self.null_handling)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.null_handling)))?;
+            struct_ser.serialize_field("nullHandling", &v)?;
         }
         struct_ser.end()
     }
@@ -25028,15 +25030,15 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "preserve_nulls",
-            "preserveNulls",
             "recursions",
+            "null_handling",
+            "nullHandling",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            PreserveNulls,
             Recursions,
+            NullHandling,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -25058,8 +25060,8 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                         E: serde::de::Error,
                     {
                         match value {
-                            "preserveNulls" | "preserve_nulls" => Ok(GeneratedField::PreserveNulls),
                             "recursions" => Ok(GeneratedField::Recursions),
+                            "nullHandling" | "null_handling" => Ok(GeneratedField::NullHandling),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -25079,31 +25081,105 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut preserve_nulls__ = None;
                 let mut recursions__ = None;
+                let mut null_handling__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::PreserveNulls => {
-                            if preserve_nulls__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("preserveNulls"));
-                            }
-                            preserve_nulls__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::Recursions => {
                             if recursions__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("recursions"));
                             }
                             recursions__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::NullHandling => {
+                            if null_handling__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullHandling"));
+                            }
+                            null_handling__ = Some(map_.next_value::<unnest_options::NullHandling>()? as i32);
+                        }
                     }
                 }
                 Ok(UnnestOptions {
-                    preserve_nulls: preserve_nulls__.unwrap_or_default(),
                     recursions: recursions__.unwrap_or_default(),
+                    null_handling: null_handling__.unwrap_or_default(),
                 })
             }
         }
         deserializer.deserialize_struct("datafusion.UnnestOptions", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for unnest_options::NullHandling {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Preserve => "PRESERVE",
+            Self::Drop => "DROP",
+            Self::PreserveAndExpandEmpty => "PRESERVE_AND_EXPAND_EMPTY",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for unnest_options::NullHandling {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "PRESERVE",
+            "DROP",
+            "PRESERVE_AND_EXPAND_EMPTY",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = unnest_options::NullHandling;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "PRESERVE" => Ok(unnest_options::NullHandling::Preserve),
+                    "DROP" => Ok(unnest_options::NullHandling::Drop),
+                    "PRESERVE_AND_EXPAND_EMPTY" => Ok(unnest_options::NullHandling::PreserveAndExpandEmpty),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for ValuesNode {

@@ -54,8 +54,17 @@ use crate::protobuf::LogicalPlanNode;
 
 impl From<&UnnestOptions> for protobuf::UnnestOptions {
     fn from(opts: &UnnestOptions) -> Self {
+        use datafusion_common::NullHandling;
+        use protobuf::unnest_options::NullHandling as ProtoNullHandling;
+        let null_handling = match opts.null_handling {
+            NullHandling::Preserve => ProtoNullHandling::Preserve,
+            NullHandling::Drop => ProtoNullHandling::Drop,
+            NullHandling::PreserveAndExpandEmpty => {
+                ProtoNullHandling::PreserveAndExpandEmpty
+            }
+        } as i32;
         Self {
-            preserve_nulls: opts.preserve_nulls,
+            null_handling,
             recursions: opts
                 .recursions
                 .iter()

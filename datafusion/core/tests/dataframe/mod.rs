@@ -4357,6 +4357,7 @@ async fn unnest_column_nulls() -> Result<()> {
 
     let options = UnnestOptions::new().with_preserve_nulls(false);
     let results = df
+        .clone()
         .unnest_columns_with_options(&["list"], options)?
         .collect()
         .await?;
@@ -4368,6 +4369,29 @@ async fn unnest_column_nulls() -> Result<()> {
     +------+----+
     | 1    | A  |
     | 2    | A  |
+    | 3    | D  |
+    +------+----+
+    "
+    );
+
+    // Spark `explode_outer` semantics: NULL and empty lists both produce a
+    // single output row containing NULL.
+    let options = UnnestOptions::new()
+        .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
+    let results = df
+        .unnest_columns_with_options(&["list"], options)?
+        .collect()
+        .await?;
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r"
+    +------+----+
+    | list | id |
+    +------+----+
+    | 1    | A  |
+    | 2    | A  |
+    |      | B  |
+    |      | C  |
     | 3    | D  |
     +------+----+
     "
