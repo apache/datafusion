@@ -1429,20 +1429,27 @@ impl SessionContext {
             && table_provider.table_type() == table_type
         {
             schema.deregister_table(&table)?;
-            if table_type == TableType::Base {
-                if let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache()
-                {
-                    lfc.drop_table_entries(&Some(table_ref.clone()))?;
-                }
-                if let Some(fsc) =
-                    self.runtime_env().cache_manager.get_file_statistic_cache()
-                {
-                    fsc.drop_table_entries(&Some(table_ref.clone()))?;
-                }
-            }
+            self.invalidate_caches(&Some(table_ref.clone()), table_type)?;
             return Ok(true);
         }
         Ok(false)
+    }
+
+    fn invalidate_caches(
+        &self,
+        table_ref: &Option<TableReference>,
+        table_type: TableType,
+    ) -> Result<()> {
+        if table_type == TableType::Base {
+            if let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache() {
+                lfc.drop_table_entries(table_ref)?;
+            }
+            if let Some(fsc) = self.runtime_env().cache_manager.get_file_statistic_cache()
+            {
+                fsc.drop_table_entries(table_ref)?;
+            }
+        }
+        Ok(())
     }
 
     async fn create_function(&self, stmt: CreateFunction) -> Result<DataFrame> {
@@ -1879,10 +1886,17 @@ impl SessionContext {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_owned();
-        self.state
+        let result = self
+            .state
             .read()
-            .schema_for_ref(table_ref)?
-            .deregister_table(&table)
+            .schema_for_ref(table_ref.clone())?
+            .deregister_table(&table);
+
+        if let Ok(Some(ref table_provider)) = result {
+            self.invalidate_caches(&Some(table_ref), table_provider.table_type())?;
+        }
+
+        result
     }
 
     /// Return `true` if the specified table exists in the schema provider.
