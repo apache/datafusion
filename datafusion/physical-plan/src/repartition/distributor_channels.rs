@@ -40,7 +40,8 @@
 //! 1. *Gate A* — every output channel has at least one buffered item. This is the earliest legitimate backpressure
 //!    point: every consumer has work to do, so throttling the producer is safe.
 //! 2. *Gate B* — total in-memory bytes buffered across all channels reaches the configured `max_buffered_bytes`. This
-//!    bounds memory under skewed fan-out, where Gate A would never fire because some channel is always empty.
+//!    bounds memory whenever some channel is always empty, e.g. skewed fan-out, or even balanced fan-out where one
+//!    consumer lags: the producer keeps adding to the slow channel each round Gate A briefly opens.
 //!
 //! While the gate is closed, sender futures are [pending](Poll::Pending) until either a receiver drains an item or
 //! enough bytes are released to reopen the gate.

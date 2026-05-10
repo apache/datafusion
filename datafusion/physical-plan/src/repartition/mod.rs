@@ -1503,7 +1503,8 @@ impl RepartitionExec {
                         };
 
                     // Spilled markers occupy ~no in-channel memory; only count Memory variants against the gate's
-                    // byte budget.
+                    // byte budget. `size` may over-count for shared buffers (e.g. dictionary values across hash
+                    // partitions); over-counting is conservative — it just blocks producers slightly earlier.
                     let send_bytes = if is_memory_batch { size } else { 0 };
 
                     if channel
