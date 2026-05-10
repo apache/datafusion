@@ -29,7 +29,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit, UInt32Type,
+    DataType, Field, Fields, Schema, SchemaRef, TimeUnit, UInt32Type,
     UnionFields,
 };
 use arrow::record_batch::RecordBatch;

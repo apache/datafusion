@@ -56,7 +56,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions, exec_err,
+    TableReference, ToDFSchema, UnnestOptions,
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
@@ -278,7 +278,7 @@ impl LogicalPlanBuilder {
             let field_metadata = field.metadata();
             let is_target_ext = field_metadata
                 .contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
-            let column_name = format!("column {}", j);
+            let column_name = format!("column {j}");
             for row in values.iter() {
                 let value = &row[j];
                 let value_type = value.get_type(schema)?;

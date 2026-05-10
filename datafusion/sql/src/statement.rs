@@ -31,7 +31,6 @@ use crate::utils::normalize_ident;
 
 use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
-use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::metadata::check_metadata_with_storage_equal;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
@@ -46,7 +45,7 @@ use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    Analyze, Cast, CreateCatalog, CreateCatalogSchema,
+    Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
