@@ -353,10 +353,7 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
-            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
-                // we take the schema of the static term as the schema of the entire recursive query
-                static_term.schema()
-            }
+            LogicalPlan::RecursiveQuery(RecursiveQuery { schema, .. }) => schema,
         }
     }
 
@@ -1080,12 +1077,12 @@ impl LogicalPlan {
             }) => {
                 self.assert_no_expressions(expr)?;
                 let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    is_distinct: *is_distinct,
-                }))
+                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery::try_new(
+                    name.clone(),
+                    Arc::new(static_term),
+                    Arc::new(recursive_term),
+                    *is_distinct,
+                )?))
             }
             LogicalPlan::Analyze(a) => {
                 self.assert_no_expressions(expr)?;
@@ -2246,7 +2243,7 @@ impl PartialOrd for EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -2255,9 +2252,82 @@ pub struct RecursiveQuery {
     /// The recursive term (evaluated on the contents of the working table until
     /// it returns an empty set)
     pub recursive_term: Arc<LogicalPlan>,
+    /// Output schema, using static term field names and nullability widened
+    /// across both static and recursive terms.
+    pub schema: DFSchemaRef,
     /// Should the output of the recursive term be deduplicated (`UNION`) or
     /// not (`UNION ALL`).
     pub is_distinct: bool,
+}
+
+impl RecursiveQuery {
+    /// Create a recursive query with an output schema using static term field names
+    /// and nullability widened across both static and recursive terms.
+    pub fn try_new(
+        name: String,
+        static_term: Arc<LogicalPlan>,
+        recursive_term: Arc<LogicalPlan>,
+        is_distinct: bool,
+    ) -> Result<Self> {
+        let schema = recursive_query_schema(static_term.schema(), recursive_term.schema())?;
+        Ok(Self {
+            name,
+            static_term,
+            recursive_term,
+            schema,
+            is_distinct,
+        })
+    }
+}
+
+fn recursive_query_schema(
+    static_schema: &DFSchema,
+    recursive_schema: &DFSchema,
+) -> Result<DFSchemaRef> {
+    let fields = static_schema
+        .fields()
+        .iter()
+        .zip(recursive_schema.fields().iter())
+        .enumerate()
+        .map(|(i, (static_field, recursive_field))| {
+            let (qualifier, _) = static_schema.qualified_field(i);
+            let mut field = Field::new(
+                static_field.name(),
+                static_field.data_type().clone(),
+                static_field.is_nullable() || recursive_field.is_nullable(),
+            );
+            field.set_metadata(intersect_metadata_for_union([
+                static_field.metadata(),
+                recursive_field.metadata(),
+            ]));
+            Ok((qualifier.cloned(), Arc::new(field)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let metadata = intersect_metadata_for_union([
+        static_schema.metadata(),
+        recursive_schema.metadata(),
+    ]);
+    Ok(Arc::new(DFSchema::new_with_metadata(fields, metadata)?))
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for RecursiveQuery {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (
+            &self.name,
+            &self.static_term,
+            &self.recursive_term,
+            self.is_distinct,
+        )
+            .partial_cmp(&(
+                &other.name,
+                &other.static_term,
+                &other.recursive_term,
+                other.is_distinct,
+            ))
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
 }
 
 /// Values expression. See

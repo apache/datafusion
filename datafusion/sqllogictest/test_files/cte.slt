@@ -1300,6 +1300,19 @@ DROP TABLE cte_schema_reread;
 statement ok
 DROP TABLE cte_schema_records;
 
+# Recursive CTE nullability is union-like: anchor names are preserved,
+# but nullable recursive output widens the CTE output schema.
+query I
+WITH RECURSIVE t AS (
+  SELECT 0 AS n
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS n FROM t WHERE n IS NOT NULL
+)
+SELECT * FROM t;
+----
+0
+NULL
+
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
 

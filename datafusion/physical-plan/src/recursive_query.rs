@@ -35,7 +35,7 @@ use crate::{
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -93,8 +93,12 @@ impl RecursiveQueryExec {
         // Use the static term as the declared recursive CTE output schema. The
         // recursive term is planned independently, so align it at plan construction
         // time instead of patching batches in RecursiveQueryStream.
-        let output_schema = static_term.schema();
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
+        let output_schema = recursive_query_output_schema(
+            &static_term.schema(),
+            &recursive_term.schema(),
+        )?;
+        let static_term = align_plan_to_schema(static_term, &output_schema)?;
         let recursive_term = align_plan_to_schema(recursive_term, &output_schema)?;
         let cache = Self::compute_properties(Arc::clone(&output_schema));
         Ok(RecursiveQueryExec {
@@ -370,6 +374,47 @@ impl RecursiveQueryStream {
     }
 }
 
+fn recursive_query_output_schema(
+    static_schema: &SchemaRef,
+    recursive_schema: &SchemaRef,
+) -> Result<SchemaRef> {
+    if static_schema.fields().len() != recursive_schema.fields().len() {
+        return datafusion_common::plan_err!(
+            "RecursiveQueryExec static and recursive terms have different number of columns: {} != {}",
+            static_schema.fields().len(),
+            recursive_schema.fields().len()
+        );
+    }
+
+    let fields = static_schema
+        .fields()
+        .iter()
+        .zip(recursive_schema.fields().iter())
+        .enumerate()
+        .map(|(i, (static_field, recursive_field))| {
+            if static_field.data_type() != recursive_field.data_type() {
+                return datafusion_common::plan_err!(
+                    "RecursiveQueryExec column {i} has different types: static term has {} whereas recursive term has {}",
+                    static_field.data_type(),
+                    recursive_field.data_type()
+                );
+            }
+            let mut field = Field::new(
+                static_field.name(),
+                static_field.data_type().clone(),
+                static_field.is_nullable() || recursive_field.is_nullable(),
+            );
+            field.set_metadata(static_field.metadata().clone());
+            Ok(Arc::new(field))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Arc::new(Schema::new_with_metadata(
+        fields,
+        static_schema.metadata().clone(),
+    )))
+}
+
 fn assign_work_table(
     plan: Arc<dyn ExecutionPlan>,
     work_table: &Arc<WorkTable>,
@@ -496,7 +541,6 @@ fn new_groups_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::SchemaAlignExec;
     use crate::empty::EmptyExec;
     use crate::projection::ProjectionExec;
 
@@ -538,23 +582,22 @@ mod tests {
     }
 
     #[test]
-    fn recursive_query_exec_preserves_static_nullability_contract() -> Result<()> {
+    fn recursive_query_exec_widens_output_nullability_from_recursive_term() -> Result<()> {
         let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
 
         let exec = recursive_exec(Arc::clone(&static_term), Arc::clone(&recursive_term))?;
 
-        let static_schema = static_term.schema();
-        assert_eq!(exec.schema(), static_schema);
-        assert_eq!(exec.static_term().schema(), static_schema);
-        assert_eq!(exec.recursive_term().schema(), static_schema);
-        assert!(!exec.schema().field(0).is_nullable());
-        let aligned = exec
-            .recursive_term()
-            .downcast_ref::<SchemaAlignExec>()
-            .expect("nullable recursive term should be aligned with SchemaAlignExec");
-        assert!(Arc::ptr_eq(aligned.input(), &recursive_term));
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]));
+        assert_eq!(exec.schema(), expected_schema);
+        assert_eq!(exec.static_term().schema(), expected_schema);
+        assert_eq!(exec.recursive_term().schema(), expected_schema);
+        assert!(exec.schema().field(0).is_nullable());
         Ok(())
     }
 }

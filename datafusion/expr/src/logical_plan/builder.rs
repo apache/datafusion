@@ -192,12 +192,14 @@ impl LogicalPlanBuilder {
         // Ensure that the recursive term has the same field types as the static term
         let coerced_recursive_term =
             coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
-        Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
-            name,
-            static_term: self.plan,
-            recursive_term: Arc::new(coerced_recursive_term),
-            is_distinct,
-        })))
+        Ok(Self::from(LogicalPlan::RecursiveQuery(
+            RecursiveQuery::try_new(
+                name,
+                self.plan,
+                Arc::new(coerced_recursive_term),
+                is_distinct,
+            )?,
+        )))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -2364,6 +2366,23 @@ mod tests {
           TableScan: employee_csv projection=[state, salary]
         ");
 
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_query_schema_widens_nullability_from_recursive_term() -> Result<()> {
+        let static_term = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(0i32).alias("n")])?;
+        let recursive_term = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(ScalarValue::Int32(None)).alias("recursive_n")])?
+            .build()?;
+
+        let plan = static_term
+            .to_recursive_query("t".to_string(), recursive_term, false)?
+            .build()?;
+
+        assert_eq!(plan.schema().field(0).name(), "n");
+        assert!(plan.schema().field(0).is_nullable());
         Ok(())
     }
 
