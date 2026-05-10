@@ -281,7 +281,7 @@ impl LogicalPlanBuilder {
             let field_metadata = field.metadata();
             let is_target_ext = field_metadata
                 .contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
-            let column_name = format!("column {}", j);
+            let column_name = format!("column {j}");
             for row in values.iter() {
                 let value = &row[j];
                 let value_type = value.get_type(schema)?;
