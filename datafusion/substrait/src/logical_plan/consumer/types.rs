@@ -347,12 +347,96 @@ fn from_substrait_struct_type(
 ) -> datafusion::common::Result<Fields> {
     let mut fields = vec![];
     for (i, f) in s.types.iter().enumerate() {
-        let field = Field::new(
-            next_struct_field_name(i, dfs_names, name_idx)?,
-            from_substrait_type(consumer, f, dfs_names, name_idx)?,
-            true, // We assume everything to be nullable since that's easier than ensuring it matches
-        );
+        let name = next_struct_field_name(i, dfs_names, name_idx)?;
+        let data_type = from_substrait_type(consumer, f, dfs_names, name_idx)?;
+        let field = Field::new(name, data_type, type_is_nullable(f));
         fields.push(field);
     }
     Ok(fields.into())
+}
+
+fn type_is_nullable(dt: &Type) -> bool {
+    let Some(kind) = dt.kind.as_ref() else {
+        return true;
+    };
+
+    let nullability = match kind {
+        r#type::Kind::Bool(boolean) => boolean.nullability,
+        r#type::Kind::I8(integer) => integer.nullability,
+        r#type::Kind::I16(integer) => integer.nullability,
+        r#type::Kind::I32(integer) => integer.nullability,
+        r#type::Kind::I64(integer) => integer.nullability,
+        r#type::Kind::Fp32(float) => float.nullability,
+        r#type::Kind::Fp64(float) => float.nullability,
+        #[expect(deprecated)]
+        r#type::Kind::Timestamp(timestamp) => timestamp.nullability,
+        r#type::Kind::Date(date) => date.nullability,
+        #[expect(deprecated)]
+        r#type::Kind::Time(time) => time.nullability,
+        #[expect(deprecated)]
+        r#type::Kind::TimestampTz(timestamp) => timestamp.nullability,
+        r#type::Kind::IntervalYear(interval) => interval.nullability,
+        r#type::Kind::IntervalDay(interval) => interval.nullability,
+        r#type::Kind::IntervalCompound(interval) => interval.nullability,
+        r#type::Kind::Uuid(uuid) => uuid.nullability,
+        r#type::Kind::String(string) => string.nullability,
+        r#type::Kind::Binary(binary) => binary.nullability,
+        r#type::Kind::FixedChar(fixed) => fixed.nullability,
+        r#type::Kind::Varchar(varchar) => varchar.nullability,
+        r#type::Kind::FixedBinary(fixed) => fixed.nullability,
+        r#type::Kind::Decimal(decimal) => decimal.nullability,
+        r#type::Kind::PrecisionTime(time) => time.nullability,
+        r#type::Kind::PrecisionTimestamp(timestamp) => timestamp.nullability,
+        r#type::Kind::PrecisionTimestampTz(timestamp) => timestamp.nullability,
+        r#type::Kind::Struct(r#struct) => r#struct.nullability,
+        r#type::Kind::List(list) => list.nullability,
+        r#type::Kind::Map(map) => map.nullability,
+        r#type::Kind::Func(func) => func.nullability,
+        r#type::Kind::UserDefined(user_defined) => user_defined.nullability,
+        #[expect(deprecated)]
+        r#type::Kind::UserDefinedTypeReference(_) => r#type::Nullability::Required as i32,
+        r#type::Kind::Alias(alias) => alias.nullability,
+    };
+
+    is_nullable(nullability)
+}
+
+fn is_nullable(nullability: i32) -> bool {
+    match r#type::Nullability::try_from(nullability) {
+        Ok(r#type::Nullability::Required) => false,
+        Ok(r#type::Nullability::Nullable | r#type::Nullability::Unspecified) | Err(_) => {
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use substrait::proto::r#type::Kind;
+
+    #[test]
+    fn type_is_nullable_user_defined_type_reference_is_required() {
+        // The deprecated `UserDefinedTypeReference` variant doesn't carry a
+        // nullability field; the consumer hardcodes Required (non-null).
+        #[expect(deprecated)]
+        let dt = Type {
+            kind: Some(Kind::UserDefinedTypeReference(0)),
+        };
+        assert!(!type_is_nullable(&dt));
+    }
+
+    #[test]
+    fn type_is_nullable_missing_kind_defaults_to_nullable() {
+        // Defensive: a Type whose kind is None is treated as nullable.
+        let dt = Type { kind: None };
+        assert!(type_is_nullable(&dt));
+    }
+
+    #[test]
+    fn is_nullable_handles_unrecognized_enum_value() {
+        // Defensive: an unrecognized Nullability enum value (one prost
+        // doesn't know about) is treated as nullable.
+        assert!(is_nullable(i32::MAX));
+    }
 }
