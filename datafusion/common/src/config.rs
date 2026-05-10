@@ -596,6 +596,19 @@ config_namespace! {
         /// Default: 128 MB
         pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
 
+        /// Maximum total in-memory bytes buffered in `RepartitionExec` distribution
+        /// channels per gate group, before producers are throttled. The gate also
+        /// closes when every output channel has at least one buffered item, so the
+        /// byte budget primarily acts as a cap for skewed fan-out workloads where
+        /// one channel would otherwise grow unbounded.
+        ///
+        /// Acts as a soft cap: if a single batch exceeds the budget and the channel
+        /// is empty, the channel allows the batch through to avoid head-of-line
+        /// blocking.
+        ///
+        /// Default: 100 MB
+        pub repartition_buffer_size_bytes: usize, default = 100 * 1024 * 1024
+
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
 

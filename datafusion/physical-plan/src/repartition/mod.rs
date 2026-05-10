@@ -299,18 +299,27 @@ impl RepartitionExecState {
 
         let spill_manager = Arc::new(spill_manager);
 
+        let max_buffered_bytes = context
+            .session_config()
+            .options()
+            .execution
+            .repartition_buffer_size_bytes;
+
         let (txs, rxs) = if preserve_order {
             // Create partition-aware channels with one channel per (input, output) pair
             // This provides backpressure while maintaining proper ordering
-            let (txs_all, rxs_all) =
-                partition_aware_channels(num_input_partitions, num_output_partitions);
+            let (txs_all, rxs_all) = partition_aware_channels(
+                num_input_partitions,
+                num_output_partitions,
+                max_buffered_bytes,
+            );
             // Take transpose of senders and receivers. `state.channels` keeps track of entries per output partition
             let txs = transpose(txs_all);
             let rxs = transpose(rxs_all);
             (txs, rxs)
         } else {
             // Create one channel per *output* partition with backpressure
-            let (txs, rxs) = channels(num_output_partitions);
+            let (txs, rxs) = channels(num_output_partitions, max_buffered_bytes);
             // Clone sender for each input partitions
             let txs = txs
                 .into_iter()
@@ -1493,7 +1502,16 @@ impl RepartitionExec {
                             }
                         };
 
-                    if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
+                    // Spilled markers occupy ~no in-channel memory; only count Memory variants against the gate's
+                    // byte budget.
+                    let send_bytes = if is_memory_batch { size } else { 0 };
+
+                    if channel
+                        .sender
+                        .send(Some(Ok(batch_to_send)), send_bytes)
+                        .await
+                        .is_err()
+                    {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         // Only shrink memory if it was a memory batch
                         if is_memory_batch {
@@ -1556,7 +1574,8 @@ impl RepartitionExec {
                         "Join Error".to_string(),
                         Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
                     ));
-                    tx.send(Some(err)).await.ok();
+                    // Sentinel send: zero bytes against the gate budget.
+                    tx.send(Some(err), 0).await.ok();
                 }
             }
             // Error from running input task
@@ -1567,14 +1586,16 @@ impl RepartitionExec {
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
                     let err = Err(DataFusionError::from(&e));
-                    tx.send(Some(err)).await.ok();
+                    // Sentinel send: zero bytes against the gate budget.
+                    tx.send(Some(err), 0).await.ok();
                 }
             }
             // Input task completed successfully
             Ok(Ok(())) => {
                 // notify each output partition that this input partition has no more data
                 for (_partition, tx) in txs {
-                    tx.send(None).await.ok();
+                    // End-of-stream marker: zero bytes against the gate budget.
+                    tx.send(None, 0).await.ok();
                 }
             }
         }

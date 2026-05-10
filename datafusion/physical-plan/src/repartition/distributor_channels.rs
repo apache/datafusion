@@ -34,9 +34,19 @@
 //! +----+      +------+  +--------+  +----+
 //! ```
 //!
-//! There are `N` virtual MPSC (multi-producer, single consumer) channels with unbounded capacity. However, if all
-//! buffers/channels are non-empty, than a global gate will be closed preventing new data from being written (the
-//! sender futures will be [pending](Poll::Pending)) until at least one channel is empty (and not closed).
+//! There are `N` virtual MPSC (multi-producer, single consumer) channels with unbounded capacity. The global gate
+//! closes when **either** of two conditions is met:
+//!
+//! 1. *Gate A* — every output channel has at least one buffered item. This is the earliest legitimate backpressure
+//!    point: every consumer has work to do, so throttling the producer is safe.
+//! 2. *Gate B* — total in-memory bytes buffered across all channels reaches the configured `max_buffered_bytes`. This
+//!    bounds memory under skewed fan-out, where Gate A would never fire because some channel is always empty.
+//!
+//! While the gate is closed, sender futures are [pending](Poll::Pending) until either a receiver drains an item or
+//! enough bytes are released to reopen the gate.
+//!
+//! As a soft cap, an empty channel is always allowed one push regardless of Gate B (the "overdraw escape"). Without
+//! this, a single batch larger than `max_buffered_bytes` would head-of-line block its consumer indefinitely.
 use std::{
     collections::VecDeque,
     future::Future,
@@ -51,16 +61,22 @@ use std::{
 
 use parking_lot::Mutex;
 
-/// Create `n` empty channels.
+/// Create `n` empty channels with a shared byte budget of `max_buffered_bytes`.
+///
+/// The byte budget is summed across all `n` channels in the returned set. Pass `usize::MAX` (or any value larger than
+/// the workload) to effectively disable Gate B.
 pub fn channels<T>(
     n: usize,
+    max_buffered_bytes: usize,
 ) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
     let channels = (0..n)
         .map(|id| Arc::new(Channel::new_with_one_sender(id)))
         .collect::<Vec<_>>();
     let gate = Arc::new(Gate {
         empty_channels: AtomicUsize::new(n),
-        send_wakers: Mutex::new(None),
+        buffered_bytes: AtomicUsize::new(0),
+        max_buffered_bytes,
+        send_wakers: Mutex::new(Vec::new()),
     });
     let senders = channels
         .iter()
@@ -85,11 +101,17 @@ type PartitionAwareReceivers<T> = Vec<Vec<DistributionReceiver<T>>>;
 /// Create `n_out` empty channels for each of the `n_in` inputs.
 /// This way, each distinct partition will communicate via a dedicated channel.
 /// This SPSC structure enables us to track which partition input data comes from.
+///
+/// Each input gets its own gate group, so `max_buffered_bytes` bounds the in-memory buffering of each input task
+/// independently.
 pub fn partition_aware_channels<T>(
     n_in: usize,
     n_out: usize,
+    max_buffered_bytes: usize,
 ) -> (PartitionAwareSenders<T>, PartitionAwareReceivers<T>) {
-    (0..n_in).map(|_| channels(n_out)).unzip()
+    (0..n_in)
+        .map(|_| channels(n_out, max_buffered_bytes))
+        .unzip()
 }
 
 /// Erroring during [send](DistributionSender::send).
@@ -125,14 +147,19 @@ pub struct DistributionSender<T> {
 }
 
 impl<T> DistributionSender<T> {
-    /// Send data.
+    /// Send `element` accounted as `bytes` against the gate's byte budget.
+    ///
+    /// `bytes` should be the in-memory size of `element` (e.g. `RecordBatch::get_array_memory_size()`). Sentinel
+    /// values that don't represent real data (end-of-stream markers, error markers, spilled-batch markers) should
+    /// pass `0`.
     ///
     /// This fails if the [receiver](DistributionReceiver) is gone.
-    pub fn send(&self, element: T) -> SendFuture<'_, T> {
+    pub fn send(&self, element: T, bytes: usize) -> SendFuture<'_, T> {
         SendFuture {
             channel: &self.channel,
             gate: &self.gate,
             element: Box::new(Some(element)),
+            bytes,
         }
     }
 }
@@ -180,7 +207,7 @@ impl<T> Drop for DistributionSender<T> {
                 .unwrap_or_default()
             {
                 // channel is gone, so we need to clear our signal
-                self.gate.decr_empty_channels();
+                self.gate.empty_channels.fetch_sub(1, Ordering::SeqCst);
             }
 
             // make sure that nobody can add wakers anymore
@@ -201,6 +228,7 @@ pub struct SendFuture<'a, T> {
     gate: &'a SharedGate,
     // the additional Box is required for `Self: Unpin`
     element: Box<Option<T>>,
+    bytes: usize,
 }
 
 impl<T> Future for SendFuture<'_, T> {
@@ -221,21 +249,31 @@ impl<T> Future for SendFuture<'_, T> {
                 )));
             };
 
-            // does ANY receiver need data?
-            // if so, allow sender to create another
-            if this.gate.empty_channels.load(Ordering::SeqCst) == 0 {
+            let was_empty = data.is_empty();
+
+            // Park if the gate is closed *and* this channel is not empty.
+            //
+            // Overdraw escape: if `was_empty` is true, this channel's consumer has nothing to chew on. Blocking the
+            // push would starve the consumer. Gate A cannot be closed when `was_empty` is true (the empty-channels
+            // count is at least 1), so `was_empty` only short-circuits Gate B.
+            if !was_empty && this.gate.is_closed() {
+                // Re-check under the send_wakers lock to avoid a lost-wakeup race:
+                // - if the gate is still closed, park.
+                // - if the gate opened between our first read and acquiring this lock, fall through and push.
                 let mut guard = this.gate.send_wakers.lock();
-                if let Some(send_wakers) = guard.deref_mut() {
-                    send_wakers.push((cx.waker().clone(), this.channel.id));
+                if this.gate.is_closed() {
+                    guard.push((cx.waker().clone(), this.channel.id));
                     return Poll::Pending;
                 }
             }
 
-            let was_empty = data.is_empty();
-            data.push_back(this.element.take().expect("just checked"));
+            // Push.
+            let bytes = this.bytes;
+            data.push_back((this.element.take().expect("just checked"), bytes));
+            this.gate.buffered_bytes.fetch_add(bytes, Ordering::SeqCst);
 
             if was_empty {
-                this.gate.decr_empty_channels();
+                this.gate.empty_channels.fetch_sub(1, Ordering::SeqCst);
                 guard_channel_state.take_recv_wakers()
             } else {
                 Vec::with_capacity(0)
@@ -273,18 +311,46 @@ impl<T> DistributionReceiver<T> {
 
 impl<T> Drop for DistributionReceiver<T> {
     fn drop(&mut self) {
-        let mut guard_channel_state = self.channel.state.lock();
-        let data = guard_channel_state.data.take().expect("not dropped yet");
+        let to_wake = {
+            let mut guard_channel_state = self.channel.state.lock();
+            let data = guard_channel_state.data.take().expect("not dropped yet");
 
-        // See `DistributedSender::drop` for an explanation of the drop order and when the "empty channels" counter is
-        // decremented.
-        if data.is_empty() && (self.channel.n_senders.load(Ordering::SeqCst) > 0) {
-            // channel is gone, so we need to clear our signal
-            self.gate.decr_empty_channels();
+            // Drain residual bytes from this channel out of the global budget so other channels can keep using it.
+            let drained_bytes: usize = data.iter().map(|(_, bytes)| *bytes).sum();
+            let bytes_before = self
+                .gate
+                .buffered_bytes
+                .fetch_sub(drained_bytes, Ordering::SeqCst);
+            let bytes_after = bytes_before - drained_bytes;
+
+            // See `DistributedSender::drop` for an explanation of the drop order and when the "empty channels" counter
+            // is decremented.
+            let empty_changed =
+                data.is_empty() && self.channel.n_senders.load(Ordering::SeqCst) > 0;
+            let empty_before = if empty_changed {
+                self.gate.empty_channels.fetch_sub(1, Ordering::SeqCst)
+            } else {
+                self.gate.empty_channels.load(Ordering::SeqCst)
+            };
+            let empty_after = empty_before - usize::from(empty_changed);
+
+            let was_closed =
+                empty_before == 0 || bytes_before >= self.gate.max_buffered_bytes;
+            let is_open = empty_after > 0 && bytes_after < self.gate.max_buffered_bytes;
+
+            if was_closed && is_open {
+                // The byte release reopened the gate; wake every parked sender so they can re-check.
+                std::mem::take(&mut *self.gate.send_wakers.lock())
+            } else {
+                // Gate state didn't transition; just wake parked senders for this dead channel so they error.
+                self.gate.take_channel_senders(self.channel.id)
+            }
+        };
+
+        // wake outside of lock scope
+        for (waker, _) in to_wake {
+            waker.wake();
         }
-
-        // senders may be waiting for gate to open but should error now that the channel is closed
-        self.gate.wake_channel_senders(self.channel.id);
     }
 }
 
@@ -307,33 +373,49 @@ impl<T> Future for RecvFuture<'_, T> {
         let data = channel_state.data.as_mut().expect("not dropped yet");
 
         match data.pop_front() {
-            Some(element) => {
-                // change "empty" signal for this channel?
-                if data.is_empty() && channel_state.recv_wakers.is_some() {
-                    // update counter
-                    let old_counter =
-                        this.gate.empty_channels.fetch_add(1, Ordering::SeqCst);
+            Some((element, item_bytes)) => {
+                let bytes_before = this
+                    .gate
+                    .buffered_bytes
+                    .fetch_sub(item_bytes, Ordering::SeqCst);
+                let bytes_after = bytes_before - item_bytes;
 
-                    // open gate?
-                    let to_wake = if old_counter == 0 {
-                        let mut guard = this.gate.send_wakers.lock();
+                let became_empty = data.is_empty();
+                let still_live = channel_state.recv_wakers.is_some();
+                let empty_changed = became_empty && still_live;
 
-                        // check after lock to see if we should still change the state
-                        if this.gate.empty_channels.load(Ordering::SeqCst) > 0 {
-                            guard.take().unwrap_or_default()
-                        } else {
-                            Vec::with_capacity(0)
-                        }
+                let empty_before = if empty_changed {
+                    this.gate.empty_channels.fetch_add(1, Ordering::SeqCst)
+                } else {
+                    this.gate.empty_channels.load(Ordering::SeqCst)
+                };
+                let empty_after = empty_before + usize::from(empty_changed);
+
+                let was_closed =
+                    empty_before == 0 || bytes_before >= this.gate.max_buffered_bytes;
+                let is_open =
+                    empty_after > 0 && bytes_after < this.gate.max_buffered_bytes;
+
+                let to_wake = if was_closed && is_open {
+                    let mut guard = this.gate.send_wakers.lock();
+
+                    // Re-check under the lock; another thread may have re-closed the gate concurrently.
+                    let empty_now = this.gate.empty_channels.load(Ordering::SeqCst);
+                    let bytes_now = this.gate.buffered_bytes.load(Ordering::SeqCst);
+                    if empty_now > 0 && bytes_now < this.gate.max_buffered_bytes {
+                        std::mem::take(&mut *guard)
                     } else {
                         Vec::with_capacity(0)
-                    };
-
-                    drop(guard_channel_state);
-
-                    // wake outside of lock scope
-                    for (waker, _channel_id) in to_wake {
-                        waker.wake();
                     }
+                } else {
+                    Vec::with_capacity(0)
+                };
+
+                drop(guard_channel_state);
+
+                // wake outside of lock scope
+                for (waker, _channel_id) in to_wake {
+                    waker.wake();
                 }
 
                 this.rdy = true;
@@ -383,10 +465,10 @@ impl<T> Channel<T> {
 
 #[derive(Debug)]
 struct ChannelState<T> {
-    /// Buffered data.
+    /// Buffered data, paired with the per-item byte size used for Gate B accounting.
     ///
     /// This is [`None`] when the receiver is gone.
-    data: Option<VecDeque<T>>,
+    data: Option<VecDeque<(T, usize)>>,
 
     /// Wakers for the receiver side.
     ///
@@ -415,57 +497,53 @@ impl<T> ChannelState<T> {
 /// One or multiple senders and a single receiver will share a channel.
 type SharedChannel<T> = Arc<Channel<T>>;
 
-/// The "all channels have data" gate.
+/// Hybrid backpressure gate.
+///
+/// The gate is closed when either:
+/// - `empty_channels == 0` (Gate A — every channel has at least one item), or
+/// - `buffered_bytes >= max_buffered_bytes` (Gate B — total in-memory bytes hit the budget).
 #[derive(Debug)]
 struct Gate {
     /// Number of currently empty (and still open) channels.
     empty_channels: AtomicUsize,
 
+    /// Total buffered bytes across all channels in this gate group.
+    buffered_bytes: AtomicUsize,
+
+    /// Per-gate-group byte budget. `usize::MAX` effectively disables Gate B.
+    max_buffered_bytes: usize,
+
     /// Wakers for the sender side, including their channel IDs.
-    ///
-    /// This is `None` if the there are non-empty channels.
-    send_wakers: Mutex<Option<Vec<(Waker, usize)>>>,
+    send_wakers: Mutex<Vec<(Waker, usize)>>,
 }
 
 impl Gate {
-    /// Wake senders for a specific channel.
+    /// Returns `true` if either gate condition currently closes the gate.
     ///
-    /// This is helpful to signal that the receiver side is gone and the senders shall now error.
-    fn wake_channel_senders(&self, id: usize) {
-        // lock scope
-        let to_wake = {
-            let mut guard = self.send_wakers.lock();
-
-            if let Some(send_wakers) = guard.deref_mut() {
-                // `drain_filter` is unstable, so implement our own
-                let (wake, keep) =
-                    send_wakers.drain(..).partition(|(_waker, id2)| id == *id2);
-
-                *send_wakers = keep;
-
-                wake
-            } else {
-                Vec::with_capacity(0)
-            }
-        };
-
-        // wake outside of lock scope
-        for (waker, _id) in to_wake {
-            waker.wake();
-        }
+    /// This is a "best-effort" snapshot — callers that need a definitive answer (e.g. before parking a sender) must
+    /// re-check under the [`send_wakers`](Self::send_wakers) lock.
+    fn is_closed(&self) -> bool {
+        self.empty_channels.load(Ordering::SeqCst) == 0
+            || self.buffered_bytes.load(Ordering::SeqCst) >= self.max_buffered_bytes
     }
 
-    fn decr_empty_channels(&self) {
-        let old_count = self.empty_channels.fetch_sub(1, Ordering::SeqCst);
-
-        if old_count == 1 {
-            let mut guard = self.send_wakers.lock();
-
-            // double-check state during lock
-            if self.empty_channels.load(Ordering::SeqCst) == 0 && guard.is_none() {
-                *guard = Some(Vec::new());
+    /// Drain and return parked senders for a specific channel id.
+    ///
+    /// Used when a channel becomes permanently dead (e.g. its receiver was dropped) so the parked senders can wake up
+    /// and observe the closed state.
+    fn take_channel_senders(&self, id: usize) -> Vec<(Waker, usize)> {
+        let mut guard = self.send_wakers.lock();
+        let mut wake = Vec::new();
+        let mut keep = Vec::with_capacity(guard.len());
+        for (waker, id2) in guard.drain(..) {
+            if id == id2 {
+                wake.push((waker, id2));
+            } else {
+                keep.push((waker, id2));
             }
         }
+        *guard = keep;
+        wake
     }
 }
 
@@ -480,21 +558,24 @@ mod tests {
 
     use super::*;
 
+    /// Effectively-unlimited byte budget for tests that exercise only Gate A.
+    const UNLIMITED: usize = usize::MAX;
+
     #[test]
     fn test_single_channel_no_gate() {
         // use two channels so that the first one never hits the gate
-        let (mut txs, mut rxs) = channels(2);
+        let (mut txs, mut rxs) = channels(2, UNLIMITED);
 
         let mut recv_fut = rxs[0].recv();
         let waker = poll_pending(&mut recv_fut);
 
-        poll_ready(&mut txs[0].send("foo")).unwrap();
+        poll_ready(&mut txs[0].send("foo", 0)).unwrap();
         assert!(waker.woken());
         assert_eq!(poll_ready(&mut recv_fut), Some("foo"),);
 
-        poll_ready(&mut txs[0].send("bar")).unwrap();
-        poll_ready(&mut txs[0].send("baz")).unwrap();
-        poll_ready(&mut txs[0].send("end")).unwrap();
+        poll_ready(&mut txs[0].send("bar", 0)).unwrap();
+        poll_ready(&mut txs[0].send("baz", 0)).unwrap();
+        poll_ready(&mut txs[0].send("end", 0)).unwrap();
         assert_eq!(poll_ready(&mut rxs[0].recv()), Some("bar"),);
         assert_eq!(poll_ready(&mut rxs[0].recv()), Some("baz"),);
 
@@ -508,12 +589,12 @@ mod tests {
     #[test]
     fn test_multi_sender() {
         // use two channels so that the first one never hits the gate
-        let (txs, mut rxs) = channels(2);
+        let (txs, mut rxs) = channels(2, UNLIMITED);
 
         let tx_clone = txs[0].clone();
 
-        poll_ready(&mut txs[0].send("foo")).unwrap();
-        poll_ready(&mut tx_clone.send("bar")).unwrap();
+        poll_ready(&mut txs[0].send("foo", 0)).unwrap();
+        poll_ready(&mut tx_clone.send("bar", 0)).unwrap();
 
         assert_eq!(poll_ready(&mut rxs[0].recv()), Some("foo"),);
         assert_eq!(poll_ready(&mut rxs[0].recv()), Some("bar"),);
@@ -521,20 +602,20 @@ mod tests {
 
     #[test]
     fn test_gate() {
-        let (txs, mut rxs) = channels(2);
+        let (txs, mut rxs) = channels(2, UNLIMITED);
 
         // gate initially open
-        poll_ready(&mut txs[0].send("0_a")).unwrap();
+        poll_ready(&mut txs[0].send("0_a", 0)).unwrap();
 
         // gate still open because channel 1 is still empty
-        poll_ready(&mut txs[0].send("0_b")).unwrap();
+        poll_ready(&mut txs[0].send("0_b", 0)).unwrap();
 
         // gate still open because channel 1 is still empty prior to this call, so this call still goes through
-        poll_ready(&mut txs[1].send("1_a")).unwrap();
+        poll_ready(&mut txs[1].send("1_a", 0)).unwrap();
 
         // both channels non-empty => gate closed
 
-        let mut send_fut = txs[1].send("1_b");
+        let mut send_fut = txs[1].send("1_b", 0);
         let waker = poll_pending(&mut send_fut);
 
         // drain channel 0
@@ -549,7 +630,7 @@ mod tests {
 
     #[test]
     fn test_close_channel_by_dropping_tx() {
-        let (mut txs, mut rxs) = channels(2);
+        let (mut txs, mut rxs) = channels(2, UNLIMITED);
 
         let tx0 = txs.remove(0);
         let tx1 = txs.remove(0);
@@ -557,7 +638,7 @@ mod tests {
 
         let mut recv_fut = rxs[0].recv();
 
-        poll_ready(&mut tx1.send("a")).unwrap();
+        poll_ready(&mut tx1.send("a", 0)).unwrap();
         let recv_waker = poll_pending(&mut recv_fut);
 
         // drop original sender
@@ -565,59 +646,62 @@ mod tests {
 
         // not yet closed (there's a clone left)
         assert!(!recv_waker.woken());
-        poll_ready(&mut tx1.send("b")).unwrap();
+        poll_ready(&mut tx1.send("b", 0)).unwrap();
         let recv_waker = poll_pending(&mut recv_fut);
 
         // create new clone
         let tx0_clone2 = tx0_clone.clone();
         assert!(!recv_waker.woken());
-        poll_ready(&mut tx1.send("c")).unwrap();
+        poll_ready(&mut tx1.send("c", 0)).unwrap();
         let recv_waker = poll_pending(&mut recv_fut);
 
         // drop first clone
         drop(tx0_clone);
         assert!(!recv_waker.woken());
-        poll_ready(&mut tx1.send("d")).unwrap();
+        poll_ready(&mut tx1.send("d", 0)).unwrap();
         let recv_waker = poll_pending(&mut recv_fut);
 
         // drop last clone
         drop(tx0_clone2);
 
         // channel closed => also close gate
-        poll_pending(&mut tx1.send("e"));
+        poll_pending(&mut tx1.send("e", 0));
         assert!(recv_waker.woken());
         assert_eq!(poll_ready(&mut recv_fut), None,);
     }
 
     #[test]
     fn test_close_channel_by_dropping_rx_on_open_gate() {
-        let (txs, mut rxs) = channels(2);
+        let (txs, mut rxs) = channels(2, UNLIMITED);
 
         let rx0 = rxs.remove(0);
         let _rx1 = rxs.remove(0);
 
-        poll_ready(&mut txs[1].send("a")).unwrap();
+        poll_ready(&mut txs[1].send("a", 0)).unwrap();
 
         // drop receiver => also close gate
         drop(rx0);
 
-        poll_pending(&mut txs[1].send("b"));
-        assert_eq!(poll_ready(&mut txs[0].send("foo")), Err(SendError("foo")),);
+        poll_pending(&mut txs[1].send("b", 0));
+        assert_eq!(
+            poll_ready(&mut txs[0].send("foo", 0)),
+            Err(SendError("foo")),
+        );
     }
 
     #[test]
     fn test_close_channel_by_dropping_rx_on_closed_gate() {
-        let (txs, mut rxs) = channels(2);
+        let (txs, mut rxs) = channels(2, UNLIMITED);
 
         let rx0 = rxs.remove(0);
         let mut rx1 = rxs.remove(0);
 
         // fill both channels
-        poll_ready(&mut txs[0].send("0_a")).unwrap();
-        poll_ready(&mut txs[1].send("1_a")).unwrap();
+        poll_ready(&mut txs[0].send("0_a", 0)).unwrap();
+        poll_ready(&mut txs[1].send("1_a", 0)).unwrap();
 
-        let mut send_fut0 = txs[0].send("0_b");
-        let mut send_fut1 = txs[1].send("1_b");
+        let mut send_fut0 = txs[0].send("0_b", 0);
+        let mut send_fut1 = txs[1].send("1_b", 0);
         let waker0 = poll_pending(&mut send_fut0);
         let waker1 = poll_pending(&mut send_fut1);
 
@@ -637,7 +721,7 @@ mod tests {
 
     #[test]
     fn test_drop_rx_three_channels() {
-        let (mut txs, mut rxs) = channels(3);
+        let (mut txs, mut rxs) = channels(3, UNLIMITED);
 
         let tx0 = txs.remove(0);
         let tx1 = txs.remove(0);
@@ -647,9 +731,9 @@ mod tests {
         let _rx2 = rxs.remove(0);
 
         // fill channels
-        poll_ready(&mut tx0.send("0_a")).unwrap();
-        poll_ready(&mut tx1.send("1_a")).unwrap();
-        poll_ready(&mut tx2.send("2_a")).unwrap();
+        poll_ready(&mut tx0.send("0_a", 0)).unwrap();
+        poll_ready(&mut tx1.send("1_a", 0)).unwrap();
+        poll_ready(&mut tx2.send("2_a", 0)).unwrap();
 
         // drop / close one channel
         drop(rx1);
@@ -658,21 +742,21 @@ mod tests {
         assert_eq!(poll_ready(&mut rx0.recv()), Some("0_a"),);
 
         // use senders again
-        poll_ready(&mut tx0.send("0_b")).unwrap();
-        assert_eq!(poll_ready(&mut tx1.send("1_b")), Err(SendError("1_b")),);
-        poll_pending(&mut tx2.send("2_b"));
+        poll_ready(&mut tx0.send("0_b", 0)).unwrap();
+        assert_eq!(poll_ready(&mut tx1.send("1_b", 0)), Err(SendError("1_b")),);
+        poll_pending(&mut tx2.send("2_b", 0));
     }
 
     #[test]
     fn test_close_channel_by_dropping_rx_clears_data() {
-        let (txs, rxs) = channels(1);
+        let (txs, rxs) = channels(1, UNLIMITED);
 
         let obj = Arc::new(());
         let counter = Arc::downgrade(&obj);
         assert_eq!(counter.strong_count(), 1);
 
         // add object to channel
-        poll_ready(&mut txs[0].send(obj)).unwrap();
+        poll_ready(&mut txs[0].send(obj, 0)).unwrap();
         assert_eq!(counter.strong_count(), 1);
 
         // drop receiver
@@ -684,7 +768,7 @@ mod tests {
     /// Ensure that polling "pending" futures work even when you poll them too often (which happens under some circumstances).
     #[test]
     fn test_poll_empty_channel_twice() {
-        let (txs, mut rxs) = channels(1);
+        let (txs, mut rxs) = channels(1, UNLIMITED);
 
         let mut recv_fut = rxs[0].recv();
         let waker_1a = poll_pending(&mut recv_fut);
@@ -693,14 +777,14 @@ mod tests {
         let mut recv_fut = rxs[0].recv();
         let waker_2 = poll_pending(&mut recv_fut);
 
-        poll_ready(&mut txs[0].send("a")).unwrap();
+        poll_ready(&mut txs[0].send("a", 0)).unwrap();
         assert!(waker_1a.woken());
         assert!(waker_1b.woken());
         assert!(waker_2.woken());
         assert_eq!(poll_ready(&mut recv_fut), Some("a"),);
 
-        poll_ready(&mut txs[0].send("b")).unwrap();
-        let mut send_fut = txs[0].send("c");
+        poll_ready(&mut txs[0].send("b", 0)).unwrap();
+        let mut send_fut = txs[0].send("c", 0);
         let waker_3 = poll_pending(&mut send_fut);
         assert_eq!(poll_ready(&mut rxs[0].recv()), Some("b"),);
         assert!(waker_3.woken());
@@ -713,8 +797,8 @@ mod tests {
         let mut recv_fut = rxs[0].recv();
         let waker_5 = poll_pending(&mut recv_fut);
 
-        poll_ready(&mut txs[0].send("d")).unwrap();
-        let mut send_fut = txs[0].send("e");
+        poll_ready(&mut txs[0].send("d", 0)).unwrap();
+        let mut send_fut = txs[0].send("e", 0);
         let waker_6a = poll_pending(&mut send_fut);
         let waker_6b = poll_pending(&mut send_fut);
 
@@ -730,8 +814,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "polled ready future")]
     fn test_panic_poll_send_future_after_ready_ok() {
-        let (txs, _rxs) = channels(1);
-        let mut fut = txs[0].send("foo");
+        let (txs, _rxs) = channels(1, UNLIMITED);
+        let mut fut = txs[0].send("foo", 0);
         poll_ready(&mut fut).unwrap();
         poll_ready(&mut fut).ok();
     }
@@ -739,11 +823,11 @@ mod tests {
     #[test]
     #[should_panic(expected = "polled ready future")]
     fn test_panic_poll_send_future_after_ready_err() {
-        let (txs, rxs) = channels(1);
+        let (txs, rxs) = channels(1, UNLIMITED);
 
         drop(rxs);
 
-        let mut fut = txs[0].send("foo");
+        let mut fut = txs[0].send("foo", 0);
         poll_ready(&mut fut).unwrap_err();
         poll_ready(&mut fut).ok();
     }
@@ -751,9 +835,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "polled ready future")]
     fn test_panic_poll_recv_future_after_ready_some() {
-        let (txs, mut rxs) = channels(1);
+        let (txs, mut rxs) = channels(1, UNLIMITED);
 
-        poll_ready(&mut txs[0].send("foo")).unwrap();
+        poll_ready(&mut txs[0].send("foo", 0)).unwrap();
 
         let mut fut = rxs[0].recv();
         poll_ready(&mut fut).unwrap();
@@ -763,7 +847,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "polled ready future")]
     fn test_panic_poll_recv_future_after_ready_none() {
-        let (txs, mut rxs) = channels::<u8>(1);
+        let (txs, mut rxs) = channels::<u8>(1, UNLIMITED);
 
         drop(txs);
 
@@ -794,6 +878,107 @@ mod tests {
         assert!(!waker.woken());
         tx.send(1).unwrap();
         assert!(waker.woken());
+    }
+
+    /// Skewed producer hitting Gate B: keep pushing to channel 0 while channel 1 stays empty.
+    /// Without Gate B the producer would never park (Gate A only closes when *every* channel has data).
+    #[test]
+    fn test_byte_budget_blocks_skewed_producer() {
+        let (txs, mut rxs) = channels(2, 100);
+
+        // First push: ch0 empty, overdraw allows. After: bytes=50.
+        poll_ready(&mut txs[0].send("a", 50)).unwrap();
+        // Second push: ch0 non-empty, gate open (bytes=50 < 100). After: bytes=100.
+        poll_ready(&mut txs[0].send("b", 50)).unwrap();
+        // Third push: ch0 non-empty, gate closed via B (bytes=100 >= 100). Park.
+        let mut send_fut = txs[0].send("c", 50);
+        let waker = poll_pending(&mut send_fut);
+
+        // Drain ch0 by one item; bytes drop to 50, gate reopens.
+        assert_eq!(poll_ready(&mut rxs[0].recv()), Some("a"));
+        assert!(waker.woken());
+        poll_ready(&mut send_fut).unwrap();
+    }
+
+    /// Single batch larger than the budget should still go through if the channel is empty (overdraw escape).
+    #[test]
+    fn test_byte_budget_overdraw_for_oversized_item() {
+        let (txs, mut rxs) = channels(2, 10);
+
+        // Item is much larger than the budget but ch0 is empty: overdraw allows.
+        poll_ready(&mut txs[0].send("big", 100)).unwrap();
+
+        // Now ch0 non-empty and bytes=100 >> 10: any non-empty-channel push parks.
+        let mut send_fut = txs[0].send("more", 1);
+        poll_pending(&mut send_fut);
+
+        // Sending to ch1 (still empty) is allowed — overdraw escape.
+        poll_ready(&mut txs[1].send("on_other", 1)).unwrap();
+
+        // Drain the oversized item; bytes drop below budget.
+        assert_eq!(poll_ready(&mut rxs[0].recv()), Some("big"));
+        poll_ready(&mut send_fut).unwrap();
+    }
+
+    /// With a generous byte budget, the original Gate A semantics should be preserved exactly.
+    #[test]
+    fn test_byte_budget_does_not_disturb_gate_a() {
+        let (txs, mut rxs) = channels(2, 1_000_000);
+
+        poll_ready(&mut txs[0].send("0_a", 1)).unwrap();
+        poll_ready(&mut txs[1].send("1_a", 1)).unwrap();
+
+        // Both channels non-empty => Gate A closes.
+        let mut send_fut = txs[0].send("0_b", 1);
+        let waker = poll_pending(&mut send_fut);
+
+        // Drain ch1 — Gate A reopens, parked sender wakes.
+        assert_eq!(poll_ready(&mut rxs[1].recv()), Some("1_a"));
+        assert!(waker.woken());
+        poll_ready(&mut send_fut).unwrap();
+    }
+
+    /// Multiple parked senders all wake up when the budget is released.
+    #[test]
+    fn test_byte_budget_release_wakes_senders() {
+        let (txs, mut rxs) = channels(3, 100);
+
+        // Saturate ch0 at the budget.
+        poll_ready(&mut txs[0].send("a", 50)).unwrap();
+        poll_ready(&mut txs[0].send("b", 50)).unwrap();
+
+        // Park two senders to non-empty channels (overdraw doesn't apply).
+        let mut send_a = txs[0].send("c", 1);
+        let mut send_b = txs[0].send("d", 1);
+        let waker_a = poll_pending(&mut send_a);
+        let waker_b = poll_pending(&mut send_b);
+
+        // One pop is enough to drop bytes below the budget.
+        assert_eq!(poll_ready(&mut rxs[0].recv()), Some("a"));
+
+        assert!(waker_a.woken());
+        assert!(waker_b.woken());
+    }
+
+    /// Dropping a receiver returns its bytes to the budget and wakes parked senders on surviving channels.
+    #[test]
+    fn test_drop_receiver_returns_bytes_to_budget() {
+        // Three channels: ch0 + ch1 saturate the budget, ch2 stays empty so Gate A remains open.
+        let (txs, mut rxs) = channels(3, 100);
+
+        poll_ready(&mut txs[0].send("a", 50)).unwrap();
+        poll_ready(&mut txs[1].send("b", 50)).unwrap();
+
+        // Park a sender on ch0 (non-empty channel, so the overdraw escape doesn't apply).
+        let mut send_fut = txs[0].send("c", 1);
+        let waker = poll_pending(&mut send_fut);
+
+        // Drop ch1's receiver — its 50 bytes return to the budget; Gate B reopens (bytes 50 < 100). Gate A is also
+        // open (ch2 still empty), so the gate as a whole transitions closed → open and parked senders wake.
+        drop(rxs.remove(1));
+
+        assert!(waker.woken());
+        poll_ready(&mut send_fut).unwrap();
     }
 
     /// Poll a given [`Future`] and ensure it is [ready](Poll::Ready).
