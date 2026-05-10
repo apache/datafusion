@@ -2285,12 +2285,27 @@ fn recursive_query_schema(
     static_schema: &DFSchema,
     recursive_schema: &DFSchema,
 ) -> Result<DFSchemaRef> {
+    if static_schema.fields().len() != recursive_schema.fields().len() {
+        return plan_err!(
+            "RecursiveQuery static and recursive terms have different number of columns: {} != {}",
+            static_schema.fields().len(),
+            recursive_schema.fields().len()
+        );
+    }
+
     let fields = static_schema
         .fields()
         .iter()
         .zip(recursive_schema.fields().iter())
         .enumerate()
         .map(|(i, (static_field, recursive_field))| {
+            if static_field.data_type() != recursive_field.data_type() {
+                return plan_err!(
+                    "RecursiveQuery column {i} has different types: static term has {} whereas recursive term has {}",
+                    static_field.data_type(),
+                    recursive_field.data_type()
+                );
+            }
             let (qualifier, _) = static_schema.qualified_field(i);
             let field = Field::new(
                 static_field.name(),
@@ -2301,9 +2316,9 @@ fn recursive_query_schema(
                 static_field.metadata(),
                 recursive_field.metadata(),
             ]));
-            (qualifier.cloned(), Arc::new(field))
+            Ok((qualifier.cloned(), Arc::new(field)))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     let metadata = intersect_metadata_for_union([
         static_schema.metadata(),
@@ -4940,6 +4955,45 @@ mod tests {
         ]
         "#
         );
+    }
+
+    fn empty_plan_with_fields(fields: Vec<Field>) -> Arc<LogicalPlan> {
+        Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::from_unqualified_fields(fields.into(), HashMap::new()).unwrap(),
+            ),
+        }))
+    }
+
+    #[test]
+    fn recursive_query_try_new_rejects_mismatched_column_count() {
+        let static_term =
+            empty_plan_with_fields(vec![Field::new("a", DataType::Int32, false)]);
+        let recursive_term = empty_plan_with_fields(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        let err =
+            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)
+                .unwrap_err();
+
+        assert_snapshot!(err.strip_backtrace(), @"Error during planning: RecursiveQuery static and recursive terms have different number of columns: 1 != 2");
+    }
+
+    #[test]
+    fn recursive_query_try_new_rejects_mismatched_types() {
+        let static_term =
+            empty_plan_with_fields(vec![Field::new("a", DataType::Int32, false)]);
+        let recursive_term =
+            empty_plan_with_fields(vec![Field::new("a", DataType::Int64, false)]);
+
+        let err =
+            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)
+                .unwrap_err();
+
+        assert_snapshot!(err.strip_backtrace(), @"Error during planning: RecursiveQuery column 0 has different types: static term has Int32 whereas recursive term has Int64");
     }
 
     #[test]

@@ -107,9 +107,8 @@ fn build_file_list_recurse(
 /// is visible in the physical plan, while batch schema rebinding remains contained in the
 /// adapter as the implementation detail required to uphold the plan-level schema contract.
 ///
-/// This helper can align field names and nullability to the declared schema. It rejects
-/// differences that would change values or silently lose schema information, such as column
-/// count, data type, field metadata, or schema metadata mismatches.
+/// This helper can align field names, nullability, and metadata to the declared schema. It
+/// rejects differences that would change values, such as column count or data type mismatches.
 ///
 /// When an adapter is required, it conservatively derives fresh equivalence properties from
 /// `expected_schema` and drops child hash partitioning because field names/nullability may have
@@ -124,6 +123,10 @@ pub fn align_plan_to_schema(
         return Ok(input);
     }
 
+    // Projection is the preferred adapter, but not every valid schema-only
+    // alignment can be represented by ProjectionExec (for example nullability
+    // narrowing). Treat projection errors as path-selection only; if the
+    // fallback also fails, SchemaAlignExec returns the final diagnostic.
     if let Ok(projected) = project_plan_to_schema(Arc::clone(&input), expected_schema) {
         debug_assert_eq!(projected.schema().as_ref(), expected_schema.as_ref());
         return Ok(projected);
@@ -138,8 +141,8 @@ pub fn align_plan_to_schema(
 /// Project `input` to `expected_schema` when [`ProjectionExec`] can produce that exact schema.
 ///
 /// This is a narrower helper than [`align_plan_to_schema`]. It is useful when a positional
-/// projection/alias is sufficient. It rejects requests where projection cannot advertise the
-/// exact expected schema, such as nullability narrowing.
+/// projection/alias is sufficient. It rejects requests where ProjectionExec cannot advertise the
+/// exact expected schema, such as nullability narrowing or metadata changes.
 pub fn project_plan_to_schema(
     input: Arc<dyn ExecutionPlan>,
     expected_schema: &SchemaRef,
@@ -149,6 +152,36 @@ pub fn project_plan_to_schema(
 
     if input_schema.as_ref() == expected_schema.as_ref() {
         return Ok(input);
+    }
+
+    if input_schema.metadata() != expected_schema.metadata() {
+        return plan_err!(
+            "Cannot project plan to expected schema: schema metadata differ"
+        );
+    }
+
+    if let Some((i, input_field, expected_field, mismatch)) = input_schema
+        .fields()
+        .iter()
+        .zip(expected_schema.fields().iter())
+        .enumerate()
+        .find_map(|(i, (input_field, expected_field))| {
+            (input_field.metadata() != expected_field.metadata()).then_some((
+                i,
+                input_field,
+                expected_field,
+                "metadata",
+            ))
+        })
+    {
+        return plan_err!(
+            "Cannot project plan column {i} ('{}') to expected output field '{}': \
+             field {mismatch} differs (input field: {:?}, expected field: {:?})",
+            input_field.name(),
+            expected_field.name(),
+            input_field,
+            expected_field
+        );
     }
 
     if let Some((i, input_field, expected_field)) = input_schema
@@ -215,12 +248,6 @@ fn validate_schema_alignment(
         );
     }
 
-    if input_schema.metadata() != expected_schema.metadata() {
-        return plan_err!(
-            "Cannot {operation} plan to expected schema: schema metadata differ"
-        );
-    }
-
     if let Some((i, input_field, expected_field, mismatch)) = input_schema
         .fields()
         .iter()
@@ -229,8 +256,6 @@ fn validate_schema_alignment(
         .find_map(|(i, (input_field, expected_field))| {
             if input_field.data_type() != expected_field.data_type() {
                 Some((i, input_field, expected_field, "data type"))
-            } else if input_field.metadata() != expected_field.metadata() {
-                Some((i, input_field, expected_field, "metadata"))
             } else {
                 None
             }
@@ -804,19 +829,23 @@ mod tests {
     }
 
     #[test]
-    fn align_plan_to_schema_errors_on_field_metadata_mismatch() {
+    fn align_plan_to_schema_aligns_field_metadata() -> Result<()> {
         let (input, expected_schema) = field_metadata_mismatch();
 
-        let err = align_plan_to_schema(input, &expected_schema).unwrap_err();
-        assert!(err.to_string().contains("field metadata differs"));
+        let result = align_plan_to_schema(input, &expected_schema)?;
+
+        assert_eq!(result.schema(), expected_schema);
+        Ok(())
     }
 
     #[test]
-    fn align_plan_to_schema_errors_on_schema_metadata_mismatch() {
+    fn align_plan_to_schema_aligns_schema_metadata() -> Result<()> {
         let (input, expected_schema) = schema_metadata_mismatch();
 
-        let err = align_plan_to_schema(input, &expected_schema).unwrap_err();
-        assert!(err.to_string().contains("schema metadata differ"));
+        let result = align_plan_to_schema(input, &expected_schema)?;
+
+        assert_eq!(result.schema(), expected_schema);
+        Ok(())
     }
 
     #[test]

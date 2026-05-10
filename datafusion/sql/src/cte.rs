@@ -169,7 +169,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         // ---------- Step 4: Create the final plan ------------------
-        // Step 4.1: Compile the final plan. Recursive CTE nullability is
+        // Step 4.1: Compile the final plan. The first plan only discovers the
+        // fixed recursive CTE output schema. Recursive CTE nullability is
         // union-like, so the recursive term can widen the work table schema.
         // Replan the recursive term with that widened schema so predicates such
         // as `n IS NOT NULL` are not optimized using the anchor-only schema.

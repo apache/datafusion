@@ -42,6 +42,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_expr::expr::intersect_metadata_for_union;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
@@ -405,14 +406,20 @@ fn recursive_query_output_schema(
                     static_field.data_type().clone(),
                     static_field.is_nullable() || recursive_field.is_nullable(),
                 )
-                .with_metadata(static_field.metadata().clone()),
+                .with_metadata(intersect_metadata_for_union([
+                    static_field.metadata(),
+                    recursive_field.metadata(),
+                ])),
             ))
         })
         .collect::<Result<Vec<_>>>()?;
 
     Ok(Arc::new(Schema::new_with_metadata(
         fields,
-        static_schema.metadata().clone(),
+        intersect_metadata_for_union([
+            static_schema.metadata(),
+            recursive_schema.metadata(),
+        ]),
     )))
 }
 
@@ -546,9 +553,14 @@ mod tests {
     use crate::projection::ProjectionExec;
 
     use arrow::datatypes::{DataType, Field, Schema};
+    use std::collections::HashMap;
 
     fn empty_exec(fields: Vec<Field>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(EmptyExec::new(Arc::new(Schema::new(fields))))
+        empty_exec_with_schema(Arc::new(Schema::new(fields)))
+    }
+
+    fn empty_exec_with_schema(schema: SchemaRef) -> Arc<dyn ExecutionPlan> {
+        Arc::new(EmptyExec::new(schema))
     }
 
     fn recursive_exec(
@@ -600,6 +612,49 @@ mod tests {
         assert_eq!(exec.static_term().schema(), expected_schema);
         assert_eq!(exec.recursive_term().schema(), expected_schema);
         assert!(exec.schema().field(0).is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_query_exec_intersects_output_metadata() -> Result<()> {
+        let static_field =
+            Field::new("value", DataType::Int32, false).with_metadata(HashMap::from([
+                ("shared".to_string(), "same".to_string()),
+                ("static".to_string(), "only".to_string()),
+            ]));
+        let recursive_field =
+            Field::new("value", DataType::Int32, false).with_metadata(HashMap::from([
+                ("shared".to_string(), "same".to_string()),
+                ("static".to_string(), "different".to_string()),
+            ]));
+        let static_schema = Arc::new(Schema::new_with_metadata(
+            vec![static_field],
+            HashMap::from([
+                ("shared".to_string(), "same".to_string()),
+                ("static".to_string(), "only".to_string()),
+            ]),
+        ));
+        let recursive_schema = Arc::new(Schema::new_with_metadata(
+            vec![recursive_field],
+            HashMap::from([
+                ("shared".to_string(), "same".to_string()),
+                ("static".to_string(), "different".to_string()),
+            ]),
+        ));
+
+        let exec = recursive_exec(
+            empty_exec_with_schema(static_schema),
+            empty_exec_with_schema(recursive_schema),
+        )?;
+
+        assert_eq!(
+            exec.schema().field(0).metadata(),
+            &HashMap::from([("shared".to_string(), "same".to_string())])
+        );
+        assert_eq!(
+            exec.schema().metadata(),
+            &HashMap::from([("shared".to_string(), "same".to_string())])
+        );
         Ok(())
     }
 }
