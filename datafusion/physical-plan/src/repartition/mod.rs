@@ -868,6 +868,27 @@ struct RepartitionMetrics {
     send_time: Vec<metrics::Time>,
 }
 
+/// Documentation for the operator-specific metrics emitted by [`RepartitionExec`].
+pub static REPARTITION_EXEC_METRICS_DOC: std::sync::LazyLock<
+    datafusion_expr::MetricsDocumentation,
+> = std::sync::LazyLock::new(|| {
+    datafusion_expr::MetricsDocumentation::builder(
+        "RepartitionExec",
+        datafusion_expr::MetricPosition::Operator,
+    )
+    .with_metric(
+        "fetch_time",
+        "Time spent executing the child operator and fetching batches.",
+    )
+    .with_metric("repartition_time", "Time spent performing repartitioning.")
+    .with_metric(
+        "send_time",
+        "Time spent sending output batches to output channels. \
+         One metric per output partition (labelled with `outputPartition`).",
+    )
+    .build()
+});
+
 impl RepartitionMetrics {
     pub fn new(
         input_partition: usize,
@@ -1182,6 +1203,12 @@ impl ExecutionPlan for RepartitionExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn metrics_documentation(
+        &self,
+    ) -> Option<&'static datafusion_expr::MetricsDocumentation> {
+        Some(&REPARTITION_EXEC_METRICS_DOC)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
