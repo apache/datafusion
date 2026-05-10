@@ -47,6 +47,50 @@ pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: boo
     nulls: MaybeNullBufferBuilder,
 }
 
+#[inline(never)]
+fn vectorized_equal_to_non_nullable<T>(
+    group_values: &[T::Native],
+    lhs_rows: &[usize],
+    array: &ArrayRef,
+    rhs_rows: &[usize],
+    equal_to_results: &mut BooleanBufferBuilder,
+) where
+    T: ArrowPrimitiveType,
+{
+    let array_values = array.as_primitive::<T>().values();
+    let n = lhs_rows.len();
+
+    // Build a packed comparison bitmask, then AND it into equal_to_results
+    let num_bytes = n.div_ceil(8);
+    let mut cmp_buf = vec![0u8; num_bytes];
+
+    for (i, (&lhs_row, &rhs_row)) in lhs_rows.iter().zip(rhs_rows.iter()).enumerate() {
+        let left = if cfg!(debug_assertions) {
+            group_values[lhs_row]
+        } else {
+            unsafe { *group_values.get_unchecked(lhs_row) }
+        };
+        let right = if cfg!(debug_assertions) {
+            array_values[rhs_row]
+        } else {
+            unsafe { *array_values.get_unchecked(rhs_row) }
+        };
+        if left.is_eq(right) {
+            cmp_buf[i / 8] |= 1 << (i % 8);
+        }
+    }
+
+    // AND the comparison result into the existing equal_to_results bitmask
+    apply_bitwise_binary_op(
+        equal_to_results.as_slice_mut(),
+        0,
+        &cmp_buf,
+        0,
+        n,
+        |a, b| a & b,
+    );
+}
+
 impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
 where
     T: ArrowPrimitiveType,
@@ -58,52 +102,6 @@ where
             group_values: vec![],
             nulls: MaybeNullBufferBuilder::new(),
         }
-    }
-
-    fn vectorized_equal_to_non_nullable(
-        &self,
-        lhs_rows: &[usize],
-        array: &ArrayRef,
-        rhs_rows: &[usize],
-        equal_to_results: &mut BooleanBufferBuilder,
-    ) {
-        assert!(
-            !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()),
-            "called with nullable input"
-        );
-        let array_values = array.as_primitive::<T>().values();
-        let n = lhs_rows.len();
-
-        // Build a packed comparison bitmask, then AND it into equal_to_results
-        let num_bytes = n.div_ceil(8);
-        let mut cmp_buf = vec![0u8; num_bytes];
-
-        for (i, (&lhs_row, &rhs_row)) in lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
-        {
-            let left = if cfg!(debug_assertions) {
-                self.group_values[lhs_row]
-            } else {
-                unsafe { *self.group_values.get_unchecked(lhs_row) }
-            };
-            let right = if cfg!(debug_assertions) {
-                array_values[rhs_row]
-            } else {
-                unsafe { *array_values.get_unchecked(rhs_row) }
-            };
-            if left.is_eq(right) {
-                cmp_buf[i / 8] |= 1 << (i % 8);
-            }
-        }
-
-        // AND the comparison result into the existing equal_to_results bitmask
-        apply_bitwise_binary_op(
-            equal_to_results.as_slice_mut(),
-            0,
-            &cmp_buf,
-            0,
-            n,
-            |a, b| a & b,
-        );
     }
 
     pub fn vectorized_equal_nullable(
@@ -181,7 +179,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         equal_to_results: &mut BooleanBufferBuilder,
     ) {
         if !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()) {
-            self.vectorized_equal_to_non_nullable(
+            vectorized_equal_to_non_nullable::<T>(
+                &self.group_values,
                 lhs_rows,
                 array,
                 rhs_rows,
