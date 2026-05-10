@@ -300,7 +300,7 @@ impl LogicalPlanBuilder {
                         )?;
                     } else if !can_cast_types(&value_type, field_type) {
                         return plan_err!(
-                            "Cannot cast {} to extension type at column {}",
+                            "Cannot cast {} to extension type at {}",
                             value_type,
                             column_name
                         );
@@ -311,7 +311,7 @@ impl LogicalPlanBuilder {
                         && !can_cast_types(&value_type, field_type)
                     {
                         return plan_err!(
-                            "Cannot cast {} to {} for column {}",
+                            "Cannot cast {} to {} for {}",
                             value_type,
                             field_type,
                             column_name
