@@ -29,48 +29,36 @@ SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)
 ----
 00010203040506070809000102030506 arrow.uuid
 
-# CREATE TABLE with UUID column preserves extension metadata through VALUES
+# Test table creation and various insertion methods (Null, Naked Binary, and Cast)
 statement ok
-CREATE TABLE test_uuid (
-    value UUID
-) AS VALUES
-    (NULL);
+CREATE TABLE test_uuid (value UUID);
 
 query TTT
 DESCRIBE test_uuid;
 ----
 value FixedSizeBinary(16) YES
 
+# 1. NULL insertion
+statement ok
+INSERT INTO test_uuid VALUES (NULL);
+
+# 2. Exercises Implicit Promotion to UUID from binary
+statement ok
+INSERT INTO test_uuid VALUES (X'00010203040506070809000102030506');
+
+# 3. Explicit CAST
+statement ok
+INSERT INTO test_uuid VALUES (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
+
 query T
 SELECT arrow_metadata(value, 'ARROW:extension:name') FROM test_uuid;
 ----
 arrow.uuid
-
-statement ok
-DROP TABLE test_uuid;
-
-# UUID column with non-null binary value
-statement ok
-CREATE TABLE test_uuid2 (
-    id UUID
-) AS VALUES
-    (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID));
-
-query T
-SELECT arrow_metadata(id, 'ARROW:extension:name') FROM test_uuid2;
-----
+arrow.uuid
 arrow.uuid
 
 statement ok
-DROP TABLE test_uuid2;
-
-# Error: Cannot cast an integer to UUID
-statement error Unsupported CAST from Int64 to FixedSizeBinary\(16\)
-SELECT CAST(12345 AS UUID);
-
-# Error: Cannot cast a short string to UUID
-statement error Unsupported CAST from Utf8 to FixedSizeBinary\(16\)
-SELECT CAST('too-short' AS UUID);
+DROP TABLE test_uuid;
 
 #######
 # JSON Extension Type
@@ -83,37 +71,207 @@ SELECT CAST('{"a": 1}' AS JSON),
 ----
 {"a": 1} arrow.json
 
-# CREATE TABLE with JSON column preserves extension metadata
 statement ok
-CREATE TABLE test_json (
-    data JSON
-) AS VALUES
-    (NULL);
+CREATE TABLE test_json (data JSON);
 
 query TTT
 DESCRIBE test_json;
 ----
 data Utf8 YES
 
+# 1. NULL insertion
+statement ok
+INSERT INTO test_json VALUES (NULL);
+
+# 2. Bare string literal (Implicit Promotion)
+statement ok
+INSERT INTO test_json VALUES ('{"bare": "literal"}');
+
+# 3. Explicit CAST
+statement ok
+INSERT INTO test_json VALUES (CAST('{"hello": "world"}' AS JSON));
+
 query T
 SELECT arrow_metadata(data, 'ARROW:extension:name') FROM test_json;
 ----
 arrow.json
+arrow.json
+arrow.json
+
+# Verify Type Decay: Concatenation results in a bare Utf8 string
+query T
+SELECT arrow_metadata(data || '{"extra": 1}', 'ARROW:extension:name') FROM test_json;
+----
+NULL
+NULL
+NULL
 
 statement ok
 DROP TABLE test_json;
 
-# JSON column with non-null value
+#######
+# Error Handling
+#######
+
+# Error: Cannot cast an integer to UUID
+statement error Unsupported CAST from Int64 to FixedSizeBinary\(16\)
+SELECT CAST(12345 AS UUID);
+
+# Error: Cannot cast a short string to UUID
+statement error Unsupported CAST from Utf8 to FixedSizeBinary\(16\)
+SELECT CAST('too-short' AS UUID);
+
+# This should trigger cast plan_err: "Cannot cast Utf8 to extension type at column 0"
+# Because 'not-a-uuid' is Utf8, and it's being compared to a UUID target in a VALUES list.
 statement ok
-CREATE TABLE test_json2 (
-    data JSON
-) AS VALUES
-    (CAST('{"hello": "world"}' AS JSON));
+CREATE TABLE t1 (id UUID);
+
+# Then, try to insert the invalid type
+statement error Cannot cast Utf8 to extension type at column 0
+INSERT INTO t1 VALUES ('not-a-uuid');
+
+statement ok
+INSERT INTO t1 VALUES (NULL);
+
+statement ok
+DROP TABLE t1;
+
+# Error: Cannot mix different extension types
+statement ok
+CREATE TABLE mix_types (id UUID);
+
+# Even if the JSON string is 16 bytes, it lacks the arrow.uuid metadata
+statement error Cannot cast Utf8 to extension type at column 0
+INSERT INTO mix_types VALUES (CAST('{"key": "value"}' AS JSON));
+
+statement ok
+DROP TABLE mix_types;
+
+statement ok
+CREATE TABLE multi_col (info JSON, id UUID);
+
+# Succeed with valid types
+statement ok
+INSERT INTO multi_col VALUES 
+  (CAST('{"a":1}' AS JSON), CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID));
+
+# This will fail because a Boolean cannot be cast to FixedSizeBinary(16)
+statement error Cannot cast Boolean to extension type at column 1
+INSERT INTO multi_col VALUES 
+  (CAST('{"a":1}' AS JSON), true);
+
+statement ok
+DROP TABLE multi_col;
+
+statement ok
+CREATE TABLE bulk_uuid (id UUID);
+
+# Batch of multiple values (some NULL)
+statement ok
+INSERT INTO bulk_uuid VALUES 
+  (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID)),
+  (NULL),
+  (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
+
+query I
+SELECT COUNT(*) FROM bulk_uuid;
+----
+3
+
+statement ok
+DROP TABLE bulk_uuid;
+
+#######
+# Relational Integration
+#######
+
+# UNION preserves extension metadata
+statement ok
+CREATE TABLE u1 (id UUID) AS VALUES (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID));
+
+statement ok
+CREATE TABLE u2 (id UUID) AS VALUES (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
 
 query T
-SELECT arrow_metadata(data, 'ARROW:extension:name') FROM test_json2;
+SELECT arrow_metadata(id, 'ARROW:extension:name') FROM (
+    SELECT id FROM u1
+    UNION ALL
+    SELECT id FROM u2
+) LIMIT 1;
 ----
-arrow.json
+arrow.uuid
 
 statement ok
-DROP TABLE test_json2;
+DROP TABLE u1;
+
+statement ok
+DROP TABLE u2;
+
+# JOIN on UUID columns
+statement ok
+CREATE TABLE j1 (id UUID, val INT) AS VALUES (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID), 1);
+
+statement ok
+CREATE TABLE j2 (id UUID, name TEXT) AS VALUES (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID), 'DataFusion');
+
+query IT
+SELECT j1.val, j2.name 
+FROM j1 
+JOIN j2 ON j1.id = j2.id;
+----
+1 DataFusion
+
+statement ok
+DROP TABLE j1;
+
+statement ok
+DROP TABLE j2;
+
+# CASE preserves extension metadata
+statement ok
+CREATE TABLE c1 (id UUID) AS VALUES 
+  (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID)),
+  (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
+
+query T
+SELECT arrow_metadata(CASE WHEN 1=1 THEN id ELSE id END, 'ARROW:extension:name') FROM c1;
+----
+arrow.uuid
+arrow.uuid
+
+# This forces the engine to evaluate the condition row-by-row - type coersion drops metadata
+query T
+SELECT arrow_metadata(CASE WHEN id IS NOT NULL THEN id ELSE id END, 'ARROW:extension:name') FROM c1;
+----
+NULL
+NULL
+
+# Force the CASE result to be treated as a UUID explicitly
+query T
+SELECT arrow_metadata(CAST((CASE WHEN id IS NOT NULL THEN id ELSE id END) AS UUID), 'ARROW:extension:name') FROM c1;
+----
+arrow.uuid
+arrow.uuid
+
+# COALESCE often drops metadata because it resolves to the common physical type
+query T
+SELECT arrow_metadata(COALESCE(id, id), 'ARROW:extension:name') FROM c1;
+----
+NULL
+NULL
+
+# Window functions might drop metadata during result materialization
+query T
+SELECT arrow_metadata(FIRST_VALUE(id) OVER(), 'ARROW:extension:name') FROM c1;
+----
+NULL
+NULL
+
+# Aggregates return the physical type, losing the extension tag
+query T
+SELECT arrow_metadata(MAX(id), 'ARROW:extension:name') FROM c1;
+----
+NULL
+
+statement ok
+DROP TABLE c1;
