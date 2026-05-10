@@ -934,7 +934,8 @@ mod tests {
         Ok(())
     }
 
-    /// Verifies that `FileStream` scans multiple files in order.
+    /// Verifies that `FileStream` scans multiple files in order while
+    /// planning the next file before the current reader finishes.
     #[tokio::test]
     async fn morsel_multiple_files() -> Result<()> {
         let test = FileStreamMorselTest::new()
@@ -960,15 +961,56 @@ mod tests {
         planner_called: file1.parquet
         morsel_produced: file1.parquet, MorselId(10)
         morsel_stream_started: MorselId(10)
-        morsel_stream_batch_produced: MorselId(10), BatchId(41)
-        morsel_stream_finished: MorselId(10)
         morselize_file: file2.parquet
         planner_created: file2.parquet
         planner_called: file2.parquet
         morsel_produced: file2.parquet, MorselId(11)
+        morsel_stream_batch_produced: MorselId(10), BatchId(41)
+        morsel_stream_finished: MorselId(10)
         morsel_stream_started: MorselId(11)
         morsel_stream_batch_produced: MorselId(11), BatchId(42)
         morsel_stream_finished: MorselId(11)
+        ");
+
+        Ok(())
+    }
+
+    /// Verifies that an error from a prefetched file waits until the active
+    /// reader finishes, so the stream does not lose already-started output.
+    #[tokio::test]
+    async fn morsel_prefetched_file_error_waits_for_active_reader() -> Result<()> {
+        let test = FileStreamMorselTest::new()
+            .with_file(
+                MockPlanner::builder("file1.parquet")
+                    .add_plan(
+                        MockPlanBuilder::new()
+                            .with_morsel_batches(MorselId(10), vec![41, 42]),
+                    )
+                    .return_none(),
+            )
+            .with_file(
+                MockPlanner::builder("file2.parquet")
+                    .return_error("planner failed while prefetching file2"),
+            );
+
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Output Stream -----
+        Batch: 41
+        Batch: 42
+        Error: planner failed while prefetching file2
+        Done
+        ----- File Stream Events -----
+        morselize_file: file1.parquet
+        planner_created: file1.parquet
+        planner_called: file1.parquet
+        morsel_produced: file1.parquet, MorselId(10)
+        morsel_stream_started: MorselId(10)
+        morselize_file: file2.parquet
+        planner_created: file2.parquet
+        planner_called: file2.parquet
+        morsel_stream_batch_produced: MorselId(10), BatchId(41)
+        morsel_stream_batch_produced: MorselId(10), BatchId(42)
+        morsel_stream_finished: MorselId(10)
         ");
 
         Ok(())
@@ -1186,20 +1228,20 @@ mod tests {
             )
             // Build streams lazily so partition 1 can poll the shared queue
             // before partition 0 has contributed its files. Once partition 0
-            // is built, a later poll of partition 1 can still steal one of
-            // them from the shared queue.
+            // is built, a later poll of partition 1 can steal from the
+            // shared queue.
             .with_build_streams_on_first_read(true)
             .with_reads(vec![PartitionId(1), PartitionId(0), PartitionId(1)])
             .with_file_stream_events(false);
 
-        // Partition 1 polls too early once, then later steals one file after
-        // partition 0 has populated the shared queue.
+        // Partition 1 polls too early once, then later steals and prefetches
+        // both files after partition 0 has populated the shared queue.
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
         ----- Partition 0 -----
-        Batch: 102
         Done
         ----- Partition 1 -----
         Batch: 101
+        Batch: 102
         Done
         ----- File Stream Events -----
         (omitted due to with_file_stream_events(false))
@@ -1312,11 +1354,11 @@ mod tests {
         ----- Partition 0 -----
         Done
         ----- Partition 1 -----
-        Batch: 103
         Done
         ----- Partition 2 -----
         Batch: 101
         Batch: 102
+        Batch: 103
         Done
         ----- File Stream Events -----
         (omitted due to with_file_stream_events(false))

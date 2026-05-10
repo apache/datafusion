@@ -21,8 +21,8 @@ use std::task::{Context, Poll};
 
 use crate::morsel::{Morsel, MorselPlanner, Morselizer, PendingMorselPlanner};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_physical_plan::metrics::ScopedTimerGuard;
 use futures::stream::BoxStream;
 use futures::{FutureExt as _, StreamExt as _};
 
@@ -40,7 +40,9 @@ use super::{FileStreamMetrics, OnError};
 /// # I/O
 ///
 /// To avoid challenges controlling buffering, the ScanState only ever has a
-/// single I/O outstanding at any time.
+/// single planner I/O outstanding at any time. Once a reader is active,
+/// ScanState may use that planner I/O slot to prefetch the next file, while
+/// the active reader continues scanning the current file.
 ///
 /// # State Transitions
 ///
@@ -81,6 +83,12 @@ pub(super) struct ScanState {
     /// Once the I/O completes, yields the next planner and is pushed back
     /// onto `ready_planners`.
     pending_planner: Option<PendingMorselPlanner>,
+    /// Whether queued planner state belongs to a file prefetched while the
+    /// current reader is still active.
+    prefetching_next_file: bool,
+    /// Opening error from a prefetched file that must be reported after the
+    /// current reader finishes.
+    deferred_open_error: Option<DataFusionError>,
     /// Metrics for the active scan queues.
     metrics: FileStreamMetrics,
 }
@@ -102,6 +110,8 @@ impl ScanState {
             ready_morsels: Default::default(),
             reader: None,
             pending_planner: None,
+            prefetching_next_file: false,
+            deferred_open_error: None,
             metrics,
         }
     }
@@ -123,13 +133,19 @@ impl ScanState {
     /// The return [`ScanAndReturn`] tells `poll_inner` how to update the
     /// outer `FileStreamState`.
     pub(super) fn poll_scan(&mut self, cx: &mut Context<'_>) -> ScanAndReturn {
-        let _processing_timer: ScopedTimerGuard<'_> =
-            self.metrics.time_processing.timer();
+        let processing_start = Instant::now();
+        let action = self.poll_scan_inner(cx);
+        self.metrics.time_processing.add_elapsed(processing_start);
+        action
+    }
 
+    fn poll_scan_inner(&mut self, cx: &mut Context<'_>) -> ScanAndReturn {
         // Try and resolve outstanding IO first. If it is still pending, check
         // the current reader or ready morsels before yielding. New planning
         // work must still wait for this I/O to resolve.
-        if let Some(mut pending_planner) = self.pending_planner.take() {
+        if self.can_poll_pending_planner()
+            && let Some(mut pending_planner) = self.pending_planner.take()
+        {
             match pending_planner.poll_unpin(cx) {
                 // IO is still pending
                 Poll::Pending => {
@@ -141,17 +157,15 @@ impl ScanState {
                 }
                 // IO Error
                 Poll::Ready(Err(err)) => {
-                    self.metrics.file_open_errors.add(1);
-                    self.metrics.time_opening.stop();
-                    return match self.on_error {
-                        OnError::Skip => {
-                            self.metrics.files_processed.add(1);
-                            ScanAndReturn::Continue
-                        }
-                        OnError::Fail => ScanAndReturn::Error(err),
-                    };
+                    if let Some(action) = self.handle_open_error(err) {
+                        return action;
+                    }
                 }
             }
+        }
+
+        if let Some(action) = self.prefetch_next_file() {
+            return action;
         }
 
         // Next try and get the next batch from the active reader, if any.
@@ -191,6 +205,7 @@ impl ScanState {
                 }
                 Poll::Ready(Some(Err(err))) => {
                     self.reader = None;
+                    self.prefetching_next_file = false;
                     self.metrics.file_scan_errors.add(1);
                     self.metrics.time_scanning_until_data.stop();
                     self.metrics.time_scanning_total.stop();
@@ -204,21 +219,21 @@ impl ScanState {
                 }
                 Poll::Ready(None) => {
                     self.reader = None;
+                    self.prefetching_next_file = false;
                     self.metrics.files_processed.add(1);
                     self.metrics.time_scanning_until_data.stop();
                     self.metrics.time_scanning_total.stop();
+                    if let Some(err) = self.deferred_open_error.take() {
+                        return ScanAndReturn::Error(err);
+                    }
                     return ScanAndReturn::Continue;
                 }
             }
         }
 
         // No active reader, but a morsel is ready to become the reader.
-        if let Some(morsel) = self.ready_morsels.pop_front() {
-            self.metrics.time_opening.stop();
-            self.metrics.time_scanning_until_data.start();
-            self.metrics.time_scanning_total.start();
-            self.reader = Some(morsel.into_stream());
-            return ScanAndReturn::Continue;
+        if let Some(action) = self.start_next_ready_morsel() {
+            return action;
         }
 
         // Do not start CPU planning or open another file while planner I/O is
@@ -228,65 +243,125 @@ impl ScanState {
             return ScanAndReturn::Return(Poll::Pending);
         }
 
-        // No reader or morsel, so try to produce more work via CPU planning.
-        if let Some(planner) = self.ready_planners.pop_front() {
-            return match planner.plan() {
-                Ok(Some(mut plan)) => {
-                    // Queue any newly-ready morsels, planners, or planner I/O.
-                    self.ready_morsels.extend(plan.take_morsels());
-                    self.ready_planners.extend(plan.take_ready_planners());
-                    if let Some(pending_planner) = plan.take_pending_planner() {
-                        // should not have planned if we have outstanding I/O
-                        if self.pending_planner.is_some() {
-                            return ScanAndReturn::Error(internal_datafusion_err!(
-                                "Conflicting pending planner state in FileStream ScanState"
-                            ));
-                        }
-                        self.pending_planner = Some(pending_planner);
-                    }
-                    ScanAndReturn::Continue
-                }
-                Ok(None) => {
-                    self.metrics.files_processed.add(1);
-                    self.metrics.time_opening.stop();
-                    ScanAndReturn::Continue
-                }
-                Err(err) => {
-                    self.metrics.file_open_errors.add(1);
-                    self.metrics.time_opening.stop();
-                    match self.on_error {
-                        OnError::Skip => {
-                            self.metrics.files_processed.add(1);
-                            ScanAndReturn::Continue
-                        }
-                        OnError::Fail => ScanAndReturn::Error(err),
-                    }
-                }
-            };
+        if let Some(action) = self.plan_ready_planner() {
+            return action;
         }
 
+        self.plan_next_file(false)
+            .unwrap_or(ScanAndReturn::Continue)
+    }
+
+    fn can_poll_pending_planner(&self) -> bool {
+        !(self.reader.is_some()
+            && self.prefetching_next_file
+            && !self.ready_morsels.is_empty())
+    }
+
+    fn prefetch_next_file(&mut self) -> Option<ScanAndReturn> {
+        if self.reader.is_none()
+            || self.remain.is_some()
+            || self.deferred_open_error.is_some()
+            || self.pending_planner.is_some()
+            || !self.ready_morsels.is_empty()
+        {
+            return None;
+        }
+
+        if self.ready_planners.is_empty() {
+            return self.plan_next_file(true);
+        }
+
+        if self.prefetching_next_file {
+            return self.plan_ready_planner();
+        }
+
+        None
+    }
+
+    fn start_next_ready_morsel(&mut self) -> Option<ScanAndReturn> {
+        let morsel = self.ready_morsels.pop_front()?;
+
+        self.metrics.time_opening.stop();
+        self.metrics.time_scanning_until_data.start();
+        self.metrics.time_scanning_total.start();
+        self.reader = Some(morsel.into_stream());
+        Some(ScanAndReturn::Continue)
+    }
+
+    fn plan_ready_planner(&mut self) -> Option<ScanAndReturn> {
+        let planner = self.ready_planners.pop_front()?;
+        Some(match planner.plan() {
+            Ok(Some(mut plan)) => {
+                // Queue any newly-ready morsels, planners, or planner I/O.
+                let morsels = plan.take_morsels();
+                if self.reader.is_some()
+                    && self.prefetching_next_file
+                    && !morsels.is_empty()
+                {
+                    self.metrics.time_opening.stop();
+                }
+                self.ready_morsels.extend(morsels);
+                self.ready_planners.extend(plan.take_ready_planners());
+                if let Some(pending_planner) = plan.take_pending_planner() {
+                    // should not have planned if we have outstanding I/O
+                    if self.pending_planner.is_some() {
+                        return Some(ScanAndReturn::Error(internal_datafusion_err!(
+                            "Conflicting pending planner state in FileStream ScanState"
+                        )));
+                    }
+                    self.pending_planner = Some(pending_planner);
+                }
+                ScanAndReturn::Continue
+            }
+            Ok(None) => {
+                self.prefetching_next_file = false;
+                self.metrics.files_processed.add(1);
+                self.metrics.time_opening.stop();
+                ScanAndReturn::Continue
+            }
+            Err(err) => self
+                .handle_open_error(err)
+                .unwrap_or(ScanAndReturn::Continue),
+        })
+    }
+
+    fn plan_next_file(&mut self, prefetch: bool) -> Option<ScanAndReturn> {
         // No outstanding work remains, so begin planning the next unopened file.
         let part_file = match self.work_source.pop_front() {
             Some(part_file) => part_file,
-            None => return ScanAndReturn::Done(None),
+            None if prefetch => return None,
+            None => return Some(ScanAndReturn::Done(None)),
         };
 
+        self.prefetching_next_file = prefetch;
         self.metrics.time_opening.start();
-        match self.morselizer.plan_file(part_file) {
+        Some(match self.morselizer.plan_file(part_file) {
             Ok(planner) => {
                 self.metrics.files_opened.add(1);
                 self.ready_planners.push_back(planner);
                 ScanAndReturn::Continue
             }
-            Err(err) => match self.on_error {
-                OnError::Skip => {
-                    self.metrics.file_open_errors.add(1);
-                    self.metrics.time_opening.stop();
-                    self.metrics.files_processed.add(1);
-                    ScanAndReturn::Continue
-                }
-                OnError::Fail => ScanAndReturn::Error(err),
-            },
+            Err(err) => self
+                .handle_open_error(err)
+                .unwrap_or(ScanAndReturn::Continue),
+        })
+    }
+
+    fn handle_open_error(&mut self, err: DataFusionError) -> Option<ScanAndReturn> {
+        self.metrics.file_open_errors.add(1);
+        self.metrics.time_opening.stop();
+        match self.on_error {
+            OnError::Skip => {
+                self.prefetching_next_file = false;
+                self.metrics.files_processed.add(1);
+                None
+            }
+            OnError::Fail if self.reader.is_some() && self.prefetching_next_file => {
+                self.prefetching_next_file = false;
+                self.deferred_open_error = Some(err);
+                None
+            }
+            OnError::Fail => Some(ScanAndReturn::Error(err)),
         }
     }
 }

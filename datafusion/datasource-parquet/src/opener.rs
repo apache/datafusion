@@ -36,9 +36,10 @@ use std::future::Future;
 use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
-use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -60,19 +61,17 @@ use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::{
-    FutureExt, Stream, StreamExt, future::BoxFuture, ready, stream::BoxStream,
-};
+use futures::{FutureExt, Stream, future::BoxFuture, stream::BoxStream};
 use log::debug;
-use parquet::DecodeResult;
+use parking_lot::Mutex;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, RowSelectionPolicy,
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::async_reader::ParquetRecordBatchStream;
 use parquet::arrow::parquet_column;
-use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
@@ -224,12 +223,10 @@ enum ParquetOpenState {
     LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
     /// Pruning with preloaded Bloom Filters
     PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
-    /// Builds the final reader stream
-    ///
-    /// TODO: split state as this currently does both I/O and CPU work.
+    /// Builds the initial row-group pipeline plan.
     BuildStream(Box<RowGroupsPrunedParquetOpen>),
-    /// Terminal state: the final opened stream is ready to return.
-    Ready(BoxStream<'static, Result<RecordBatch>>),
+    /// Terminal state: the first morsel plan is ready to return.
+    Ready(MorselPlan),
     /// Terminal state: reading complete
     Done,
 }
@@ -397,37 +394,13 @@ impl ParquetOpenState {
                 ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
             ),
             ParquetOpenState::BuildStream(prepared) => {
-                Ok(ParquetOpenState::Ready(prepared.build_stream()?))
+                Ok(ParquetOpenState::Ready(prepared.build_morsel_plan()?))
             }
             ParquetOpenState::Ready(stream) => Ok(ParquetOpenState::Ready(stream)),
             ParquetOpenState::Done => {
                 panic!("ParquetOpenFuture polled after completion");
             }
         }
-    }
-}
-
-/// Implements the Morsel API
-struct ParquetStreamMorsel {
-    stream: BoxStream<'static, Result<RecordBatch>>,
-}
-
-impl ParquetStreamMorsel {
-    fn new(stream: BoxStream<'static, Result<RecordBatch>>) -> Self {
-        Self { stream }
-    }
-}
-
-impl fmt::Debug for ParquetStreamMorsel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ParquetStreamMorsel")
-            .finish_non_exhaustive()
-    }
-}
-
-impl Morsel for ParquetStreamMorsel {
-    fn into_stream(self: Box<Self>) -> BoxStream<'static, Result<RecordBatch>> {
-        self.stream
     }
 }
 
@@ -515,11 +488,7 @@ impl MorselPlanner for ParquetMorselPlanner {
                     )))
                 })))
             }
-            ParquetOpenState::Ready(stream) => {
-                let morsels: Vec<Box<dyn Morsel>> =
-                    vec![Box::new(ParquetStreamMorsel::new(stream))];
-                Ok(Some(MorselPlan::new().with_morsels(morsels)))
-            }
+            ParquetOpenState::Ready(plan) => Ok(Some(plan)),
             ParquetOpenState::Done => Ok(None),
             cpu_state => Ok(Some(
                 MorselPlan::new()
@@ -1055,8 +1024,8 @@ impl BloomFiltersLoadedParquetOpen {
 }
 
 impl RowGroupsPrunedParquetOpen {
-    /// Build the final parquet stream once all pruning work is complete.
-    fn build_stream(self) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+    /// Build the initial row-group pipeline plan once all pruning work is complete.
+    fn build_morsel_plan(self) -> Result<MorselPlan> {
         let RowGroupsPrunedParquetOpen {
             prepared,
             mut row_groups,
@@ -1139,33 +1108,32 @@ impl RowGroupsPrunedParquetOpen {
             reader_metadata.parquet_schema(),
         );
 
-        let mut decoder_builder =
-            ParquetPushDecoderBuilder::new_with_metadata(reader_metadata)
-                .with_projection(read_plan.projection_mask)
-                .with_batch_size(prepared.batch_size)
-                .with_metrics(arrow_reader_metrics.clone());
+        let mut stream_builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
+            prepared.async_file_reader,
+            reader_metadata,
+        )
+        .with_projection(read_plan.projection_mask)
+        .with_batch_size(prepared.batch_size)
+        .with_metrics(arrow_reader_metrics.clone());
 
         if let Some(row_filter) = row_filter {
-            decoder_builder = decoder_builder.with_row_filter(row_filter);
+            stream_builder = stream_builder.with_row_filter(row_filter);
         }
         if prepared.force_filter_selections {
-            decoder_builder =
-                decoder_builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
+            stream_builder =
+                stream_builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
         }
         if let Some(row_selection) = prepared_plan.row_selection {
-            decoder_builder = decoder_builder.with_row_selection(row_selection);
+            stream_builder = stream_builder.with_row_selection(row_selection);
         }
-        decoder_builder =
-            decoder_builder.with_row_groups(prepared_plan.row_group_indexes);
+        stream_builder = stream_builder.with_row_groups(prepared_plan.row_group_indexes);
         if let Some(limit) = prepared.limit {
-            decoder_builder = decoder_builder.with_limit(limit);
+            stream_builder = stream_builder.with_limit(limit);
         }
         if let Some(max_predicate_cache_size) = prepared.max_predicate_cache_size {
-            decoder_builder =
-                decoder_builder.with_max_predicate_cache_size(max_predicate_cache_size);
+            stream_builder =
+                stream_builder.with_max_predicate_cache_size(max_predicate_cache_size);
         }
-
-        let decoder = decoder_builder.build()?;
 
         let predicate_cache_inner_records =
             prepared.file_metrics.predicate_cache_inner_records.clone();
@@ -1185,110 +1153,137 @@ impl RowGroupsPrunedParquetOpen {
             .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
         let projector = projection.make_projector(&stream_schema)?;
         let output_schema = Arc::clone(&prepared.output_schema);
+        let baseline_metrics = prepared.baseline_metrics;
         let files_ranges_pruned_statistics =
             prepared.file_metrics.files_ranges_pruned_statistics.clone();
-        let stream = futures::stream::unfold(
-            PushDecoderStreamState {
-                decoder,
-                reader: prepared.async_file_reader,
-                projector,
-                output_schema,
-                replace_schema,
-                arrow_reader_metrics,
-                predicate_cache_inner_records,
-                predicate_cache_records,
-                baseline_metrics: prepared.baseline_metrics,
-            },
-            |state| async move { state.transition().await },
-        )
-        .fuse();
-
-        // Wrap the stream so a dynamic filter can stop the file scan early.
-        if let Some(file_pruner) = prepared.file_pruner {
-            let stream = stream.boxed();
-            Ok(EarlyStoppingStream::new(
-                stream,
-                file_pruner,
+        let early_stop = prepared.file_pruner.map(|file_pruner| {
+            Arc::new(RowGroupPipelineEarlyStop {
+                stopped: AtomicBool::new(false),
+                file_pruner: Mutex::new(file_pruner),
                 files_ranges_pruned_statistics,
-            )
-            .boxed())
-        } else {
-            Ok(stream.boxed())
-        }
+            })
+        });
+
+        let context = Arc::new(RowGroupPipelineContext {
+            projector,
+            output_schema,
+            replace_schema,
+            arrow_reader_metrics,
+            predicate_cache_inner_records,
+            predicate_cache_records,
+            baseline_metrics,
+            early_stop,
+        });
+
+        let stream = stream_builder.build()?;
+        Ok(RowGroupPipelinePlanner::fetch_next_row_group(
+            stream, context,
+        ))
     }
 }
 
-/// State for a stream that decodes a single Parquet file using a push-based decoder.
+type AsyncParquetRowGroupStream = ParquetRecordBatchStream<Box<dyn AsyncFileReader>>;
+
+/// Planner that pipelines Parquet row-group I/O with CPU decoding.
 ///
-/// The [`transition`](Self::transition) method drives the decoder in a loop: it requests
-/// byte ranges from the [`AsyncFileReader`], pushes the fetched data into the
-/// [`ParquetPushDecoder`], and yields projected [`RecordBatch`]es until the file is
-/// fully consumed.
-struct PushDecoderStreamState {
-    decoder: ParquetPushDecoder,
-    reader: Box<dyn AsyncFileReader>,
+/// Each plan call emits the row group fetched by the prior `next_row_group`
+/// future as a ready morsel and immediately schedules I/O for the following row
+/// group. `ScanState` can then poll that I/O while the current morsel is being
+/// decoded.
+struct RowGroupPipelinePlanner {
+    stream: AsyncParquetRowGroupStream,
+    row_group_reader: Option<ParquetRecordBatchReader>,
+    context: Arc<RowGroupPipelineContext>,
+}
+
+impl fmt::Debug for RowGroupPipelinePlanner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RowGroupPipelinePlanner")
+            .field("has_row_group_reader", &self.row_group_reader.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl RowGroupPipelinePlanner {
+    fn fetch_next_row_group(
+        stream: AsyncParquetRowGroupStream,
+        context: Arc<RowGroupPipelineContext>,
+    ) -> MorselPlan {
+        MorselPlan::new()
+            .with_pending_planner(Self::fetch_next_row_group_future(stream, context))
+    }
+
+    async fn fetch_next_row_group_future(
+        mut stream: AsyncParquetRowGroupStream,
+        context: Arc<RowGroupPipelineContext>,
+    ) -> Result<Box<dyn MorselPlanner>> {
+        let row_group_reader = if context.stopped() {
+            None
+        } else {
+            stream.next_row_group().await?
+        };
+        Ok(Box::new(Self {
+            stream,
+            row_group_reader,
+            context,
+        }) as Box<dyn MorselPlanner>)
+    }
+}
+
+impl MorselPlanner for RowGroupPipelinePlanner {
+    fn plan(self: Box<Self>) -> Result<Option<MorselPlan>> {
+        let Self {
+            stream,
+            row_group_reader,
+            context,
+        } = *self;
+
+        if context.stopped() {
+            return Ok(None);
+        }
+
+        let Some(row_group_reader) = row_group_reader else {
+            return Ok(None);
+        };
+
+        let morsel: Box<dyn Morsel> = Box::new(RowGroupPipelineMorsel {
+            stream,
+            reader: row_group_reader,
+            context,
+        });
+        Ok(Some(MorselPlan::new().with_morsels(vec![morsel])))
+    }
+}
+
+struct RowGroupPipelineContext {
     projector: Projector,
-    output_schema: Arc<Schema>,
+    output_schema: SchemaRef,
     replace_schema: bool,
     arrow_reader_metrics: ArrowReaderMetrics,
     predicate_cache_inner_records: Gauge,
     predicate_cache_records: Gauge,
     baseline_metrics: BaselineMetrics,
+    early_stop: Option<Arc<RowGroupPipelineEarlyStop>>,
 }
 
-impl PushDecoderStreamState {
-    /// Advances the decoder state machine until the next [`RecordBatch`] is
-    /// produced, the file is fully consumed, or an error occurs.
-    ///
-    /// On each iteration the decoder is polled via [`ParquetPushDecoder::try_decode`]:
-    /// - [`NeedsData`](DecodeResult::NeedsData) – the requested byte ranges are
-    ///   fetched from the [`AsyncFileReader`] and fed back into the decoder.
-    /// - [`Data`](DecodeResult::Data) – a decoded batch is projected and returned.
-    /// - [`Finished`](DecodeResult::Finished) – signals end-of-stream (`None`).
-    ///
-    /// Takes `self` by value (rather than `&mut self`) so the generated future
-    /// owns the state directly. This avoids a Stacked Borrows violation under
-    /// miri where `&mut self` creates a single opaque borrow that conflicts
-    /// with `unfold`'s ownership across yield points.
-    async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
-        loop {
-            match self.decoder.try_decode() {
-                Ok(DecodeResult::NeedsData(ranges)) => {
-                    let data = self
-                        .reader
-                        .get_byte_ranges(ranges.clone())
-                        .await
-                        .map_err(DataFusionError::from);
-                    match data {
-                        Ok(data) => {
-                            if let Err(e) = self.decoder.push_ranges(ranges, data) {
-                                return Some((Err(DataFusionError::from(e)), self));
-                            }
-                        }
-                        Err(e) => return Some((Err(e), self)),
-                    }
-                }
-                Ok(DecodeResult::Data(batch)) => {
-                    let mut timer = self.baseline_metrics.elapsed_compute().timer();
-                    self.copy_arrow_reader_metrics();
-                    let result = self.project_batch(&batch);
-                    timer.stop();
-                    // Release the borrow on baseline_metrics before moving self
-                    drop(timer);
-                    return Some((result, self));
-                }
-                Ok(DecodeResult::Finished) => {
-                    return None;
-                }
-                Err(e) => {
-                    return Some((Err(DataFusionError::from(e)), self));
-                }
-            }
+impl RowGroupPipelineContext {
+    fn stopped(&self) -> bool {
+        self.early_stop
+            .as_ref()
+            .is_some_and(|early_stop| early_stop.stopped())
+    }
+
+    fn check_prune(&self, batch: RecordBatch) -> Result<Option<RecordBatch>> {
+        if let Some(early_stop) = &self.early_stop
+            && early_stop.should_stop()?
+        {
+            return Ok(None);
         }
+        Ok(Some(batch))
     }
 
     /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
-    /// arrow-rs parquet reader) to the parquet file metrics for DataFusion
+    /// arrow-rs parquet reader) to the parquet file metrics for DataFusion.
     fn copy_arrow_reader_metrics(&self) {
         if let Some(v) = self.arrow_reader_metrics.records_read_from_inner() {
             self.predicate_cache_inner_records.set(v);
@@ -1318,6 +1313,203 @@ impl PushDecoderStreamState {
             )?;
         }
         Ok(batch)
+    }
+}
+
+struct RowGroupPipelineEarlyStop {
+    stopped: AtomicBool,
+    file_pruner: Mutex<FilePruner>,
+    files_ranges_pruned_statistics: PruningMetrics,
+}
+
+impl RowGroupPipelineEarlyStop {
+    fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+
+    fn should_stop(&self) -> Result<bool> {
+        if self.stopped() {
+            return Ok(true);
+        }
+
+        if self.file_pruner.lock().should_prune()? {
+            self.files_ranges_pruned_statistics.add_pruned(1);
+            // Previously this file range has been counted as matched.
+            self.files_ranges_pruned_statistics.subtract_matched(1);
+            self.stopped.store(true, Ordering::Release);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+struct RowGroupPipelineMorsel {
+    stream: AsyncParquetRowGroupStream,
+    reader: ParquetRecordBatchReader,
+    context: Arc<RowGroupPipelineContext>,
+}
+
+impl fmt::Debug for RowGroupPipelineMorsel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RowGroupPipelineMorsel")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Morsel for RowGroupPipelineMorsel {
+    fn into_stream(self: Box<Self>) -> BoxStream<'static, Result<RecordBatch>> {
+        let context = self.context;
+        let next_row_group = NextRowGroupState::fetch(self.stream, Arc::clone(&context));
+        Box::pin(PipelinedRowGroupStream {
+            active_reader: Some(self.reader),
+            next_row_group,
+            context,
+            done: false,
+        })
+    }
+}
+
+struct PipelinedRowGroupStream {
+    active_reader: Option<ParquetRecordBatchReader>,
+    next_row_group: NextRowGroupState,
+    context: Arc<RowGroupPipelineContext>,
+    done: bool,
+}
+
+impl Stream for PipelinedRowGroupStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if self.done || self.context.stopped() {
+            self.done = true;
+            return Poll::Ready(None);
+        }
+
+        loop {
+            self.next_row_group.poll_prefetch(cx);
+
+            let context = Arc::clone(&self.context);
+            if let Some(reader) = self.active_reader.as_mut() {
+                let mut timer = context.baseline_metrics.elapsed_compute().timer();
+                let result = match reader.next() {
+                    Some(Ok(batch)) => {
+                        context.copy_arrow_reader_metrics();
+                        context
+                            .project_batch(&batch)
+                            .and_then(|batch| context.check_prune(batch))
+                    }
+                    Some(Err(e)) => Err(DataFusionError::from(e)),
+                    None => {
+                        self.active_reader = None;
+                        timer.stop();
+                        continue;
+                    }
+                };
+                timer.stop();
+                drop(timer);
+
+                match result {
+                    Ok(Some(batch)) => return Poll::Ready(Some(Ok(batch))),
+                    Ok(None) => {
+                        self.done = true;
+                        return Poll::Ready(None);
+                    }
+                    Err(e) => {
+                        self.done = true;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                }
+            }
+
+            match self.next_row_group.take_ready() {
+                NextRowGroup::Reader { stream, reader } => {
+                    self.active_reader = Some(reader);
+                    self.next_row_group =
+                        NextRowGroupState::fetch(stream, Arc::clone(&self.context));
+                }
+                NextRowGroup::Pending => return Poll::Pending,
+                NextRowGroup::Done => {
+                    self.done = true;
+                    return Poll::Ready(None);
+                }
+                NextRowGroup::Error(e) => {
+                    self.done = true;
+                    return Poll::Ready(Some(Err(e)));
+                }
+            }
+        }
+    }
+}
+
+enum NextRowGroupState {
+    Pending(BoxFuture<'static, NextRowGroupFetchResult>),
+    Ready(NextRowGroupFetchResult),
+    Done,
+}
+
+type NextRowGroupFetchResult =
+    Result<(AsyncParquetRowGroupStream, Option<ParquetRecordBatchReader>)>;
+
+enum NextRowGroup {
+    Reader {
+        stream: AsyncParquetRowGroupStream,
+        reader: ParquetRecordBatchReader,
+    },
+    Pending,
+    Done,
+    Error(DataFusionError),
+}
+
+impl NextRowGroupState {
+    fn fetch(
+        mut stream: AsyncParquetRowGroupStream,
+        context: Arc<RowGroupPipelineContext>,
+    ) -> Self {
+        if context.stopped() {
+            return Self::Done;
+        }
+
+        Self::Pending(
+            async move {
+                let row_group_reader = if context.stopped() {
+                    None
+                } else {
+                    stream
+                        .next_row_group()
+                        .await
+                        .map_err(DataFusionError::from)?
+                };
+                Ok((stream, row_group_reader))
+            }
+            .boxed(),
+        )
+    }
+
+    fn poll_prefetch(&mut self, cx: &mut Context<'_>) {
+        if let Self::Pending(future) = self {
+            match future.poll_unpin(cx) {
+                Poll::Ready(result) => *self = Self::Ready(result),
+                Poll::Pending => {}
+            }
+        }
+    }
+
+    fn take_ready(&mut self) -> NextRowGroup {
+        match mem::replace(self, Self::Done) {
+            Self::Ready(Ok((stream, Some(reader)))) => {
+                NextRowGroup::Reader { stream, reader }
+            }
+            Self::Ready(Ok((_, None))) | Self::Done => NextRowGroup::Done,
+            Self::Ready(Err(e)) => NextRowGroup::Error(e),
+            Self::Pending(future) => {
+                *self = Self::Pending(future);
+                NextRowGroup::Pending
+            }
+        }
     }
 }
 
@@ -1381,85 +1573,6 @@ fn constant_value_from_stats(
     }
 
     None
-}
-
-/// Wraps an inner RecordBatchStream and a [`FilePruner`]
-///
-/// This can terminate the scan early when some dynamic filters is updated after
-/// the scan starts, so we discover after the scan starts that the file can be
-/// pruned (can't have matching rows).
-struct EarlyStoppingStream<S> {
-    /// Has the stream finished processing? All subsequent polls will return
-    /// None
-    done: bool,
-    file_pruner: FilePruner,
-    files_ranges_pruned_statistics: PruningMetrics,
-    /// The inner stream
-    inner: S,
-}
-
-impl<S> EarlyStoppingStream<S> {
-    pub fn new(
-        stream: S,
-        file_pruner: FilePruner,
-        files_ranges_pruned_statistics: PruningMetrics,
-    ) -> Self {
-        Self {
-            done: false,
-            inner: stream,
-            file_pruner,
-            files_ranges_pruned_statistics,
-        }
-    }
-}
-
-impl<S> EarlyStoppingStream<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    fn check_prune(&mut self, input: Result<RecordBatch>) -> Result<Option<RecordBatch>> {
-        let batch = input?;
-
-        // Since dynamic filters may have been updated, see if we can stop
-        // reading this stream entirely.
-        if self.file_pruner.should_prune()? {
-            self.files_ranges_pruned_statistics.add_pruned(1);
-            // Previously this file range has been counted as matched
-            self.files_ranges_pruned_statistics.subtract_matched(1);
-            self.done = true;
-            Ok(None)
-        } else {
-            // Return the adapted batch
-            Ok(Some(batch))
-        }
-    }
-}
-
-impl<S> Stream for EarlyStoppingStream<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        if self.done {
-            return Poll::Ready(None);
-        }
-        match ready!(self.inner.poll_next_unpin(cx)) {
-            None => {
-                // input done
-                self.done = true;
-                Poll::Ready(None)
-            }
-            Some(input_batch) => {
-                let output = self.check_prune(input_batch);
-                Poll::Ready(output.transpose())
-            }
-        }
-    }
 }
 
 #[derive(Default)]
@@ -1815,25 +1928,27 @@ mod test {
     }
 
     /// Test helper that drives a [`ParquetMorselizer`] to completion and returns
-    /// the first stream morsel it produces.
+    /// a stream concatenating all morsels it produces.
     ///
     /// This mirrors how `FileStream` consumes the morsel APIs: it repeatedly
     /// plans CPU work, awaits any discovered I/O futures, and feeds the planner
-    /// back into the ready queue until a stream morsel is ready.
+    /// back into the ready queue until all stream morsels are ready.
     async fn open_file(
         morselizer: &ParquetMorselizer,
         file: PartitionedFile,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
         let mut morsels: VecDeque<Box<dyn Morsel>> = VecDeque::new();
+        let mut streams = Vec::new();
 
         loop {
             if let Some(morsel) = morsels.pop_front() {
-                return Ok(Box::pin(morsel.into_stream()));
+                streams.push(morsel.into_stream());
+                continue;
             }
 
             let Some(planner) = planners.pop_front() else {
-                return Ok(Box::pin(futures::stream::empty()));
+                return Ok(futures::stream::iter(streams).flatten().boxed());
             };
 
             if let Some(mut plan) = planner.plan()? {
@@ -1841,7 +1956,7 @@ mod test {
                 planners.extend(plan.take_ready_planners());
 
                 if let Some(pending_planner) = plan.take_pending_planner() {
-                    planners.push_front(pending_planner.await?);
+                    planners.push_back(pending_planner.await?);
                     continue;
                 }
 
@@ -1966,6 +2081,61 @@ mod test {
             }
         }
         values
+    }
+
+    #[tokio::test]
+    async fn test_row_group_pipeline_reads_multiple_row_groups_from_single_morsel() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch1 = record_batch!(("a", Int32, vec![Some(1), Some(2)])).unwrap();
+        let batch2 = record_batch!(("a", Int32, vec![Some(3), Some(4)])).unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(2))
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch1.clone(), batch2],
+            Some(props),
+        )
+        .await;
+
+        let schema = batch1.schema();
+        let file = PartitionedFile::new("test.parquet", data_len as u64);
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(store)
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .build();
+
+        let mut planners = VecDeque::from([morselizer.plan_file(file).unwrap()]);
+        loop {
+            let planner = planners
+                .pop_front()
+                .expect("expected planner before first row group morsel");
+            let mut plan = planner
+                .plan()
+                .unwrap()
+                .expect("expected plan before first row group morsel");
+
+            let mut morsels = plan.take_morsels();
+            if !morsels.is_empty() {
+                assert_eq!(morsels.len(), 1);
+                assert!(
+                    !plan.has_io_future(),
+                    "row-group pipelining should stay inside a single file-level morsel"
+                );
+
+                let stream = morsels.pop().unwrap().into_stream();
+                assert_eq!(collect_int32_values(stream).await, vec![1, 2, 3, 4]);
+                return;
+            }
+
+            planners.extend(plan.take_ready_planners());
+            if let Some(pending_planner) = plan.take_pending_planner() {
+                planners.push_back(pending_planner.await.unwrap());
+            }
+        }
     }
 
     async fn write_parquet(
