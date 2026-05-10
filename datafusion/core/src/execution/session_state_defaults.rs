@@ -40,9 +40,9 @@ use datafusion_expr::registry::ExtensionTypeRegistrationRef;
 use datafusion_expr::{
     AggregateUDF, HigherOrderUDF, MetricsDocumentation, ScalarUDF, WindowUDF,
 };
-use datafusion_physical_plan::filter::FILTER_EXEC_METRICS_DOC;
+use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::metric_docs::common_metric_docs;
-use datafusion_physical_plan::repartition::REPARTITION_EXEC_METRICS_DOC;
+use datafusion_physical_plan::repartition::RepartitionExec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -148,7 +148,7 @@ impl SessionStateDefaults {
     /// `docs/source/user-guide/metrics.md`.
     pub fn default_metric_docs() -> Vec<&'static MetricsDocumentation> {
         let mut docs = common_metric_docs();
-        docs.extend([&*FILTER_EXEC_METRICS_DOC, &*REPARTITION_EXEC_METRICS_DOC]);
+        docs.extend([FilterExec::metrics_doc(), RepartitionExec::metrics_doc()]);
         docs
     }
 

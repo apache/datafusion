@@ -21,6 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
+use datafusion_macros::metrics_doc;
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use itertools::Itertools;
 
@@ -77,6 +78,13 @@ const FILTER_EXEC_DEFAULT_BATCH_SIZE: usize = 8192;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
+#[metrics_doc(
+    position = "operator",
+    metric(
+        name = "selectivity",
+        description = "Selectivity of the filter, calculated as output_rows / input_rows",
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct FilterExec {
     /// The expression to filter on. This expression must evaluate to a boolean value.
@@ -577,7 +585,7 @@ impl ExecutionPlan for FilterExec {
     fn metrics_documentation(
         &self,
     ) -> Option<&'static datafusion_expr::MetricsDocumentation> {
-        Some(&FILTER_EXEC_METRICS_DOC)
+        Some(Self::metrics_doc())
     }
 
     /// The output statistics of a filtering operation can be estimated if the
@@ -965,24 +973,6 @@ struct FilterExecMetrics {
     /// Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
 }
-
-/// Documentation for the operator-specific metrics emitted by [`FilterExec`].
-///
-/// Picked up by `SessionStateDefaults::default_metric_docs` to render the
-/// metrics user-guide page.
-pub static FILTER_EXEC_METRICS_DOC: std::sync::LazyLock<
-    datafusion_expr::MetricsDocumentation,
-> = std::sync::LazyLock::new(|| {
-    datafusion_expr::MetricsDocumentation::builder(
-        "FilterExec",
-        datafusion_expr::MetricPosition::Operator,
-    )
-    .with_metric(
-        "selectivity",
-        "Selectivity of the filter, calculated as output_rows / input_rows",
-    )
-    .build()
-});
 
 impl FilterExecMetrics {
     pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {

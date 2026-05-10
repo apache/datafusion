@@ -59,6 +59,7 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_macros::metrics_doc;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -840,6 +841,21 @@ impl BatchPartitioner {
 /// For more background, please also see the [Optimizing Repartitions in DataFusion] blog.
 ///
 /// [Optimizing Repartitions in DataFusion]: https://datafusion.apache.org/blog/2025/12/15/avoid-consecutive-repartitions
+#[metrics_doc(
+    position = "operator",
+    metric(
+        name = "fetch_time",
+        description = "Time spent executing the child operator and fetching batches.",
+    ),
+    metric(
+        name = "repartition_time",
+        description = "Time spent performing repartitioning.",
+    ),
+    metric(
+        name = "send_time",
+        description = "Time spent sending output batches to output channels. One metric per output partition (labelled with `outputPartition`).",
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct RepartitionExec {
     /// Input execution plan
@@ -867,27 +883,6 @@ struct RepartitionMetrics {
     /// One metric per output partition.
     send_time: Vec<metrics::Time>,
 }
-
-/// Documentation for the operator-specific metrics emitted by [`RepartitionExec`].
-pub static REPARTITION_EXEC_METRICS_DOC: std::sync::LazyLock<
-    datafusion_expr::MetricsDocumentation,
-> = std::sync::LazyLock::new(|| {
-    datafusion_expr::MetricsDocumentation::builder(
-        "RepartitionExec",
-        datafusion_expr::MetricPosition::Operator,
-    )
-    .with_metric(
-        "fetch_time",
-        "Time spent executing the child operator and fetching batches.",
-    )
-    .with_metric("repartition_time", "Time spent performing repartitioning.")
-    .with_metric(
-        "send_time",
-        "Time spent sending output batches to output channels. \
-         One metric per output partition (labelled with `outputPartition`).",
-    )
-    .build()
-});
 
 impl RepartitionMetrics {
     pub fn new(
@@ -1208,7 +1203,7 @@ impl ExecutionPlan for RepartitionExec {
     fn metrics_documentation(
         &self,
     ) -> Option<&'static datafusion_expr::MetricsDocumentation> {
-        Some(&REPARTITION_EXEC_METRICS_DOC)
+        Some(Self::metrics_doc())
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
