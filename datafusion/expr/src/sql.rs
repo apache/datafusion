@@ -45,8 +45,8 @@ impl Display for IlikeSelectItem {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub enum ExcludeSelectItem {
-    Single(Ident),
-    Multiple(Vec<Ident>),
+    Single(ObjectName),
+    Multiple(Vec<ObjectName>),
 }
 
 impl Display for ExcludeSelectItem {
@@ -61,6 +61,37 @@ impl Display for ExcludeSelectItem {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct ObjectName(pub Vec<ObjectNamePart>);
+
+impl Display for ObjectName {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let parts: Vec<String> = self.0.iter().map(|p| format!("{p}")).collect();
+        write!(f, "{}", parts.join("."))
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub enum ObjectNamePart {
+    Identifier(Ident),
+}
+
+impl ObjectNamePart {
+    pub fn as_ident(&self) -> Option<&Ident> {
+        match self {
+            ObjectNamePart::Identifier(ident) => Some(ident),
+        }
+    }
+}
+
+impl Display for ObjectNamePart {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            ObjectNamePart::Identifier(ident) => write!(f, "{ident}"),
+        }
     }
 }
 

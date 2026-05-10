@@ -39,10 +39,10 @@ use datafusion_common::{
 };
 
 #[cfg(not(feature = "sql"))]
-use crate::sql::{ExceptSelectItem, ExcludeSelectItem};
+use crate::sql::{ExceptSelectItem, ExcludeSelectItem, Ident, ObjectName};
 use indexmap::IndexSet;
 #[cfg(feature = "sql")]
-use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
+use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, Ident, ObjectName};
 
 pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 
@@ -341,40 +341,30 @@ fn get_excluded_columns(
     }
     // Declared outside the `if let` so `idents.extend(exclude_owned.iter())`
     // below can borrow references that outlive the inner scope.
-    #[cfg(feature = "sql")]
-    let exclude_owned: Vec<sqlparser::ast::Ident>;
+    let exclude_owned: Vec<Ident>;
     if let Some(exclude) = opt_exclude {
-        #[cfg(feature = "sql")]
-        {
-            let object_name_to_ident =
-                |name: &sqlparser::ast::ObjectName| -> Result<sqlparser::ast::Ident> {
-                    if name.0.len() != 1 {
-                        return plan_err!(
-                            "EXCLUDE with multi-part identifiers is not supported: {name}"
-                        );
-                    }
-                    let part = &name.0[0];
-                    let Some(ident) = part.as_ident() else {
-                        return plan_err!(
-                            "EXCLUDE with non-identifier name part is not supported: {part}"
-                        );
-                    };
-                    Ok(ident.clone())
-                };
-            exclude_owned = match exclude {
-                ExcludeSelectItem::Single(name) => vec![object_name_to_ident(name)?],
-                ExcludeSelectItem::Multiple(names) => names
-                    .iter()
-                    .map(object_name_to_ident)
-                    .collect::<Result<Vec<_>>>()?,
+        let object_name_to_ident = |name: &ObjectName| -> Result<Ident> {
+            if name.0.len() != 1 {
+                return plan_err!(
+                    "EXCLUDE with multi-part identifiers is not supported: {name}"
+                );
+            }
+            let part = &name.0[0];
+            let Some(ident) = part.as_ident() else {
+                return plan_err!(
+                    "EXCLUDE with non-identifier name part is not supported: {part}"
+                );
             };
-            idents.extend(exclude_owned.iter());
-        }
-        #[cfg(not(feature = "sql"))]
-        match exclude {
-            ExcludeSelectItem::Single(ident) => idents.push(ident),
-            ExcludeSelectItem::Multiple(idents_inner) => idents.extend(idents_inner),
-        }
+            Ok(ident.clone())
+        };
+        exclude_owned = match exclude {
+            ExcludeSelectItem::Single(name) => vec![object_name_to_ident(name)?],
+            ExcludeSelectItem::Multiple(names) => names
+                .iter()
+                .map(object_name_to_ident)
+                .collect::<Result<Vec<_>>>()?,
+        };
+        idents.extend(exclude_owned.iter());
     }
     // Excluded columns should be unique
     let n_elem = idents.len();
