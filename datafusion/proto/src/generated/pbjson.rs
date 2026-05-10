@@ -25005,20 +25005,20 @@ impl serde::Serialize for UnnestOptions {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.recursions.is_empty() {
-            len += 1;
-        }
         if self.null_handling != 0 {
             len += 1;
         }
-        let mut struct_ser = serializer.serialize_struct("datafusion.UnnestOptions", len)?;
         if !self.recursions.is_empty() {
-            struct_ser.serialize_field("recursions", &self.recursions)?;
+            len += 1;
         }
+        let mut struct_ser = serializer.serialize_struct("datafusion.UnnestOptions", len)?;
         if self.null_handling != 0 {
             let v = unnest_options::NullHandling::try_from(self.null_handling)
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.null_handling)))?;
             struct_ser.serialize_field("nullHandling", &v)?;
+        }
+        if !self.recursions.is_empty() {
+            struct_ser.serialize_field("recursions", &self.recursions)?;
         }
         struct_ser.end()
     }
@@ -25030,15 +25030,15 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "recursions",
             "null_handling",
             "nullHandling",
+            "recursions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Recursions,
             NullHandling,
+            Recursions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -25060,8 +25060,8 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                         E: serde::de::Error,
                     {
                         match value {
-                            "recursions" => Ok(GeneratedField::Recursions),
                             "nullHandling" | "null_handling" => Ok(GeneratedField::NullHandling),
+                            "recursions" => Ok(GeneratedField::Recursions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -25081,27 +25081,27 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut recursions__ = None;
                 let mut null_handling__ = None;
+                let mut recursions__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Recursions => {
-                            if recursions__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("recursions"));
-                            }
-                            recursions__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::NullHandling => {
                             if null_handling__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nullHandling"));
                             }
                             null_handling__ = Some(map_.next_value::<unnest_options::NullHandling>()? as i32);
                         }
+                        GeneratedField::Recursions => {
+                            if recursions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("recursions"));
+                            }
+                            recursions__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(UnnestOptions {
-                    recursions: recursions__.unwrap_or_default(),
                     null_handling: null_handling__.unwrap_or_default(),
+                    recursions: recursions__.unwrap_or_default(),
                 })
             }
         }

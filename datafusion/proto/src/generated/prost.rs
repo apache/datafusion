@@ -528,10 +528,10 @@ pub struct ColumnUnnestListRecursion {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnnestOptions {
-    #[prost(message, repeated, tag = "2")]
-    pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
     #[prost(enumeration = "unnest_options::NullHandling", tag = "3")]
     pub null_handling: i32,
+    #[prost(message, repeated, tag = "2")]
+    pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
 }
 /// Nested message and enum types in `UnnestOptions`.
 pub mod unnest_options {
