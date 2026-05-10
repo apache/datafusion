@@ -732,9 +732,9 @@ pub fn lambda(params: impl IntoIterator<Item = impl Into<String>>, body: Expr) -
 ///
 /// The expression tree or [`LogicalPlan`] which
 /// owns this variable must be resolved before usage with either
-/// [`Expr::resolve_lambdas_variables`] or [`LogicalPlan::resolve_lambdas_variables`].
+/// [`Expr::resolve_lambda_variables`] or [`LogicalPlan::resolve_lambda_variables`].
 ///
-/// [`LogicalPlan::resolve_lambdas_variables`]: crate::LogicalPlan::resolve_lambdas_variables
+/// [LogicalPlan::resolve_lambda_variables]: crate::LogicalPlan::resolve_lambda_variables
 pub fn lambda_var(name: impl Into<String>) -> Expr {
     Expr::LambdaVariable(LambdaVariable::new(name.into(), None))
 }

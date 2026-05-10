@@ -889,7 +889,7 @@ fn resolve_higher_order_function(
 
     let mut step = 0;
 
-    let lambdas_params = loop {
+    let lambda_params = loop {
         match func.lambda_parameters(step, &fields)? {
             LambdaParametersProgress::Partial(params) => {
                 let mut params = params.into_iter();
@@ -961,21 +961,21 @@ fn resolve_higher_order_function(
         }
     };
 
-    let mut lambdas_params = lambdas_params.into_iter();
+    let mut lambda_params = lambda_params.into_iter();
 
-    if num_lambdas != lambdas_params.len() {
+    if num_lambdas != lambda_params.len() {
         return plan_err!(
             "{} lambda_parameters returned {} values for {num_lambdas} lambdas",
             func.name(),
-            lambdas_params.len()
+            lambda_params.len()
         );
     }
 
     let args = args.map_elements(|arg| match arg {
         Expr::Lambda(mut lambda) => {
-            let lambda_params = lambdas_params.next().ok_or_else(|| {
+            let lambda_params = lambda_params.next().ok_or_else(|| {
                 internal_datafusion_err!(
-                    "lambdas_params len should have been checked above"
+                    "lambda_params len should have been checked above"
                 )
             })?;
 

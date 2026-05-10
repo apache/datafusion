@@ -447,7 +447,12 @@ impl HigherOrderFunction {
     }
 
     /// Invokes the inner function [`HigherOrderUDF::lambda_parameters`]
-    /// using the arguments of this invocation
+    /// using the arguments of this invocation. This expression lambda
+    /// variables must be already resolved either by coming from the
+    /// default sql planner or by calling [Expr::resolve_lambda_variables]
+    /// or [LogicalPlan::resolve_lambda_variables]
+    ///
+    /// [LogicalPlan::resolve_lambda_variables]: crate::LogicalPlan::resolve_lambda_variables
     pub fn lambda_parameters(
         &self,
         schema: &dyn ExprSchema,
