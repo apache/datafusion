@@ -29,8 +29,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, Fields, Schema, SchemaRef, TimeUnit, UInt32Type,
-    UnionFields,
+    DataType, Field, Fields, Schema, SchemaRef, TimeUnit, UInt32Type, UnionFields,
 };
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{

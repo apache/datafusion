@@ -56,9 +56,8 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions,
-    get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
-    plan_err,
+    TableReference, ToDFSchema, UnnestOptions, get_target_functional_dependencies,
+    internal_datafusion_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
