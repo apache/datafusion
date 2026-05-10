@@ -66,6 +66,7 @@ parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 url = { workspace = true }
 
 [dev-dependencies]

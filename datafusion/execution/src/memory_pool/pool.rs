@@ -28,10 +28,23 @@ use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{
     num::NonZeroUsize,
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
+
+/// How long [`TrackConsumersPool::try_grow_async`] waits for an
+/// in-flight sibling to finish reclaiming before retrying. Kept short
+/// so we don't stall the requestor longer than the typical reclaim
+/// (mpsc send + spill commit).
+const RECLAIM_RETRY_SLEEP: Duration = Duration::from_millis(50);
+
+/// Maximum number of times [`TrackConsumersPool::try_grow_async`]
+/// retries the candidate walk while siblings are still in-flight.
+/// Bounds the total wait at `MAX_RECLAIM_RETRIES * RECLAIM_RETRY_SLEEP`
+/// so a livelock surfaces as OOM rather than a hang.
+const MAX_RECLAIM_RETRIES: usize = 3;
 
 /// A [`MemoryPool`] that enforces no limit
 #[derive(Debug, Default)]
@@ -709,77 +722,127 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 Err(e) => e,
             };
 
-            // Snapshot reclaimers. Only consumers strictly larger than
-            // the requestor are eligible: smaller-or-equal siblings would
-            // free less than the requestor itself can, so the requestor
-            // should self-spill instead. This rule also breaks the
-            // mutual-reclaim cycle (A targets B while B targets A) — at
-            // most one side of any pair can hold strictly more memory,
-            // so the other side has no candidates and surfaces an error
-            // for the caller's self-spill fallback. Filter out anyone
-            // whose `reclaimer_state` flag is not `AVAILABLE` (in-flight or
-            // sticky-disabled). Drop the read guard before awaiting any
-            // reclaim.
+            // Mark the requestor as IN_FLIGHT for the duration of this
+            // walk. Without this, a victim's reclaim handler that
+            // recursively triggers `pool.reclaim` (e.g. a merge stream
+            // started inside an `ExternalSorter` spill) could pick the
+            // requestor as its own victim, send it a reclaim oneshot,
+            // and deadlock — the requestor is blocked here at
+            // `reclaimer.reclaim().await` and can't drain its own
+            // reclaim channel. Sticky-disabled or already-in-flight
+            // requestors aren't acquired; the walk proceeds without
+            // protection (the candidate filter still rejects the
+            // requestor by id).
             let requestor_id = reservation.consumer().id();
-            let requestor_reserved = {
-                let guard = self.tracked_consumers.read();
-                guard
-                    .get(&requestor_id)
-                    .map(|tc| tc.reserved())
-                    .unwrap_or(0)
-            };
-            let mut candidates: Vec<(usize, Arc<dyn MemoryReclaimer>, Arc<AtomicU8>)> = {
-                let guard = self.tracked_consumers.read();
-                guard
-                    .iter()
-                    .filter_map(|(cid, tc)| {
-                        let reclaimer = tc.reclaimer.as_ref()?;
-                        if *cid == requestor_id || tc.reserved() <= requestor_reserved {
-                            return None;
-                        }
-                        if tc.reclaimer_state.load(Ordering::Acquire)
-                            != reclaimer_state::AVAILABLE
-                        {
-                            return None;
-                        }
-                        Some((
-                            tc.reserved(),
-                            Arc::clone(reclaimer),
-                            Arc::clone(&tc.reclaimer_state),
-                        ))
-                    })
-                    .collect()
-            };
-            // Order: priority desc, then reservation size desc.
-            candidates.sort_by(|(lr, l, _), (rr, r, _)| {
-                r.priority().cmp(&l.priority()).then_with(|| rr.cmp(lr))
-            });
-            // Cap reclaim work — only consider the top-ranked candidates.
-            candidates.truncate(self.reclaim_candidate_limit.get());
+            let _self_guard = self
+                .tracked_consumers
+                .read()
+                .get(&requestor_id)
+                .and_then(|tc| ReclaimerStateGuard::try_acquire(&tc.reclaimer_state));
 
-            // For each candidate: try to claim its in-flight slot
-            // (skip on contention or sticky-disabled so we work on a
-            // different victim rather than serializing behind a
-            // sibling's reclaim); re-check `try_grow` before reclaiming
-            // in case a sibling already freed enough; reclaim; retry
-            // `try_grow`. The retry path goes through `self.try_grow`,
-            // which already updates the tracked consumer's atomic
-            // reservation — no manual accounting needed here.
-            for (_, reclaimer, flag) in candidates {
-                let _g = match ReclaimerStateGuard::try_acquire(&flag) {
-                    Some(g) => g,
-                    None => continue,
+            let mut retries: usize = 0;
+            loop {
+                // Snapshot reclaimers. Only consumers strictly larger than
+                // the requestor are eligible: smaller-or-equal siblings would
+                // free less than the requestor itself can, so the requestor
+                // should self-spill instead. This rule also breaks the
+                // mutual-reclaim cycle (A targets B while B targets A) — at
+                // most one side of any pair can hold strictly more memory,
+                // so the other side has no candidates and surfaces an error
+                // for the caller's self-spill fallback. Filter out anyone
+                // whose `reclaimer_state` flag is not `AVAILABLE` (in-flight or
+                // sticky-disabled). Also count IN_FLIGHT siblings so we know
+                // whether to wait briefly for them to finish before giving up.
+                // Drop the read guard before awaiting any reclaim.
+                let requestor_reserved = {
+                    let guard = self.tracked_consumers.read();
+                    guard
+                        .get(&requestor_id)
+                        .map(|tc| tc.reserved())
+                        .unwrap_or(0)
                 };
-                if self.try_grow(reservation, additional).is_ok() {
-                    return Ok(());
+                let mut in_flight_seen: usize = 0;
+                let mut candidates: Vec<(
+                    usize,
+                    Arc<dyn MemoryReclaimer>,
+                    Arc<AtomicU8>,
+                )> = {
+                    let guard = self.tracked_consumers.read();
+                    guard
+                        .iter()
+                        .filter_map(|(cid, tc)| {
+                            if *cid == requestor_id {
+                                return None;
+                            }
+                            // Track in-flight siblings (any size) so we can
+                            // decide whether a retry has any chance of helping.
+                            let state = tc.reclaimer_state.load(Ordering::Acquire);
+                            if state == reclaimer_state::IN_FLIGHT {
+                                in_flight_seen += 1;
+                            }
+                            let reclaimer = tc.reclaimer.as_ref()?;
+                            if tc.reserved() <= requestor_reserved {
+                                return None;
+                            }
+                            if state != reclaimer_state::AVAILABLE {
+                                return None;
+                            }
+                            Some((
+                                tc.reserved(),
+                                Arc::clone(reclaimer),
+                                Arc::clone(&tc.reclaimer_state),
+                            ))
+                        })
+                        .collect()
+                };
+                // Order: priority desc, then reservation size desc.
+                candidates.sort_by(|(lr, l, _), (rr, r, _)| {
+                    r.priority().cmp(&l.priority()).then_with(|| rr.cmp(lr))
+                });
+                // Cap reclaim work — only consider the top-ranked candidates.
+                candidates.truncate(self.reclaim_candidate_limit.get());
+
+                // For each candidate: try to claim its in-flight slot
+                // (skip on contention or sticky-disabled so we work on a
+                // different victim rather than serializing behind a
+                // sibling's reclaim); re-check `try_grow` before reclaiming
+                // in case a sibling already freed enough; reclaim; retry
+                // `try_grow`. The retry path goes through `self.try_grow`,
+                // which already updates the tracked consumer's atomic
+                // reservation — no manual accounting needed here.
+                for (_, reclaimer, flag) in candidates {
+                    let _g = match ReclaimerStateGuard::try_acquire(&flag) {
+                        Some(g) => g,
+                        None => continue,
+                    };
+                    if self.try_grow(reservation, additional).is_ok() {
+                        return Ok(());
+                    }
+                    if let Err(e) = reclaimer.reclaim(additional).await {
+                        debug!("memory reclaimer returned error: {e}");
+                        continue;
+                    }
+                    if self.try_grow(reservation, additional).is_ok() {
+                        return Ok(());
+                    }
                 }
-                if let Err(e) = reclaimer.reclaim(additional).await {
-                    debug!("memory reclaimer returned error: {e}");
+
+                // Walk produced nothing usable. If other consumers are
+                // currently reclaiming for someone else, their freed bytes
+                // may land in the pool shortly — wait briefly and retry
+                // before falling through to OOM. Bounded so we don't stall
+                // forever on a livelock.
+                if in_flight_seen > 0 && retries < MAX_RECLAIM_RETRIES {
+                    retries += 1;
+                    tokio::time::sleep(RECLAIM_RETRY_SLEEP).await;
+                    // Quick fast-path retry: an in-flight sibling may have
+                    // freed bytes during the sleep.
+                    if self.try_grow(reservation, additional).is_ok() {
+                        return Ok(());
+                    }
                     continue;
                 }
-                if self.try_grow(reservation, additional).is_ok() {
-                    return Ok(());
-                }
+                break;
             }
 
             // Fall through to the inner pool's own reclaim path, if any.
