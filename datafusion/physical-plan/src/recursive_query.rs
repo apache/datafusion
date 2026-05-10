@@ -90,9 +90,9 @@ impl RecursiveQueryExec {
     ) -> Result<Self> {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
-        // Use the static term as the declared recursive CTE output schema. The
-        // recursive term is planned independently, so align it at plan construction
-        // time instead of patching batches in RecursiveQueryStream.
+        // Use static term field names with nullability widened across static and
+        // recursive terms. Align both children at plan construction time instead
+        // of patching batches in RecursiveQueryStream.
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
         let output_schema = recursive_query_output_schema(
             &static_term.schema(),
@@ -399,13 +399,14 @@ fn recursive_query_output_schema(
                     recursive_field.data_type()
                 );
             }
-            let mut field = Field::new(
-                static_field.name(),
-                static_field.data_type().clone(),
-                static_field.is_nullable() || recursive_field.is_nullable(),
-            );
-            field.set_metadata(static_field.metadata().clone());
-            Ok(Arc::new(field))
+            Ok(Arc::new(
+                Field::new(
+                    static_field.name(),
+                    static_field.data_type().clone(),
+                    static_field.is_nullable() || recursive_field.is_nullable(),
+                )
+                .with_metadata(static_field.metadata().clone()),
+            ))
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -582,7 +583,8 @@ mod tests {
     }
 
     #[test]
-    fn recursive_query_exec_widens_output_nullability_from_recursive_term() -> Result<()> {
+    fn recursive_query_exec_widens_output_nullability_from_recursive_term() -> Result<()>
+    {
         let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);

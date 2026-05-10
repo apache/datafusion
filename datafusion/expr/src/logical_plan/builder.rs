@@ -2371,8 +2371,8 @@ mod tests {
 
     #[test]
     fn recursive_query_schema_widens_nullability_from_recursive_term() -> Result<()> {
-        let static_term = LogicalPlanBuilder::empty(true)
-            .project(vec![lit(0i32).alias("n")])?;
+        let static_term =
+            LogicalPlanBuilder::empty(true).project(vec![lit(0i32).alias("n")])?;
         let recursive_term = LogicalPlanBuilder::empty(true)
             .project(vec![lit(ScalarValue::Int32(None)).alias("recursive_n")])?
             .build()?;

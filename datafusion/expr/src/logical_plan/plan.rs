@@ -2269,7 +2269,8 @@ impl RecursiveQuery {
         recursive_term: Arc<LogicalPlan>,
         is_distinct: bool,
     ) -> Result<Self> {
-        let schema = recursive_query_schema(static_term.schema(), recursive_term.schema())?;
+        let schema =
+            recursive_query_schema(static_term.schema(), recursive_term.schema())?;
         Ok(Self {
             name,
             static_term,
@@ -2291,18 +2292,18 @@ fn recursive_query_schema(
         .enumerate()
         .map(|(i, (static_field, recursive_field))| {
             let (qualifier, _) = static_schema.qualified_field(i);
-            let mut field = Field::new(
+            let field = Field::new(
                 static_field.name(),
                 static_field.data_type().clone(),
                 static_field.is_nullable() || recursive_field.is_nullable(),
-            );
-            field.set_metadata(intersect_metadata_for_union([
+            )
+            .with_metadata(intersect_metadata_for_union([
                 static_field.metadata(),
                 recursive_field.metadata(),
             ]));
-            Ok((qualifier.cloned(), Arc::new(field)))
+            (qualifier.cloned(), Arc::new(field))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
     let metadata = intersect_metadata_for_union([
         static_schema.metadata(),
