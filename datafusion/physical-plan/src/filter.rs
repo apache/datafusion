@@ -574,6 +574,12 @@ impl ExecutionPlan for FilterExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn metrics_documentation(
+        &self,
+    ) -> Option<&'static datafusion_expr::MetricsDocumentation> {
+        Some(&FILTER_EXEC_METRICS_DOC)
+    }
+
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
@@ -958,9 +964,25 @@ struct FilterExecMetrics {
     baseline_metrics: BaselineMetrics,
     /// Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
-    // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
-    // or modifying metrics comments
 }
+
+/// Documentation for the operator-specific metrics emitted by [`FilterExec`].
+///
+/// Picked up by `SessionStateDefaults::default_metric_docs` to render the
+/// metrics user-guide page.
+pub static FILTER_EXEC_METRICS_DOC: std::sync::LazyLock<
+    datafusion_expr::MetricsDocumentation,
+> = std::sync::LazyLock::new(|| {
+    datafusion_expr::MetricsDocumentation::builder(
+        "FilterExec",
+        datafusion_expr::MetricPosition::Operator,
+    )
+    .with_metric(
+        "selectivity",
+        "Selectivity of the filter, calculated as output_rows / input_rows",
+    )
+    .build()
+});
 
 impl FilterExecMetrics {
     pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
