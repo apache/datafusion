@@ -15,16 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::{Any, TypeId},
-    collections::HashMap,
-    hash::{BuildHasherDefault, Hasher},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use datafusion_common::{
     Result, ScalarValue,
     config::{ConfigExtension, ConfigOptions, SpillCompression},
+    extensions::Extensions,
 };
 
 /// Configuration options for [`SessionContext`].
@@ -99,19 +95,17 @@ pub struct SessionConfig {
     /// A new copy is created on write, if there are other outstanding
     /// references to the same options.
     options: Arc<ConfigOptions>,
-    /// Opaque extensions.
-    extensions: AnyMap,
+    /// Opaque extensions, keyed by concrete Rust type. See
+    /// [`with_extension`](Self::with_extension) and
+    /// [`get_extension`](Self::get_extension).
+    extensions: Extensions,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             options: Arc::new(ConfigOptions::new()),
-            // Assume no extensions by default.
-            extensions: HashMap::with_capacity_and_hasher(
-                0,
-                BuildHasherDefault::default(),
-            ),
+            extensions: Extensions::new(),
         }
     }
 }
@@ -602,9 +596,7 @@ impl SessionConfig {
     where
         T: Send + Sync + 'static,
     {
-        let ext = ext as Arc<dyn Any + Send + Sync + 'static>;
-        let id = TypeId::of::<T>();
-        self.extensions.insert(id, ext);
+        self.extensions.insert_arc(ext);
     }
 
     /// Get extension, if any for the specified type `T` exists.
@@ -614,11 +606,7 @@ impl SessionConfig {
     where
         T: Send + Sync + 'static,
     {
-        let id = TypeId::of::<T>();
-        self.extensions
-            .get(&id)
-            .cloned()
-            .map(|ext| Arc::downcast(ext).expect("TypeId unique"))
+        self.extensions.get_arc::<T>()
     }
 }
 
@@ -629,36 +617,5 @@ impl From<ConfigOptions> for SessionConfig {
             options,
             ..Default::default()
         }
-    }
-}
-
-/// Map that holds opaque objects indexed by their type.
-///
-/// Data is wrapped into an [`Arc`] to enable [`Clone`] while still being [object safe].
-///
-/// [object safe]: https://doc.rust-lang.org/reference/items/traits.html#object-safety
-type AnyMap =
-    HashMap<TypeId, Arc<dyn Any + Send + Sync + 'static>, BuildHasherDefault<IdHasher>>;
-
-/// Hasher for [`AnyMap`].
-///
-/// With [`TypeId`]s as keys, there's no need to hash them. They are already hashes themselves, coming from the compiler.
-/// The [`IdHasher`] just holds the [`u64`] of the [`TypeId`], and then returns it, instead of doing any bit fiddling.
-#[derive(Default)]
-struct IdHasher(u64);
-
-impl Hasher for IdHasher {
-    fn write(&mut self, _: &[u8]) {
-        unreachable!("TypeId calls write_u64");
-    }
-
-    #[inline]
-    fn write_u64(&mut self, id: u64) {
-        self.0 = id;
-    }
-
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
     }
 }

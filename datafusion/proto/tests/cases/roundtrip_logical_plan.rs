@@ -68,6 +68,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
@@ -273,6 +274,27 @@ async fn roundtrip_custom_memory_tables() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_explain_format_tree() -> Result<()> {
+    let ctx = SessionContext::new();
+    let plan = ctx
+        .state()
+        .create_logical_plan("EXPLAIN FORMAT TREE SELECT 1")
+        .await?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    match logical_round_trip {
+        LogicalPlan::Explain(explain) => {
+            assert_eq!(explain.explain_format, ExplainFormat::Tree);
+        }
+        plan => panic!("expected Explain plan, got {plan:?}"),
+    }
 
     Ok(())
 }

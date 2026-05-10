@@ -23,7 +23,7 @@ use datafusion_datasource::file_format::FileFormat;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::SortExpr;
 use futures::StreamExt;
-use futures::{TryStreamExt, future};
+use futures::TryStreamExt;
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -263,7 +263,15 @@ impl ListingOptions {
     /// Infer the schema of the files at the given path on the provided object store.
     ///
     /// If the table_path contains one or more files (i.e. it is a directory /
-    /// prefix of files) their schema is merged by calling [`FileFormat::infer_schema`]
+    /// prefix of files) their schema is merged by calling [`FileFormat::infer_schema`].
+    ///
+    /// Returns a `Plan` error if `table_path` contains no files at all (e.g. an
+    /// empty or non-existent directory), since an inferred schema with zero
+    /// columns produces confusing "column not found" errors at query time.
+    /// Callers that need to support empty locations must declare an explicit
+    /// schema instead of relying on inference. Locations that contain files
+    /// which all happen to be 0-byte are still accepted — the empty files are
+    /// filtered out before format-specific inference runs.
     ///
     /// Note: The inferred schema does not include any partitioning columns.
     ///
@@ -275,13 +283,26 @@ impl ListingOptions {
     ) -> datafusion_common::Result<SchemaRef> {
         let store = state.runtime_env().object_store(table_path)?;
 
-        let files: Vec<_> = table_path
+        let all_files: Vec<_> = table_path
             .list_all_files(state, store.as_ref(), &self.file_extension)
             .await?
-            // Empty files cannot affect schema but may throw when trying to read for it
-            .try_filter(|object_meta| future::ready(object_meta.size > 0))
             .try_collect()
             .await?;
+
+        if all_files.is_empty() {
+            return plan_err!(
+                "No files found at {}. \
+                 Cannot infer schema from an empty location; either add data files \
+                 or declare an explicit schema for the table.",
+                table_path
+            );
+        }
+
+        // Empty files cannot affect schema but may throw when trying to read for it
+        let files: Vec<_> = all_files
+            .into_iter()
+            .filter(|object_meta| object_meta.size > 0)
+            .collect();
 
         let schema = self.format.infer_schema(state, &store, &files).await?;
 
