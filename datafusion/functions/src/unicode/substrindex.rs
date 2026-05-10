@@ -273,10 +273,11 @@ where
 {
     let num_rows = string_array.len();
     // Output is null if and only if any input is null.
-    let nulls = NullBuffer::union(
-        NullBuffer::union(string_array.nulls(), delimiter_array.nulls()).as_ref(),
+    let nulls = NullBuffer::union_many([
+        string_array.nulls(),
+        delimiter_array.nulls(),
         count_array.nulls(),
-    );
+    ]);
 
     for i in 0..num_rows {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
@@ -299,10 +300,11 @@ fn substr_index_view(
     delimiter_array: &StringViewArray,
     count_array: &PrimitiveArray<Int64Type>,
 ) -> Result<ArrayRef> {
-    let nulls = NullBuffer::union(
-        NullBuffer::union(string_array.nulls(), delimiter_array.nulls()).as_ref(),
+    let nulls = NullBuffer::union_many([
+        string_array.nulls(),
+        delimiter_array.nulls(),
         count_array.nulls(),
-    );
+    ]);
     let views = string_array.views();
     let mut views_buf = Vec::with_capacity(string_array.len());
     let mut has_out_of_line = false;

@@ -31,19 +31,23 @@ use arrow::array::{
     cast::AsArray,
 };
 use arrow::array::{
-    Datum, GenericListArray, Int32Array, Int64Array, MutableArrayData, make_array,
+    ArrowPrimitiveType, Datum, GenericListArray, Int32Array, Int64Array,
+    MutableArrayData, PrimitiveArray, make_array,
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cmp::neq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, partition};
-use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::datatypes::{
+    ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
+};
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, min};
 use std::collections::HashSet;
+use std::iter::repeat_n;
 use std::num::NonZero;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
@@ -1181,6 +1185,74 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
     Ok(list.clone())
 }
 
+/// If `array` is a list or a map, returns a new array of the same length as it's inner values
+/// where each value is the 1-based index of the sublist it's contained. Example:
+///
+/// `[[1], [2, 3], [4, 5, 6]] =>  [1, 2, 2, 3, 3, 3]`
+///
+/// Otherwise returns an error
+pub fn list_values_row_number(array: &dyn Array) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::List(_) => Ok(Arc::new(variable_size_list_values_row_number::<
+            Int32Type,
+        >(array.as_list().offsets()))),
+        DataType::LargeList(_) => Ok(Arc::new(variable_size_list_values_row_number::<
+            Int64Type,
+        >(array.as_list().offsets()))),
+        DataType::ListView(_) => Ok(Arc::new(variable_size_list_values_row_number::<
+            Int32Type,
+        >(array.as_list_view().offsets()))),
+        DataType::LargeListView(_) => {
+            Ok(Arc::new(variable_size_list_values_row_number::<Int64Type>(
+                array.as_list_view().offsets(),
+            )))
+        }
+        DataType::FixedSizeList(_, _) => {
+            let fixed_size_list = array.as_fixed_size_list();
+
+            Ok(Arc::new(fsl_values_row_number(
+                fixed_size_list.value_length(),
+                fixed_size_list.len(),
+            )?))
+        }
+        DataType::Map(_, _) => Ok(Arc::new(variable_size_list_values_row_number::<
+            Int32Type,
+        >(array.as_map().offsets()))),
+        other => _exec_err!("expected list, got {other}"),
+    }
+}
+
+/// [0, 2, 2, 5, 6] -> [0, 0, 2, 2, 2, 3]
+fn variable_size_list_values_row_number<T: ArrowPrimitiveType>(
+    offsets: &[T::Native],
+) -> PrimitiveArray<T> {
+    let mut rows_number = Vec::with_capacity(
+        offsets[offsets.len() - 1].to_usize().unwrap() - offsets[0].to_usize().unwrap(),
+    );
+
+    for (i, w) in offsets.windows(2).enumerate() {
+        let len = w[1].as_usize() - w[0].as_usize();
+        rows_number.extend(repeat_n(T::Native::usize_as(i), len));
+    }
+
+    PrimitiveArray::new(rows_number.into(), None)
+}
+
+/// (2, 3) -> [0, 0, 1, 1, 2, 2]
+fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array> {
+    let list_size = list_size.to_usize().ok_or_else(|| {
+        _exec_datafusion_err!("fsl_values_index: invalid list_size {list_size}")
+    })?;
+
+    let mut rows_number = Vec::with_capacity(list_size * array_len);
+
+    for i in 0..array_len {
+        rows_number.extend(repeat_n(i as i32, list_size));
+    }
+
+    Ok(PrimitiveArray::new(rows_number.into(), None))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1616,5 +1688,86 @@ mod tests {
         // check above skips inner value of nulls
         assert_eq!(res.values(), expected.values());
         assert_eq!(res.offsets(), expected.offsets());
+    }
+
+    #[test]
+    fn test_list_array_values_row_number() {
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([1, 3, 0, 2,])
+            ),
+            Int32Array::from(vec![0, 1, 1, 1, 3, 3])
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([])
+            ),
+            Int32Array::new_null(0)
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([0])
+            ),
+            Int32Array::new_null(0)
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([0, 0])
+            ),
+            Int32Array::new_null(0)
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([1])
+            ),
+            Int32Array::from(vec![0])
+        );
+
+        assert_eq!(
+            variable_size_list_values_row_number::<Int32Type>(
+                &OffsetBuffer::from_lengths([2])
+            ),
+            Int32Array::from(vec![0, 0])
+        );
+    }
+
+    #[test]
+    fn test_fsl_values_row_number() {
+        assert_eq!(
+            fsl_values_row_number(2, 3).unwrap(),
+            Int32Array::from(vec![0, 0, 1, 1, 2, 2])
+        );
+
+        assert_eq!(
+            fsl_values_row_number(1, 3).unwrap(),
+            Int32Array::from(vec![0, 1, 2])
+        );
+
+        assert_eq!(
+            fsl_values_row_number(2, 1).unwrap(),
+            Int32Array::from(vec![0, 0])
+        );
+
+        assert_eq!(
+            fsl_values_row_number(2, 0).unwrap(),
+            Int32Array::new_null(0),
+        );
+
+        assert_eq!(
+            fsl_values_row_number(0, 2).unwrap(),
+            Int32Array::new_null(0),
+        );
+
+        assert_eq!(
+            fsl_values_row_number(0, 0).unwrap(),
+            Int32Array::new_null(0),
+        );
+
+        fsl_values_row_number(-1, 2).unwrap_err();
+        fsl_values_row_number(-1, 0).unwrap_err();
     }
 }

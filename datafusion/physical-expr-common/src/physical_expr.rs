@@ -161,6 +161,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>;
 
     /// Returns a new PhysicalExpr where all children were replaced by new exprs.
+    ///
+    /// If the implementation returns a [`PhysicalExpr::expression_id`], then
+    /// the identifier should be preserved by the new expression.
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
@@ -443,6 +446,23 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// The default implementation returns [`ExpressionPlacement::KeepInPlace`].
     fn placement(&self) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
+    }
+
+    /// Return a stable, globally-unique identifier for this [`PhysicalExpr`], if it
+    /// has one.
+    ///
+    /// This identifier tracks which expressions which are connected (e.g. `DynamicFilterPhysicalExpr`
+    /// where two expressions may be different but store the same mutable inner state). Tracking
+    /// connected expressions helps preserve referential integrity within plan nodes
+    /// during serialization and deserialization.
+    ///
+    /// This id must be preserved across [`PhysicalExpr::with_new_children`] or any other
+    /// methods which may want to preserve identity.
+    ///
+    /// Default is `None`: the expression has no identity worth preserving across a
+    /// serialization boundary.
+    fn expression_id(&self) -> Option<u64> {
+        None
     }
 }
 
