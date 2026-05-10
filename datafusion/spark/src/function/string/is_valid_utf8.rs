@@ -16,9 +16,11 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion::logical_expr::{ColumnarValue, Signature, Volatility};
 use datafusion_common::{Result, internal_err};
-use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
+};
 
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::buffer::BooleanBuffer;
