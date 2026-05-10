@@ -37,7 +37,12 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::ExtensionTypeRegistrationRef;
-use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, HigherOrderUDF, MetricsDocumentation, ScalarUDF, WindowUDF,
+};
+use datafusion_physical_plan::filter::FILTER_EXEC_METRICS_DOC;
+use datafusion_physical_plan::metric_docs::common_metric_docs;
+use datafusion_physical_plan::repartition::REPARTITION_EXEC_METRICS_DOC;
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -130,6 +135,21 @@ impl SessionStateDefaults {
     /// returns the list of default [`WindowUDF`]s
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
         functions_window::all_default_window_functions()
+    }
+
+    /// Returns the documentation for all built-in metrics emitted by
+    /// `ExecutionPlan`s.
+    ///
+    /// Common-metric docs (e.g. `BaselineMetrics`) come first, followed by
+    /// operator-specific docs sourced from
+    /// [`ExecutionPlan::metrics_documentation`](datafusion_physical_plan::ExecutionPlan::metrics_documentation).
+    ///
+    /// Used by `print_metric_docs` to render
+    /// `docs/source/user-guide/metrics.md`.
+    pub fn default_metric_docs() -> Vec<&'static MetricsDocumentation> {
+        let mut docs = common_metric_docs();
+        docs.extend([&*FILTER_EXEC_METRICS_DOC, &*REPARTITION_EXEC_METRICS_DOC]);
+        docs
     }
 
     /// Returns the list of default extension types.
