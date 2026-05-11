@@ -6,27 +6,27 @@
   "extensions": [
     {
       "extensionFunction": {
-        "extensionUrnReference": 4294967295,
+        "extensionUrnReference": 2,
         "functionAnchor": 2,
         "name": "array_transform2"
       }
     },
     {
       "extensionFunction": {
-        "extensionUrnReference": 4294967295,
+        "extensionUrnReference": 2,
         "name": "make_array"
       }
     },
     {
       "extensionFunction": {
-        "extensionUrnReference": 4294967295,
+        "extensionUrnReference": 2,
         "functionAnchor": 3,
         "name": "array_concat"
       }
     },
     {
       "extensionFunction": {
-        "extensionUrnReference": 4294967295,
+        "extensionUrnReference": 1,
         "functionAnchor": 1,
         "name": "multiply"
       }
@@ -98,11 +98,36 @@
                                         }
                                       }
                                     }
-                                  ]
+                                  ],
+                                  "outputType": {
+                                    "list": {
+                                      "type": {
+                                        "i64": {
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      },
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  }
                                 }
                               }
                             }
-                          ]
+                          ],
+                          "outputType": {
+                            "list": {
+                              "type": {
+                                "list": {
+                                  "type": {
+                                    "i64": {
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  },
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              },
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          }
                         }
                       }
                     },
@@ -199,7 +224,12 @@
                                                                 }
                                                               }
                                                             }
-                                                          ]
+                                                          ],
+                                                          "outputType": {
+                                                            "i64": {
+                                                              "nullability": "NULLABILITY_NULLABLE"
+                                                            }
+                                                          }
                                                         }
                                                       }
                                                     },
@@ -215,13 +245,28 @@
                                                         }
                                                       }
                                                     }
-                                                  ]
+                                                  ],
+                                                  "outputType": {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  }
                                                 }
                                               }
                                             }
                                           }
                                         }
-                                      ]
+                                      ],
+                                      "outputType": {
+                                        "list": {
+                                          "type": {
+                                            "i64": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          },
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      }
                                     }
                                   }
                                 },
@@ -291,7 +336,12 @@
                                                                 }
                                                               }
                                                             }
-                                                          ]
+                                                          ],
+                                                          "outputType": {
+                                                            "i64": {
+                                                              "nullability": "NULLABILITY_NULLABLE"
+                                                            }
+                                                          }
                                                         }
                                                       }
                                                     },
@@ -307,23 +357,63 @@
                                                         }
                                                       }
                                                     }
-                                                  ]
+                                                  ],
+                                                  "outputType": {
+                                                    "i64": {
+                                                      "nullability": "NULLABILITY_NULLABLE"
+                                                    }
+                                                  }
                                                 }
                                               }
                                             }
                                           }
                                         }
-                                      ]
+                                      ],
+                                      "outputType": {
+                                        "list": {
+                                          "type": {
+                                            "i64": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          },
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      }
                                     }
                                   }
                                 }
-                              ]
+                              ],
+                              "outputType": {
+                                "list": {
+                                  "type": {
+                                    "i64": {
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  },
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }
                             }
                           }
                         }
                       }
                     }
-                  ]
+                  ],
+                  "outputType": {
+                    "list": {
+                      "type": {
+                        "list": {
+                          "type": {
+                            "i64": {
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          },
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  }
                 }
               }
             ]
@@ -333,6 +423,16 @@
           "array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_concat(array_transform2(v,(v, j) -> v * i * j),array_transform2(v,(v, j) -> v * i * j)))"
         ]
       }
+    }
+  ],
+  "extensionUrns": [
+    {
+      "extensionUrnAnchor": 1,
+      "urn": "extension:io.substrait:functions_arithmetic"
+    },
+    {
+      "extensionUrnAnchor": 2,
+      "urn": "extension:io.substrait:functions_list"
     }
   ]
 }
