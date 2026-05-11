@@ -96,9 +96,10 @@ impl RecursiveQueryExec {
         // children at plan construction time instead of patching batches in
         // RecursiveQueryStream.
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        let static_term = align_recursive_plan_to_schema(static_term, &output_schema)?;
+        let static_term =
+            align_recursive_child_to_logical_schema(static_term, &output_schema)?;
         let recursive_term =
-            align_recursive_plan_to_schema(recursive_term, &output_schema)?;
+            align_recursive_child_to_logical_schema(recursive_term, &output_schema)?;
         let cache = Self::compute_properties(Arc::clone(&output_schema));
         Ok(RecursiveQueryExec {
             name,
@@ -374,16 +375,18 @@ impl RecursiveQueryStream {
     }
 }
 
-fn align_recursive_plan_to_schema(
+fn align_recursive_child_to_logical_schema(
     input: Arc<dyn ExecutionPlan>,
     output_schema: &SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     match project_plan_to_schema(Arc::clone(&input), output_schema) {
         Ok(projected) => Ok(projected),
-        Err(_) => Ok(Arc::new(RecursiveSchemaRebindExec::try_new(
-            input,
-            Arc::clone(output_schema),
-        )?)),
+        Err(projection_error) => {
+            match RecursiveSchemaRebindExec::try_new(input, Arc::clone(output_schema)) {
+                Ok(exec) => Ok(Arc::new(exec)),
+                Err(_) => Err(projection_error),
+            }
+        }
     }
 }
 
@@ -503,6 +506,12 @@ fn validate_recursive_schema_rebind(
         );
     }
 
+    if input_schema.metadata() != output_schema.metadata() {
+        return datafusion_common::plan_err!(
+            "Cannot align recursive query input to output schema: schema metadata differ"
+        );
+    }
+
     if let Some((i, input_field, output_field, mismatch)) = input_schema
         .fields()
         .iter()
@@ -511,8 +520,8 @@ fn validate_recursive_schema_rebind(
         .find_map(|(i, (input_field, output_field))| {
             if input_field.data_type() != output_field.data_type() {
                 Some((i, input_field, output_field, "type"))
-            } else if input_field.is_nullable() && !output_field.is_nullable() {
-                Some((i, input_field, output_field, "nullability"))
+            } else if input_field.metadata() != output_field.metadata() {
+                Some((i, input_field, output_field, "metadata"))
             } else {
                 None
             }
@@ -732,52 +741,67 @@ mod tests {
     }
 
     #[test]
-    fn recursive_query_exec_intersects_output_metadata() -> Result<()> {
-        let static_field =
-            Field::new("value", DataType::Int32, false).with_metadata(HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "only".to_string()),
-            ]));
-        let recursive_field =
-            Field::new("value", DataType::Int32, false).with_metadata(HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "different".to_string()),
-            ]));
-        let static_schema = Arc::new(Schema::new_with_metadata(
-            vec![static_field],
-            HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "only".to_string()),
-            ]),
-        ));
-        let recursive_schema = Arc::new(Schema::new_with_metadata(
-            vec![recursive_field],
-            HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "different".to_string()),
-            ]),
-        ));
+    fn recursive_query_exec_uses_rebind_for_nullability_narrowing() -> Result<()> {
+        let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
+        let recursive_term = empty_exec(vec![Field::new("value", DataType::Int32, true)]);
+        let output_schema = static_term.schema();
 
-        let expected_schema = Arc::new(Schema::new_with_metadata(
-            vec![Field::new("value", DataType::Int32, false).with_metadata(
-                HashMap::from([("shared".to_string(), "same".to_string())]),
-            )],
-            HashMap::from([("shared".to_string(), "same".to_string())]),
-        ));
         let exec = recursive_exec(
-            empty_exec_with_schema(static_schema),
-            empty_exec_with_schema(recursive_schema),
-            expected_schema,
+            Arc::clone(&static_term),
+            Arc::clone(&recursive_term),
+            Arc::clone(&output_schema),
         )?;
 
-        assert_eq!(
-            exec.schema().field(0).metadata(),
-            &HashMap::from([("shared".to_string(), "same".to_string())])
-        );
-        assert_eq!(
-            exec.schema().metadata(),
-            &HashMap::from([("shared".to_string(), "same".to_string())])
+        assert_eq!(exec.schema(), output_schema);
+        assert_eq!(exec.recursive_term().schema(), output_schema);
+        assert!(
+            exec.recursive_term()
+                .downcast_ref::<RecursiveSchemaRebindExec>()
+                .is_some()
         );
         Ok(())
+    }
+
+    #[test]
+    fn recursive_query_exec_rejects_field_metadata_mismatch() {
+        let input_metadata = HashMap::from([("source".to_string(), "input".to_string())]);
+        let output_metadata =
+            HashMap::from([("source".to_string(), "output".to_string())]);
+        let static_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, false).with_metadata(input_metadata),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, false).with_metadata(output_metadata),
+        ]));
+
+        let err = recursive_exec(
+            empty_exec_with_schema(static_schema),
+            empty_exec(vec![Field::new("value", DataType::Int32, false)]),
+            output_schema,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("field metadata differs"));
+    }
+
+    #[test]
+    fn recursive_query_exec_rejects_schema_metadata_mismatch() {
+        let static_schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("value", DataType::Int32, false)],
+            HashMap::from([("source".to_string(), "input".to_string())]),
+        ));
+        let output_schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("value", DataType::Int32, false)],
+            HashMap::from([("source".to_string(), "output".to_string())]),
+        ));
+
+        let err = recursive_exec(
+            empty_exec_with_schema(static_schema),
+            empty_exec(vec![Field::new("value", DataType::Int32, false)]),
+            output_schema,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("schema metadata differ"));
     }
 }
