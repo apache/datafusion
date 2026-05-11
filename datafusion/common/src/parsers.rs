@@ -130,7 +130,6 @@ impl Display for CsvQuoteStyle {
     }
 }
 
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DateTimeParserType {
     #[default]
