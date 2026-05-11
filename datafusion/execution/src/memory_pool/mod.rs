@@ -182,6 +182,16 @@ pub use pool::*;
 ///
 /// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
 ///   providing better error messages on the largest memory users.
+///
+/// * [`SubPool`]: Wraps another [`MemoryPool`] and aggregates a single
+///   blocking operator's reservations into one outer slot on the parent,
+///   while applying [`FairSpillPool`]-style fair-share semantics among
+///   that operator's own reservations. Used by
+///   `ExternalSorter` so the parent pool sees one consumer per operator
+///   instead of one per internal reservation. Recommended parent for
+///   chains of blocking spillable operators is [`GreedyMemoryPool`],
+///   which lets each sub-pool grow into the full parent pool when it is
+///   the only one currently using memory.
 pub trait MemoryPool: Send + Sync + std::fmt::Debug + Display {
     /// Return pool name
     fn name(&self) -> &str;

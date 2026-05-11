@@ -21,7 +21,8 @@
 
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::RwLock;
 
@@ -65,7 +66,9 @@ use datafusion_common::{
     unwrap_or_internal_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryPool, MemoryReservation, sub_pool,
+};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
@@ -262,6 +265,16 @@ struct ExternalSorter {
     /// How much memory to reserve for performing in-memory sort/merges
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
+
+    /// Per-operator sub-pool. Both `reservation` and `merge_reservation`
+    /// are registered against this; it aggregates them into a single outer
+    /// registration on `runtime.memory_pool` and applies fair-share within
+    /// the operator. Held here so the sub-pool's lifetime is obviously
+    /// tied to the sorter; functionally the reservations already keep it
+    /// alive via `Arc<SharedRegistration>`. Listed last so that `Drop`
+    /// frees the reservations before the sub-pool is released.
+    #[expect(dead_code)]
+    pool: Arc<dyn MemoryPool>,
 }
 
 impl ExternalSorter {
@@ -279,15 +292,23 @@ impl ExternalSorter {
         spill_compression: SpillCompression,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
+        // Per-`SortExec` sub-pool, shared across all of that node's
+        // partitions. Built once by `SortExec::execute` and passed in
+        // here so the sub-pool's internal fair-share divides the
+        // operator's headroom evenly across partitions, while the parent
+        // pool sees one outer registration per `SortExec` node rather
+        // than one per partition.
+        pool: Arc<dyn MemoryPool>,
     ) -> Result<Self> {
         let metrics = ExternalSorterMetrics::new(metrics, partition_id);
+
         let reservation = MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
             .with_can_spill(true)
-            .register(&runtime.memory_pool);
+            .register(&pool);
 
         let merge_reservation =
             MemoryConsumer::new(format!("ExternalSorterMerge[{partition_id}]"))
-                .register(&runtime.memory_pool);
+                .register(&pool);
 
         let spill_manager = SpillManager::new(
             Arc::clone(&runtime),
@@ -310,6 +331,7 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            pool,
         })
     }
 
@@ -842,11 +864,16 @@ pub fn sort_batch_chunked(
     IncrementalSortIterator::new(batch.clone(), expressions.clone(), batch_size).collect()
 }
 
+/// Process-wide counter giving each `SortExec` instance a stable id used to
+/// name its shared sub-pool's outer consumer (helps disambiguate plans that
+/// contain multiple `SortExec` nodes in `TrackConsumersPool` reports).
+static SORT_EXEC_INSTANCE_ID: AtomicUsize = AtomicUsize::new(0);
+
 /// Sort execution plan.
 ///
 /// Support sorting datasets that are larger than the memory allotted
 /// by the memory manager, by spilling to disk.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SortExec {
     /// Input schema
     pub(crate) input: Arc<dyn ExecutionPlan>,
@@ -867,6 +894,37 @@ pub struct SortExec {
     /// If `fetch` is `Some`, this will also be set and a TopK operator may be used.
     /// If `fetch` is `None`, this will be `None`.
     filter: Option<Arc<RwLock<TopKDynamicFilters>>>,
+    /// Per-`SortExec`-node sub-pool, shared across all of this node's
+    /// partitions. Lazily initialised on the first `execute()` call (the
+    /// `RuntimeEnv` to wrap is only known then), and reused by every
+    /// subsequent partition's `ExternalSorter`. So all partitions of this
+    /// `SortExec` register their `MemoryConsumer`s against the *same*
+    /// sub-pool, and the sub-pool's `FairSpillPool`-style internal
+    /// fair-share divides its capacity evenly among them.
+    ///
+    /// Cloning a `SortExec` produces a fresh `OnceLock` (custom `Clone`
+    /// impl below) — the clone is treated as a separate operator
+    /// instance and gets its own sub-pool on first execute.
+    shared_pool: OnceLock<Arc<dyn MemoryPool>>,
+}
+
+impl Clone for SortExec {
+    fn clone(&self) -> Self {
+        Self {
+            input: Arc::clone(&self.input),
+            expr: self.expr.clone(),
+            metrics_set: self.metrics_set.clone(),
+            preserve_partitioning: self.preserve_partitioning,
+            fetch: self.fetch,
+            common_sort_prefix: self.common_sort_prefix.clone(),
+            cache: Arc::clone(&self.cache),
+            filter: self.filter.clone(),
+            // Fresh sub-pool slot for the clone — it is a separate
+            // operator instance and shouldn't share the original's
+            // sub-pool registration with the parent pool.
+            shared_pool: OnceLock::new(),
+        }
+    }
 }
 
 impl SortExec {
@@ -886,6 +944,7 @@ impl SortExec {
             common_sort_prefix: sort_prefix,
             cache: Arc::new(cache),
             filter: None,
+            shared_pool: OnceLock::new(),
         }
     }
 
@@ -930,6 +989,11 @@ impl SortExec {
             fetch: self.fetch,
             cache: Arc::clone(&self.cache),
             filter: self.filter.clone(),
+            // Fresh sub-pool slot: `cloned` is used to spin off a
+            // logically distinct `SortExec` (e.g. with a different
+            // `fetch`), which should not share the original's sub-pool
+            // registration with the parent pool.
+            shared_pool: OnceLock::new(),
         }
     }
 
@@ -1246,6 +1310,21 @@ impl ExecutionPlan for SortExec {
                 )))
             }
             (false, None) => {
+                // Lazily build the per-`SortExec`-node sub-pool the first
+                // time any partition reaches this branch, then reuse it
+                // for every subsequent partition's `ExternalSorter`. The
+                // sub-pool's internal `FairSpillPool`-style state then
+                // counts each partition's spillable consumer toward
+                // `num_spill`, dividing the sub-pool's capacity evenly
+                // across partitions.
+                let pool = Arc::clone(self.shared_pool.get_or_init(|| {
+                    let id = SORT_EXEC_INSTANCE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+                    sub_pool(
+                        &context.runtime_env().memory_pool,
+                        format!("SortExec[#{id}]:subpool"),
+                    )
+                }));
+
                 let mut sorter = ExternalSorter::new(
                     partition,
                     input.schema(),
@@ -1256,6 +1335,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
+                    pool,
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -2756,6 +2836,10 @@ mod tests {
         let metrics_set = ExecutionPlanMetricsSet::new();
         let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
 
+        // For test purposes, build a sub-pool right here mirroring what
+        // `SortExec::execute` would do.
+        let sorter_pool: Arc<dyn MemoryPool> =
+            sub_pool(&runtime.memory_pool, "test_sorter:subpool".to_string());
         let mut sorter = ExternalSorter::new(
             0,
             Arc::clone(&schema),
@@ -2766,6 +2850,7 @@ mod tests {
             SpillCompression::Uncompressed,
             &metrics_set,
             Arc::clone(&runtime),
+            sorter_pool,
         )?;
 
         // Insert enough data to force spilling.

@@ -25,6 +25,7 @@ use parking_lot::Mutex;
 use std::fmt::{Display, Formatter};
 use std::{
     num::NonZeroUsize,
+    sync::Arc,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -197,6 +198,12 @@ impl FairSpillPool {
             }),
         }
     }
+
+    /// Number of currently registered spillable consumers. Test-only.
+    #[cfg(test)]
+    pub fn num_spill(&self) -> usize {
+        self.state.lock().num_spill
+    }
 }
 
 impl MemoryPool for FairSpillPool {
@@ -292,6 +299,232 @@ impl Display for FairSpillPool {
             "{}(pool_size: {})",
             &self.name(),
             human_readable_size(self.pool_size),
+        )
+    }
+}
+
+/// A [`MemoryPool`] that aggregates a single operator's allocations into one
+/// outer reservation against a parent pool, while applying
+/// [`FairSpillPool`]-equivalent fair-share semantics among the operator's
+/// own reservations.
+///
+/// `SubPool` is intended to be created per blocking operator (e.g. once per
+/// `ExternalSorter`) inside the operator's `execute()` path. The operator
+/// then registers all of its [`MemoryConsumer`]s against the sub-pool
+/// instead of against the runtime's pool. Two things follow:
+///
+/// 1. The parent pool sees one consumer per operator (the sub-pool's
+///    eagerly-registered outer reservation), regardless of how many
+///    internal reservations the operator splits its accounting into.
+/// 2. Within the sub-pool, multiple reservations are divided fairly using
+///    the same rule as [`FairSpillPool`], with the sub-pool's effective
+///    "pool size" computed dynamically from what the parent pool has
+///    available right now (`parent.memory_limit() - parent.reserved() +
+///    self.outer.size()`).
+///
+/// # Composition with the parent pool
+///
+/// `SubPool`'s outer reservation is registered with `can_spill = true`, so
+/// from the parent's point of view a sub-pool is one ordinary spillable
+/// participant. The parent's own policy still applies to the outer slot.
+/// In particular:
+///
+/// * **[`GreedyMemoryPool`] parent**: no `num_spill` cap at the parent.
+///   Each sub-pool's outer is bounded only by the parent's hard limit and
+///   what other sub-pools currently hold. Recommended for plans that chain
+///   multiple blocking spillable operators back-to-back, where only one is
+///   actually using memory at a time.
+/// * **[`FairSpillPool`] parent**: each sub-pool counts as one spillable
+///   consumer at the parent, so M coexisting sub-pools each cap their
+///   outer at `parent_pool / M`. The sub-pool's *internal* fair-share is
+///   the only new benefit over registering directly with the parent.
+#[derive(Debug)]
+pub struct SubPool {
+    parent: Arc<dyn MemoryPool>,
+    /// Outer reservation against `parent`. Created eagerly in [`Self::new`]
+    /// and held for the sub-pool's lifetime; it aggregates every internal
+    /// reservation's bytes into one parent slot. Dropped (and the parent
+    /// consumer unregistered) when the sub-pool itself is dropped.
+    outer: MemoryReservation,
+    state: Mutex<SubPoolState>,
+}
+
+#[derive(Debug)]
+struct SubPoolState {
+    /// Number of spillable consumers registered against this sub-pool.
+    num_spill: usize,
+    /// Total bytes reserved by spillable consumers of this sub-pool.
+    spillable: usize,
+    /// Total bytes reserved by unspillable consumers of this sub-pool.
+    unspillable: usize,
+}
+
+impl SubPool {
+    /// Create a new `SubPool` over `parent`. Eagerly registers an outer
+    /// [`MemoryConsumer`] (`can_spill = true`) named `outer_name` against
+    /// the parent pool; that consumer is unregistered when the returned
+    /// `SubPool` is dropped.
+    ///
+    /// `outer_name` should identify the operator (e.g.
+    /// `format!("ExternalSorter[{partition_id}]:subpool")`).
+    pub fn new(parent: Arc<dyn MemoryPool>, outer_name: impl Into<String>) -> Self {
+        let outer = MemoryConsumer::new(outer_name)
+            .with_can_spill(true)
+            .register(&parent);
+        Self {
+            parent,
+            outer,
+            state: Mutex::new(SubPoolState {
+                num_spill: 0,
+                spillable: 0,
+                unspillable: 0,
+            }),
+        }
+    }
+
+    /// Maximum bytes this sub-pool could currently reserve from the parent
+    /// — the bound used by the internal fair-share calculation. Computed
+    /// as `parent.memory_limit() - parent.reserved() + self.outer.size()`
+    /// (the `outer.size()` term re-includes what we already hold so we
+    /// don't punish ourselves twice). Falls back to [`usize::MAX`] when
+    /// the parent reports `Infinite` or `Unknown`.
+    fn capacity(&self) -> usize {
+        match self.parent.memory_limit() {
+            MemoryLimit::Finite(limit) => limit
+                .saturating_sub(self.parent.reserved())
+                .saturating_add(self.outer.size()),
+            MemoryLimit::Infinite | MemoryLimit::Unknown => usize::MAX,
+        }
+    }
+}
+
+/// Convenience: build a [`SubPool`] over `parent` and return it as
+/// `Arc<dyn MemoryPool>`, ready to pass to [`MemoryConsumer::register`].
+pub fn sub_pool(
+    parent: &Arc<dyn MemoryPool>,
+    outer_name: impl Into<String>,
+) -> Arc<dyn MemoryPool> {
+    Arc::new(SubPool::new(Arc::clone(parent), outer_name))
+}
+
+impl MemoryPool for SubPool {
+    fn name(&self) -> &str {
+        "sub_pool"
+    }
+
+    fn register(&self, consumer: &MemoryConsumer) {
+        if consumer.can_spill {
+            self.state.lock().num_spill += 1;
+        }
+    }
+
+    fn unregister(&self, consumer: &MemoryConsumer) {
+        if consumer.can_spill {
+            let mut state = self.state.lock();
+            state.num_spill = state.num_spill.checked_sub(1).unwrap();
+        }
+    }
+
+    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+        let mut state = self.state.lock();
+        self.outer.grow(additional);
+        match reservation.registration.consumer.can_spill {
+            true => state.spillable += additional,
+            false => state.unspillable += additional,
+        }
+    }
+
+    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+        let mut state = self.state.lock();
+        self.outer.shrink(shrink);
+        match reservation.registration.consumer.can_spill {
+            true => state.spillable -= shrink,
+            false => state.unspillable -= shrink,
+        }
+    }
+
+    fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
+        let mut state = self.state.lock();
+
+        // Wrap any error with the inner reservation's name and the bytes
+        // requested, so the parent's diagnostic (e.g. `TrackConsumersPool`'s
+        // top-consumers list) doesn't lose track of which inner consumer
+        // triggered the failure. The parent only sees the sub-pool's
+        // outer name.
+        let inner_context = || {
+            format!(
+                "Failed to allocate additional {} for {} via sub-pool",
+                human_readable_size(additional),
+                reservation.consumer().name(),
+            )
+        };
+
+        match reservation.registration.consumer.can_spill {
+            true => {
+                // Apply FairSpillPool-style per-reservation cap *inside*
+                // the sub-pool, so that if the operator has multiple
+                // spillable reservations they share the sub-pool's
+                // headroom equally. With only one spillable reservation
+                // the check reduces to the parent's.
+                let cap = self.capacity();
+                let spill_available = cap.saturating_sub(state.unspillable);
+                let available = spill_available
+                    .checked_div(state.num_spill)
+                    .unwrap_or(spill_available);
+
+                if reservation.size() + additional > available {
+                    return Err(insufficient_capacity_err(
+                        reservation,
+                        additional,
+                        available,
+                        self,
+                    ));
+                }
+                self.outer
+                    .try_grow(additional)
+                    .map_err(|e| e.context(inner_context()))?;
+                state.spillable += additional;
+            }
+            false => {
+                // Unspillable allocations are first-come-first-served and,
+                // because the sub-pool aggregates into a single outer slot,
+                // the SubPool's local check would be identical in outcome
+                // to the parent's. Defer to the parent so any wrapping
+                // pool (e.g. `TrackConsumersPool`) gets to emit its
+                // top-consumers diagnostic on failure.
+                self.outer
+                    .try_grow(additional)
+                    .map_err(|e| e.context(inner_context()))?;
+                state.unspillable += additional;
+            }
+        }
+        Ok(())
+    }
+
+    fn reserved(&self) -> usize {
+        let state = self.state.lock();
+        state.spillable + state.unspillable
+    }
+
+    fn memory_limit(&self) -> MemoryLimit {
+        self.parent.memory_limit()
+    }
+}
+
+impl Display for SubPool {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // NB: do not lock `self.state` here. `Display::fmt` is called by
+        // `insufficient_capacity_err` from inside `SubPool::try_grow`,
+        // which is already holding `self.state` — re-locking would
+        // deadlock. `outer.size()` is atomic and lock-free, which is
+        // sufficient for an error message.
+        write!(
+            f,
+            "{}(outer: {}, reserved: {}, parent: {})",
+            &self.name(),
+            self.outer.consumer().name(),
+            human_readable_size(self.outer.size()),
+            self.parent,
         )
     }
 }
@@ -692,6 +925,296 @@ mod tests {
         let r4 = MemoryConsumer::new("s4").register(&pool);
         let err = r4.try_grow(30).unwrap_err().strip_backtrace();
         assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 30.0 B for s4 with 0.0 B already allocated for this reservation - 20.0 B remain available for the total memory pool: fair(pool_size: 100.0 B)");
+    }
+
+    /// Reproducer for unfair allocation in `FairSpillPool` when two spillable
+    /// operators join the pool at different times. The consumer names mirror
+    /// what `ExternalSorter` (used by `SortExec`, including the sorts feeding a
+    /// `SortMergeJoinExec`) actually registers in `sort.rs:284-290`:
+    ///   * `ExternalSorter[N]`       — `can_spill = true`  (the buffered batches)
+    ///   * `ExternalSorterMerge[N]`  — `can_spill = false` (the merge buffer)
+    ///
+    /// The "fair share" check in `FairSpillPool::try_grow` is:
+    ///   `if reservation.size() + additional > pool_size / num_spill { err }`
+    ///
+    /// It is purely a per-reservation cap: it never asks "is the *pool* full?".
+    /// As a result, a consumer that arrives late can be granted its fair
+    /// share even when an earlier consumer is already holding the whole pool,
+    /// and the pool ends up oversubscribed.
+    #[test]
+    fn test_fair_spill_pool_late_arriver_oversubscribes_pool() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(100));
+
+        // --- ExternalSorter #0 starts first and is alone in the pool ----
+        let sort0_buf = MemoryConsumer::new("ExternalSorter[0]")
+            .with_can_spill(true)
+            .register(&pool);
+        let _sort0_merge = MemoryConsumer::new("ExternalSorterMerge[0]")
+            // Unspillable, exactly as ExternalSorter::new builds it.
+            .register(&pool);
+
+        // While alone, num_spill==1 so the per-reservation cap == pool_size.
+        // The buffered-batches reservation happily grows to fill the pool.
+        sort0_buf.try_grow(100).expect("alone, can take whole pool");
+        assert_eq!(pool.reserved(), 100, "sort #0 holds the whole pool");
+
+        // --- ExternalSorter #1 registers later ---------------------------
+        // Now there are two spillable consumers, so each reservation's
+        // "fair share" is pool_size / 2 == 50.
+        let sort1_buf = MemoryConsumer::new("ExternalSorter[1]")
+            .with_can_spill(true)
+            .register(&pool);
+        let _sort1_merge = MemoryConsumer::new("ExternalSorterMerge[1]").register(&pool);
+
+        // BUG #1 — Oversubscription:
+        // sort #1's buffered-batches reservation is allowed to grow to its
+        // 50-byte "fair share" even though sort #0 is already holding 100
+        // bytes. The per-reservation check
+        // (`reservation.size() + additional > available`) succeeds because
+        // sort #1's *own* reservation is still 0; the pool's actual
+        // reservation total is never consulted.
+        sort1_buf.try_grow(50).expect(
+            "FairSpillPool grants sort #1 its 'fair share' even though the pool is full",
+        );
+
+        // The pool now reports 150 bytes reserved against a 100-byte limit.
+        assert_eq!(
+            pool.reserved(),
+            150,
+            "FairSpillPool oversubscribed: 150 > pool_size 100"
+        );
+
+        // BUG #2 — Effective starvation of the late arriver:
+        // sort #0 is sitting on 2x its fair share, but FairSpillPool will
+        // not ask it to give any back. Meanwhile sort #1's per-reservation
+        // cap is 50, so any single grow above its fair share fails
+        // immediately — even though sort #0, not the pool, is the actual
+        // reason there is no memory left. In a real query, this is what
+        // forces the late `ExternalSorter` to spill aggressively while the
+        // early one keeps everything in memory.
+        let err = sort1_buf.try_grow(1).unwrap_err().strip_backtrace();
+        assert_snapshot!(
+            err,
+            @"Resources exhausted: Failed to allocate additional 1.0 B for ExternalSorter[1] with 50.0 B already allocated for this reservation - 50.0 B remain available for the total memory pool: fair(pool_size: 100.0 B)"
+        );
+
+        // The error message is also misleading: it claims "50.0 B remain
+        // available for the total memory pool", but the pool is *already*
+        // 50 bytes over its limit. The "available" figure is the
+        // per-reservation cap (pool_size / num_spill), not real headroom.
+
+        // sort #0, the hogger, is similarly stuck — its own reservation
+        // (100) already exceeds the 50-byte fair share, so it cannot grow
+        // further either. But it is never forced to release the surplus
+        // it accumulated while it was alone in the pool.
+        let err = sort0_buf.try_grow(1).unwrap_err().strip_backtrace();
+        assert_snapshot!(
+            err,
+            @"Resources exhausted: Failed to allocate additional 1.0 B for ExternalSorter[0] with 100.0 B already allocated for this reservation - 50.0 B remain available for the total memory pool: fair(pool_size: 100.0 B)"
+        );
+
+        // Net effect for two `ExternalSorter`s (e.g. the two child sorts of
+        // a `SortMergeJoinExec`) sharing a memory-constrained
+        // `FairSpillPool`: whichever sort starts buffering first can legally
+        // take the whole pool, and the second sort is capped at
+        // `pool_size / 2`, while real memory usage silently exceeds the
+        // configured limit.
+    }
+
+    /// Companion test: even an `ExternalSorter` that arrives *during* the
+    /// first sorter's growth — well before sort #0 is at the pool limit —
+    /// still ends up with less effective room than sort #0 holds, because
+    /// sort #0's earlier-grown reservation is grandfathered in past the
+    /// new fair share.
+    #[test]
+    fn test_fair_spill_pool_early_grower_keeps_oversize_share() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(120));
+
+        let sort0_buf = MemoryConsumer::new("ExternalSorter[0]")
+            .with_can_spill(true)
+            .register(&pool);
+
+        // sort #0 grows to 90 while alone (cap is 120). 90 > 60 == pool/2.
+        sort0_buf.try_grow(90).unwrap();
+
+        // sort #1 joins. Fair share is now 120 / 2 = 60.
+        let sort1_buf = MemoryConsumer::new("ExternalSorter[1]")
+            .with_can_spill(true)
+            .register(&pool);
+
+        // sort #1 is capped at 60, even though sort #0 is sitting on 90.
+        sort1_buf.try_grow(60).unwrap();
+        // Pool is now 90 + 60 = 150 reserved against a 120-byte limit.
+        assert_eq!(pool.reserved(), 150);
+
+        // The asymmetry: sort #0 keeps 90, sort #1 capped at 60. Not "fair".
+        assert_eq!(sort0_buf.size(), 90);
+        assert_eq!(sort1_buf.size(), 60);
+    }
+
+    #[test]
+    fn test_subpool_eager_outer_registration() {
+        let parent: Arc<FairSpillPool> = Arc::new(FairSpillPool::new(100));
+        assert_eq!(parent.num_spill(), 0);
+
+        // Constructing the SubPool registers the outer consumer with the
+        // parent immediately, even though the sub-pool holds no inner
+        // reservations yet.
+        let sub = SubPool::new(Arc::clone(&parent) as Arc<dyn MemoryPool>, "op:subpool");
+        assert_eq!(parent.num_spill(), 1);
+        assert_eq!(parent.reserved(), 0);
+
+        // Dropping the sub-pool unregisters its outer consumer.
+        drop(sub);
+        assert_eq!(parent.num_spill(), 0);
+    }
+
+    #[test]
+    fn test_subpool_aggregates_two_internal_consumers() {
+        let parent: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1000));
+        let sub: Arc<dyn MemoryPool> = sub_pool(&parent, "op:subpool");
+
+        let r_spill = MemoryConsumer::new("inner_spill")
+            .with_can_spill(true)
+            .register(&sub);
+        let r_unspill = MemoryConsumer::new("inner_unspill").register(&sub);
+
+        r_spill.try_grow(40).unwrap();
+        r_unspill.try_grow(30).unwrap();
+
+        assert_eq!(sub.reserved(), 70);
+        assert_eq!(parent.reserved(), 70, "parent sees the aggregated bytes");
+
+        r_spill.shrink(40);
+        assert_eq!(parent.reserved(), 30);
+
+        r_unspill.shrink(30);
+        assert_eq!(parent.reserved(), 0);
+    }
+
+    /// Within a sub-pool, two spillable reservations divide the sub-pool's
+    /// effective capacity fairly even when the parent has plenty of room.
+    #[test]
+    fn test_subpool_internal_fair_share_caps_spillable_reservations() {
+        let parent: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1000));
+        let sub: Arc<dyn MemoryPool> = sub_pool(&parent, "op:subpool");
+
+        // Two spillable consumers: each capped at sub-pool capacity / 2.
+        let a = MemoryConsumer::new("a").with_can_spill(true).register(&sub);
+        let b = MemoryConsumer::new("b").with_can_spill(true).register(&sub);
+
+        // capacity == 1000 (parent has full pool free), num_spill == 2,
+        // so each spillable reservation is capped at 500.
+        a.try_grow(500).unwrap();
+        let err = b.try_grow(501).unwrap_err().strip_backtrace();
+        assert!(
+            err.contains("500.0 B remain available"),
+            "expected per-reservation cap of 500 in error, got: {err}"
+        );
+
+        // 500 still fits.
+        b.try_grow(500).unwrap();
+        assert_eq!(parent.reserved(), 1000);
+    }
+
+    #[test]
+    fn test_subpool_unspillable_takes_first_then_spillable_caps_drop() {
+        let parent: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1000));
+        let sub: Arc<dyn MemoryPool> = sub_pool(&parent, "op:subpool");
+
+        let merge = MemoryConsumer::new("merge").register(&sub);
+        let a = MemoryConsumer::new("a").with_can_spill(true).register(&sub);
+        let b = MemoryConsumer::new("b").with_can_spill(true).register(&sub);
+
+        // Unspillable takes 200 first.
+        merge.try_grow(200).unwrap();
+
+        // Now each spillable's available is (1000 - 200) / 2 == 400.
+        a.try_grow(400).unwrap();
+        b.try_grow(400).unwrap();
+        let err = a.try_grow(1).unwrap_err().strip_backtrace();
+        assert!(
+            err.contains("400.0 B remain available"),
+            "expected per-reservation cap of 400 in error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_subpool_capacity_reflects_other_subpools() {
+        let parent: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(200));
+
+        let sub_a: Arc<dyn MemoryPool> = sub_pool(&parent, "a:subpool");
+        let sub_b: Arc<dyn MemoryPool> = sub_pool(&parent, "b:subpool");
+
+        let a = MemoryConsumer::new("a")
+            .with_can_spill(true)
+            .register(&sub_a);
+        let b = MemoryConsumer::new("b")
+            .with_can_spill(true)
+            .register(&sub_b);
+
+        // sub_b alone (no growth in sub_a yet) sees full 200 as cap.
+        b.try_grow(200).unwrap();
+        b.shrink(200);
+
+        // After sub_a grows to 50, sub_b's effective capacity drops to
+        // 200 - 50 == 150.
+        a.try_grow(50).unwrap();
+        b.try_grow(150).unwrap();
+        let err = b.try_grow(1).unwrap_err().strip_backtrace();
+        assert!(
+            err.contains("150.0 B remain available")
+                || err.contains("0.0 B remain available"),
+            "expected capacity to reflect sub_a's 50 bytes, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_subpool_drop_releases_parent() {
+        let parent: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(100));
+        let sub: Arc<dyn MemoryPool> = sub_pool(&parent, "op:subpool");
+        let r = MemoryConsumer::new("r").with_can_spill(true).register(&sub);
+
+        r.try_grow(50).unwrap();
+        assert_eq!(parent.reserved(), 50);
+
+        drop(r);
+        drop(sub);
+        assert_eq!(parent.reserved(), 0);
+    }
+
+    #[test]
+    fn test_subpool_with_track_consumers_pool_parent() {
+        let parent: Arc<TrackConsumersPool<FairSpillPool>> =
+            Arc::new(TrackConsumersPool::new(
+                FairSpillPool::new(1000),
+                NonZeroUsize::new(3).unwrap(),
+            ));
+        let parent_dyn: Arc<dyn MemoryPool> = Arc::clone(&parent) as _;
+        let sub: Arc<dyn MemoryPool> = sub_pool(&parent_dyn, "ExternalSorter[7]:subpool");
+
+        let r = MemoryConsumer::new("inner")
+            .with_can_spill(true)
+            .register(&sub);
+        r.try_grow(100).unwrap();
+
+        let report = parent.report_top(5);
+        assert!(
+            report.contains("ExternalSorter[7]:subpool"),
+            "expected outer consumer name in report, got: {report}"
+        );
+    }
+
+    #[test]
+    fn test_subpool_with_unbounded_parent() {
+        let parent: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let sub: Arc<dyn MemoryPool> = sub_pool(&parent, "op:subpool");
+        let r = MemoryConsumer::new("r").with_can_spill(true).register(&sub);
+
+        // capacity() falls back to usize::MAX for Infinite/Unknown parents,
+        // so the internal fair-share check is trivially satisfied.
+        r.try_grow(1_000_000).unwrap();
+        assert_eq!(parent.reserved(), 1_000_000);
     }
 
     #[test]
