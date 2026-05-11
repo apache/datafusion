@@ -50,7 +50,7 @@ pub use sqlparser::ast::{
     ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
     ReplaceSelectElement,
 };
-// Use sqlparser shims when sql feature disabled
+// Use shims for sqlparser types when the sql feature is disabled.
 #[cfg(not(feature = "sql"))]
 pub use crate::sql::{
     ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
