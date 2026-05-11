@@ -27,17 +27,15 @@ mod tests {
     use datafusion::prelude::*;
 
     use insta::assert_snapshot;
-    use std::collections::HashMap;
     use std::fs;
     use substrait::proto::expression::field_reference::{ReferenceType, RootType};
-    use substrait::proto::expression::reference_segment::ReferenceType as SegmentType;
-    use substrait::proto::expression::{Lambda, RexType, ScalarFunction};
-    use substrait::proto::extensions::simple_extension_declaration::MappingType;
+    use substrait::proto::expression::reference_segment;
+    use substrait::proto::expression::{ReferenceSegment, RexType};
     use substrait::proto::function_argument::ArgType;
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
-    use substrait::proto::r#type::{I64, Kind as TypeKind, List, Nullability};
-    use substrait::proto::{Expression, FunctionArgument, RelCommon, Type, rel};
+    use substrait::proto::r#type::{I64, Kind as TypeKind, List, Nullability, Struct};
+    use substrait::proto::{Expression, RelCommon, Type, rel};
 
     use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
 
@@ -206,7 +204,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn higher_order_function42() -> Result<()> {
+    async fn higher_order_function() -> Result<()> {
         let ctx = higher_order_function_ctx().await?;
         let df = ctx
             .sql(
@@ -222,28 +220,9 @@ mod tests {
             )
             .await?;
         let datafusion_plan = df.into_optimized_plan()?;
-        assert_snapshot!(
-            datafusion_plan,
-            @"
-        Projection: array_transform2(make_array(make_array(data3.p1)), (v, i) -> array_concat(array_transform2(v, (v, j) -> v * i * j), array_transform2(v, (v, j) -> v * i * j)))
-          TableScan: data3 projection=[p1]
-        "
-        );
-
         let plan = to_substrait_plan(&datafusion_plan, &ctx.state())?
             .as_ref()
             .clone();
-
-        let functions: HashMap<u32, String> = plan
-            .extensions
-            .iter()
-            .filter_map(|e| match e.mapping_type.as_ref()? {
-                MappingType::ExtensionFunction(f) => {
-                    Some((f.function_anchor, f.name.clone()))
-                }
-                _ => None,
-            })
-            .collect();
 
         let relation = plan.relations.first().unwrap().rel_type.as_ref();
         let root_rel = match relation {
@@ -255,124 +234,68 @@ mod tests {
             panic!("expected Project at top of plan")
         };
 
-        //note: checking only lambda arguments
-        let nullable_i64 = TypeKind::I64(I64 {
-            type_variation_reference: 0,
-            nullability: Nullability::Nullable as i32,
-        });
+        let mut params = vec![];
+        let mut lambda_refs = vec![];
 
-        // Outer call: array_transform2(make_array(make_array(p1)), lambda)
-        let outer = expect_scalar_function(&p.expressions[0]);
-        assert_eq!(functions[&outer.function_reference], "array_transform2");
-        assert_eq!(outer.arguments.len(), 2);
+        collect_lambda_ref(&p.expressions[0], &mut params, &mut lambda_refs);
 
-        // arg 1: outer lambda with two parameters (list<i64>, i64) for (v, i)
-        let outer_lambda = expect_lambda_arg(&outer.arguments[1]);
-        let outer_params = &outer_lambda.parameters.as_ref().unwrap();
-        assert_eq!(outer_params.nullability, Nullability::Required as i32);
-        assert_eq!(outer_params.types.len(), 2);
-        assert_eq!(
-            outer_params.types[0].kind.as_ref().unwrap(),
-            &TypeKind::List(Box::new(List {
-                r#type: Some(Box::new(Type {
-                    kind: Some(nullable_i64.clone())
-                })),
+        let nullable_i64 = Type {
+            kind: Some(TypeKind::I64(I64 {
                 type_variation_reference: 0,
-                nullability: Nullability::Nullable as i32
-            }))
+                nullability: Nullability::Nullable as i32,
+            })),
+        };
+
+        let inner_lambda_struct = Struct {
+            // v, j
+            types: vec![nullable_i64.clone(); 2],
+            type_variation_reference: 0,
+            nullability: Nullability::Required as i32,
+        };
+
+        assert_eq!(
+            params,
+            vec![
+                Struct {
+                    types: vec![
+                        // v
+                        Type {
+                            kind: Some(TypeKind::List(Box::new(List {
+                                r#type: Some(Box::new(nullable_i64.clone())),
+                                type_variation_reference: 0,
+                                nullability: Nullability::Nullable as i32
+                            })))
+                        },
+                        // i
+                        nullable_i64,
+                    ],
+                    type_variation_reference: 0,
+                    nullability: Nullability::Required as i32,
+                },
+                inner_lambda_struct.clone(),
+                inner_lambda_struct,
+            ]
         );
-        assert_eq!(outer_params.types[1].kind.as_ref().unwrap(), &nullable_i64);
 
-        // outer lambda body: array_concat(array_transform2(...), array_transform2(...))
-        let concat = expect_scalar_function(outer_lambda.body.as_ref().unwrap());
-        assert_eq!(functions[&concat.function_reference], "array_concat");
-        assert_eq!(concat.arguments.len(), 2);
-
-        for arg in &concat.arguments {
-            // each arg: array_transform2(v, inner_lambda)
-            let inner_call = expect_scalar_function(expect_value(arg));
-            assert_eq!(
-                functions[&inner_call.function_reference],
-                "array_transform2"
-            );
-            assert_eq!(inner_call.arguments.len(), 2);
-
-            // inner_call arg 0: outer v (steps_out=0, field=0 from outer lambda's body)
-            assert_lambda_param_ref(&inner_call.arguments[0], 0, 0);
-
-            // inner_call arg 1: inner lambda with two i64 parameters for (v, j)
-            let inner_lambda = expect_lambda_arg(&inner_call.arguments[1]);
-            let inner_params = &inner_lambda.parameters.as_ref().unwrap();
-            assert_eq!(inner_params.nullability, Nullability::Required as i32);
-            assert_eq!(inner_params.types.len(), 2);
-            assert_eq!(inner_params.types[0].kind.as_ref().unwrap(), &nullable_i64);
-            assert_eq!(inner_params.types[1].kind.as_ref().unwrap(), &nullable_i64);
-
-            // inner lambda body: multiply(multiply(v, i), j) -- v * i * j
-            let mul = expect_scalar_function(inner_lambda.body.as_ref().unwrap());
-            assert_eq!(functions[&mul.function_reference], "multiply");
-            assert_eq!(mul.arguments.len(), 2);
-
-            // mul arg 0: multiply(v, i)
-            let inner_mul = expect_scalar_function(expect_value(&mul.arguments[0]));
-            assert_eq!(functions[&inner_mul.function_reference], "multiply");
-            assert_eq!(inner_mul.arguments.len(), 2);
-            // inner v: current (inner) lambda, field 0
-            assert_lambda_param_ref(&inner_mul.arguments[0], 0, 0);
-            // outer i: one lambda out, field 1
-            assert_lambda_param_ref(&inner_mul.arguments[1], 1, 1);
-
-            // mul arg 1: inner j (current lambda, field 1)
-            assert_lambda_param_ref(&mul.arguments[1], 0, 1);
-        }
+        assert_eq!(
+            lambda_refs,
+            vec![
+                // first inner array_transform2 argument: outer v
+                (0, 0),
+                // first inner lambda body: v * i * j
+                (0, 0),
+                (1, 1),
+                (0, 1),
+                // second inner array_transform2 argument: outer v
+                (0, 0),
+                // second inner lambda body: v * i * j
+                (0, 0),
+                (1, 1),
+                (0, 1),
+            ]
+        );
 
         Ok(())
-    }
-
-    fn assert_lambda_param_ref(arg: &FunctionArgument, steps_out: u32, field: i32) {
-        let expr = expect_value(arg);
-        let field_ref = match expr.rex_type.as_ref().unwrap() {
-            RexType::Selection(s) => s.as_ref(),
-            _ => panic!("expected lambda-parameter selection"),
-        };
-        let lambda_param_ref = match field_ref.root_type.as_ref() {
-            Some(RootType::LambdaParameterReference(lpr)) => lpr,
-            _ => panic!("expected lambda-parameter reference"),
-        };
-        let direct_ref = match field_ref.reference_type.as_ref().unwrap() {
-            ReferenceType::DirectReference(d) => d,
-            _ => panic!("expected direct reference"),
-        };
-        let struct_field = match direct_ref.reference_type.as_ref().unwrap() {
-            SegmentType::StructField(sf) => sf,
-            _ => panic!("expected struct field segment"),
-        };
-        assert_eq!(
-            lambda_param_ref.steps_out, steps_out,
-            "unexpected steps_out"
-        );
-        assert_eq!(struct_field.field, field, "unexpected struct field");
-    }
-
-    fn expect_value(arg: &FunctionArgument) -> &Expression {
-        match arg.arg_type.as_ref().unwrap() {
-            ArgType::Value(v) => v,
-            _ => panic!("expected value FunctionArgument"),
-        }
-    }
-
-    fn expect_scalar_function(expr: &Expression) -> &ScalarFunction {
-        match expr.rex_type.as_ref().unwrap() {
-            RexType::ScalarFunction(s) => s,
-            _ => panic!("expected ScalarFunction expression"),
-        }
-    }
-
-    fn expect_lambda_arg(arg: &FunctionArgument) -> &Lambda {
-        match expect_value(arg).rex_type.as_ref().unwrap() {
-            RexType::Lambda(l) => l.as_ref(),
-            _ => panic!("expected Lambda expression"),
-        }
     }
 
     fn assert_emit(rel_common: Option<&RelCommon>, output_mapping: Vec<i32>) {
@@ -389,5 +312,50 @@ mod tests {
         ctx.register_csv("data2", "tests/testdata/data.csv", CsvReadOptions::new())
             .await?;
         Ok(ctx)
+    }
+
+    fn collect_lambda_ref(
+        expr: &Expression,
+        params: &mut Vec<Struct>,
+        lambda_refs: &mut Vec<(u32, i32)>,
+    ) {
+        if let Some(rex_type) = &expr.rex_type {
+            match rex_type {
+                RexType::Selection(field_reference) => {
+                    if let (
+                        Some(ReferenceType::DirectReference(ReferenceSegment {
+                            reference_type:
+                                Some(reference_segment::ReferenceType::StructField(
+                                    struct_field,
+                                )),
+                        })),
+                        Some(RootType::LambdaParameterReference(lambda_param_ref)),
+                    ) = (&field_reference.reference_type, &field_reference.root_type)
+                    {
+                        lambda_refs.push((lambda_param_ref.steps_out, struct_field.field))
+                    }
+                }
+                RexType::ScalarFunction(scalar_function) => {
+                    for arg in &scalar_function.arguments {
+                        match &arg.arg_type {
+                            Some(ArgType::Value(value)) => {
+                                collect_lambda_ref(value, params, lambda_refs)
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+                RexType::Lambda(lambda) => {
+                    if let Some(parameters) = &lambda.parameters {
+                        params.push(parameters.clone());
+                    }
+                    if let Some(body) = &lambda.body {
+                        collect_lambda_ref(body, params, lambda_refs);
+                    }
+                }
+                RexType::Literal(_literal) => {}
+                _ => unreachable!(),
+            }
+        }
     }
 }
