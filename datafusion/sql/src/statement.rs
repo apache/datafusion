@@ -31,6 +31,7 @@ use crate::utils::normalize_ident;
 
 use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
+use datafusion_common::metadata::check_metadata_with_storage_equal;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
@@ -52,7 +53,7 @@ use datafusion_expr::{
     LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
     ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
     TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast, col,
+    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, col,
 };
 use sqlparser::ast::{
     self, BeginTransactionKind, CheckConstraint, ForeignKeyConstraint, IndexColumn,
@@ -529,14 +530,52 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 .fields()
                                 .iter()
                                 .zip(input_fields)
-                                .map(|(field, input_field)| {
-                                    cast(
-                                        col(input_field.name()),
-                                        field.data_type().clone(),
-                                    )
-                                    .alias(field.name())
+                                .map(|(field, input_field)| -> Result<Expr> {
+                                    let input_meta = input_field.metadata();
+                                    let target_meta = field.metadata();
+
+                                    let is_target_ext = target_meta.contains_key(
+                                        arrow_schema::extension::EXTENSION_TYPE_NAME_KEY,
+                                    );
+                                    let is_input_ext = input_meta.contains_key(
+                                        arrow_schema::extension::EXTENSION_TYPE_NAME_KEY,
+                                    );
+
+                                    if !is_target_ext && !is_input_ext {
+                                        return if input_field.data_type()
+                                            == field.data_type()
+                                        {
+                                            Ok(col(input_field.name())
+                                                .alias(field.name()))
+                                        } else {
+                                            Ok(col(input_field.name())
+                                                .cast_to(field.data_type(), input_schema)?
+                                                .alias(field.name()))
+                                        };
+                                    }
+
+                                    let metadata_matches =
+                                        check_metadata_with_storage_equal(
+                                            (input_field.data_type(), Some(input_meta)),
+                                            (field.data_type(), Some(target_meta)),
+                                            "input",
+                                            "target",
+                                        )
+                                        .is_ok();
+
+                                    if metadata_matches {
+                                        Ok(col(input_field.name()).alias(field.name()))
+                                    } else {
+                                        Ok(Expr::Cast(
+                                            datafusion_expr::Cast::new_from_field(
+                                                Box::new(col(input_field.name())),
+                                                Arc::clone(field),
+                                            ),
+                                        )
+                                        .alias(field.name()))
+                                    }
                                 })
-                                .collect::<Vec<_>>();
+                                .collect::<Result<Vec<_>>>()?;
 
                             LogicalPlanBuilder::from(plan.clone())
                                 .project(project_exprs)?

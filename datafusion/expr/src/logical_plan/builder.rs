@@ -17,6 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use datafusion_common::metadata::check_metadata_with_storage_equal;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -55,9 +56,8 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions, exec_err,
-    get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
-    plan_err,
+    TableReference, ToDFSchema, UnnestOptions, get_target_functional_dependencies,
+    internal_datafusion_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -272,23 +272,59 @@ impl LogicalPlanBuilder {
         let n_cols = values[0].len();
         let mut fields = ValuesFields::new();
         for j in 0..n_cols {
-            let field_type = schema.field(j).data_type();
-            let field_nullable = schema.field(j).is_nullable();
+            let field = schema.field(j);
+            let field_type = field.data_type();
+            let field_metadata = field.metadata();
+            let is_target_ext = field_metadata
+                .contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
+            let column_name = format!("column {j}");
             for row in values.iter() {
                 let value = &row[j];
-                let data_type = value.get_type(schema)?;
+                let value_type = value.get_type(schema)?;
+                if value_type == DataType::Null {
+                    continue;
+                }
 
-                if !data_type.equals_datatype(field_type)
-                    && !can_cast_types(&data_type, field_type)
-                {
-                    return exec_err!(
-                        "type mismatch and can't cast to got {} and {}",
-                        data_type,
-                        field_type
-                    );
+                if is_target_ext {
+                    let value_meta = value.metadata(schema)?;
+                    let value_meta_map = value_meta.to_hashmap();
+                    let is_value_ext = value_meta_map
+                        .contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
+
+                    if is_value_ext && value_type == *field_type {
+                        check_metadata_with_storage_equal(
+                            (&value_type, Some(&value_meta_map)),
+                            (field_type, Some(field_metadata)),
+                            &column_name,
+                            " in VALUES list",
+                        )?;
+                    } else if !can_cast_types(&value_type, field_type) {
+                        return plan_err!(
+                            "Cannot cast {} to extension type at {}",
+                            value_type,
+                            column_name
+                        );
+                    }
+                } else {
+                    // Optimized path for standard types
+                    if !value_type.equals_datatype(field_type)
+                        && !can_cast_types(&value_type, field_type)
+                    {
+                        return plan_err!(
+                            "Cannot cast {} to {} for {}",
+                            value_type,
+                            field_type,
+                            column_name
+                        );
+                    }
                 }
             }
-            fields.push(field_type.to_owned(), field_nullable);
+
+            fields.push_with_metadata(
+                field_type.clone(),
+                field.is_nullable(),
+                Some(FieldMetadata::new_from_field(field)),
+            );
         }
 
         Self::infer_inner(values, fields, schema)
@@ -1565,10 +1601,6 @@ struct ValuesFields {
 impl ValuesFields {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn push(&mut self, data_type: DataType, nullable: bool) {
-        self.push_with_metadata(data_type, nullable, None);
     }
 
     pub fn push_with_metadata(
