@@ -774,7 +774,7 @@ impl DefaultSubstraitLambdaConsumer {
 
         let Some(var) = lambda_parameters.get(field_idx) else {
             return substrait_err!(
-                "No lambda field at index {field_idx}, got only {}",
+                "At lambda {steps_out} steps out, no field at index {field_idx}, got only {}",
                 lambda_parameters.len()
             );
         };

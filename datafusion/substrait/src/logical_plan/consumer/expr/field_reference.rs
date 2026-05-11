@@ -85,3 +85,85 @@ fn resolve_outer_reference(
     let col = Column::from((qualifier, field));
     Ok(Expr::OuterReferenceColumn(Arc::clone(field), col))
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::{
+        common::{DFSchema, assert_contains},
+        prelude::SessionContext,
+    };
+    use substrait::proto::{
+        Type,
+        expression::{
+            FieldReference, ReferenceSegment,
+            field_reference::{self, LambdaParameterReference, RootType},
+            reference_segment::{ReferenceType, StructField},
+        },
+        r#type::{I64, Kind},
+    };
+
+    use crate::{
+        extensions::Extensions,
+        logical_plan::consumer::{
+            DefaultSubstraitConsumer, SubstraitConsumer, from_field_reference,
+        },
+    };
+
+    #[tokio::test]
+    async fn test_lambda_variable_invalid_steps_out() {
+        let lambda_field_ref = lambda_field_ref(0, 99);
+
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+
+        let err =
+            from_field_reference(&consumer, &lambda_field_ref, DFSchema::empty_ref())
+                .await
+                .unwrap_err();
+
+        assert_contains!(err.to_string(), "No lambda at 99 steps out, got only 0");
+    }
+
+    #[tokio::test]
+    async fn test_lambda_variable_invalid_field_idx() {
+        let lambda_field_ref = lambda_field_ref(1, 0);
+
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let (_names, consumer) =
+            DefaultSubstraitConsumer::new(&extensions, &session_state)
+                .with_lambda_parameters(
+                    &[Type {
+                        kind: Some(Kind::I64(I64::default())),
+                    }],
+                    DFSchema::empty_ref(),
+                )
+                .unwrap();
+
+        let err =
+            from_field_reference(&consumer, &lambda_field_ref, DFSchema::empty_ref())
+                .await
+                .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "At lambda 0 steps out, no field at index 1, got only 1"
+        );
+    }
+
+    fn lambda_field_ref(field: i32, steps_out: u32) -> FieldReference {
+        FieldReference {
+            reference_type: Some(field_reference::ReferenceType::DirectReference(
+                ReferenceSegment {
+                    reference_type: Some(ReferenceType::StructField(Box::new(
+                        StructField { field, child: None },
+                    ))),
+                },
+            )),
+            root_type: Some(RootType::LambdaParameterReference(
+                LambdaParameterReference { steps_out },
+            )),
+        }
+    }
+}
