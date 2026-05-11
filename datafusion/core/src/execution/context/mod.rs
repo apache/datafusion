@@ -1275,7 +1275,7 @@ impl SessionContext {
     }
 
     /// Parse capacity limit from string to number of bytes by allowing units: K, M and G.
-    /// Supports formats like '1.5G', '100M', '512K'
+    /// Supports formats like '1.5G', '100M', '512K'. Capacity limit can be set to 0 with '0'.
     ///
     /// # Examples
     /// ```
@@ -1295,6 +1295,9 @@ impl SessionContext {
             return Err(plan_datafusion_err!(
                 "Empty limit value found for '{config_name}'"
             ));
+        }
+        if limit == "0" {
+            return Ok(0);
         }
         let (number, unit) = limit.split_at(limit.len() - 1);
         let number: f64 = number.parse().map_err(|_| {
@@ -2970,6 +2973,7 @@ mod tests {
 
         // Valid capacity_limit
         for (limit, want) in [
+            ("0", 0),
             ("1.5K", (1.5 * 1024.0) as usize),
             ("2M", (2f64 * 1024.0 * 1024.0) as usize),
             ("1G", (1f64 * 1024.0 * 1024.0 * 1024.0) as usize),
