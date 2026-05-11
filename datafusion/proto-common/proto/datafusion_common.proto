@@ -669,3 +669,10 @@ message ColumnStats {
   Precision distinct_count = 4;
   Precision byte_size = 6;
 }
+
+enum ExplainFormat {
+  EXPLAIN_FORMAT_INDENT = 0;
+  EXPLAIN_FORMAT_TREE = 1;
+  EXPLAIN_FORMAT_PGJSON = 2;
+  EXPLAIN_FORMAT_GRAPHVIZ = 3;
+}
