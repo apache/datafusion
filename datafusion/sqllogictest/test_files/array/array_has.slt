@@ -517,18 +517,16 @@ logical_plan
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
 05)--------Projection:
-06)----------Filter: __common_expr_3 IS NULL AND Boolean(NULL) OR __common_expr_3 IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")]) IS NOT DISTINCT FROM Boolean(true) AND __common_expr_3 IS NOT NULL
-07)------------Projection: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) AS __common_expr_3
-08)--------------TableScan: generate_series() projection=[value]
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
+07)------------TableScan: generate_series() projection=[value]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------FilterExec: __common_expr_3@0 IS NULL AND NULL OR __common_expr_3@0 IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]) IS NOT DISTINCT FROM true AND __common_expr_3@0 IS NOT NULL, projection=[]
-06)----------ProjectionExec: expr=[substr(md5(CAST(value@0 AS Utf8View)), 1, 32) as __common_expr_3]
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -724,7 +722,8 @@ select 5 <> any(make_array(5, 5, 5));
 ----
 false
 
-# Empty array: all operators should return false (no elements satisfy the condition)
+# Empty array: vacuous false. min/max-based desugars are guarded by cardinality
+# so `value > any([])` and friends don't leak NULL.
 query B
 select 5 = any(make_array());
 ----
@@ -755,27 +754,26 @@ select 5 <= any(make_array());
 ----
 false
 
-# Mixed NULL + non-NULL array where no non-NULL element satisfies the condition
-# These return NULL because NULLs leave the result indeterminate
+# Mixed NULL + non-NULL, no non-NULL element satisfies: false (min/max skip NULLs).
 query B
 select 5 > any(make_array(6, NULL));
 ----
-NULL
+false
 
 query B
 select 5 < any(make_array(3, NULL));
 ----
-NULL
+false
 
 query B
 select 5 >= any(make_array(6, NULL));
 ----
-NULL
+false
 
 query B
 select 5 <= any(make_array(3, NULL));
 ----
-NULL
+false
 
 # Mixed NULL + non-NULL array where a non-NULL element satisfies the condition
 query B
@@ -806,9 +804,9 @@ true
 query B
 select 5 <> any(make_array(5, NULL));
 ----
-NULL
+false
 
-# All-NULL array: all operators should return NULL (unknown comparison)
+# All-NULL array: NULL from min/max-based desugars; `= ANY` is false via array_has.
 query B
 select 5 > any(make_array(NULL::INT, NULL::INT));
 ----
@@ -837,7 +835,7 @@ NULL
 query B
 select 5 = any(make_array(NULL::INT, NULL::INT));
 ----
-NULL
+false
 
 # NULL left operand: should return NULL for non-empty arrays
 query B
@@ -865,7 +863,7 @@ select NULL <> any(make_array(1, 2, 3));
 ----
 NULL
 
-# NULL left operand with empty array: should return false
+# NULL left operand + empty array: vacuous false (cardinality guard short-circuits).
 query B
 select NULL > any(make_array());
 ----
@@ -920,11 +918,11 @@ select 5 = any(make_array(5, NULL));
 ----
 true
 
-# = ANY with mixed NULL (non-satisfying): NULLs leave result indeterminate
+# = ANY with mixed NULL, no match: false (array_has treats NULL as absent).
 query B
 select 5 = any(make_array(1, 2, NULL));
 ----
-NULL
+false
 
 statement ok
 DROP TABLE any_op_test;

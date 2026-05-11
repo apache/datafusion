@@ -36,12 +36,12 @@ use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
-    Operator, TryCast, lit, when,
+    Operator, TryCast, lit,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_functions_nested::expr_fn::{
-    array_has, array_max, array_min, array_position, cardinality,
+    array_has, array_max, array_min, cardinality,
 };
 
 mod binary_op;
@@ -1259,64 +1259,59 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
-/// Plans `needle <compare_op> ANY/ALL(haystack)` with proper SQL NULL semantics.
-///
-/// CASE/WHEN structure:
-///   WHEN arr IS NULL        → NULL
-///   WHEN empty              → vacuous_result (ANY:false, ALL:true)
-///   WHEN lhs IS NULL        → NULL
-///   WHEN decisive_condition → decisive_result (ANY:true match found, ALL:false violation found)
-///   WHEN has_nulls          → NULL
-///   ELSE                    → vacuous_result
+/// Plans `needle <op> ANY/ALL(haystack)` by desugaring to `array_has`,
+/// `array_min`, or `array_max`. Desugars using min/max get a cardinality guard
+/// so empty arrays return the vacuous result (ANY → false, ALL → true) instead
+/// of NULL.
 fn plan_quantified_op(
     needle: &Expr,
     haystack: &Expr,
     compare_op: &BinaryOperator,
     quantifier: SetQuantifier,
 ) -> Result<Expr> {
-    let null_arr_check = haystack.clone().is_null();
-    let empty_check = cardinality(haystack.clone()).eq(lit(0u64));
-    let null_lhs_check = needle.clone().is_null();
-    // DataFusion's array_position uses is_null() checks internally (not equality),
-    // so it can locate NULL elements even though NULL = NULL is NULL in standard SQL.
-    let has_nulls =
-        array_position(haystack.clone(), lit(ScalarValue::Null), lit(1i64)).is_not_null();
-
-    let decisive_condition = match (compare_op, quantifier) {
-        (BinaryOperator::Eq, SetQuantifier::Any)
-        | (BinaryOperator::NotEq, SetQuantifier::All) => {
-            array_has(haystack.clone(), needle.clone())
+    let (cmp, needs_empty_guard) = match (compare_op, quantifier) {
+        (BinaryOperator::Eq, SetQuantifier::Any) => {
+            (array_has(haystack.clone(), needle.clone()), false)
         }
-        (BinaryOperator::Eq, SetQuantifier::All)
-        | (BinaryOperator::NotEq, SetQuantifier::Any) => {
-            let all_equal = array_min(haystack.clone())
+        (BinaryOperator::NotEq, SetQuantifier::All) => (
+            Expr::Not(Box::new(array_has(haystack.clone(), needle.clone()))),
+            false,
+        ),
+        (BinaryOperator::Eq, SetQuantifier::All) => (
+            array_min(haystack.clone())
                 .eq(needle.clone())
-                .and(array_max(haystack.clone()).eq(needle.clone()));
-            Expr::Not(Box::new(all_equal))
-        }
+                .and(array_max(haystack.clone()).eq(needle.clone())),
+            true,
+        ),
+        (BinaryOperator::NotEq, SetQuantifier::Any) => (
+            array_min(haystack.clone())
+                .not_eq(needle.clone())
+                .or(array_max(haystack.clone()).not_eq(needle.clone())),
+            true,
+        ),
         (BinaryOperator::Gt, SetQuantifier::Any) => {
-            needle.clone().gt(array_min(haystack.clone()))
+            (needle.clone().gt(array_min(haystack.clone())), true)
         }
         (BinaryOperator::Gt, SetQuantifier::All) => {
-            Expr::Not(Box::new(needle.clone().gt(array_max(haystack.clone()))))
+            (needle.clone().gt(array_max(haystack.clone())), true)
         }
         (BinaryOperator::Lt, SetQuantifier::Any) => {
-            needle.clone().lt(array_max(haystack.clone()))
+            (needle.clone().lt(array_max(haystack.clone())), true)
         }
         (BinaryOperator::Lt, SetQuantifier::All) => {
-            Expr::Not(Box::new(needle.clone().lt(array_min(haystack.clone()))))
+            (needle.clone().lt(array_min(haystack.clone())), true)
         }
         (BinaryOperator::GtEq, SetQuantifier::Any) => {
-            needle.clone().gt_eq(array_min(haystack.clone()))
+            (needle.clone().gt_eq(array_min(haystack.clone())), true)
         }
         (BinaryOperator::GtEq, SetQuantifier::All) => {
-            Expr::Not(Box::new(needle.clone().gt_eq(array_max(haystack.clone()))))
+            (needle.clone().gt_eq(array_max(haystack.clone())), true)
         }
         (BinaryOperator::LtEq, SetQuantifier::Any) => {
-            needle.clone().lt_eq(array_max(haystack.clone()))
+            (needle.clone().lt_eq(array_max(haystack.clone())), true)
         }
         (BinaryOperator::LtEq, SetQuantifier::All) => {
-            Expr::Not(Box::new(needle.clone().lt_eq(array_min(haystack.clone()))))
+            (needle.clone().lt_eq(array_min(haystack.clone())), true)
         }
         _ => {
             return plan_err!(
@@ -1325,18 +1320,15 @@ fn plan_quantified_op(
         }
     };
 
-    let (vacuous_result, decisive_result) = match quantifier {
-        SetQuantifier::Any => (false, true),
-        SetQuantifier::All => (true, false),
+    let expr = if needs_empty_guard {
+        match quantifier {
+            SetQuantifier::Any => cardinality(haystack.clone()).gt(lit(0u64)).and(cmp),
+            SetQuantifier::All => cardinality(haystack.clone()).eq(lit(0u64)).or(cmp),
+        }
+    } else {
+        cmp
     };
-
-    let null_bool = lit(ScalarValue::Boolean(None));
-    when(null_arr_check, null_bool.clone())
-        .when(empty_check, lit(vacuous_result))
-        .when(null_lhs_check, null_bool.clone())
-        .when(decisive_condition, lit(decisive_result))
-        .when(has_nulls, null_bool)
-        .otherwise(lit(vacuous_result))
+    Ok(expr)
 }
 
 #[cfg(test)]

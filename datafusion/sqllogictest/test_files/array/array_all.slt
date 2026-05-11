@@ -145,7 +145,7 @@ NULL
 query B
 select 5 <> ALL(make_array(NULL::INT, NULL::INT));
 ----
-NULL
+true
 
 query B
 select 5 > ALL(make_array(NULL::INT, NULL::INT));
@@ -171,22 +171,22 @@ NULL
 query B
 select 5 > ALL(make_array(3, NULL));
 ----
-NULL
+true
 
 query B
 select 5 >= ALL(make_array(5, NULL));
 ----
-NULL
+true
 
 query B
 select 1 < ALL(make_array(3, NULL));
 ----
-NULL
+true
 
 query B
 select 1 <= ALL(make_array(1, NULL));
 ----
-NULL
+true
 
 # Mixed NULL + non-NULL (not satisfying condition → FALSE wins over NULL)
 query B
