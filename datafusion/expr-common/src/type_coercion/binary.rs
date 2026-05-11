@@ -378,6 +378,16 @@ fn math_decimal_coercion(
             let (lhs_type, value_type) = math_decimal_coercion(lhs_type, value_type)?;
             Some((lhs_type, value_type))
         }
+        (RunEndEncoded(_, field), _) => {
+            let (value_type, rhs_type) =
+                math_decimal_coercion(field.data_type(), rhs_type)?;
+            Some((value_type, rhs_type))
+        }
+        (_, RunEndEncoded(_, field)) => {
+            let (lhs_type, value_type) =
+                math_decimal_coercion(lhs_type, field.data_type())?;
+            Some((lhs_type, value_type))
+        }
         (
             Null,
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
@@ -518,11 +528,12 @@ enum TypeCategory {
 impl From<&DataType> for TypeCategory {
     fn from(data_type: &DataType) -> Self {
         match data_type {
-            // Dict is a special type in arrow, we check the value type
+            // Dict and REE are special types in arrow, we check the value type.
             DataType::Dictionary(_, v) => {
                 let v = v.as_ref();
                 TypeCategory::from(v)
             }
+            DataType::RunEndEncoded(_, v) => TypeCategory::from(v.data_type()),
             _ => {
                 if data_type.is_numeric() {
                     return TypeCategory::Numeric;
@@ -698,6 +709,27 @@ fn type_union_resolution_coercion(
                 )),
                 None => None,
             }
+        }
+        (
+            DataType::RunEndEncoded(lhs_run, lhs_val),
+            DataType::RunEndEncoded(rhs_run, rhs_val),
+        ) => {
+            let new_run =
+                type_union_resolution_coercion(lhs_run.data_type(), rhs_run.data_type())?;
+            let new_val =
+                type_union_resolution_coercion(lhs_val.data_type(), rhs_val.data_type())?;
+            Some(DataType::RunEndEncoded(
+                Arc::new(lhs_run.as_ref().clone().with_data_type(new_run)),
+                Arc::new(lhs_val.as_ref().clone().with_data_type(new_val)),
+            ))
+        }
+        (DataType::RunEndEncoded(run, val), other)
+        | (other, DataType::RunEndEncoded(run, val)) => {
+            let new_val = type_union_resolution_coercion(val.data_type(), other)?;
+            Some(DataType::RunEndEncoded(
+                Arc::clone(run),
+                Arc::new(val.as_ref().clone().with_data_type(new_val)),
+            ))
         }
         (DataType::Struct(lhs), DataType::Struct(rhs)) => {
             if lhs.len() != rhs.len() {
@@ -1414,6 +1446,15 @@ fn mathematics_numerical_coercion(
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(lhs_type, value_type)
         }
+        (RunEndEncoded(_, lhs_field), RunEndEncoded(_, rhs_field)) => {
+            mathematics_numerical_coercion(lhs_field.data_type(), rhs_field.data_type())
+        }
+        (RunEndEncoded(_, field), _) => {
+            mathematics_numerical_coercion(field.data_type(), rhs_type)
+        }
+        (_, RunEndEncoded(_, field)) => {
+            mathematics_numerical_coercion(lhs_type, field.data_type())
+        }
         _ => numerical_coercion(lhs_type, rhs_type),
     }
 }
@@ -1493,6 +1534,15 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
         (_, Dictionary(_, value_type)) => {
             lhs_type.is_numeric() && value_type.is_numeric()
         }
+        (RunEndEncoded(_, lhs_field), RunEndEncoded(_, rhs_field)) => {
+            lhs_field.data_type().is_numeric() && rhs_field.data_type().is_numeric()
+        }
+        (RunEndEncoded(_, field), _) => {
+            field.data_type().is_numeric() && rhs_type.is_numeric()
+        }
+        (_, RunEndEncoded(_, field)) => {
+            lhs_type.is_numeric() && field.data_type().is_numeric()
+        }
         _ => lhs_type.is_numeric() && rhs_type.is_numeric(),
     }
 }
@@ -1561,9 +1611,37 @@ fn ree_coercion(
 /// This is a union of string coercion rules and specified rules:
 /// 1. At least one side of lhs and rhs should be string type (Utf8 / LargeUtf8)
 /// 2. Data type of the other side should be able to cast to string type
+/// 3. Binary and string types cannot be mixed
 fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     string_coercion(lhs_type, rhs_type).or_else(|| match (lhs_type, rhs_type) {
+        // Allow pure binary + binary
+        (
+            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+        ) => {
+            // Coerce fixed-sized binary to variable-sized `Binary` to make uniform signature
+            // with the `Binary` result
+            let lhs_type = match lhs_type {
+                FixedSizeBinary(_) => &Binary,
+                val => val,
+            };
+            let rhs_type = match rhs_type {
+                FixedSizeBinary(_) => &Binary,
+                val => val,
+            };
+            binary_coercion(lhs_type, rhs_type)
+        }
+        // Deny other mixed binary + string combinations
+        (
+            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+            Utf8 | LargeUtf8 | Utf8View,
+        ) => None,
+        (
+            Utf8 | LargeUtf8 | Utf8View,
+            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
+        ) => None,
+        // Predicate-based coercion rules are following
         (Utf8View, from_type) | (from_type, Utf8View) => {
             string_concat_internal_coercion(from_type, &Utf8View)
         }
@@ -1576,7 +1654,6 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
             string_coercion(lhs_value_type, rhs_value_type).or(None)
         }
-        (Binary, Binary) => Some(Utf8),
         _ => None,
     })
 }
@@ -1706,13 +1783,17 @@ pub fn binary_to_string_coercion(
 fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
+        // Prefer symmetric coercion (in case the function is called directly)
+        (Binary, Binary) => Some(Binary),
+        (LargeBinary, LargeBinary) => Some(LargeBinary),
+        (BinaryView, BinaryView) => Some(BinaryView),
         // If BinaryView is in any side, we coerce to BinaryView.
-        (BinaryView, BinaryView | Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View)
+        (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View)
         | (LargeBinary | Binary | Utf8 | LargeUtf8 | Utf8View, BinaryView) => {
             Some(BinaryView)
         }
         // Prefer LargeBinary over Binary
-        (LargeBinary | Binary | Utf8 | LargeUtf8 | Utf8View, LargeBinary)
+        (Binary | Utf8 | LargeUtf8 | Utf8View, LargeBinary)
         | (LargeBinary, Binary | Utf8 | LargeUtf8 | Utf8View) => Some(LargeBinary),
 
         // If Utf8View/LargeUtf8 presents need to be large Binary
@@ -1738,8 +1819,8 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| binary_to_string_coercion(lhs_type, rhs_type))
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, false, string_coercion))
-        .or_else(|| ree_coercion(lhs_type, rhs_type, false, string_coercion))
+        .or_else(|| dictionary_coercion(lhs_type, rhs_type, false, like_coercion))
+        .or_else(|| ree_coercion(lhs_type, rhs_type, false, like_coercion))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
@@ -1759,8 +1840,8 @@ fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 /// This is a union of string coercion rules, dictionary coercion rules, and REE coercion rules.
 pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, false, string_coercion))
-        .or_else(|| ree_coercion(lhs_type, rhs_type, false, string_coercion))
+        .or_else(|| dictionary_coercion(lhs_type, rhs_type, false, regex_coercion))
+        .or_else(|| ree_coercion(lhs_type, rhs_type, false, regex_coercion))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
 }
 

@@ -103,6 +103,9 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
             | &DataType::UInt8
             | &DataType::Float64
             | &DataType::Float32
+            | &DataType::Date32
+            | &DataType::Date64
+            | &DataType::Timestamp(_, _)
     )
 }
 

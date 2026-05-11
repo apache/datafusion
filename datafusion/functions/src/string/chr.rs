@@ -17,11 +17,12 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringBuilder, Int64Array};
+use arrow::array::{Array, ArrayRef, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 use arrow::datatypes::DataType::Utf8;
 
+use crate::strings::GenericStringArrayBuilder;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
@@ -32,31 +33,46 @@ use datafusion_macros::user_doc;
 /// Returns the character with the given code.
 /// chr(65) = 'A'
 fn chr_array(integer_array: &Int64Array) -> Result<ArrayRef> {
-    let mut builder = GenericStringBuilder::<i32>::with_capacity(
-        integer_array.len(),
-        // 1 byte per character, assuming that is the common case
-        integer_array.len(),
+    let len = integer_array.len();
+    let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(
+        len, // 1 byte per character, assuming that is the common case
+        len,
     );
 
     let mut buf = [0u8; 4];
+    let nulls = integer_array.nulls();
 
-    for integer in integer_array {
-        match integer {
-            Some(integer) => {
-                if let Ok(u) = u32::try_from(integer)
-                    && let Some(c) = core::char::from_u32(u)
-                {
-                    builder.append_value(c.encode_utf8(&mut buf));
-                    continue;
-                }
-
-                return exec_err!("invalid Unicode scalar value: {integer}");
+    if let Some(n) = nulls {
+        for i in 0..len {
+            if n.is_null(i) {
+                builder.append_placeholder();
+                continue;
             }
-            None => builder.append_null(),
+            // SAFETY: bounds + null check above.
+            let integer = unsafe { integer_array.value_unchecked(i) };
+            if let Ok(u) = u32::try_from(integer)
+                && let Some(c) = core::char::from_u32(u)
+            {
+                builder.append_value(c.encode_utf8(&mut buf));
+                continue;
+            }
+            return exec_err!("invalid Unicode scalar value: {integer}");
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: no null buffer means every index is valid.
+            let integer = unsafe { integer_array.value_unchecked(i) };
+            if let Ok(u) = u32::try_from(integer)
+                && let Some(c) = core::char::from_u32(u)
+            {
+                builder.append_value(c.encode_utf8(&mut buf));
+                continue;
+            }
+            return exec_err!("invalid Unicode scalar value: {integer}");
         }
     }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls.cloned())?) as ArrayRef)
 }
 
 #[user_doc(
@@ -198,7 +214,13 @@ mod tests {
         ];
 
         assert_eq!(string_array.len(), expected.len());
+        assert_eq!(string_array.null_count(), 1);
+        assert!(string_array.is_null(7));
         for (i, e) in expected.iter().enumerate() {
+            if i == 7 {
+                continue;
+            }
+            assert!(!string_array.is_null(i));
             assert_eq!(string_array.value(i), *e);
         }
     }

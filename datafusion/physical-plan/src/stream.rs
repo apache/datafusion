@@ -330,6 +330,11 @@ impl RecordBatchReceiverStreamBuilder {
         context: Arc<TaskContext>,
     ) {
         let output = self.tx();
+        let input_display = if log::log_enabled!(log::Level::Debug) {
+            displayable(input.as_ref()).one_line().to_string()
+        } else {
+            String::new()
+        };
 
         self.inner.spawn(async move {
             let mut stream = match input.execute(partition, context) {
@@ -338,13 +343,17 @@ impl RecordBatchReceiverStreamBuilder {
                     // is no place to send the error and no reason to continue.
                     output.send(Err(e)).await.ok();
                     debug!(
-                        "Stopping execution: error executing input: {}",
-                        displayable(input.as_ref()).one_line()
+                        "Stopping execution: error executing input: {input_display}",
                     );
                     return Ok(());
                 }
                 Ok(stream) => stream,
             };
+
+            // Drop the input early, as soon as we're done with it.
+            // Holding on to it can cause delays in cancelling the child plan when the query is
+            // cancelled.
+            drop(input);
 
             // Transfer batches from inner stream to the output tx
             // immediately.
@@ -355,8 +364,7 @@ impl RecordBatchReceiverStreamBuilder {
                 // place to send the error and no reason to continue.
                 if output.send(item).await.is_err() {
                     debug!(
-                        "Stopping execution: output is gone, plan cancelling: {}",
-                        displayable(input.as_ref()).one_line()
+                        "Stopping execution: output is gone, plan cancelling: {input_display}",
                     );
                     return Ok(());
                 }
@@ -364,10 +372,7 @@ impl RecordBatchReceiverStreamBuilder {
                 // Stop after the first error is encountered (Don't
                 // drive all streams to completion)
                 if is_err {
-                    debug!(
-                        "Stopping execution: plan returned error: {}",
-                        displayable(input.as_ref()).one_line()
-                    );
+                    debug!("Stopping execution: plan returned error: {input_display}");
                     return Ok(());
                 }
             }

@@ -790,8 +790,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect::<Result<_>>()?;
 
                 // Create planner context with parameters
-                let mut planner_context =
-                    PlannerContext::new().with_prepare_param_data_types(fields.clone());
+                let mut planner_context = PlannerContext::new()
+                    .with_prepare_param_data_types(
+                        fields.iter().cloned().map(Some).collect(),
+                    );
 
                 // Build logical plan for inner statement of the prepare statement
                 let plan = self.sql_statement_to_plan_with_context_impl(
@@ -808,7 +810,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         })
                         .collect();
                     fields.extend(param_types.iter().cloned());
-                    planner_context.with_prepare_param_data_types(param_types);
+                    planner_context.with_prepare_param_data_types(
+                        param_types.into_iter().map(Some).collect(),
+                    );
                 }
 
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
@@ -1341,7 +1345,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
                 let mut planner_context = PlannerContext::new()
-                    .with_prepare_param_data_types(arg_types.unwrap_or_default());
+                    .with_prepare_param_data_types(
+                        arg_types
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(Some)
+                            .collect(),
+                    );
 
                 let function_body = match function_body {
                     Some(r) => Some(self.sql_to_expr(
@@ -2340,7 +2350,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
         }
-        let prepare_param_data_types = prepare_param_data_types.into_values().collect();
+        let prepare_param_data_types = {
+            let len = prepare_param_data_types.keys().last().map_or(0, |&k| k + 1);
+            (0..len)
+                .map(|i| prepare_param_data_types.remove(&i))
+                .collect()
+        };
 
         // Projection
         let mut planner_context =

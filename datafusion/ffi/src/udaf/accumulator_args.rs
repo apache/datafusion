@@ -17,14 +17,14 @@
 
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{RString, RVec};
 use arrow::datatypes::Schema;
 use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
 use datafusion_common::error::DataFusionError;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::physical_expr::FFI_PhysicalExpr;
@@ -35,17 +35,17 @@ use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 /// For an explanation of each field, see the corresponding field
 /// defined in [`AccumulatorArgs`].
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_AccumulatorArgs {
     return_field: WrappedSchema,
     schema: WrappedSchema,
     ignore_nulls: bool,
-    order_bys: RVec<FFI_PhysicalSortExpr>,
+    order_bys: SVec<FFI_PhysicalSortExpr>,
     is_reversed: bool,
-    name: RString,
+    name: SString,
     is_distinct: bool,
-    exprs: RVec<FFI_PhysicalExpr>,
-    expr_fields: RVec<WrappedSchema>,
+    exprs: SVec<FFI_PhysicalExpr>,
+    expr_fields: SVec<WrappedSchema>,
 }
 
 impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
@@ -55,7 +55,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
 
-        let order_bys: RVec<_> = args
+        let order_bys: SVec<_> = args
             .order_bys
             .iter()
             .map(FFI_PhysicalSortExpr::from)

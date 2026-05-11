@@ -17,13 +17,15 @@
 
 use arrow::array::{ArrayRef, LargeStringArray, StringArray};
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion::logical_expr::{ColumnarValue, Signature, Volatility};
 use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_large_binary_array,
 };
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
-use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 use std::sync::Arc;
 

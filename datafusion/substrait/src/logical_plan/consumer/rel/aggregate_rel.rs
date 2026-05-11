@@ -106,7 +106,7 @@ pub async fn from_aggregate_rel(
                     not_impl_err!("Aggregate without aggregate function is not supported")
                 }
             };
-            aggr_exprs.push(agg_func?.as_ref().clone());
+            aggr_exprs.push(std::sync::Arc::unwrap_or_clone(agg_func?));
         }
 
         // Ensure that all expressions have a unique name

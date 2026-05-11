@@ -17,7 +17,8 @@
 
 use std::sync::Arc;
 
-use crate::ScalarFunctionExpr;
+use crate::scalar_subquery::ScalarSubqueryExpr;
+use crate::{HigherOrderFunctionExpr, ScalarFunctionExpr};
 use crate::{
     PhysicalExpr,
     expressions::{self, Column, Literal, binary, like, similar_to},
@@ -25,12 +26,17 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
-    DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err, plan_err,
+    DFSchema, Result, ScalarValue, TableReference, ToDFSchema, exec_err,
+    internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
+use datafusion_expr::expr::{
+    Alias, Cast, HigherOrderFunction, InList, Lambda, LambdaVariable, Placeholder,
+    ScalarFunction,
+};
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
@@ -396,8 +402,168 @@ pub fn create_physical_expr(
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
+        Expr::ScalarSubquery(sq) => {
+            match execution_props.subquery_indexes.get(sq) {
+                Some(&index) => {
+                    let schema = sq.subquery.schema();
+                    if schema.fields().len() != 1 {
+                        return plan_err!(
+                            "Scalar subquery must return exactly one column, got {}",
+                            schema.fields().len()
+                        );
+                    }
+                    let dt = schema.field(0).data_type().clone();
+                    let nullable = schema.field(0).is_nullable();
+                    Ok(Arc::new(ScalarSubqueryExpr::new(
+                        dt,
+                        nullable,
+                        index,
+                        execution_props.subquery_results.clone(),
+                    )))
+                }
+                None => {
+                    // Not found: either a correlated subquery that wasn't
+                    // rewritten to a join, or an uncorrelated one that wasn't
+                    // registered by the physical planner.
+                    not_impl_err!(
+                        "Physical plan does not support logical expression {e:?}"
+                    )
+                }
+            }
+        }
         Expr::Placeholder(Placeholder { id, .. }) => {
             exec_err!("Placeholder '{id}' was not provided a value for execution.")
+        }
+        Expr::HigherOrderFunction(invocation @ HigherOrderFunction { func, args }) => {
+            let num_lambdas = args
+                .iter()
+                .filter(|arg| matches!(arg, Expr::Lambda(_)))
+                .count();
+
+            let mut lambda_parameters =
+                invocation.lambda_parameters(input_dfschema)?.into_iter();
+
+            if num_lambdas > lambda_parameters.len() {
+                return plan_err!(
+                    "{} lambda_parameters returned only {} values for {num_lambdas} lambdas",
+                    func.name(),
+                    lambda_parameters.len()
+                );
+            }
+
+            let lambda_qualifier = 1 + input_dfschema
+                .iter()
+                .filter_map(|(qualifier, _field)| {
+                    qualifier.and_then(|tbl| {
+                        tbl.table().strip_prefix("lambda_")?.parse::<usize>().ok()
+                    })
+                })
+                .max()
+                .unwrap_or_default();
+
+            let qualifier = TableReference::bare(format!("lambda_{lambda_qualifier}"));
+
+            let physical_args = args
+                .iter()
+                .map(|arg| match arg {
+                    Expr::Lambda(lambda) => {
+                        let lambda_parameters = lambda_parameters
+                            .next()
+                            .ok_or_else(|| {
+                                internal_datafusion_err!(
+                                    "lambda_parameters len should have been checked above"
+                                )
+                            })?
+                            .into_iter()
+                            .zip(&lambda.params)
+                            .map(|(field, name)| {
+                                (Some(qualifier.clone()), field.renamed(name.as_str()))
+                            });
+
+                        let new_fields = input_dfschema
+                            .iter()
+                            .map(|(tbl, field)| (tbl.cloned(), Arc::clone(field)))
+                            .chain(lambda_parameters)
+                            .collect();
+
+                        let lambda_schema = DFSchema::new_with_metadata(
+                            new_fields,
+                            input_dfschema.metadata().clone(),
+                        )?;
+
+                        let execution_props = execution_props
+                            .clone()
+                            .with_qualified_lambda_variables(&qualifier, &lambda.params);
+
+                        create_physical_expr(arg, &lambda_schema, &execution_props)
+                    }
+                    _ => create_physical_expr(arg, input_dfschema, execution_props),
+                })
+                .collect::<Result<_>>()?;
+
+            let config_options = match execution_props.config_options.as_ref() {
+                Some(config_options) => Arc::clone(config_options),
+                None => Arc::new(ConfigOptions::default()),
+            };
+
+            Ok(Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+                Arc::clone(func),
+                physical_args,
+                input_schema,
+                config_options,
+            )?))
+        }
+        Expr::Lambda(Lambda { params, body }) => expressions::lambda(
+            params,
+            create_physical_expr(body, input_dfschema, execution_props)?,
+        ),
+        Expr::LambdaVariable(LambdaVariable {
+            name,
+            field,
+            spans: _,
+        }) => {
+            let field = field.as_ref().ok_or_else(|| {
+                plan_datafusion_err!("unresolved LambdaVariable {name}")
+            })?;
+
+            let qualifier = execution_props
+                .lambda_variable_qualifier
+                .get(name)
+                .ok_or_else(|| {
+                    plan_datafusion_err!("qualifier for lambda variable {name} not found")
+                })?;
+
+            let index = input_dfschema
+                .index_of_column_by_name(Some(qualifier), name)
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "lambda variable {qualifier}.{name} not found in planning schema"
+                    )
+                })?;
+
+            let schema_field = input_dfschema.field(index);
+
+            // LambdaVariable.field will be made optional as in Expr::Placeholder
+            // and only LambdaVariable.name used, and field.name ignored,
+            // so they're not enforced to match for logical expressions
+            // Rename the field to match the schema one and use it's PartialEq impl instead
+            // of checking property by property and fail if new properties get's added to it.
+            // While not necessary, the sql planner does create lambda vars with matching names,
+            // so this shouldn't allocate with a lambda var from it
+            let renamed_field = Arc::clone(field).renamed(name);
+
+            if &renamed_field != schema_field {
+                return plan_err!(
+                    "LambdaVariable field and schema field mismatch {} != {}",
+                    renamed_field,
+                    schema_field
+                );
+            }
+
+            Ok(Arc::new(expressions::LambdaVariable::new(
+                index,
+                Arc::clone(schema_field),
+            )))
         }
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
