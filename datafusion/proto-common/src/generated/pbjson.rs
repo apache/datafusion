@@ -4116,6 +4116,83 @@ impl<'de> serde::Deserialize<'de> for EmptyMessage {
         deserializer.deserialize_struct("datafusion_common.EmptyMessage", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ExplainFormat {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Indent => "EXPLAIN_FORMAT_INDENT",
+            Self::Tree => "EXPLAIN_FORMAT_TREE",
+            Self::Pgjson => "EXPLAIN_FORMAT_PGJSON",
+            Self::Graphviz => "EXPLAIN_FORMAT_GRAPHVIZ",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for ExplainFormat {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "EXPLAIN_FORMAT_INDENT",
+            "EXPLAIN_FORMAT_TREE",
+            "EXPLAIN_FORMAT_PGJSON",
+            "EXPLAIN_FORMAT_GRAPHVIZ",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = ExplainFormat;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "EXPLAIN_FORMAT_INDENT" => Ok(ExplainFormat::Indent),
+                    "EXPLAIN_FORMAT_TREE" => Ok(ExplainFormat::Tree),
+                    "EXPLAIN_FORMAT_PGJSON" => Ok(ExplainFormat::Pgjson),
+                    "EXPLAIN_FORMAT_GRAPHVIZ" => Ok(ExplainFormat::Graphviz),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for Field {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
