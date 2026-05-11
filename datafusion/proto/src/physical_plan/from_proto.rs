@@ -38,8 +38,10 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
 use datafusion_expr::dml::InsertOp;
+use datafusion_expr::execution_props::SubqueryIndex;
 use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::{
     HigherOrderFunctionExpr, LexOrdering, PhysicalSortExpr, ScalarFunctionExpr,
 };
@@ -51,7 +53,6 @@ use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
-use datafusion_proto_common::from_proto::FromOptionalField;
 use object_store::ObjectMeta;
 use object_store::path::Path;
 
@@ -573,26 +574,29 @@ pub fn parse_physical_expr_with_converter(
                 .try_decode_expr(extension.expr.as_slice(), &inputs)? as _
         }
         ExprType::HigherOrderUdf(e) => {
-            let udhof = match &e.fun_definition {
-                Some(buf) => codec.try_decode_udhof(&e.name, buf)?,
+            let func = match &e.fun_definition {
+                Some(buf) => {
+                    ctx.codec().try_decode_higher_order_function(&e.name, buf)?
+                }
                 None => ctx
-                    .udhof(e.name.as_str())
-                    .or_else(|_| codec.try_decode_udhof(&e.name, &[]))?,
+                    .task_ctx()
+                    .higher_order_function(e.name.as_str())
+                    .or_else(|_| {
+                        ctx.codec().try_decode_higher_order_function(&e.name, &[])
+                    })?,
             };
-            let hof_def = Arc::clone(&udhof);
+            let func_def = Arc::clone(&func);
 
-            let args =
-                parse_physical_exprs(&e.args, ctx, input_schema, codec, proto_converter)?;
+            let args = parse_physical_exprs(&e.args, ctx, input_schema, proto_converter)?;
 
-            let config_options = Arc::clone(ctx.session_config().options());
+            let config_options = Arc::clone(ctx.task_ctx().session_config().options());
 
-            Arc::new(HigherOrderFunctionExpr::new(
-                e.name.as_str(),
-                hof_def,
+            Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+                func_def,
                 args,
-                Arc::new(convert_required!(e.return_field)?),
+                input_schema,
                 config_options,
-            ))
+            )?)
         }
         ExprType::Lambda(lambda) => Arc::new(LambdaExpr::try_new(
             lambda.params.clone(),
@@ -601,12 +605,10 @@ pub fn parse_physical_expr_with_converter(
                 ctx,
                 "body",
                 input_schema,
-                codec,
                 proto_converter,
             )?,
         )?),
         ExprType::LambdaVariable(var) => Arc::new(LambdaVariable::new(
-            var.name.clone(),
             var.index as usize,
             Arc::new(convert_required!(var.field)?),
         )),

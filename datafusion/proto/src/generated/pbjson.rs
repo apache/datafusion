@@ -18194,9 +18194,6 @@ impl serde::Serialize for PhysicalHigherOrderUdfNode {
         if self.fun_definition.is_some() {
             len += 1;
         }
-        if self.return_field.is_some() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalHigherOrderUdfNode", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -18208,9 +18205,6 @@ impl serde::Serialize for PhysicalHigherOrderUdfNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
-        }
-        if let Some(v) = self.return_field.as_ref() {
-            struct_ser.serialize_field("returnField", v)?;
         }
         struct_ser.end()
     }
@@ -18226,8 +18220,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHigherOrderUdfNode {
             "args",
             "fun_definition",
             "funDefinition",
-            "return_field",
-            "returnField",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -18235,7 +18227,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHigherOrderUdfNode {
             Name,
             Args,
             FunDefinition,
-            ReturnField,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18260,7 +18251,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHigherOrderUdfNode {
                             "name" => Ok(GeneratedField::Name),
                             "args" => Ok(GeneratedField::Args),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
-                            "returnField" | "return_field" => Ok(GeneratedField::ReturnField),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -18283,7 +18273,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHigherOrderUdfNode {
                 let mut name__ = None;
                 let mut args__ = None;
                 let mut fun_definition__ = None;
-                let mut return_field__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -18306,19 +18295,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalHigherOrderUdfNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
-                        GeneratedField::ReturnField => {
-                            if return_field__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("returnField"));
-                            }
-                            return_field__ = map_.next_value()?;
-                        }
                     }
                 }
                 Ok(PhysicalHigherOrderUdfNode {
                     name: name__.unwrap_or_default(),
                     args: args__.unwrap_or_default(),
                     fun_definition: fun_definition__,
-                    return_field: return_field__,
                 })
             }
         }
@@ -18748,9 +18730,6 @@ impl serde::Serialize for PhysicalLambdaVariableExprNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.name.is_empty() {
-            len += 1;
-        }
         if self.index != 0 {
             len += 1;
         }
@@ -18758,9 +18737,6 @@ impl serde::Serialize for PhysicalLambdaVariableExprNode {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalLambdaVariableExprNode", len)?;
-        if !self.name.is_empty() {
-            struct_ser.serialize_field("name", &self.name)?;
-        }
         if self.index != 0 {
             struct_ser.serialize_field("index", &self.index)?;
         }
@@ -18777,14 +18753,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalLambdaVariableExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "name",
             "index",
             "field",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Name,
             Index,
             Field,
         }
@@ -18808,7 +18782,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalLambdaVariableExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "name" => Ok(GeneratedField::Name),
                             "index" => Ok(GeneratedField::Index),
                             "field" => Ok(GeneratedField::Field),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -18830,17 +18803,10 @@ impl<'de> serde::Deserialize<'de> for PhysicalLambdaVariableExprNode {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut name__ = None;
                 let mut index__ = None;
                 let mut field__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Name => {
-                            if name__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("name"));
-                            }
-                            name__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::Index => {
                             if index__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("index"));
@@ -18858,7 +18824,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalLambdaVariableExprNode {
                     }
                 }
                 Ok(PhysicalLambdaVariableExprNode {
-                    name: name__.unwrap_or_default(),
                     index: index__.unwrap_or_default(),
                     field: field__,
                 })

@@ -1466,8 +1466,6 @@ pub struct PhysicalHigherOrderUdfNode {
     pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bytes = "vec", optional, tag = "3")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(message, optional, tag = "4")]
-    pub return_field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalLambdaExprNode {
@@ -1478,11 +1476,9 @@ pub struct PhysicalLambdaExprNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalLambdaVariableExprNode {
-    #[prost(string, tag = "1")]
-    pub name: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "2")]
+    #[prost(uint32, tag = "1")]
     pub index: u32,
-    #[prost(message, optional, tag = "3")]
+    #[prost(message, optional, tag = "2")]
     pub field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

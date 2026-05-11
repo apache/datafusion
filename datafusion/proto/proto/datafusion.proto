@@ -984,7 +984,6 @@ message PhysicalHigherOrderUdfNode {
   string name = 1;
   repeated PhysicalExprNode args = 2;
   optional bytes fun_definition = 3;
-  datafusion_common.Field return_field = 4;
 }
 
 message PhysicalLambdaExprNode {
@@ -993,9 +992,8 @@ message PhysicalLambdaExprNode {
 }
 
 message PhysicalLambdaVariableExprNode {
-  string name = 1;
-  uint32 index = 2;
-  datafusion_common.Field field = 3;
+  uint32 index = 1;
+  datafusion_common.Field field = 2;
 }
 
 message PhysicalAggregateExprNode {

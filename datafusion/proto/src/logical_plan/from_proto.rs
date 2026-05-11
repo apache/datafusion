@@ -625,6 +625,7 @@ pub fn parse_expr(
                 null_treatment,
             )))
         }
+
         ExprType::GroupingSet(GroupingSetNode { expr }) => {
             Ok(Expr::GroupingSet(GroupingSets(
                 expr.iter()
@@ -667,30 +668,31 @@ pub fn parse_expr(
                 codec,
             )?;
             Ok(Expr::ScalarSubquery(subquery))
+        }
         ExprType::HigherOrderUdfExpr(protobuf::HigherOrderUdfExprNode {
             fun_name,
             args,
             fun_definition,
         }) => {
             let hof_fn = match fun_definition {
-                Some(buf) => codec.try_decode_udhof(fun_name, buf)?,
-                None => registry
-                    .udhof(fun_name.as_str())
-                    .or_else(|_| codec.try_decode_udhof(fun_name, &[]))?,
+                Some(buf) => codec.try_decode_higher_order_function(fun_name, buf)?,
+                None => ctx
+                    .higher_order_function(fun_name.as_str())
+                    .or_else(|_| codec.try_decode_higher_order_function(fun_name, &[]))?,
             };
             Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
                 hof_fn,
-                parse_exprs(args, registry, codec)?,
+                parse_exprs(args, ctx, codec)?,
             )))
         }
         ExprType::Lambda(lambda) => Ok(Expr::Lambda(Lambda::new(
             lambda.params.clone(),
-            parse_required_expr(lambda.body.as_deref(), registry, "body", codec)?,
+            parse_required_expr(lambda.body.as_deref(), ctx, "body", codec)?,
         ))),
         ExprType::LambdaVariable(lambda_variable) => {
             Ok(Expr::LambdaVariable(LambdaVariable::new(
                 lambda_variable.name.clone(),
-                Arc::new(lambda_variable.field.clone().as_ref().required("field")?),
+                lambda_variable.field.as_ref().optional()?.map(Arc::new),
             )))
         }
     }

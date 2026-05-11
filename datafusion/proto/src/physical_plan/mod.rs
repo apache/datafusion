@@ -50,6 +50,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
+use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
@@ -3715,7 +3716,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
         Ok(())
     }
 
-    fn try_decode_udhof(
+    fn try_decode_higher_order_function(
         &self,
         name: &str,
         _buf: &[u8],
@@ -3725,7 +3726,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
         )
     }
 
-    fn try_encode_udhof(
+    fn try_encode_higher_order_function(
         &self,
         _node: &dyn HigherOrderUDF,
         _buf: &mut Vec<u8>,

@@ -637,7 +637,7 @@ pub fn serialize_expr(
         },
         Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
             let mut buf = Vec::new();
-            let _ = codec.try_encode_udhof(func.as_ref(), &mut buf);
+            let _ = codec.try_encode_higher_order_function(func.as_ref(), &mut buf);
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::HigherOrderUdfExpr(
                     protobuf::HigherOrderUdfExprNode {
@@ -661,7 +661,7 @@ pub fn serialize_expr(
         }) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::LambdaVariable(protobuf::LambdaVariable {
                 name: name.clone(),
-                field: Some(field.as_ref().try_into()?),
+                field: field.as_deref().map(|v| v.try_into()).transpose()?,
             })),
         },
     };

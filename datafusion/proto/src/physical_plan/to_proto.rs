@@ -32,9 +32,9 @@ use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_expr::WindowFrame;
 use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
+use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr::{HigherOrderFunctionExpr, ScalarFunctionExpr};
-use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, DynamicFilterPhysicalExpr, InListExpr,
@@ -568,28 +568,25 @@ pub fn serialize_physical_expr_with_converter(
                     generation: inner.generation,
                     inner_expr: Some(inner_expr),
                     is_complete: inner.is_complete,
-                })
-            ))
-        }),
+                }),
+            )),
+        })
     } else if let Some(expr) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
         let mut buf = Vec::new();
-        codec.try_encode_udhof(expr.fun(), &mut buf)?;
+        codec.try_encode_higher_order_function(expr.fun(), &mut buf)?;
         Ok(protobuf::PhysicalExprNode {
-            expr_id: None,
+            expr_id,
             expr_type: Some(protobuf::physical_expr_node::ExprType::HigherOrderUdf(
                 protobuf::PhysicalHigherOrderUdfNode {
                     name: expr.name().to_string(),
                     args: serialize_physical_exprs(expr.args(), codec, proto_converter)?,
                     fun_definition: (!buf.is_empty()).then_some(buf),
-                    return_field: Some(
-                        expr.return_field(&Schema::empty())?.as_ref().try_into()?,
-                    ),
                 },
             )),
         })
     } else if let Some(lambda) = expr.downcast_ref::<LambdaExpr>() {
         Ok(protobuf::PhysicalExprNode {
-            expr_id: None,
+            expr_id,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Lambda(Box::new(
                 protobuf::PhysicalLambdaExprNode {
                     params: lambda.params().to_vec(),
@@ -601,10 +598,9 @@ pub fn serialize_physical_expr_with_converter(
         })
     } else if let Some(var) = expr.downcast_ref::<LambdaVariable>() {
         Ok(protobuf::PhysicalExprNode {
-            expr_id: None,
+            expr_id,
             expr_type: Some(protobuf::physical_expr_node::ExprType::LambdaVariable(
                 PhysicalLambdaVariableExprNode {
-                    name: var.name().to_owned(),
                     index: var.index() as u32,
                     field: Some(var.field().as_ref().try_into()?),
                 },
