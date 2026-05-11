@@ -1422,7 +1422,6 @@ impl Lambda {
     }
 }
 
-
 pub fn display_comma_separated<T>(slice: &[T]) -> String
 where
     T: Display,
