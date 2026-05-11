@@ -861,20 +861,18 @@ fn take_numeric_param(s: &str, zero: bool) -> (NumericParam, &str) {
     }
 }
 
-/// Convert a `u32` to a [`char`] for the `%c` conversion, returning a SQL
-/// error if the value is not a valid Unicode scalar value (i.e. is in the
-/// surrogate range `0xD800..=0xDFFF` or above `0x10FFFF`). Java's `Formatter`
-/// raises `IllegalFormatCodePointException` in the same situations.
+/// Convert a `u32` to a [`char`] for the `%c` conversion. Returns an error if
+/// the value is not a valid Unicode scalar value (i.e. is in the surrogate
+/// range `0xD800..=0xDFFF` or above `0x10FFFF`).
 fn codepoint_to_char(value: u32) -> Result<char> {
     char::from_u32(value).ok_or_else(|| {
         exec_datafusion_err!("invalid Unicode scalar value for %c: {value:#x}")
     })
 }
 
-/// `%c` codepoint validation for signed integer arguments. Negative values
-/// and values above `0x10FFFF` (or in the surrogate range) error out, matching
-/// Java's `Character.isValidCodePoint` rather than reinterpreting the bits as
-/// unsigned.
+/// Convert a signed integer to a [`char`] for the `%c` conversion. Returns an
+/// error if the value is negative or is not a valid Unicode scalar value (i.e.
+/// is in the surrogate range `0xD800..=0xDFFF` or above `0x10FFFF`).
 fn signed_to_char(value: i64) -> Result<char> {
     let codepoint = u32::try_from(value).map_err(|_| {
         exec_datafusion_err!("invalid Unicode scalar value for %c: {value}")
@@ -882,9 +880,10 @@ fn signed_to_char(value: i64) -> Result<char> {
     codepoint_to_char(codepoint)
 }
 
-/// `%c` codepoint validation for unsigned integer arguments. Errors if the
-/// value does not fit in a `u32` or is not a valid Unicode scalar value,
-/// instead of silently truncating high bits.
+/// Convert an unsigned integer to a [`char`] for the `%c` conversion. Returns
+/// an error if the value does not fit in a `u32` or is not a valid Unicode
+/// scalar value (i.e. is in the surrogate range `0xD800..=0xDFFF` or above
+/// `0x10FFFF`).
 fn unsigned_to_char(value: u64) -> Result<char> {
     let codepoint = u32::try_from(value).map_err(|_| {
         exec_datafusion_err!("invalid Unicode scalar value for %c: {value:#x}")
