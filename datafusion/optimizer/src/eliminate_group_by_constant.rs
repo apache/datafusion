@@ -64,10 +64,10 @@ impl OptimizerRule for EliminateGroupByConstant {
                     .group_expr
                     .iter()
                     .partition(|expr| is_redundant_group_expr(expr, &group_by_columns));
+                // Only eliminate when at least one required group expression remains. A grouping
+                // aggregate emits 0 rows on empty input; a global aggregate emits 1 NULL row.
 
-                if redundant.is_empty()
-                    || (required.is_empty() && aggregate.aggr_expr.is_empty())
-                {
+                if redundant.is_empty() || required.is_empty() {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
@@ -228,9 +228,8 @@ mod tests {
             .build()?;
 
         assert_optimized_plan_equal!(plan, @r#"
-        Projection: Utf8("test"), UInt32(123), count(test.c)
-          Aggregate: groupBy=[[]], aggr=[[count(test.c)]]
-            TableScan: test
+        Aggregate: groupBy=[[Utf8("test"), UInt32(123)]], aggr=[[count(test.c)]]
+          TableScan: test
         "#)
     }
 
