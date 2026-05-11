@@ -24,11 +24,15 @@ use arrow::array::{
 };
 use arrow::compute::DecimalCast;
 use arrow::compute::kernels::cast_utils::string_to_datetime;
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{
+    ArrowTimestampType, DataType, Date32Type, Date64Type, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType,
+};
 use arrow_buffer::ArrowNativeType;
 use chrono::LocalResult::Single;
 use chrono::format::{Parsed, StrftimeItems, parse};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
@@ -40,6 +44,52 @@ use datafusion_expr::ColumnarValue;
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
 static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
+
+/// Convert a `NaiveDate` into a `ScalarValue` matching `target_type`. The Date
+/// variants encode the bare date; Timestamp variants are anchored at the
+/// date's midnight in the given timezone. Returns `None` for unsupported
+/// target types.
+pub(crate) fn date_to_scalar(
+    date: NaiveDate,
+    target_type: &DataType,
+) -> Option<ScalarValue> {
+    Some(match target_type {
+        DataType::Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
+        DataType::Date64 => ScalarValue::Date64(Some(Date64Type::from_naive_date(date))),
+        DataType::Timestamp(unit, tz_opt) => {
+            let naive_midnight = date.and_hms_opt(0, 0, 0)?;
+            let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
+            match unit {
+                TimeUnit::Second => ScalarValue::TimestampSecond(
+                    TimestampSecondType::from_naive_datetime(naive_midnight, tz.as_ref()),
+                    tz_opt.clone(),
+                ),
+                TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(
+                    TimestampMillisecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
+                    tz_opt.clone(),
+                ),
+                TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(
+                    TimestampMicrosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
+                    tz_opt.clone(),
+                ),
+                TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(
+                    TimestampNanosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
+                    tz_opt.clone(),
+                ),
+            }
+        }
+        _ => return None,
+    })
+}
 
 /// Converts a string representation of a date‑time into a timestamp expressed in
 /// nanoseconds since the Unix epoch.

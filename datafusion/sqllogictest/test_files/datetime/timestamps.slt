@@ -2714,6 +2714,186 @@ statement ok
 drop table ts_utf8_data
 
 ##########
+## date_trunc Preimage Tests
+##
+## date_trunc(granularity, col) = literal  rewrites to
+##   col >= literal AND col < literal + 1 granularity
+## when the literal is aligned to the bucket boundary.
+##########
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# Day: equality rewrites to a half-open interval on the column
+query TT
+EXPLAIN SELECT * FROM ts_data_nanos
+WHERE date_trunc('day', ts) = arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: ts_data_nanos.ts >= TimestampNanosecond(1714521600000000000, None) AND ts_data_nanos.ts < TimestampNanosecond(1714608000000000000, None)
+02)--TableScan: ts_data_nanos projection=[ts, value]
+
+# Month: variable-width upper bound computed via calendar arithmetic
+query TT
+EXPLAIN SELECT * FROM ts_data_nanos
+WHERE date_trunc('month', ts) = arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: ts_data_nanos.ts >= TimestampNanosecond(1714521600000000000, None) AND ts_data_nanos.ts < TimestampNanosecond(1717200000000000000, None)
+02)--TableScan: ts_data_nanos projection=[ts, value]
+
+# Year: 2024 → [2024-01-01, 2025-01-01)
+query TT
+EXPLAIN SELECT * FROM ts_data_nanos
+WHERE date_trunc('year', ts) = arrow_cast('2024-01-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: ts_data_nanos.ts >= TimestampNanosecond(1704067200000000000, None) AND ts_data_nanos.ts < TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: ts_data_nanos projection=[ts, value]
+
+# Greater-than: only the upper bound survives
+query TT
+EXPLAIN SELECT * FROM ts_data_nanos
+WHERE date_trunc('day', ts) > arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: ts_data_nanos.ts >= TimestampNanosecond(1714608000000000000, None)
+02)--TableScan: ts_data_nanos projection=[ts, value]
+
+# Less-than-or-equal: only the upper bound survives
+query TT
+EXPLAIN SELECT * FROM ts_data_nanos
+WHERE date_trunc('day', ts) <= arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: ts_data_nanos.ts < TimestampNanosecond(1714608000000000000, None)
+02)--TableScan: ts_data_nanos projection=[ts, value]
+
+# Misaligned literal: no rewrite — preimage returns None and the original predicate stays
+query TT
+EXPLAIN SELECT * FROM ts_data_nanos
+WHERE date_trunc('month', ts) = arrow_cast('2024-05-15T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: date_trunc(Utf8("month"), ts_data_nanos.ts) = TimestampNanosecond(1715731200000000000, None)
+02)--TableScan: ts_data_nanos projection=[ts, value]
+
+# Date column: preimage peels the signature-inserted Cast(date, Timestamp(ns))
+# and emits bounds in the Date type against the raw column, enabling pruning
+# on Date partition columns. Date values are always at midnight UTC after the
+# cast, so sub-day granularities (e.g. 'hour') collapse to a 1-day interval.
+statement ok
+create table d (d date) as values (date '2024-05-01');
+
+query TT
+EXPLAIN SELECT * FROM d
+WHERE date_trunc('day', d) = arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: d.d >= Date32("2024-05-01") AND d.d < Date32("2024-05-02")
+02)--TableScan: d projection=[d]
+
+query TT
+EXPLAIN SELECT * FROM d
+WHERE date_trunc('month', d) = arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: d.d >= Date32("2024-05-01") AND d.d < Date32("2024-06-01")
+02)--TableScan: d projection=[d]
+
+# Sub-day granularity with midnight literal: every Date value is at midnight
+# UTC, so date_trunc(any_g, midnight) = midnight; predicate collapses to a
+# single-date bucket.
+query TT
+EXPLAIN SELECT * FROM d
+WHERE date_trunc('hour', d) = arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: d.d >= Date32("2024-05-01") AND d.d < Date32("2024-05-02")
+02)--TableScan: d projection=[d]
+
+# Non-midnight literal: a Date column can never produce a 10:00 bucket; both
+# arms bail and the predicate stays unsimplified.
+query TT
+EXPLAIN SELECT * FROM d
+WHERE date_trunc('day', d) = arrow_cast('2024-05-01T10:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: date_trunc(Utf8("day"), CAST(d.d AS Timestamp(ns))) = TimestampNanosecond(1714557600000000000, None)
+02)--TableScan: d projection=[d]
+
+# Misaligned date-natural literal (day=15 isn't a month boundary): bails.
+query TT
+EXPLAIN SELECT * FROM d
+WHERE date_trunc('month', d) = arrow_cast('2024-05-15T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: date_trunc(Utf8("month"), CAST(d.d AS Timestamp(ns))) = TimestampNanosecond(1715731200000000000, None)
+02)--TableScan: d projection=[d]
+
+statement ok
+drop table d;
+
+# Date64 column: same arm as Date32, emits Date64 bounds.
+statement ok
+create table d64 as select arrow_cast(date '2024-05-01', 'Date64') as d;
+
+query TT
+EXPLAIN SELECT * FROM d64
+WHERE date_trunc('month', d) = arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: d64.d >= Date64("2024-05-01") AND d64.d < Date64("2024-06-01")
+02)--TableScan: d64 projection=[d]
+
+statement ok
+drop table d64;
+
+# Time column: signature accepts Time as exact match (no cast), so the column
+# arrives raw. All valid-for-Time granularities are fixed-width, so the
+# preimage is a half-open Time interval against the raw column.
+statement ok
+create table t (t time);
+
+query TT
+EXPLAIN SELECT * FROM t WHERE date_trunc('minute', t) = '13:42:00'::time;
+----
+logical_plan
+01)Filter: t.t >= Time64Nanosecond("49320000000000") AND t.t < Time64Nanosecond("49380000000000")
+02)--TableScan: t projection=[t]
+
+# Misaligned literal — bails.
+query TT
+EXPLAIN SELECT * FROM t WHERE date_trunc('minute', t) = '13:42:29'::time;
+----
+logical_plan
+01)Filter: date_trunc(Utf8("minute"), t.t) = Time64Nanosecond("49349000000000")
+02)--TableScan: t projection=[t]
+
+# Granularity not valid for Time (Day) — bails. At runtime invoke_with_args
+# would error; preimage leaves the predicate alone.
+query TT
+EXPLAIN SELECT * FROM t WHERE date_trunc('day', t) = '00:00:00'::time;
+----
+logical_plan
+01)Filter: date_trunc(Utf8("day"), t.t) = Time64Nanosecond("0")
+02)--TableScan: t projection=[t]
+
+statement ok
+drop table t;
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+# Misaligned literal data check: verify the un-rewritten predicate still
+# produces correct (empty) results at runtime — date_trunc returns the bucket
+# start, so a non-boundary literal can never match.
+query I rowsort
+SELECT value FROM ts_data_nanos
+WHERE date_trunc('month', ts) = arrow_cast('2024-05-15T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+
+##########
 ## Test binary temporal coercion for Date and Timestamp
 ##########
 
