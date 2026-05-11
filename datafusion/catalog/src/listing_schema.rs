@@ -17,7 +17,6 @@
 
 //! [`ListingSchemaProvider`]: [`SchemaProvider`] that scans ObjectStores for tables automatically
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -146,10 +145,6 @@ impl ListingSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for ListingSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.tables
             .lock()

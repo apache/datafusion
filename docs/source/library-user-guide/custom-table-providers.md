@@ -155,12 +155,10 @@ stream path, which gives you complete control and applies to any data source.
 ## Layer 1: TableProvider
 
 A [TableProvider] represents a queryable data source. For a minimal read-only
-table, you need four methods:
+table, you need three methods:
 
 ```rust,ignore
 impl TableProvider for MyTable {
-    fn as_any(&self) -> &dyn Any { self }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -520,7 +518,6 @@ To opt in, implement `supports_filters_pushdown`:
 #
 # #[async_trait::async_trait]
 # impl TableProvider for MyFilterTable {
-#     fn as_any(&self) -> &dyn Any { self }
 #     fn schema(&self) -> SchemaRef { todo!() }
 #     fn table_type(&self) -> TableType { TableType::Base }
 #     async fn scan(&self, _: &dyn Session, _: Option<&Vec<usize>>, _: &[Expr], _: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> { todo!() }
@@ -673,7 +670,6 @@ struct DatePartitionedTable {
 
 #[async_trait::async_trait]
 impl TableProvider for DatePartitionedTable {
-    fn as_any(&self) -> &dyn Any { self }
     fn schema(&self) -> SchemaRef { Arc::clone(&self.schema) }
     fn table_type(&self) -> TableType { TableType::Base }
 
@@ -832,7 +828,6 @@ impl CountingTable {
 
 #[async_trait::async_trait]
 impl TableProvider for CountingTable {
-    fn as_any(&self) -> &dyn Any { self }
     fn schema(&self) -> SchemaRef { Arc::clone(&self.schema) }
     fn table_type(&self) -> TableType { TableType::Base }
 

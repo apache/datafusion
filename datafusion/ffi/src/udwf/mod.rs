@@ -19,8 +19,6 @@ use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RResult, RString, RVec};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow_schema::{Field, FieldRef};
@@ -36,27 +34,30 @@ use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
 
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
+
 mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::util::{
-    FFIResult, rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
+    FFI_Option, FFI_Result, rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
     vec_datatype_to_rvec_wrapped, vec_fieldref_to_rvec_wrapped,
 };
 use crate::volatility::FFI_Volatility;
-use crate::{df_result, rresult, rresult_return};
+use crate::{df_result, sresult, sresult_return};
 
 /// A stable struct for sharing a [`WindowUDF`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_WindowUDF {
     /// FFI equivalent to the `name` of a [`WindowUDF`]
-    pub name: RString,
+    pub name: SString,
 
     /// FFI equivalent to the `aliases` of a [`WindowUDF`]
-    pub aliases: RVec<RString>,
+    pub aliases: SVec<SString>,
 
     /// FFI equivalent to the `volatility` of a [`WindowUDF`]
     pub volatility: FFI_Volatility,
@@ -65,13 +66,13 @@ pub struct FFI_WindowUDF {
         udwf: &Self,
         args: FFI_PartitionEvaluatorArgs,
     )
-        -> FFIResult<FFI_PartitionEvaluator>,
+        -> FFI_Result<FFI_PartitionEvaluator>,
 
     pub field: unsafe extern "C" fn(
         udwf: &Self,
-        input_types: RVec<WrappedSchema>,
-        display_name: RString,
-    ) -> FFIResult<WrappedSchema>,
+        input_types: SVec<WrappedSchema>,
+        display_name: SString,
+    ) -> FFI_Result<WrappedSchema>,
 
     /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
@@ -79,10 +80,10 @@ pub struct FFI_WindowUDF {
     /// appropriate calls on the underlying [`WindowUDF`]
     pub coerce_types: unsafe extern "C" fn(
         udf: &Self,
-        arg_types: RVec<WrappedSchema>,
-    ) -> FFIResult<RVec<WrappedSchema>>,
+        arg_types: SVec<WrappedSchema>,
+    ) -> FFI_Result<SVec<WrappedSchema>>,
 
-    pub sort_options: ROption<FFI_SortOptions>,
+    pub sort_options: FFI_Option<FFI_SortOptions>,
 
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
@@ -120,60 +121,60 @@ impl FFI_WindowUDF {
 unsafe extern "C" fn partition_evaluator_fn_wrapper(
     udwf: &FFI_WindowUDF,
     args: FFI_PartitionEvaluatorArgs,
-) -> FFIResult<FFI_PartitionEvaluator> {
+) -> FFI_Result<FFI_PartitionEvaluator> {
     unsafe {
         let inner = udwf.inner();
 
-        let args = rresult_return!(ForeignPartitionEvaluatorArgs::try_from(args));
+        let args = sresult_return!(ForeignPartitionEvaluatorArgs::try_from(args));
 
         let evaluator =
-            rresult_return!(inner.partition_evaluator_factory((&args).into()));
+            sresult_return!(inner.partition_evaluator_factory((&args).into()));
 
-        RResult::ROk(evaluator.into())
+        FFI_Result::Ok(evaluator.into())
     }
 }
 
 unsafe extern "C" fn field_fn_wrapper(
     udwf: &FFI_WindowUDF,
-    input_fields: RVec<WrappedSchema>,
-    display_name: RString,
-) -> FFIResult<WrappedSchema> {
+    input_fields: SVec<WrappedSchema>,
+    display_name: SString,
+) -> FFI_Result<WrappedSchema> {
     unsafe {
         let inner = udwf.inner();
 
-        let input_fields = rresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
+        let input_fields = sresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
 
-        let field = rresult_return!(inner.field(WindowUDFFieldArgs::new(
+        let field = sresult_return!(inner.field(WindowUDFFieldArgs::new(
             &input_fields,
             display_name.as_str()
         )));
 
         let schema = Arc::new(Schema::new(vec![field]));
 
-        RResult::ROk(WrappedSchema::from(schema))
+        FFI_Result::Ok(WrappedSchema::from(schema))
     }
 }
 
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udwf: &FFI_WindowUDF,
-    arg_types: RVec<WrappedSchema>,
-) -> FFIResult<RVec<WrappedSchema>> {
+    arg_types: SVec<WrappedSchema>,
+) -> FFI_Result<SVec<WrappedSchema>> {
     unsafe {
         let inner = udwf.inner();
 
-        let arg_fields = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types))
+        let arg_fields = sresult_return!(rvec_wrapped_to_vec_datatype(&arg_types))
             .into_iter()
             .map(|dt| Field::new("f", dt, false))
             .map(Arc::new)
             .collect::<Vec<_>>();
 
-        let return_fields = rresult_return!(fields_with_udf(&arg_fields, inner.as_ref()));
+        let return_fields = sresult_return!(fields_with_udf(&arg_fields, inner.as_ref()));
         let return_types = return_fields
             .into_iter()
             .map(|f| f.data_type().to_owned())
             .collect::<Vec<_>>();
 
-        rresult!(vec_datatype_to_rvec_wrapped(&return_types))
+        sresult!(vec_datatype_to_rvec_wrapped(&return_types))
     }
 }
 
@@ -358,7 +359,7 @@ impl WindowUDFImpl for ForeignWindowUDF {
     }
 
     fn sort_options(&self) -> Option<SortOptions> {
-        let options: Option<&FFI_SortOptions> = self.udf.sort_options.as_ref().into();
+        let options: Option<&FFI_SortOptions> = self.udf.sort_options.as_ref();
         options.map(|s| s.into())
     }
 
@@ -368,7 +369,7 @@ impl WindowUDFImpl for ForeignWindowUDF {
 }
 
 #[repr(C)]
-#[derive(Debug, StableAbi, Clone)]
+#[derive(Debug, Clone)]
 pub struct FFI_SortOptions {
     pub descending: bool,
     pub nulls_first: bool,

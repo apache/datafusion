@@ -21,7 +21,6 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{
     DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
     Decimal128Type, DecimalType, Field, IntervalUnit, TimeUnit,
@@ -595,6 +594,20 @@ impl Display for ArrayFunctionArgument {
         }
     }
 }
+
+static NUMERICS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+    DataType::Float16,
+    DataType::Float32,
+    DataType::Float64,
+];
 
 impl TypeSignature {
     pub fn to_string_repr(&self) -> Vec<String> {

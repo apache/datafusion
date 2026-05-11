@@ -20,11 +20,13 @@ mod kernels;
 use crate::PhysicalExpr;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use std::hash::Hash;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
-use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use arrow::compute::kernels::concat_elements::{
+    concat_element_binary, concat_elements_utf8,
+};
 use arrow::compute::{SlicesIterator, cast, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
@@ -46,7 +48,8 @@ use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
-    concat_elements_utf8view, regex_match_dyn, regex_match_dyn_scalar,
+    concat_elements_binary_view_array, concat_elements_utf8view, regex_match_dyn,
+    regex_match_dyn_scalar,
 };
 
 /// Binary expression
@@ -130,7 +133,7 @@ impl std::fmt::Display for BinaryExpr {
             expr: &dyn PhysicalExpr,
             precedence: u8,
         ) -> std::fmt::Result {
-            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(child) = expr.downcast_ref::<BinaryExpr>() {
                 let p = child.op.precedence();
                 if p == 0 || p < precedence {
                     write!(f, "({child})")?;
@@ -252,11 +255,6 @@ fn duration_to_days(array: &ArrayRef) -> Result<ArrayRef> {
 }
 
 impl PhysicalExpr for BinaryExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         BinaryTypeCoercer::new(
             &self.left.data_type(input_schema)?,
@@ -294,11 +292,11 @@ impl PhysicalExpr for BinaryExpr {
                     ColumnarValue::Array(array) => {
                         // When the array on the right is all true or all false, skip the scatter process
                         let boolean_array = array.as_boolean();
-                        let true_count = boolean_array.true_count();
-                        let length = boolean_array.len();
-                        if true_count == length {
+                        if boolean_array.null_count() == 0 && !boolean_array.has_false() {
                             return Ok(lhs);
-                        } else if true_count == 0 && boolean_array.null_count() == 0 {
+                        } else if boolean_array.null_count() == 0
+                            && !boolean_array.has_true()
+                        {
                             // If the right-hand array is returned at this point,the lengths will be inconsistent;
                             // returning a scalar can avoid this issue
                             return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
@@ -590,7 +588,7 @@ impl PhysicalExpr for BinaryExpr {
             expr: &dyn PhysicalExpr,
             precedence: u8,
         ) -> std::fmt::Result {
-            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(child) = expr.downcast_ref::<BinaryExpr>() {
                 let p = child.op.precedence();
                 if p == 0 || p < precedence {
                     write!(f, "(")?;
@@ -933,18 +931,6 @@ fn pre_selection_scatter(
 }
 
 fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
-    if *left.data_type() == DataType::Binary && *right.data_type() == DataType::Binary {
-        // Cast Binary to Utf8 to validate UTF-8 encoding before concatenation
-        // Follow widespread approach of PostgreSQL, sqlite, DuckDB, Snowflake
-        // Spark does it in a different way by making a binary-to-binary concatenation
-        let left = cast(left.as_ref(), &DataType::Utf8)?;
-        let right = cast(right.as_ref(), &DataType::Utf8)?;
-        return Ok(Arc::new(concat_elements_utf8(
-            left.as_string::<i32>(),
-            right.as_string::<i32>(),
-        )?));
-    }
-
     Ok(match left.data_type() {
         DataType::Utf8 => Arc::new(concat_elements_utf8(
             left.as_string::<i32>(),
@@ -957,6 +943,18 @@ fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
         DataType::Utf8View => Arc::new(concat_elements_utf8view(
             left.as_string_view(),
             right.as_string_view(),
+        )?),
+        DataType::Binary => Arc::new(concat_element_binary::<i32>(
+            left.as_binary(),
+            right.as_binary(),
+        )?),
+        DataType::LargeBinary => Arc::new(concat_element_binary::<i64>(
+            left.as_binary(),
+            right.as_binary(),
+        )?),
+        DataType::BinaryView => Arc::new(concat_elements_binary_view_array(
+            left.as_binary_view(),
+            right.as_binary_view(),
         )?),
         other => {
             return internal_err!(
@@ -4668,7 +4666,6 @@ mod tests {
         schema: &Schema,
     ) -> Result<BinaryExpr> {
         Ok(binary_op(left, op, right, schema)?
-            .as_any()
             .downcast_ref::<BinaryExpr>()
             .unwrap()
             .clone())

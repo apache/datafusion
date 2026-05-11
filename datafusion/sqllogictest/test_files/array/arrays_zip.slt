@@ -1,0 +1,569 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+## arrays_zip (aliases: `list_zip`)
+
+# Spark example: arrays_zip(array(1, 2, 3), array(2, 3, 4))
+query ?
+select arrays_zip([1, 2, 3], [2, 3, 4]);
+----
+[{1: 1, 2: 2}, {1: 2, 2: 3}, {1: 3, 2: 4}]
+
+# Spark example: arrays_zip(array(1, 2), array(2, 3), array(3, 4))
+query ?
+select arrays_zip([1, 2], [2, 3], [3, 4]);
+----
+[{1: 1, 2: 2, 3: 3}, {1: 2, 2: 3, 3: 4}]
+
+# basic: two integer arrays of equal length
+query ?
+select arrays_zip([1, 2, 3], [10, 20, 30]);
+----
+[{1: 1, 2: 10}, {1: 2, 2: 20}, {1: 3, 2: 30}]
+
+# basic: two arrays with different element types (int + string)
+query ?
+select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
+----
+[{1: 1, 2: a}, {1: 2, 2: b}, {1: 3, 2: c}]
+
+# three arrays of equal length
+query ?
+select arrays_zip([1, 2, 3], [10, 20, 30], [100, 200, 300]);
+----
+[{1: 1, 2: 10, 3: 100}, {1: 2, 2: 20, 3: 200}, {1: 3, 2: 30, 3: 300}]
+
+# four arrays of equal length
+query ?
+select arrays_zip([1], [2], [3], [4]);
+----
+[{1: 1, 2: 2, 3: 3, 4: 4}]
+
+# mixed element types: float + boolean
+query ?
+select arrays_zip([1.5, 2.5], [true, false]);
+----
+[{1: 1.5, 2: true}, {1: 2.5, 2: false}]
+
+# different length arrays: shorter array padded with NULLs
+query ?
+select arrays_zip([1, 2], [3, 4, 5]);
+----
+[{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]
+
+# different length arrays: first longer
+query ?
+select arrays_zip([1, 2, 3], [10]);
+----
+[{1: 1, 2: 10}, {1: 2, 2: NULL}, {1: 3, 2: NULL}]
+
+# different length: one single element, other three elements
+query ?
+select arrays_zip([1], ['a', 'b', 'c']);
+----
+[{1: 1, 2: a}, {1: NULL, 2: b}, {1: NULL, 2: c}]
+
+# empty arrays
+query ?
+select arrays_zip([], []);
+----
+[]
+
+# one empty, one non-empty
+query ?
+select arrays_zip([], [1, 2, 3]);
+----
+[{1: NULL, 2: 1}, {1: NULL, 2: 2}, {1: NULL, 2: 3}]
+
+# NULL elements inside arrays
+query ?
+select arrays_zip([1, NULL, 3], ['a', 'b', 'c']);
+----
+[{1: 1, 2: a}, {1: NULL, 2: b}, {1: 3, 2: c}]
+
+# all NULL elements
+query ?
+select arrays_zip([NULL::int, NULL, NULL], [NULL::text, NULL, NULL]);
+----
+[{1: NULL, 2: NULL}, {1: NULL, 2: NULL}, {1: NULL, 2: NULL}]
+
+# both args are NULL (entire list null)
+query ?
+select arrays_zip(NULL::int[], NULL::int[]);
+----
+NULL
+
+# one arg is NULL list, other is real array
+query ?
+select arrays_zip(NULL::int[], [1, 2, 3]);
+----
+[{1: NULL, 2: 1}, {1: NULL, 2: 2}, {1: NULL, 2: 3}]
+
+# real array + NULL list
+query ?
+select arrays_zip([1, 2], NULL::text[]);
+----
+[{1: 1, 2: NULL}, {1: 2, 2: NULL}]
+
+# column-level test with multiple rows
+query ?
+select arrays_zip(a, b) from (values ([1, 2], [10, 20]), ([3, 4, 5], [30]), ([6], [60, 70])) as t(a, b);
+----
+[{1: 1, 2: 10}, {1: 2, 2: 20}]
+[{1: 3, 2: 30}, {1: 4, 2: NULL}, {1: 5, 2: NULL}]
+[{1: 6, 2: 60}, {1: NULL, 2: 70}]
+
+# column-level test with NULL rows
+query ?
+select arrays_zip(a, b) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6], null)) as t(a, b);
+----
+[{1: 1, 2: 10}, {1: 2, 2: 20}]
+[{1: NULL, 2: 30}, {1: NULL, 2: 40}]
+[{1: 5, 2: NULL}, {1: 6, 2: NULL}]
+
+# column-level test with single argument
+query ?
+select arrays_zip(a) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6], null)) as t(a, b);
+----
+[{1: 1}, {1: 2}]
+NULL
+[{1: 5}, {1: 6}]
+
+query ?
+select arrays_zip(b) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6], null)) as t(a, b);
+----
+[{1: 10}, {1: 20}]
+[{1: 30}, {1: 40}]
+NULL
+
+# No input
+query error Error during planning: 'arrays_zip' does not support zero arguments
+select arrays_zip();
+
+# Non-array input
+query error DataFusion error: Execution error: arrays_zip expects array arguments, got Int64
+select arrays_zip(1, 2);
+
+# null input
+query ?
+select arrays_zip(null)
+----
+NULL
+
+# single empty array
+query ?
+select arrays_zip([])
+----
+[]
+
+
+# single array of null
+query ?
+select arrays_zip([null])
+----
+[{1: NULL}]
+
+query ?
+select arrays_zip([NULL::int])
+----
+[{1: NULL}]
+
+query ?
+select arrays_zip([NULL::int[]])
+----
+[{1: NULL}]
+
+# alias: list_zip
+query ?
+select list_zip([1, 2], [3, 4]);
+----
+[{1: 1, 2: 3}, {1: 2, 2: 4}]
+
+# column test: total values equal (3 each) but per-row lengths differ
+# a: [1]     b: [10, 20]   → row 0: a has 1, b has 2
+# a: [2, 3]  b: [30]       → row 1: a has 2, b has 1
+# total a values = 3, total b values = 3 (same!) but rows are misaligned
+query ?
+select arrays_zip(a, b) from (values ([1], [10, 20]), ([2, 3], [30])) as t(a, b);
+----
+[{1: 1, 2: 10}, {1: NULL, 2: 20}]
+[{1: 2, 2: 30}, {1: 3, 2: NULL}]
+
+# single element arrays
+query ?
+select arrays_zip([42], ['hello']);
+----
+[{1: 42, 2: hello}]
+
+# single argument
+query ?
+select arrays_zip([1, 2, 3]);
+----
+[{1: 1}, {1: 2}, {1: 3}]
+
+# arrays_zip with LargeList inputs
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{1: 1, 2: 10}, {1: 2, 2: 20}, {1: 3, 2: 30}]
+
+# arrays_zip with LargeList different lengths (padding)
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2), 'LargeList(Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{1: 1, 2: 10}, {1: 2, 2: 20}, {1: NULL, 2: 30}]
+
+# single argument from LargeList
+query ?
+select arrays_zip(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'));
+----
+[{1: 1}, {1: 2}, {1: 3}]
+
+# arrays_zip with FixedSizeList inputs
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'FixedSizeList(3, Int64)')
+);
+----
+[{1: 1, 2: 10}, {1: 2, 2: 20}, {1: 3, 2: 30}]
+
+# single argument from FixedSizeList
+query ?
+select arrays_zip(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'));
+----
+[{1: 1}, {1: 2}, {1: 3}]
+
+# arrays_zip mixing List and LargeList
+query ?
+select arrays_zip(
+    [1, 2, 3],
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{1: 1, 2: 10}, {1: 2, 2: 20}, {1: 3, 2: 30}]
+
+# arrays_zip mixing List and FixedSizeList with different lengths (padding)
+query ?
+select arrays_zip(
+    [1, 2, 3],
+    arrow_cast(make_array(10, 20), 'FixedSizeList(2, Int64)')
+);
+----
+[{1: 1, 2: 10}, {1: 2, 2: 20}, {1: 3, 2: NULL}]
+
+# arrays_zip with LargeList and FixedSizeList mixed types
+query ?
+select arrays_zip(
+    arrow_cast(make_array(1, 2), 'LargeList(Int64)'),
+    arrow_cast(make_array('a', 'b'), 'FixedSizeList(2, Utf8)')
+);
+----
+[{1: 1, 2: a}, {1: 2, 2: b}]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D;
+----
+[1] [1, 3] [1, 3]
+[11] [11, 33] [11, 33]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from large_array_intersect_table_1D;
+----
+[1] [1, 3] [1, 3]
+[11] [11, 33] [11, 33]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D_Float;
+----
+[1.0] [1.0, 3.0] []
+[] [2.0] [1.11]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D_Boolean;
+----
+[] [true, false] [false]
+[false] [true] [true]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from large_array_intersect_table_1D_Boolean;
+----
+[] [true, false] [false]
+[false] [true] [true]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D_UTF8;
+----
+[bc] [rust, arrow] []
+[] [datafusion, rust, arrow] [rust, arrow]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from large_array_intersect_table_1D_UTF8;
+----
+[bc] [rust, arrow] []
+[] [datafusion, rust, arrow] [rust, arrow]
+
+query ?
+select array_intersect(column1, column2)
+from array_intersect_table_1D_NULL;
+----
+[2, 3]
+[3]
+[3]
+NULL
+NULL
+NULL
+
+query ??
+select array_intersect(column1, column2),
+       array_intersect(column3, column4)
+from array_intersect_table_2D;
+----
+[] [[4, 5], [6, 7]]
+[[3, 4]] [[5, 6, 7], [8, 9, 10]]
+
+query ??
+select array_intersect(column1, column2),
+       array_intersect(column3, column4)
+from large_array_intersect_table_2D;
+----
+[] [[4, 5], [6, 7]]
+[[3, 4]] [[5, 6, 7], [8, 9, 10]]
+
+
+query ?
+select array_intersect(column1, column2)
+from array_intersect_table_2D_float;
+----
+[[1.1, 2.2], [3.3]]
+[[1.1, 2.2], [3.3]]
+
+query ?
+select array_intersect(column1, column2)
+from large_array_intersect_table_2D_float;
+----
+[[1.1, 2.2], [3.3]]
+[[1.1, 2.2], [3.3]]
+
+query ?
+select array_intersect(column1, column2)
+from array_intersect_table_3D;
+----
+[]
+[[[1, 2]]]
+
+query ?
+select array_intersect(column1, column2)
+from large_array_intersect_table_3D;
+----
+[]
+[[[1, 2]]]
+
+query ??????
+SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
+        array_intersect(make_array(1,3,5), make_array(2,4,6)),
+        array_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')),
+        array_intersect(make_array(true, false), make_array(true)),
+        array_intersect(make_array(1.1, 2.2, 3.3), make_array(2.2, 3.3, 4.4)),
+        array_intersect(make_array([1, 1], [2, 2], [3, 3]), make_array([2, 2], [3, 3], [4, 4]))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
+query ??????
+SELECT  array_intersect(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_cast(make_array(2,3,4), 'LargeList(Int64)')),
+        array_intersect(arrow_cast(make_array(1,3,5), 'LargeList(Int64)'), arrow_cast(make_array(2,4,6), 'LargeList(Int64)')),
+        array_intersect(arrow_cast(make_array('aa','bb','cc'), 'LargeList(Utf8)'), arrow_cast(make_array('cc','aa','dd'), 'LargeList(Utf8)')),
+        array_intersect(arrow_cast(make_array(true, false), 'LargeList(Boolean)'), arrow_cast(make_array(true), 'LargeList(Boolean)')),
+        array_intersect(arrow_cast(make_array(1.1, 2.2, 3.3), 'LargeList(Float64)'), arrow_cast(make_array(2.2, 3.3, 4.4), 'LargeList(Float64)')),
+        array_intersect(arrow_cast(make_array([1, 1], [2, 2], [3, 3]), 'LargeList(List(Int64))'), arrow_cast(make_array([2, 2], [3, 3], [4, 4]), 'LargeList(List(Int64))'))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
+query ??????
+SELECT  array_intersect(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(2,3,4), 'FixedSizeList(3, Int64)')),
+        array_intersect(arrow_cast(make_array(1,3,5), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(2,4,6), 'FixedSizeList(3, Int64)')),
+        array_intersect(arrow_cast(make_array('aa','bb','cc'), 'FixedSizeList(3, Utf8)'), arrow_cast(make_array('cc','aa','dd'), 'FixedSizeList(3, Utf8)')),
+        array_intersect(arrow_cast(make_array(true, false), 'FixedSizeList(2, Boolean)'), arrow_cast(make_array(true), 'FixedSizeList(1, Boolean)')),
+        array_intersect(arrow_cast(make_array(1.1, 2.2, 3.3), 'FixedSizeList(3, Float64)'), arrow_cast(make_array(2.2, 3.3, 4.4), 'FixedSizeList(3, Float64)')),
+        array_intersect(arrow_cast(make_array([1, 1], [2, 2], [3, 3]), 'FixedSizeList(3, List(Int64))'), arrow_cast(make_array([2, 2], [3, 3], [4, 4]), 'FixedSizeList(3, List(Int64))'))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
+query ?
+select array_intersect([], []);
+----
+[]
+
+query ?
+select array_intersect(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'LargeList(Int64)'));
+----
+[]
+
+query ?
+select array_intersect([1, 1, 2, 2, 3, 3], null);
+----
+NULL
+
+query ?
+select array_intersect(arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'), null);
+----
+NULL
+
+query ?
+select array_intersect(null, [1, 1, 2, 2, 3, 3]);
+----
+NULL
+
+query ?
+select array_intersect(null, arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'));
+----
+NULL
+
+query ?
+select array_intersect([], null);
+----
+NULL
+
+query ?
+select array_intersect([[1,2,3]], [[]]);
+----
+[]
+
+query ?
+select array_intersect([[null]], [[]]);
+----
+[]
+
+query ?
+select array_intersect(arrow_cast([], 'LargeList(Int64)'), null);
+----
+NULL
+
+query ?
+select array_intersect(null, []);
+----
+NULL
+
+query ?
+select array_intersect(null, arrow_cast([], 'LargeList(Int64)'));
+----
+NULL
+
+query ?
+select array_intersect(null, null);
+----
+NULL
+
+query ??????
+SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
+        list_intersect(make_array(1,3,5), make_array(2,4,6)),
+        list_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')),
+        list_intersect(make_array(true, false), make_array(true)),
+        list_intersect(make_array(1.1, 2.2, 3.3), make_array(2.2, 3.3, 4.4)),
+        list_intersect(make_array([1, 1], [2, 2], [3, 3]), make_array([2, 2], [3, 3], [4, 4]))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
+query ??????
+SELECT  list_intersect(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_cast(make_array(2,3,4), 'LargeList(Int64)')),
+        list_intersect(arrow_cast(make_array(1,3,5), 'LargeList(Int64)'), arrow_cast(make_array(2,4,6), 'LargeList(Int64)')),
+        list_intersect(arrow_cast(make_array('aa','bb','cc'), 'LargeList(Utf8)'), arrow_cast(make_array('cc','aa','dd'), 'LargeList(Utf8)')),
+        list_intersect(arrow_cast(make_array(true, false), 'LargeList(Boolean)'), arrow_cast(make_array(true), 'LargeList(Boolean)')),
+        list_intersect(arrow_cast(make_array(1.1, 2.2, 3.3), 'LargeList(Float64)'), arrow_cast(make_array(2.2, 3.3, 4.4), 'LargeList(Float64)')),
+        list_intersect(arrow_cast(make_array([1, 1], [2, 2], [3, 3]), 'LargeList(List(Int64))'), arrow_cast(make_array([2, 2], [3, 3], [4, 4]), 'LargeList(List(Int64))'))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
+query BBBB
+select list_has_all(make_array(1,2,3), make_array(4,5,6)),
+       list_has_all(make_array(1,2,3), make_array(1,2)),
+       list_has_any(make_array(1,2,3), make_array(4,5,6)),
+        list_has_any(make_array(1,2,3), make_array(1,2,4))
+;
+----
+false true false true
+
+query BBBB
+select arrays_overlap(make_array(1,2,3), make_array(4,5,6)),
+        arrays_overlap(make_array(1,2,3), make_array(1,2,4)),
+        arrays_overlap(make_array(['aa']), make_array(['aa'],['bb'])),
+        arrays_overlap(make_array('aa',NULL), make_array('bb',NULL))
+;
+----
+false true true true
+
+query ???
+select range(column2),
+       range(column1, column2),
+       range(column1, column2, column3)
+from arrays_range;
+----
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9] [3, 4, 5, 6, 7, 8, 9] [3, 5, 7, 9]
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 7, 10]
+
+query ???????????
+select range(5),
+       range(2, 5),
+       range(2, 10, 3),
+       range(10, 2, -3),
+       range(1, 5, -1),
+       range(1, -5, 1),
+       range(1, -5, -1),
+       range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH),
+       range(DATE '1993-02-01', DATE '1993-01-01', INTERVAL '-1' DAY),
+       range(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '1' YEAR),
+       range(DATE '1993-03-01', DATE '1989-04-01', INTERVAL '1' YEAR)
+;
+----
+[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [10, 7, 4] [] [] [1, 0, -1, -2, -3, -4] [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] [1993-02-01, 1993-01-31, 1993-01-30, 1993-01-29, 1993-01-28, 1993-01-27, 1993-01-26, 1993-01-25, 1993-01-24, 1993-01-23, 1993-01-22, 1993-01-21, 1993-01-20, 1993-01-19, 1993-01-18, 1993-01-17, 1993-01-16, 1993-01-15, 1993-01-14, 1993-01-13, 1993-01-12, 1993-01-11, 1993-01-10, 1993-01-09, 1993-01-08, 1993-01-07, 1993-01-06, 1993-01-05, 1993-01-04, 1993-01-03, 1993-01-02] [1989-04-01, 1990-04-01, 1991-04-01] []
+
+
+include ./cleanup.slt.part

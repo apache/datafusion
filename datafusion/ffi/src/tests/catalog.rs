@@ -25,7 +25,6 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -89,10 +88,6 @@ impl Default for FixedSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for FixedSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.inner.table_names()
     }
@@ -142,10 +137,6 @@ impl Default for FixedCatalogProvider {
 }
 
 impl CatalogProvider for FixedCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.inner.schema_names()
     }
@@ -205,10 +196,6 @@ impl Default for FixedCatalogProviderList {
 }
 
 impl CatalogProviderList for FixedCatalogProviderList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn catalog_names(&self) -> Vec<String> {
         self.inner.catalog_names()
     }

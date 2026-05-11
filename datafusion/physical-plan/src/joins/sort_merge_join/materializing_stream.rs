@@ -235,6 +235,18 @@ pub(super) struct BufferedBatch {
     pub null_joined: Vec<usize>,
     /// Size estimation used for reserving / releasing memory
     pub size_estimation: usize,
+    /// Memory footprint of `join_arrays` cached at construction time.
+    /// Used during spill to track the residual memory that remains after
+    /// the main batch is written to disk.
+    pub join_arrays_mem: usize,
+    /// Actual amount tracked in the memory reservation for this batch.
+    ///
+    /// - `InMemory`: equals `size_estimation` (full batch + join_arrays + metadata)
+    /// - `Spilled`: equals `join_arrays_mem` (join key arrays stay in memory)
+    ///
+    /// Invariant: `free_reservation()` shrinks by exactly this amount, so we never
+    /// shrink by more than we grew.
+    pub reserved_amount: usize,
     /// Tracks filter outcomes for buffered rows in full outer joins.
     /// Indexed by absolute row position within the batch. See [`FilterState`].
     pub join_filter_status: Vec<FilterState>,
@@ -258,11 +270,13 @@ impl BufferedBatch {
         // + worst case null_joined (as vector capacity * element size)
         // + Range size
         // + size of this estimation
+        let join_arrays_mem: usize = join_arrays
+            .iter()
+            .map(|arr| arr.get_array_memory_size())
+            .sum();
+
         let size_estimation = batch.get_array_memory_size()
-            + join_arrays
-                .iter()
-                .map(|arr| arr.get_array_memory_size())
-                .sum::<usize>()
+            + join_arrays_mem
             + batch.num_rows().next_power_of_two() * size_of::<usize>()
             + size_of::<Range<usize>>()
             + size_of::<usize>();
@@ -274,6 +288,8 @@ impl BufferedBatch {
             join_arrays,
             null_joined: vec![],
             size_estimation,
+            join_arrays_mem,
+            reserved_amount: 0,
             join_filter_status: vec![FilterState::Unvisited; num_rows],
             num_rows,
         }
@@ -947,18 +963,16 @@ impl MaterializingSortMergeJoinStream {
         }
     }
 
-    fn free_reservation(&mut self, buffered_batch: &BufferedBatch) -> Result<()> {
-        // Shrink memory usage for in-memory batches only
-        if let BufferedBatchState::InMemory(_) = buffered_batch.batch {
-            self.reservation
-                .try_shrink(buffered_batch.size_estimation)?;
+    fn free_reservation(&mut self, buffered_batch: &BufferedBatch) {
+        if buffered_batch.reserved_amount > 0 {
+            self.reservation.shrink(buffered_batch.reserved_amount);
         }
-        Ok(())
     }
 
     fn allocate_reservation(&mut self, mut buffered_batch: BufferedBatch) -> Result<()> {
         match self.reservation.try_grow(buffered_batch.size_estimation) {
             Ok(_) => {
+                buffered_batch.reserved_amount = buffered_batch.size_estimation;
                 self.join_metrics
                     .peak_mem_used()
                     .set_max(self.reservation.size());
@@ -978,6 +992,22 @@ impl MaterializingSortMergeJoinStream {
                             .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
 
                         buffered_batch.batch = BufferedBatchState::Spilled(spill_file);
+
+                        // Join key arrays remain in memory after the batch is
+                        // spilled — the comparator needs them for key boundary
+                        // detection. Force-grow the reservation so the pool
+                        // reflects actual memory usage even if this pushes
+                        // pool.reserved() above the configured limit. This is
+                        // safe because the memory is physically consumed and
+                        // not tracking it would let other operators over-allocate
+                        // against a stale pool view.
+                        let join_arrays_mem = buffered_batch.join_arrays_mem;
+                        self.reservation.grow(join_arrays_mem);
+                        buffered_batch.reserved_amount = join_arrays_mem;
+                        self.join_metrics
+                            .peak_mem_used()
+                            .set_max(self.reservation.size());
+
                         Ok(())
                     }
                     _ => internal_err!("Buffered batch has empty body"),
@@ -1006,7 +1036,7 @@ impl MaterializingSortMergeJoinStream {
                                 self.buffered_data.batches.pop_front()
                             {
                                 self.produce_buffered_not_matched(&mut buffered_batch)?;
-                                self.free_reservation(&buffered_batch)?;
+                                self.free_reservation(&buffered_batch);
                                 head_changed = true;
                             }
                         } else {
@@ -1423,27 +1453,22 @@ impl MaterializingSortMergeJoinStream {
                     .evaluate(&filter_batch)?
                     .into_array(filter_batch.num_rows())?;
 
-                let pre_mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+                let filter_result_mask =
+                    datafusion_common::cast::as_boolean_array(&filter_result)?;
 
-                let mask = if pre_mask.null_count() > 0 {
-                    compute::prep_null_mask_filter(pre_mask)
+                // Convert NULL filter results to false — NULL means "not satisfied"
+                // per SQL semantics, same as Left/Right outer joins.
+                let mask = if filter_result_mask.null_count() > 0 {
+                    compute::prep_null_mask_filter(filter_result_mask)
                 } else {
-                    pre_mask.clone()
+                    filter_result_mask.clone()
                 };
 
                 if needs_deferred_filtering(&self.filter, self.join_type) {
-                    // Full join uses pre_mask (preserving nulls) for
-                    // get_corrected_filter_mask; other outer joins use mask.
-                    let mask_to_use = if self.join_type != JoinType::Full {
-                        &mask
-                    } else {
-                        pre_mask
-                    };
-
                     self.joined_record_batches.push_batch_with_filter_metadata(
                         output_batch,
                         &combined_left_indices,
-                        mask_to_use,
+                        &mask,
                         self.streamed_batch_counter.load(Relaxed),
                         self.join_type,
                     );
@@ -1468,7 +1493,7 @@ impl MaterializingSortMergeJoinStream {
                             let idx = right.value(i) as usize;
                             match buffered_batch.join_filter_status[idx] {
                                 FilterState::SomePassed => {}
-                                _ if pre_mask.value(offset + i) => {
+                                _ if mask.value(offset + i) => {
                                     buffered_batch.join_filter_status[idx] =
                                         FilterState::SomePassed;
                                 }

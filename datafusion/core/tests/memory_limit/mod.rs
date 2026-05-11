@@ -17,7 +17,6 @@
 
 //! This module contains tests for limiting memory at runtime in DataFusion
 
-use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
@@ -64,7 +63,7 @@ use futures::StreamExt;
 use tokio::fs::File;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();
@@ -1145,10 +1144,6 @@ impl SortedTableProvider {
 
 #[async_trait]
 impl TableProvider for SortedTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

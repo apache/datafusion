@@ -159,7 +159,7 @@ next section)
 ## More Debugging Information: `EXPLAIN VERBOSE`
 
 If the plan has to read too many files, not all of them will be shown in the
-`EXPLAIN`. To see them, use `EXPLAIN VEBOSE`. Like `EXPLAIN`, `EXPLAIN VERBOSE`
+`EXPLAIN`. To see them, use `EXPLAIN VERBOSE`. Like `EXPLAIN`, `EXPLAIN VERBOSE`
 does not run the query. Instead it shows the full explain plan, with information
 that is omitted from the default explain, as well as all intermediate physical
 plans DataFusion generates before returning. This mode can be very helpful for

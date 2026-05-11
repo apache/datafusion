@@ -95,7 +95,7 @@ const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
 ///
 /// See the [table on `AggregateMode`](AggregateMode#variants-and-their-inputoutput-modes)
 /// for how this relates to aggregate modes.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum AggregateInputMode {
     /// The stage consumes raw, unaggregated input data and calls
     /// [`Accumulator::update_batch`].
@@ -110,7 +110,7 @@ pub enum AggregateInputMode {
 ///
 /// See the [table on `AggregateMode`](AggregateMode#variants-and-their-inputoutput-modes)
 /// for how this relates to aggregate modes.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum AggregateOutputMode {
     /// The stage produces intermediate accumulator state, serialized via
     /// [`Accumulator::state`].
@@ -138,7 +138,7 @@ pub enum AggregateOutputMode {
 ///
 /// Use [`AggregateMode::input_mode`] and [`AggregateMode::output_mode`]
 /// to query these properties.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum AggregateMode {
     /// One of multiple layers of aggregation, any input partitioning
     ///
@@ -1006,7 +1006,7 @@ impl AggregateExec {
                 .iter()
                 .flat_map(|(_, target_cols)| {
                     target_cols.iter().flat_map(|(expr, _)| {
-                        expr.as_any().downcast_ref::<Column>().map(|c| c.index())
+                        expr.downcast_ref::<Column>().map(|c| c.index())
                     })
                 })
                 .collect(),
@@ -1098,7 +1098,7 @@ impl AggregateExec {
             let mut column_statistics = Statistics::unknown_column(&self.schema());
 
             for (idx, (expr, _)) in self.group_by.expr.iter().enumerate() {
-                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(col) = expr.downcast_ref::<Column>() {
                     let child_col_stats =
                         &child_statistics.column_statistics[col.index()];
                     column_statistics[idx].max_value = child_col_stats.max_value.clone();
@@ -1210,7 +1210,7 @@ impl AggregateExec {
                 if group_mask[j] {
                     continue;
                 }
-                let col = expr.as_any().downcast_ref::<Column>()?;
+                let col = expr.downcast_ref::<Column>()?;
                 let col_stats = &child_statistics.column_statistics[col.index()];
                 let ndv = *col_stats.distinct_count.get_value()?;
                 let null_adjustment = match col_stats.null_count.get_value() {
@@ -1265,7 +1265,7 @@ impl AggregateExec {
 
             // 2. arg should be only 1 column reference
             if let [arg] = aggr_expr.expressions().as_slice()
-                && arg.as_any().is::<Column>()
+                && arg.is::<Column>()
             {
                 all_cols.push(Arc::clone(arg));
                 aggr_dyn_filters.push(PerAccumulatorDynFilter {
