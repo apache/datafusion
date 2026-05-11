@@ -3173,3 +3173,60 @@ async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
     );
     Ok(())
 }
+
+// Regression test for https://github.com/apache/datafusion/issues/22065
+#[tokio::test]
+async fn roundtrip_join_null_aware() -> Result<()> {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_expr::JoinType;
+
+    let ctx = SessionContext::new();
+    let sql = "
+        SELECT id
+        FROM (VALUES (1), (2), (3)) AS t1(id)
+        WHERE id NOT IN (
+            SELECT bad_id
+            FROM (VALUES (CAST(1 AS INT)), (CAST(NULL AS INT))) AS excludes(bad_id)
+        )
+    ";
+
+    let df = ctx.sql(sql).await?;
+    let plan = ctx.state().optimize(df.logical_plan())?;
+
+    let mut found_null_aware = false;
+    plan.apply(|n| {
+        if let LogicalPlan::Join(j) = n
+            && j.join_type == JoinType::LeftAnti
+            && j.null_aware
+        {
+            found_null_aware = true;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert!(found_null_aware);
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    let direct: usize = ctx
+        .execute_logical_plan(plan)
+        .await?
+        .collect()
+        .await?
+        .iter()
+        .map(|b| b.num_rows())
+        .sum();
+    let rt: usize = ctx
+        .execute_logical_plan(logical_round_trip)
+        .await?
+        .collect()
+        .await?
+        .iter()
+        .map(|b| b.num_rows())
+        .sum();
+    assert_eq!(direct, 0);
+    assert_eq!(rt, direct);
+
+    Ok(())
+}

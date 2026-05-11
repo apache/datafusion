@@ -903,7 +903,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     }
                 };
 
-                builder.build()
+                // The builder paths above hardcode `null_aware = false`, so
+                // restore it from the proto here. Otherwise a null-aware
+                // LeftAnti join (NOT IN semantics) silently degrades to a
+                // plain LeftAnti after a round trip.
+                match builder.build()? {
+                    LogicalPlan::Join(j) => Ok(LogicalPlan::Join(Join {
+                        null_aware: join.null_aware,
+                        ..j
+                    })),
+                    other => Ok(other),
+                }
             }
             LogicalPlanType::Union(union) => {
                 assert_or_internal_err!(
@@ -1492,6 +1502,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 join_type,
                 join_constraint,
                 null_equality,
+                null_aware,
                 ..
             }) => {
                 let left: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
@@ -1533,6 +1544,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             right_join_key,
                             null_equality: null_equality.into(),
                             filter,
+                            null_aware: *null_aware,
                         },
                     ))),
                 })
