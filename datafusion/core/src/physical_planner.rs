@@ -3291,38 +3291,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_create_aggregate_expr_unwraps_alias_with_metadata() -> Result<()> {
-        use std::collections::HashMap;
-
-        use datafusion_common::metadata::FieldMetadata;
-
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "column1",
-            DataType::Int64,
-            true,
-        )]));
-        let logical_schema = schema.as_ref().clone().to_dfschema_ref()?;
-        let metadata = FieldMetadata::from(HashMap::from([(
-            "some_key".to_string(),
-            "some_value".to_string(),
-        )]));
-        let expr = sum(col("column1")).alias_with_metadata("agg", Some(metadata));
-
-        #[expect(deprecated)]
-        let (aggregate_expr, _, _) = create_aggregate_expr_and_maybe_filter(
-            &expr,
-            &logical_schema,
-            schema.as_ref(),
-            &ExecutionProps::new(),
-        )?;
-
-        assert_eq!(aggregate_expr.name(), "agg");
-        assert!(aggregate_expr.field().metadata().get("some_key").is_none());
-
-        Ok(())
-    }
-
     #[derive(Debug, Default)]
     struct NullAccumulator;
 

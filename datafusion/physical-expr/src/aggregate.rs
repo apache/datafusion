@@ -394,17 +394,26 @@ struct LoweredAggregateHumanDisplay {
     alias: Option<String>,
 }
 
-/// Result of lowering a logical aggregate expression to physical aggregate
-/// pieces.
+/// Result of lowering a logical aggregate expression into physical aggregate
+/// planning pieces.
 #[derive(Debug, Clone)]
 pub struct LoweredAggregate {
+    /// Physical aggregate expression that can be used by an aggregate execution
+    /// plan.
     pub aggregate: Arc<AggregateFunctionExpr>,
+    /// Optional physical filter expression for `FILTER (WHERE ...)`.
     pub filter: Option<Arc<dyn PhysicalExpr>>,
+    /// Physical ordering expressions from aggregate `ORDER BY`.
     pub order_bys: Vec<PhysicalSortExpr>,
 }
 
-/// Builder for lowering a logical aggregate [`Expr`] to physical aggregate
-/// pieces.
+/// Builder for converting a logical aggregate [`Expr`] into physical aggregate
+/// planning pieces.
+///
+/// This builder handles the logical-to-physical work needed for aggregate
+/// planning: unwrapping aggregate aliases, choosing the output name, preserving
+/// user-facing display text, lowering aggregate arguments, lowering the optional
+/// filter, and lowering aggregate `ORDER BY` expressions.
 pub struct LoweredAggregateBuilder<'a> {
     expr: &'a Expr,
     name: Option<String>,
@@ -417,6 +426,11 @@ pub struct LoweredAggregateBuilder<'a> {
 }
 
 impl<'a> LoweredAggregateBuilder<'a> {
+    /// Create a builder for lowering `expr`.
+    ///
+    /// `logical_input_schema` is used to resolve logical expressions such as
+    /// columns, while `physical_input_schema` is the input schema used by the
+    /// physical aggregate expression.
     pub fn new(
         expr: &'a Expr,
         logical_input_schema: &'a DFSchema,
@@ -435,12 +449,21 @@ impl<'a> LoweredAggregateBuilder<'a> {
         }
     }
 
+    /// Override the output column name for the aggregate.
+    ///
+    /// If this is not set, the builder uses the alias from `expr` when present,
+    /// or derives the physical name from the aggregate expression.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
-    #[doc(hidden)]
+    /// Override the human-readable display text for the aggregate.
+    ///
+    /// This is useful when a caller has already computed the exact display text
+    /// it wants to preserve. When this override is used, aliases with metadata
+    /// are still unwrapped for planning, but alias metadata is not copied to the
+    /// aggregate output field.
     pub fn with_human_display(mut self, human_display: impl Into<String>) -> Self {
         self.human_display = Some(LoweredAggregateHumanDisplay {
             expression: human_display.into(),
@@ -450,6 +473,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
         self
     }
 
+    /// Lower the logical aggregate expression into physical aggregate pieces.
     pub fn build(self) -> Result<LoweredAggregate> {
         let Self {
             expr,
@@ -1134,6 +1158,39 @@ mod tests {
         assert_eq!(
             lowered.aggregate.field().metadata().get("some_key"),
             Some(&"some_value".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn lowered_aggregate_builder_display_override_skips_alias_metadata() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("column1", DataType::Int64, true)]);
+        let logical_schema = DFSchema::try_from(schema.clone())?;
+        let metadata = FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]));
+        let expr = sum(col("column1")).alias_with_metadata("agg", Some(metadata));
+
+        let lowered = LoweredAggregateBuilder::new(
+            &expr,
+            &logical_schema,
+            &schema,
+            &ExecutionProps::new(),
+        )
+        .with_human_display(expr.human_display().to_string())
+        .build()?;
+
+        assert_eq!(lowered.aggregate.name(), "agg");
+        assert_eq!(lowered.aggregate.human_display_alias(), None);
+        assert!(
+            lowered
+                .aggregate
+                .field()
+                .metadata()
+                .get("some_key")
+                .is_none()
         );
 
         Ok(())
