@@ -289,21 +289,3 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
-
-
-## Temporary arrow-rs patch until 58.3.0 is released
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-avro = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", tag = "58.3.0-rc1" }
