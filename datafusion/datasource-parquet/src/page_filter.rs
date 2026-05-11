@@ -200,11 +200,12 @@ impl PagePruningAccessPlanFilter {
             // The selection for this particular row group
             let mut overall_selection = None;
 
-            let total_pages_in_group = parquet_metadata.offset_index().map_or(0, |offset_index| {
-                offset_index[row_group_index]
-                    .first()
-                    .map_or(0, |column| column.page_locations.len())
-            });
+            let total_pages_in_group =
+                parquet_metadata.offset_index().map_or(0, |offset_index| {
+                    offset_index[row_group_index]
+                        .first()
+                        .map_or(0, |column| column.page_locations.len())
+                });
             // stores the indexes of the matched pages
             let mut matched_pages_in_group: HashSet<usize> =
                 HashSet::from_iter(0..total_pages_in_group);
