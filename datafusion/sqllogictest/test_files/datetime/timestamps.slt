@@ -2751,6 +2751,24 @@ logical_plan
 01)Filter: ts_data_nanos.ts >= TimestampNanosecond(1704067200000000000, None) AND ts_data_nanos.ts < TimestampNanosecond(1735689600000000000, None)
 02)--TableScan: ts_data_nanos projection=[ts, value]
 
+# Quarter: 2024-Q2 → [2024-04-01, 2024-07-01)
+query TT
+EXPLAIN SELECT * FROM ts_data_nanos
+WHERE date_trunc('quarter', ts) = arrow_cast('2024-04-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: ts_data_nanos.ts >= TimestampNanosecond(1711929600000000000, None) AND ts_data_nanos.ts < TimestampNanosecond(1719792000000000000, None)
+02)--TableScan: ts_data_nanos projection=[ts, value]
+
+# Week: date_trunc floors to Monday; aligned Monday literal → [Mon, next Mon)
+query TT
+EXPLAIN SELECT * FROM ts_data_nanos
+WHERE date_trunc('week', ts) = arrow_cast('2024-04-29T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+logical_plan
+01)Filter: ts_data_nanos.ts >= TimestampNanosecond(1714348800000000000, None) AND ts_data_nanos.ts < TimestampNanosecond(1714953600000000000, None)
+02)--TableScan: ts_data_nanos projection=[ts, value]
+
 # Greater-than: only the upper bound survives
 query TT
 EXPLAIN SELECT * FROM ts_data_nanos
@@ -2881,6 +2899,40 @@ logical_plan
 
 statement ok
 drop table t;
+
+# Granularity finer than the unit's resolution: truncating a Timestamp(Second)
+# to microseconds is a no-op, so the preimage is a singleton bucket of one
+# underlying second tick.
+statement ok
+create table ts_sec as select arrow_cast(1700000000, 'Timestamp(Second, None)') as ts;
+
+query TT
+EXPLAIN SELECT * FROM ts_sec
+WHERE date_trunc('microsecond', ts) = arrow_cast(1700000000, 'Timestamp(Second, None)');
+----
+logical_plan
+01)Filter: ts_sec.ts >= TimestampSecond(1700000000, None) AND ts_sec.ts < TimestampSecond(1700000001, None)
+02)--TableScan: ts_sec projection=[ts]
+
+statement ok
+drop table ts_sec;
+
+# Fine granularity with a named-offset timezone: bucket width is constant
+# regardless of tz, so the rewrite fires with the column's tz preserved on
+# the bounds.
+statement ok
+create table ts_tz02 as select arrow_cast('2024-10-27T02:00:00+02:00', 'Timestamp(Nanosecond, Some("+02"))') as ts;
+
+query TT
+EXPLAIN SELECT * FROM ts_tz02
+WHERE date_trunc('minute', ts) = arrow_cast('2024-10-27T02:00:00+02:00', 'Timestamp(Nanosecond, Some("+02"))');
+----
+logical_plan
+01)Filter: ts_tz02.ts >= TimestampNanosecond(1729987200000000000, Some("+02")) AND ts_tz02.ts < TimestampNanosecond(1729987260000000000, Some("+02"))
+02)--TableScan: ts_tz02 projection=[ts]
+
+statement ok
+drop table ts_tz02;
 
 statement ok
 RESET datafusion.explain.logical_plan_only;

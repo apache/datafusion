@@ -1196,36 +1196,6 @@ mod tests {
         SimplifyContext::builder().with_schema(schema).build()
     }
 
-    fn assert_preimage_range(
-        granularity: &str,
-        literal: ScalarValue,
-        expected_lower: ScalarValue,
-        expected_upper: ScalarValue,
-    ) {
-        let date_trunc = DateTruncFunc::new();
-        let args = vec![
-            Expr::Literal(ScalarValue::Utf8(Some(granularity.to_string())), None),
-            col("x"),
-        ];
-        let lit_expr = Expr::Literal(literal.clone(), None);
-        // The bounds should match the column's type, so derive `x`'s type from
-        // the literal — they're expected to agree by the time preimage runs.
-        let info = ctx_with_x(literal.data_type());
-
-        let result = date_trunc.preimage(&args, &lit_expr, &info).unwrap();
-
-        match result {
-            PreimageResult::Range { expr, interval } => {
-                assert_eq!(expr, col("x"));
-                assert_eq!(interval.lower().clone(), expected_lower);
-                assert_eq!(interval.upper().clone(), expected_upper);
-            }
-            PreimageResult::None => {
-                panic!("expected range preimage for literal {literal:?}")
-            }
-        }
-    }
-
     fn assert_preimage_none(granularity: &str, literal: ScalarValue) {
         let date_trunc = DateTruncFunc::new();
         let args = vec![
@@ -1337,80 +1307,6 @@ mod tests {
             let result = date_trunc_coarse(granularity_enum, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
         });
-    }
-
-    #[test]
-    fn test_date_trunc_preimage_timestamp_valid_cases() {
-        let day_start = string_to_timestamp_nanos("2024-05-01T00:00:00Z").unwrap();
-        let next_day = string_to_timestamp_nanos("2024-05-02T00:00:00Z").unwrap();
-        assert_preimage_range(
-            "day",
-            ScalarValue::TimestampNanosecond(Some(day_start), None),
-            ScalarValue::TimestampNanosecond(Some(day_start), None),
-            ScalarValue::TimestampNanosecond(Some(next_day), None),
-        );
-
-        let month_start = string_to_timestamp_nanos("2024-05-01T00:00:00Z").unwrap();
-        let next_month = string_to_timestamp_nanos("2024-06-01T00:00:00Z").unwrap();
-        assert_preimage_range(
-            "month",
-            ScalarValue::TimestampNanosecond(Some(month_start), None),
-            ScalarValue::TimestampNanosecond(Some(month_start), None),
-            ScalarValue::TimestampNanosecond(Some(next_month), None),
-        );
-
-        // Quarter: April 1 → July 1
-        let q2_start = string_to_timestamp_nanos("2024-04-01T00:00:00Z").unwrap();
-        let q3_start = string_to_timestamp_nanos("2024-07-01T00:00:00Z").unwrap();
-        assert_preimage_range(
-            "quarter",
-            ScalarValue::TimestampNanosecond(Some(q2_start), None),
-            ScalarValue::TimestampNanosecond(Some(q2_start), None),
-            ScalarValue::TimestampNanosecond(Some(q3_start), None),
-        );
-
-        // Year: 2024-01-01 → 2025-01-01 (covers Feb 29 in the leap-year span)
-        let year_start = string_to_timestamp_nanos("2024-01-01T00:00:00Z").unwrap();
-        let next_year = string_to_timestamp_nanos("2025-01-01T00:00:00Z").unwrap();
-        assert_preimage_range(
-            "year",
-            ScalarValue::TimestampNanosecond(Some(year_start), None),
-            ScalarValue::TimestampNanosecond(Some(year_start), None),
-            ScalarValue::TimestampNanosecond(Some(next_year), None),
-        );
-
-        // Week: date_trunc floors to Monday
-        let monday = string_to_timestamp_nanos("2024-04-29T00:00:00Z").unwrap();
-        let next_monday = string_to_timestamp_nanos("2024-05-06T00:00:00Z").unwrap();
-        assert_preimage_range(
-            "week",
-            ScalarValue::TimestampNanosecond(Some(monday), None),
-            ScalarValue::TimestampNanosecond(Some(monday), None),
-            ScalarValue::TimestampNanosecond(Some(next_monday), None),
-        );
-
-        // Granularity finer than the unit's resolution still produces a
-        // singleton bucket of one underlying tick.
-        assert_preimage_range(
-            "microsecond",
-            ScalarValue::TimestampSecond(Some(1_700_000_000), None),
-            ScalarValue::TimestampSecond(Some(1_700_000_000), None),
-            ScalarValue::TimestampSecond(Some(1_700_000_001), None),
-        );
-    }
-
-    #[test]
-    fn test_date_trunc_preimage_timestamp_timezone_fine_granularity() {
-        let lower = string_to_timestamp_nanos("2024-10-27T02:00:00+02:00").unwrap();
-        let upper = string_to_timestamp_nanos("2024-10-27T02:01:00+02:00").unwrap();
-        let tz = Some(Arc::<str>::from("+02"));
-
-        assert_preimage_range(
-            "minute",
-            ScalarValue::TimestampNanosecond(Some(lower), tz.clone()),
-            ScalarValue::TimestampNanosecond(Some(lower), tz.clone()),
-            ScalarValue::TimestampNanosecond(Some(upper), tz),
-        );
     }
 
     #[test]
