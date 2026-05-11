@@ -67,6 +67,16 @@ pub fn from_higher_order_function(
                             )
                         })?;
 
+                    if l.params.len() > lambda_parameters.len() {
+                        return substrait_err!(
+                            "Lambda defined {} parameters ({}) but function {} supports only {}",
+                            l.params.len(),
+                            l.params.join(","),
+                            fun.name(),
+                            lambda_parameters.len()
+                        )
+                    }
+
                     let named_lambda_parameters =
                         std::iter::zip(&l.params, lambda_parameters)
                             .map(|(name, parameter)| parameter.renamed(name))
