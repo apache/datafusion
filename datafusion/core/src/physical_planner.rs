@@ -1787,7 +1787,7 @@ impl DefaultPhysicalPlanner {
                     name.clone(),
                     static_term,
                     recursive_term,
-                    Arc::clone(schema.inner()),
+                    schema.inner(),
                     *is_distinct,
                 )?)
             }
