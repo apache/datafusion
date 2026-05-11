@@ -353,7 +353,9 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
-            LogicalPlan::RecursiveQuery(RecursiveQuery { schema, .. }) => schema,
+            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
+                static_term.schema()
+            }
         }
     }
 
@@ -2252,9 +2254,6 @@ pub struct RecursiveQuery {
     /// The recursive term (evaluated on the contents of the working table until
     /// it returns an empty set)
     pub recursive_term: Arc<LogicalPlan>,
-    /// Output schema, using static term field names and nullability widened
-    /// across both static and recursive terms.
-    pub schema: DFSchemaRef,
     /// Should the output of the recursive term be deduplicated (`UNION`) or
     /// not (`UNION ALL`).
     pub is_distinct: bool,
@@ -2271,14 +2270,34 @@ impl RecursiveQuery {
     ) -> Result<Self> {
         let schema =
             recursive_query_schema(static_term.schema(), recursive_term.schema())?;
+        let static_term = align_logical_plan_to_schema(static_term, schema)?;
         Ok(Self {
             name,
             static_term,
             recursive_term,
-            schema,
             is_distinct,
         })
     }
+}
+
+fn align_logical_plan_to_schema(
+    input: Arc<LogicalPlan>,
+    schema: DFSchemaRef,
+) -> Result<Arc<LogicalPlan>> {
+    if input.schema().as_ref() == schema.as_ref() {
+        return Ok(input);
+    }
+
+    let expr = input
+        .schema()
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, _)| Expr::Column(Column::from(input.schema().qualified_field(i))))
+        .collect();
+    Ok(Arc::new(LogicalPlan::Projection(
+        Projection::try_new_with_schema(expr, input, schema)?,
+    )))
 }
 
 fn recursive_query_schema(
@@ -2312,22 +2331,17 @@ fn recursive_query_schema(
                 static_field.data_type().clone(),
                 static_field.is_nullable() || recursive_field.is_nullable(),
             )
-            .with_metadata(intersect_metadata_for_union([
-                static_field.metadata(),
-                recursive_field.metadata(),
-            ]));
+            .with_metadata(static_field.metadata().clone());
             Ok((qualifier.cloned(), Arc::new(field)))
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let metadata = intersect_metadata_for_union([
-        static_schema.metadata(),
-        recursive_schema.metadata(),
-    ]);
-    Ok(Arc::new(DFSchema::new_with_metadata(fields, metadata)?))
+    Ok(Arc::new(DFSchema::new_with_metadata(
+        fields,
+        static_schema.metadata().clone(),
+    )?))
 }
 
-// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for RecursiveQuery {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         (
@@ -4964,6 +4978,33 @@ mod tests {
                 DFSchema::from_unqualified_fields(fields.into(), HashMap::new()).unwrap(),
             ),
         }))
+    }
+
+    #[test]
+    fn recursive_query_try_new_aligns_static_term_to_widened_schema() -> Result<()> {
+        let static_term =
+            empty_plan_with_fields(vec![Field::new("a", DataType::Int32, false)]);
+        let recursive_term =
+            empty_plan_with_fields(vec![Field::new("b", DataType::Int32, true)]);
+
+        let query = RecursiveQuery::try_new(
+            "t".to_string(),
+            Arc::clone(&static_term),
+            Arc::clone(&recursive_term),
+            false,
+        )?;
+
+        assert_eq!(query.static_term.schema().field(0).name(), "a");
+        assert!(query.static_term.schema().field(0).is_nullable());
+        assert!(matches!(
+            query.static_term.as_ref(),
+            LogicalPlan::Projection(_)
+        ));
+        assert!(
+            Arc::ptr_eq(&query.recursive_term, &recursive_term),
+            "recursive term should not be wrapped in a schema-only Projection"
+        );
+        Ok(())
     }
 
     #[test]

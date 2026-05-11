@@ -2291,6 +2291,7 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::vec;
 
     use super::*;
@@ -2383,6 +2384,39 @@ mod tests {
 
         assert_eq!(plan.schema().field(0).name(), "n");
         assert!(plan.schema().field(0).is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_query_schema_preserves_static_metadata() -> Result<()> {
+        let static_metadata =
+            HashMap::from([("source".to_string(), "static".to_string())]);
+        let recursive_metadata =
+            HashMap::from([("source".to_string(), "recursive".to_string())]);
+        let static_schema = Schema::new_with_metadata(
+            vec![
+                Field::new("n", DataType::Int32, false)
+                    .with_metadata(static_metadata.clone()),
+            ],
+            static_metadata.clone(),
+        );
+        let recursive_schema = Schema::new_with_metadata(
+            vec![
+                Field::new("recursive_n", DataType::Int32, false)
+                    .with_metadata(recursive_metadata),
+            ],
+            HashMap::from([("source".to_string(), "recursive".to_string())]),
+        );
+
+        let static_term = table_scan(Some("static_t"), &static_schema, None)?;
+        let recursive_term =
+            table_scan(Some("recursive_t"), &recursive_schema, None)?.build()?;
+        let plan = static_term
+            .to_recursive_query("t".to_string(), recursive_term, false)?
+            .build()?;
+
+        assert_eq!(plan.schema().field(0).metadata(), &static_metadata);
+        assert_eq!(plan.schema().metadata(), &static_metadata);
         Ok(())
     }
 
