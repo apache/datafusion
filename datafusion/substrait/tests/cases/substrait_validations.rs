@@ -162,7 +162,7 @@ mod tests {
             let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
 
             assert_snapshot!(
-                res.unwrap_err(),
+                res.unwrap_err().strip_backtrace(),
                 @r#"Substrait error: Field 'b' is nullable in the DataFusion schema but not nullable in the Substrait schema."#
             );
             Ok(())
