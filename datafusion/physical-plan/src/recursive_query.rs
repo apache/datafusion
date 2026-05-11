@@ -24,25 +24,25 @@ use std::task::{Context, Poll};
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::common::align_plan_to_schema;
+use crate::common::project_plan_to_schema;
 use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
+use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_expr::expr::intersect_metadata_for_union;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
@@ -87,20 +87,18 @@ impl RecursiveQueryExec {
         name: String,
         static_term: Arc<dyn ExecutionPlan>,
         recursive_term: Arc<dyn ExecutionPlan>,
+        output_schema: SchemaRef,
         is_distinct: bool,
     ) -> Result<Self> {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
-        // Use static term field names with nullability widened across static and
-        // recursive terms. Align both children at plan construction time instead
-        // of patching batches in RecursiveQueryStream.
+        // The logical recursive CTE schema is authoritative. Align both
+        // children at plan construction time instead of patching batches in
+        // RecursiveQueryStream.
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        let output_schema = recursive_query_output_schema(
-            &static_term.schema(),
-            &recursive_term.schema(),
-        )?;
-        let static_term = align_plan_to_schema(static_term, &output_schema)?;
-        let recursive_term = align_plan_to_schema(recursive_term, &output_schema)?;
+        let static_term = align_recursive_plan_to_schema(static_term, &output_schema)?;
+        let recursive_term =
+            align_recursive_plan_to_schema(recursive_term, &output_schema)?;
         let cache = Self::compute_properties(Arc::clone(&output_schema));
         Ok(RecursiveQueryExec {
             name,
@@ -191,6 +189,7 @@ impl ExecutionPlan for RecursiveQueryExec {
             self.name.clone(),
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
+            self.schema(),
             self.is_distinct,
         )
         .map(|e| Arc::new(e) as _)
@@ -375,52 +374,160 @@ impl RecursiveQueryStream {
     }
 }
 
-fn recursive_query_output_schema(
-    static_schema: &SchemaRef,
-    recursive_schema: &SchemaRef,
-) -> Result<SchemaRef> {
-    if static_schema.fields().len() != recursive_schema.fields().len() {
+fn align_recursive_plan_to_schema(
+    input: Arc<dyn ExecutionPlan>,
+    output_schema: &SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    match project_plan_to_schema(Arc::clone(&input), output_schema) {
+        Ok(projected) => Ok(projected),
+        Err(_) => Ok(Arc::new(RecursiveSchemaRebindExec::try_new(
+            input,
+            Arc::clone(output_schema),
+        )?)),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RecursiveSchemaRebindExec {
+    input: Arc<dyn ExecutionPlan>,
+    schema: SchemaRef,
+    cache: Arc<PlanProperties>,
+}
+
+impl RecursiveSchemaRebindExec {
+    fn try_new(input: Arc<dyn ExecutionPlan>, schema: SchemaRef) -> Result<Self> {
+        validate_recursive_schema_rebind(&input.schema(), &schema)?;
+        let input_properties = input.properties();
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(Arc::clone(&schema)),
+            Partitioning::UnknownPartitioning(
+                input_properties.partitioning.partition_count(),
+            ),
+            input_properties.emission_type,
+            input_properties.boundedness,
+        )
+        .with_evaluation_type(input_properties.evaluation_type)
+        .with_scheduling_type(input_properties.scheduling_type);
+
+        Ok(Self {
+            input,
+            schema,
+            cache: Arc::new(properties),
+        })
+    }
+}
+
+impl DisplayAs for RecursiveSchemaRebindExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "RecursiveSchemaRebindExec")
+            }
+            DisplayFormatType::TreeRender => Ok(()),
+        }
+    }
+}
+
+impl ExecutionPlan for RecursiveSchemaRebindExec {
+    fn name(&self) -> &'static str {
+        "RecursiveSchemaRebindExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let [input] = children.try_into().map_err(|children: Vec<_>| {
+            internal_datafusion_err!(
+                "RecursiveSchemaRebindExec expected 1 child, got {}",
+                children.len()
+            )
+        })?;
+        Ok(Arc::new(Self::try_new(input, Arc::clone(&self.schema))?))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let schema = Arc::clone(&self.schema);
+        let stream = self.input.execute(partition, context)?.map({
+            let schema = Arc::clone(&schema);
+            move |batch| {
+                let batch = batch?;
+                if batch.schema().as_ref() == schema.as_ref() {
+                    Ok(batch)
+                } else {
+                    RecordBatch::try_new(Arc::clone(&schema), batch.columns().to_vec())
+                        .map_err(Into::into)
+                }
+            }
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+}
+
+fn validate_recursive_schema_rebind(
+    input_schema: &SchemaRef,
+    output_schema: &SchemaRef,
+) -> Result<()> {
+    if input_schema.fields().len() != output_schema.fields().len() {
         return datafusion_common::plan_err!(
-            "RecursiveQueryExec static and recursive terms have different number of columns: {} != {}",
-            static_schema.fields().len(),
-            recursive_schema.fields().len()
+            "RecursiveQueryExec input and output schemas have different number of columns: {} != {}",
+            input_schema.fields().len(),
+            output_schema.fields().len()
         );
     }
 
-    let fields = static_schema
+    if let Some((i, input_field, output_field, mismatch)) = input_schema
         .fields()
         .iter()
-        .zip(recursive_schema.fields().iter())
+        .zip(output_schema.fields().iter())
         .enumerate()
-        .map(|(i, (static_field, recursive_field))| {
-            if static_field.data_type() != recursive_field.data_type() {
-                return datafusion_common::plan_err!(
-                    "RecursiveQueryExec column {i} has different types: static term has {} whereas recursive term has {}",
-                    static_field.data_type(),
-                    recursive_field.data_type()
-                );
+        .find_map(|(i, (input_field, output_field))| {
+            if input_field.data_type() != output_field.data_type() {
+                Some((i, input_field, output_field, "type"))
+            } else if input_field.is_nullable() && !output_field.is_nullable() {
+                Some((i, input_field, output_field, "nullability"))
+            } else {
+                None
             }
-            Ok(Arc::new(
-                Field::new(
-                    static_field.name(),
-                    static_field.data_type().clone(),
-                    static_field.is_nullable() || recursive_field.is_nullable(),
-                )
-                .with_metadata(intersect_metadata_for_union([
-                    static_field.metadata(),
-                    recursive_field.metadata(),
-                ])),
-            ))
         })
-        .collect::<Result<Vec<_>>>()?;
+    {
+        return datafusion_common::plan_err!(
+            "Cannot align recursive query column {i} ('{}') to output field '{}': field {mismatch} differs (input field: {:?}, output field: {:?})",
+            input_field.name(),
+            output_field.name(),
+            input_field,
+            output_field
+        );
+    }
 
-    Ok(Arc::new(Schema::new_with_metadata(
-        fields,
-        intersect_metadata_for_union([
-            static_schema.metadata(),
-            recursive_schema.metadata(),
-        ]),
-    )))
+    Ok(())
 }
 
 fn assign_work_table(
@@ -566,11 +673,13 @@ mod tests {
     fn recursive_exec(
         static_term: Arc<dyn ExecutionPlan>,
         recursive_term: Arc<dyn ExecutionPlan>,
+        output_schema: SchemaRef,
     ) -> Result<RecursiveQueryExec> {
         RecursiveQueryExec::try_new(
             "numbers".to_string(),
             static_term,
             recursive_term,
+            output_schema,
             false,
         )
     }
@@ -581,7 +690,11 @@ mod tests {
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, false)]);
 
-        let exec = recursive_exec(Arc::clone(&static_term), Arc::clone(&recursive_term))?;
+        let exec = recursive_exec(
+            Arc::clone(&static_term),
+            Arc::clone(&recursive_term),
+            static_term.schema(),
+        )?;
 
         assert_eq!(exec.schema(), static_term.schema());
         let projection = exec
@@ -601,13 +714,16 @@ mod tests {
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
 
-        let exec = recursive_exec(Arc::clone(&static_term), Arc::clone(&recursive_term))?;
-
         let expected_schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::Int32,
             true,
         )]));
+        let exec = recursive_exec(
+            Arc::clone(&static_term),
+            Arc::clone(&recursive_term),
+            Arc::clone(&expected_schema),
+        )?;
         assert_eq!(exec.schema(), expected_schema);
         assert_eq!(exec.static_term().schema(), expected_schema);
         assert_eq!(exec.recursive_term().schema(), expected_schema);
@@ -642,9 +758,16 @@ mod tests {
             ]),
         ));
 
+        let expected_schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([("shared".to_string(), "same".to_string())]),
+            )],
+            HashMap::from([("shared".to_string(), "same".to_string())]),
+        ));
         let exec = recursive_exec(
             empty_exec_with_schema(static_schema),
             empty_exec_with_schema(recursive_schema),
+            expected_schema,
         )?;
 
         assert_eq!(
