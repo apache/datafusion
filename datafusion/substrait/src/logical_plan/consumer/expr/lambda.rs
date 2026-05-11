@@ -45,3 +45,59 @@ pub async fn from_lambda(
 
     Ok(lambda(names, body))
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::{
+        common::{DFSchema, assert_contains},
+        prelude::SessionContext,
+    };
+    use substrait::proto::{self, Expression, r#type::Struct};
+
+    use crate::{
+        extensions::Extensions,
+        logical_plan::consumer::{DefaultSubstraitConsumer, from_lambda},
+    };
+
+    #[tokio::test]
+    async fn test_lambda_without_body() {
+        let lambda = proto::expression::Lambda {
+            parameters: Some(Struct::default()),
+            body: None,
+        };
+
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+
+        let err = from_lambda(&consumer, &lambda, DFSchema::empty_ref())
+            .await
+            .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "Lambda expression without body is not allowed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lambda_without_parameters() {
+        let lambda = proto::expression::Lambda {
+            parameters: None,
+            body: Some(Box::new(Expression::default())),
+        };
+
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+
+        let err = from_lambda(&consumer, &lambda, DFSchema::empty_ref())
+            .await
+            .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "Lambda expression without parameters is not allowed"
+        );
+    }
+}
