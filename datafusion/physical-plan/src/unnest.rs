@@ -759,20 +759,20 @@ fn build_batch(
 /// l2: [4,5], [], null, [6, 7]
 /// ```
 ///
-/// With [`NullHandling::Drop`], the longest length array will be:
+/// With [`datafusion_common::NullHandling::Drop`], the longest length array will be:
 ///
 /// ```ignore
 /// longest_length: [3, 0, 0, 2]
 /// ```
 ///
-/// With [`NullHandling::Preserve`] (the default), the longest length array
+/// With [`datafusion_common::NullHandling::Preserve`] (the default), the longest length array
 /// will be:
 ///
 /// ```ignore
 /// longest_length: [3, 1, 1, 2]
 /// ```
 ///
-/// With [`NullHandling::PreserveAndExpandEmpty`], empty input lists are
+/// With [`datafusion_common::NullHandling::PreserveAndExpandEmpty`], empty input lists are
 /// also bumped to length 1 so they produce a single `NULL` row, matching
 /// Spark `explode_outer` semantics:
 ///
