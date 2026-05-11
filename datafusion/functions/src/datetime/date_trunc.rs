@@ -783,7 +783,9 @@ fn time_column_preimage(
         return None;
     }
 
-    let value = lit_expr.as_literal().and_then(|lit| time_value(lit, unit))?;
+    let value = lit_expr
+        .as_literal()
+        .and_then(|lit| time_value(lit, unit))?;
     let step = constant_granularity_step(unit, granularity)?;
     let step = if step == 0 { 1 } else { step };
     // Alignment: literal must already be on a bucket boundary, else the
