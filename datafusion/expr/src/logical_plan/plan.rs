@@ -2325,10 +2325,15 @@ fn recursive_query_schema(
                     recursive_field.data_type()
                 );
             }
+            // Field names and qualifiers always come from the static/anchor term so
+            // that recursive-term column names never leak into the declared CTE schema.
             let (qualifier, _) = static_schema.qualified_field(i);
             let field = Field::new(
                 static_field.name(),
                 static_field.data_type().clone(),
+                // Nullability is widened (union-like) across both terms so that a
+                // nullable recursive expression does not force a runtime error when
+                // the anchor is non-nullable (e.g. `SELECT 0 AS level`).
                 static_field.is_nullable() || recursive_field.is_nullable(),
             )
             .with_metadata(static_field.metadata().clone());

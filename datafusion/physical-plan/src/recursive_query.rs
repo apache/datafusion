@@ -137,6 +137,11 @@ impl RecursiveQueryExec {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
+        // `output_schema` has already been widened for nullability at logical
+        // planning time, so `project_plan_to_schema` here only ever widens
+        // non-nullable → nullable (safe cast) or encounters equal-nullability
+        // fields.  It will never be asked to narrow a nullable input to a
+        // non-null expected field for a recursive CTE child.
         let static_term = project_plan_to_schema(static_term, output_schema)?;
         let recursive_term = project_plan_to_schema(recursive_term, output_schema)?;
         Self::try_new_with_work_table(

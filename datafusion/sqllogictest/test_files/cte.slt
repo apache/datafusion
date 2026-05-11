@@ -1313,6 +1313,20 @@ SELECT * FROM t;
 0
 NULL
 
+# Column names in a recursive CTE must come from the anchor/static term,
+# not from the recursive term, even when the recursive term uses a different alias.
+query I
+WITH RECURSIVE t AS (
+  SELECT 0 AS anchor_col
+  UNION ALL
+  SELECT anchor_col + 1 AS recursive_col FROM t WHERE anchor_col < 2
+)
+SELECT anchor_col FROM t;
+----
+0
+1
+2
+
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
 
