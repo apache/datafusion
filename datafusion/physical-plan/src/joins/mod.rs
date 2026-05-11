@@ -20,8 +20,11 @@
 use arrow::array::BooleanBufferBuilder;
 pub use cross_join::CrossJoinExec;
 use datafusion_physical_expr::PhysicalExprRef;
+#[expect(deprecated)]
+pub use hash_join::HashExpr;
 pub use hash_join::{
-    HashExpr, HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr, SeededRandomState,
+    HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr, MultiMapLookupExpr,
+    SeededRandomState,
 };
 pub use nested_loop_join::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use parking_lot::Mutex;

@@ -46,7 +46,9 @@ use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
     NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
-use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
+#[expect(deprecated)]
+use datafusion_physical_plan::joins::HashExpr;
+use datafusion_physical_plan::joins::SeededRandomState;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
@@ -255,6 +257,7 @@ pub fn parse_physical_expr(
 ///   any scoped state needed during recursive deserialization.
 /// * `proto_converter` - Converter hooks used for recursive physical plan and
 ///   expression deserialization.
+#[expect(deprecated)] // HashExpr branch — kept for proto wire compatibility.
 pub fn parse_physical_expr_with_converter(
     proto: &protobuf::PhysicalExprNode,
     input_schema: &Schema,

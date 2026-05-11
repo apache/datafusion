@@ -72,6 +72,10 @@ impl SeededRandomState {
 /// This is used for:
 /// - Computing routing hashes (with RepartitionExec's 0,0,0,0 seeds)
 /// - Computing lookup hashes (with HashJoin's 'J','O','I','N' seeds)
+#[deprecated(
+    since = "54.0.0",
+    note = "Hash-join dynamic filters no longer route rows via a per-row hash + CASE. Use HashTableLookupExpr for single-map membership probes or MultiMapLookupExpr to OR across several maps in one hashing pass."
+)]
 pub struct HashExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,
@@ -81,6 +85,7 @@ pub struct HashExpr {
     description: String,
 }
 
+#[expect(deprecated)]
 impl HashExpr {
     /// Create a new HashExpr
     ///
@@ -116,6 +121,7 @@ impl HashExpr {
     }
 }
 
+#[expect(deprecated)]
 impl std::fmt::Debug for HashExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cols = self
@@ -129,6 +135,7 @@ impl std::fmt::Debug for HashExpr {
     }
 }
 
+#[expect(deprecated)]
 impl Hash for HashExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.on_columns.dyn_hash(state);
@@ -137,6 +144,7 @@ impl Hash for HashExpr {
     }
 }
 
+#[expect(deprecated)]
 impl PartialEq for HashExpr {
     fn eq(&self, other: &Self) -> bool {
         self.on_columns == other.on_columns
@@ -145,14 +153,17 @@ impl PartialEq for HashExpr {
     }
 }
 
+#[expect(deprecated)]
 impl Eq for HashExpr {}
 
+#[expect(deprecated)]
 impl Display for HashExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
     }
 }
 
+#[expect(deprecated)]
 impl PhysicalExpr for HashExpr {
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         self.on_columns.iter().collect()
@@ -546,6 +557,7 @@ fn evaluate_columns(
 }
 
 #[cfg(test)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use crate::joins::join_hash_map::JoinHashMapU32;

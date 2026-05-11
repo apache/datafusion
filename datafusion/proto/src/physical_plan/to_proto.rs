@@ -40,7 +40,9 @@ use datafusion_physical_plan::expressions::{
     IsNotNullExpr, IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr,
     UnKnownColumn,
 };
-use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
+#[expect(deprecated)]
+use datafusion_physical_plan::joins::HashExpr;
+use datafusion_physical_plan::joins::{HashTableLookupExpr, MultiMapLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -253,6 +255,7 @@ pub fn serialize_physical_expr(
 /// serialization of udfs requiring specialized serialization (see [`PhysicalExtensionCodec::try_encode_udf`]).
 /// A [`PhysicalProtoConverterExtension`] can be provided to handle the
 /// conversion process (see [`PhysicalProtoConverterExtension::physical_expr_to_proto`]).
+#[expect(deprecated)] // HashExpr branch — kept for proto wire compatibility.
 pub fn serialize_physical_expr_with_converter(
     value: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
@@ -260,12 +263,12 @@ pub fn serialize_physical_expr_with_converter(
 ) -> Result<protobuf::PhysicalExprNode> {
     let expr = value.as_ref();
     let expr_id = value.expression_id();
-    // HashTableLookupExpr is used for dynamic filter pushdown in hash joins.
-    // It contains an Arc<dyn JoinHashMapType> (the build-side hash table) which
-    // cannot be serialized - the hash table is a runtime structure built during
-    // execution on the build side.
+    // HashTableLookupExpr and MultiMapLookupExpr are used for dynamic filter
+    // pushdown in hash joins. They contain Arc<Map>s (the build-side hash tables)
+    // which cannot be serialized - the hash tables are runtime structures built
+    // during execution on the build side.
     //
-    // We replace it with lit(true) which is safe because:
+    // We replace them with lit(true) which is safe because:
     // 1. The filter is a performance optimization, not a correctness requirement
     // 2. lit(true) passes all rows, so no valid rows are incorrectly filtered out
     // 3. The join itself will still produce correct results, just without the
@@ -273,7 +276,9 @@ pub fn serialize_physical_expr_with_converter(
     //
     // In distributed execution, the remote worker won't have access to the hash
     // table anyway, so the best we can do is skip this optimization.
-    if expr.downcast_ref::<HashTableLookupExpr>().is_some() {
+    if expr.downcast_ref::<HashTableLookupExpr>().is_some()
+        || expr.downcast_ref::<MultiMapLookupExpr>().is_some()
+    {
         let value = datafusion_proto_common::ScalarValue {
             value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
                 true,

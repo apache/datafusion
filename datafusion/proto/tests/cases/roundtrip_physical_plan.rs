@@ -2466,6 +2466,53 @@ async fn roundtrip_async_func_exec() -> Result<()> {
     Ok(())
 }
 
+/// Test that MultiMapLookupExpr serializes to lit(true)
+///
+/// MultiMapLookupExpr holds runtime build-side hash tables — same reasoning as
+/// [`roundtrip_hash_table_lookup_expr_to_lit`]: the maps cannot cross the wire,
+/// so the optimization is dropped to `lit(true)` and the join still produces
+/// correct results without probe-side prefiltering.
+#[test]
+fn roundtrip_multi_map_lookup_expr_to_lit() -> Result<()> {
+    use datafusion::physical_plan::joins::join_hash_map::JoinHashMapU32;
+    use datafusion::physical_plan::joins::{Map, MultiMapLookupExpr};
+
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    let maps = vec![
+        Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0)))),
+        Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0)))),
+    ];
+    let on_columns = vec![datafusion::physical_plan::expressions::col("col", &schema)?];
+    let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(MultiMapLookupExpr::new(
+        on_columns,
+        datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
+        maps,
+        "test_multi_lookup".to_string(),
+    ));
+
+    let filter = Arc::new(FilterExec::try_new(lookup_expr, input)?);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+
+    let proto: PhysicalPlanNode =
+        PhysicalPlanNode::try_from_physical_plan(filter.clone(), &codec)
+            .expect("serialization should succeed");
+
+    let result: Arc<dyn ExecutionPlan> = proto
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .expect("deserialization should succeed");
+
+    let result_filter = result.downcast_ref::<FilterExec>().unwrap();
+    let predicate = result_filter.predicate();
+    let literal = predicate.downcast_ref::<Literal>().unwrap();
+    assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
+
+    Ok(())
+}
+
 /// Test that HashTableLookupExpr serializes to lit(true)
 ///
 /// HashTableLookupExpr contains a runtime hash table that cannot be serialized.
@@ -2517,6 +2564,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
 }
 
 #[test]
+#[expect(deprecated)] // HashExpr is deprecated but still proto-serialized for wire compatibility.
 fn roundtrip_hash_expr() -> Result<()> {
     use datafusion::physical_plan::joins::{HashExpr, SeededRandomState};
 
