@@ -795,22 +795,20 @@ impl TopKHeap {
         }
 
         let total_rows = self.store.total_rows;
-
-        let avg_bytes_per_row = self.store.batches_size / total_rows.max(1); // .max(1) prevents div by zero
-        let compacted_estimate = avg_bytes_per_row * self.inner.len();
+        let num_rows = self.inner.len();
 
         // Compact when current store memory exceeds 2x what the compacted
         // result would need. The multiplier avoids compacting when the
         // savings would be marginal.
-        if self.store.batches_size <= compacted_estimate * 2 {
+        if total_rows <= num_rows * 2 {
             return Ok(());
         }
+
         // at first, compact the entire thing always into a new batch
         // (maybe we can get fancier in the future about ignoring
         // batches that have a high usage ratio already
 
         // Note: new batch is in the same order as inner
-        let num_rows = self.inner.len();
         let (new_batch, mut topk_rows) = self.emit_with_state()?;
         let Some(new_batch) = new_batch else {
             return Ok(());
@@ -1046,7 +1044,7 @@ impl RecordBatchStore {
             self.total_rows = self
                 .total_rows
                 .checked_sub(old_entry.batch.num_rows())
-                .unwrap_or_default();
+                .unwrap();
         }
     }
 
@@ -1320,6 +1318,75 @@ mod tests {
             &[
                 "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "| 4 |", "| 5 |",
                 "+---+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
+
+    /// Negative path: when stored rows are close to the heap size,
+    /// compaction must NOT fire even with multiple batches present,
+    /// because the savings would be marginal
+    /// (guard: `total_rows <= num_rows * 2`).
+    #[tokio::test]
+    async fn test_topk_memory_compaction_skipped_when_marginal() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let sort_expr = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+        let full_expr = LexOrdering::from([sort_expr.clone()]);
+        let prefix = vec![sort_expr];
+
+        let runtime = Arc::new(RuntimeEnv::default());
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let k = 10;
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            prefix,
+            full_expr,
+            k,
+            8192,
+            runtime,
+            &metrics,
+            Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+                DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+            )))),
+        )?;
+
+        // Two small batches; every row from both batches ends up referenced
+        // by the heap, so total_rows == num_rows == 10.
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef],
+        )?;
+        topk.insert_batch(batch1)?;
+
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![6, 7, 8, 9, 10])) as ArrayRef],
+        )?;
+        topk.insert_batch(batch2)?;
+
+        // Guard `total_rows <= num_rows * 2` should hold (10 <= 20),
+        // so compaction is skipped and BOTH batches remain in the store.
+        assert_eq!(
+            topk.heap.store.len(),
+            2,
+            "store must keep 2 batches when savings would be marginal"
+        );
+        assert_eq!(topk.heap.inner.len(), 10, "heap should hold all 10 rows");
+
+        // Output is still correct.
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+", "| a  |", "+----+", "| 1  |", "| 2  |", "| 3  |", "| 4  |",
+                "| 5  |", "| 6  |", "| 7  |", "| 8  |", "| 9  |", "| 10 |", "+----+",
             ],
             &results
         );
