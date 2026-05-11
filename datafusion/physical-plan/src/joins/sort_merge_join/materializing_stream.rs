@@ -1526,7 +1526,7 @@ impl MaterializingSortMergeJoinStream {
     /// gathers columns across sources. A null-row sentinel at source index 0
     /// handles null right indices (unmatched streamed rows).
     fn materialize_right_columns(
-        &self,
+        &mut self,
         matched_chunks: &[(usize, UInt64Array, UInt64Array)],
         total_matched_rows: usize,
     ) -> Result<Vec<ArrayRef>> {
@@ -1541,11 +1541,33 @@ impl MaterializingSortMergeJoinStream {
                     matched_chunks.iter().map(|c| &c.2 as &dyn Array).collect();
                 as_uint64_array(&compute::concat(&refs)?)?.clone()
             };
-            return fetch_right_columns_by_idxs(
+
+            let spill_read_mem = match &self.buffered_data.batches[first_batch_idx].batch
+            {
+                BufferedBatchState::Spilled(_) => {
+                    self.buffered_data.batches[first_batch_idx].size_estimation
+                }
+                _ => 0,
+            };
+
+            if spill_read_mem > 0 {
+                self.reservation.grow(spill_read_mem);
+                self.join_metrics
+                    .peak_mem_used()
+                    .set_max(self.reservation.size());
+            }
+
+            let result = fetch_right_columns_by_idxs(
                 &self.buffered_data,
                 first_batch_idx,
                 &combined_right_indices,
             );
+
+            if spill_read_mem > 0 {
+                self.reservation.shrink(spill_read_mem);
+            }
+
+            return result;
         }
 
         // Multiple source batches: map each buffered_batch_idx to a
@@ -1577,20 +1599,31 @@ impl MaterializingSortMergeJoinStream {
         let mut right_columns = Vec::with_capacity(num_right_cols);
 
         // Read each source batch once (spilled batches require disk I/O).
-        let source_data: Vec<Option<RecordBatch>> = source_batches
-            .iter()
-            .map(|&idx| {
-                let bb = &self.buffered_data.batches[idx];
-                match &bb.batch {
-                    BufferedBatchState::InMemory(batch) => Some(batch.clone()),
-                    BufferedBatchState::Spilled(spill_file) => {
-                        let file = BufReader::new(File::open(spill_file.path()).ok()?);
-                        let reader = StreamReader::try_new(file, None).ok()?;
-                        reader.into_iter().next()?.ok()
-                    }
+        // Track memory for each spilled batch at the point of deserialization
+        // so the pool reflects actual usage as it grows.
+        let mut spill_read_mem: usize = 0;
+        let mut source_data: Vec<Option<RecordBatch>> =
+            Vec::with_capacity(source_batches.len());
+        for &idx in &source_batches {
+            let bb = &self.buffered_data.batches[idx];
+            match &bb.batch {
+                BufferedBatchState::InMemory(batch) => {
+                    source_data.push(Some(batch.clone()));
                 }
-            })
-            .collect();
+                BufferedBatchState::Spilled(spill_file) => {
+                    let batch_mem = bb.size_estimation;
+                    self.reservation.grow(batch_mem);
+                    self.join_metrics
+                        .peak_mem_used()
+                        .set_max(self.reservation.size());
+                    spill_read_mem += batch_mem;
+
+                    let file = BufReader::new(File::open(spill_file.path())?);
+                    let reader = StreamReader::try_new(file, None)?;
+                    source_data.push(reader.into_iter().next().transpose()?);
+                }
+            }
+        }
 
         for col_idx in 0..num_right_cols {
             let dtype = self.buffered_schema.field(col_idx).data_type();
@@ -1612,6 +1645,10 @@ impl MaterializingSortMergeJoinStream {
             }
 
             right_columns.push(interleave(&source_arrays, &interleave_indices)?);
+        }
+
+        if spill_read_mem > 0 {
+            self.reservation.shrink(spill_read_mem);
         }
 
         Ok(right_columns)
