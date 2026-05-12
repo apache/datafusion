@@ -2136,6 +2136,7 @@ dependencies = [
  "arrow-schema",
  "async-ffi",
  "async-trait",
+ "chrono",
  "datafusion",
  "datafusion-catalog",
  "datafusion-common",
