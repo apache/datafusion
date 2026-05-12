@@ -677,7 +677,6 @@ impl Hash for Alias {
         self.expr.hash(state);
         self.relation.hash(state);
         self.name.hash(state);
-        self.metadata.hash(state);
     }
 }
 
@@ -2426,18 +2425,17 @@ impl NormalizeEq for Expr {
                     expr: self_expr,
                     relation: self_relation,
                     name: self_name,
-                    metadata: self_metadata,
+                    ..
                 }),
                 Expr::Alias(Alias {
                     expr: other_expr,
                     relation: other_relation,
                     name: other_name,
-                    metadata: other_metadata,
+                    ..
                 }),
             ) => {
                 self_name == other_name
                     && self_relation == other_relation
-                    && self_metadata == other_metadata
                     && self_expr.normalize_eq(other_expr)
             }
             (
@@ -2783,11 +2781,10 @@ impl HashNode for Expr {
                 expr: _expr,
                 relation,
                 name,
-                metadata,
+                ..
             }) => {
                 relation.hash(state);
                 name.hash(state);
-                metadata.hash(state);
             }
             Expr::Column(column) => {
                 column.hash(state);
