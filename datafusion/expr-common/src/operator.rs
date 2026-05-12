@@ -255,9 +255,9 @@ impl Operator {
             Operator::GtEq => Some(Operator::LtEq),
             Operator::AtArrow => Some(Operator::ArrowAt),
             Operator::ArrowAt => Some(Operator::AtArrow),
-            Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-            | Operator::Plus
+            Operator::IsDistinctFrom => Some(Operator::IsDistinctFrom),
+            Operator::IsNotDistinctFrom => Some(Operator::IsNotDistinctFrom),
+            Operator::Plus
             | Operator::Minus
             | Operator::Multiply
             | Operator::Divide
