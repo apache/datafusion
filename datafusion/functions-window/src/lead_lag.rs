@@ -176,7 +176,9 @@ static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         .with_argument("offset", "Integer. Specifies how many rows back \
         the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
-        not within the partition. Must be of the same type as expression.")
+        not within the partition. \
+        Must be either a literal or an expression itself. \
+        Must be of the same type as expression.")
         .with_sql_example(r#"
 ```sql
 -- Example usage of the lag window function:
@@ -195,6 +197,26 @@ FROM employees;
 +-------------+--------+-------------+
 ```
 "#)
+.with_sql_example(r#"
+```sql
+-- Example usage of lag window function that takes an expression as its default parameter:
+SELECT
+    employee_id,
+    salary,
+    lag(salary, 1, salary) OVER (ORDER BY employee_id) AS prev_salary_or_current
+FROM employees;
+
++-------------+--------+------------------------+
+| employee_id | salary | prev_salary_or_current |
++-------------+--------+------------------------+
+| 1           | 30000  | 30000                  |
+| 2           | 50000  | 30000                  |
+| 3           | 70000  | 50000                  |
+| 4           | 60000  | 70000                  |
++-------------+--------+------------------------+
+```
+"#
+)
         .build()
 });
 
@@ -212,7 +234,9 @@ static LEAD_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         .with_argument("offset", "Integer. Specifies how many rows \
         forward the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
-        not within the partition. Must be of the same type as expression.")
+        not within the partition. \
+        Must be either a literal or an expression itself. \
+        Must be of the same type as expression.")
         .with_sql_example(r#"
 ```sql
 -- Example usage of lead window function:
@@ -232,6 +256,27 @@ FROM employees;
 | 4           | Engineering | 40000  | 60000        |
 | 5           | Engineering | 60000  | 0            |
 +-------------+-------------+--------+--------------+
+```
+"#)
+        .with_sql_example(r#"
+```sql
+-- Example usage of lead window function that takes an expression as its default parameter:
+SELECT
+    employee_id,
+    department,
+    salary,
+    lead(salary, 1, salary) OVER (PARTITION BY department ORDER BY salary) AS next_salary_or_current
+FROM employees;
+
++-------------+-------------+--------+-------------------------+
+| employee_id | department  | salary | next_salary_or_current  |
++-------------+-------------+--------+-------------------------+
+| 1           | Sales       | 30000  | 50000                   |
+| 2           | Sales       | 50000  | 70000                   |
+| 3           | Sales       | 70000  | 70000                   |
+| 4           | Engineering | 40000  | 60000                   |
+| 5           | Engineering | 60000  | 60000                   |
++-------------+-------------+--------+-------------------------+
 ```
 "#)
         .build()
@@ -543,7 +588,7 @@ fn shift_with_array_default(
         return Ok(Arc::clone(array));
     }
     if offset == i64::MIN || offset.abs() >= value_len {
-        return Ok(default_values.clone());
+        return Ok(Arc::clone(default_values));
     }
 
     let slice_offset = (-offset).clamp(0, value_len) as usize;
@@ -790,7 +835,6 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         _num_rows: usize,
     ) -> Result<ArrayRef> {
         // LEAD, LAG window functions take single column, values will have size 1
-        eprintln!("evaluate_all called, values.len()={}", values.len());
         let value = &values[0];
         match &self.default_value {
             DefaultValue::Literal(scalar) => {
