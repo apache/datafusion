@@ -3230,3 +3230,48 @@ async fn roundtrip_join_null_aware() -> Result<()> {
 
     Ok(())
 }
+
+// Regression test for null_equality round-trip (related to #22065).
+#[tokio::test]
+async fn roundtrip_join_null_equality() -> Result<()> {
+    use datafusion_common::NullEquality;
+    use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+    use datafusion_expr::logical_plan::Join;
+
+    let ctx = SessionContext::new();
+    let sql = "
+        SELECT t1.a FROM (VALUES (1)) AS t1(a)
+        INNER JOIN (VALUES (1)) AS t2(b) ON t1.a = t2.b
+    ";
+    let plan = ctx
+        .sql(sql)
+        .await?
+        .into_optimized_plan()?
+        .transform_up(|node| {
+            Ok(match node {
+                LogicalPlan::Join(j) => Transformed::yes(LogicalPlan::Join(Join {
+                    null_equality: NullEquality::NullEqualsNull,
+                    ..j
+                })),
+                other => Transformed::no(other),
+            })
+        })?
+        .data;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{rt:?}"));
+
+    let mut found = false;
+    rt.apply(|n| {
+        if let LogicalPlan::Join(j) = n
+            && j.null_equality == NullEquality::NullEqualsNull
+        {
+            found = true;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert!(found);
+
+    Ok(())
+}
