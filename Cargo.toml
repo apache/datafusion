@@ -118,7 +118,7 @@ bytes = "1.11"
 bzip2 = "0.6.1"
 chrono = { version = "0.4.44", default-features = false }
 criterion = "0.8"
-ctor = "1.0.1"
+ctor = "1.0.5"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "53.1.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "53.1.0" }
@@ -164,7 +164,7 @@ flate2 = "1.1.9"
 futures = "0.3"
 glob = "0.3.0"
 half = { version = "2.7.0", default-features = false }
-hashbrown = { version = "0.17.0" }
+hashbrown = { version = "0.17.1" }
 hex = { version = "0.4.3" }
 indexmap = "2.14.0"
 insta = { version = "1.47.2", features = ["glob", "filters"] }
