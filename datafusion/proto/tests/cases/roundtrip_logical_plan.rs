@@ -3174,7 +3174,10 @@ async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
     Ok(())
 }
 
-// Regression test for https://github.com/apache/datafusion/issues/22065
+// Regression test for https://github.com/apache/datafusion/issues/22065:
+// the decoder must preserve `null_aware = true` (NOT IN semantics)
+// across a to_proto -> from_proto round trip. `null_equality` is at
+// its default (`NullEqualsNothing`).
 #[tokio::test]
 async fn roundtrip_join_null_aware() -> Result<()> {
     use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -3231,7 +3234,10 @@ async fn roundtrip_join_null_aware() -> Result<()> {
     Ok(())
 }
 
-// Regression test for null_equality round-trip (related to #22065).
+// Regression test for `null_equality` round-trip (related to #22065):
+// the decoder must preserve a non-default `null_equality`
+// (`NullEqualsNull`) across a to_proto -> from_proto round trip.
+// `null_aware` is at its default (`false`).
 #[tokio::test]
 async fn roundtrip_join_null_equality() -> Result<()> {
     use datafusion_common::NullEquality;
