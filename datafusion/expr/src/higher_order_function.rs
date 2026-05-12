@@ -526,12 +526,13 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     /// * `fields`: The argument types of the value arguments of this function, or the output type of lambdas
     ///
     /// # Return value
-    /// A Vec with the same number of [ValueOrLambda::Value] in `fields`. DataFusion will `CAST` the
-    /// function call arguments to these specific types.
+    /// If `Some`, contains a Vec with the same number of [ValueOrLambda::Value] in `fields`.
+    /// DataFusion will `CAST` the function call arguments to these specific types. If `None`, no
+    /// coercion will be applied beyond the one defined by the function signature.
     ///
     /// For example, a flexible array_reduce implementation (see [Self::lambda_parameters] docs), when working
     /// with the expression below, may want to coerce it's initial value argument, the *integer* `0`,
-    /// to match the output it's merge function, which is a *float*:
+    /// to match the output of it's merge function, which is a *float*:
     ///
     /// `array_reduce([1.2, 2.1], 0, (acc, v) -> acc + v + 1.5, v -> v > 2.0)`
     fn coerce_values_for_lambdas(
