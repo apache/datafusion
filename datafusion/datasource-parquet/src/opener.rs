@@ -896,11 +896,15 @@ impl FiltersPreparedParquetOpen {
         // If there is a predicate that can be evaluated against the metadata
         if let Some(predicate) = self.pruning_predicate.as_ref().map(|p| p.as_ref()) {
             if prepared.enable_row_group_stats_pruning {
-                row_groups.prune_by_statistics(
+                row_groups.prune_by_statistics_with_column_orders(
                     &prepared.physical_file_schema,
                     loaded.reader_metadata.parquet_schema(),
                     rg_metadata,
                     predicate,
+                    file_metadata
+                        .file_metadata()
+                        .column_orders()
+                        .map(Vec::as_slice),
                     &prepared.file_metrics,
                 );
             } else {

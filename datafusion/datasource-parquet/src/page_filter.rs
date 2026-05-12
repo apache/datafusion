@@ -23,7 +23,7 @@ use std::sync::Arc;
 use super::metrics::ParquetFileMetrics;
 use crate::ParquetAccessPlan;
 
-use arrow::array::BooleanArray;
+use arrow::array::{BooleanArray, new_null_array};
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
@@ -405,6 +405,7 @@ struct PagesPruningStatistics<'a> {
     row_group_index: usize,
     row_group_metadatas: &'a [RowGroupMetaData],
     converter: StatisticsConverter<'a>,
+    can_use_min_max: bool,
     column_index: &'a ParquetColumnIndex,
     offset_index: &'a ParquetOffsetIndex,
     page_offsets: &'a Vec<PageLocation>,
@@ -428,10 +429,18 @@ impl<'a> PagesPruningStatistics<'a> {
             );
             return None;
         };
-
         let column_index = parquet_metadata.column_index()?;
         let offset_index = parquet_metadata.offset_index()?;
         let row_group_metadatas = parquet_metadata.row_groups();
+        let can_use_min_max = crate::can_use_min_max_statistics(
+            parquet_metadata.file_metadata().schema_descr(),
+            parquet_column_index,
+            parquet_metadata
+                .file_metadata()
+                .column_orders()
+                .map(Vec::as_slice),
+            false,
+        );
 
         let Some(row_group_page_offsets) = offset_index.get(row_group_index) else {
             trace!("No page offsets for row group {row_group_index}, skipping");
@@ -452,6 +461,7 @@ impl<'a> PagesPruningStatistics<'a> {
             row_group_index,
             row_group_metadatas,
             converter,
+            can_use_min_max,
             column_index,
             offset_index,
             page_offsets,
@@ -481,6 +491,13 @@ impl<'a> PagesPruningStatistics<'a> {
 }
 impl PruningStatistics for PagesPruningStatistics<'_> {
     fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+        if !self.can_use_min_max {
+            return Some(new_null_array(
+                self.converter.arrow_field().data_type(),
+                self.num_containers(),
+            ));
+        }
+
         match self.converter.data_page_mins(
             self.column_index,
             self.offset_index,
@@ -495,6 +512,13 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
     }
 
     fn max_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+        if !self.can_use_min_max {
+            return Some(new_null_array(
+                self.converter.arrow_field().data_type(),
+                self.num_containers(),
+            ));
+        }
+
         match self.converter.data_page_maxes(
             self.column_index,
             self.offset_index,
@@ -546,5 +570,214 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
         _values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_expr::{col, lit};
+    use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use parquet::arrow::ArrowSchemaConverter;
+    use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
+    use parquet::file::metadata::{
+        ColumnChunkMetaData, ColumnIndexBuilder, FileMetaData, OffsetIndexBuilder,
+        ParquetMetaDataBuilder, RowGroupMetaData,
+    };
+
+    #[test]
+    fn page_pruning_ignores_unsigned_stats_without_column_order() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
+        let parquet_metadata = unsigned_page_index_metadata(Arc::clone(&schema));
+
+        let predicate = logical2physical(&col("c1").eq(lit(0u32)), &schema);
+        let page_filter =
+            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
+
+        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
+        let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
+        let access_plan = page_filter.prune_plan_with_page_index(
+            ParquetAccessPlan::new_all(1),
+            &schema,
+            parquet_metadata.file_metadata().schema_descr(),
+            &parquet_metadata,
+            &file_metrics,
+        );
+
+        assert!(access_plan.should_scan(0));
+    }
+
+    #[test]
+    fn page_pruning_uses_unsigned_stats_with_column_order() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
+        let parquet_metadata = page_index_metadata(
+            Arc::clone(&schema),
+            PhysicalType::INT32,
+            1i32.to_le_bytes().to_vec(),
+            10i32.to_le_bytes().to_vec(),
+            Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)]),
+        );
+
+        let predicate = logical2physical(&col("c1").gt(lit(15u32)), &schema);
+        let page_filter =
+            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
+
+        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
+        let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
+        let access_plan = page_filter.prune_plan_with_page_index(
+            ParquetAccessPlan::new_all(1),
+            &schema,
+            parquet_metadata.file_metadata().schema_descr(),
+            &parquet_metadata,
+            &file_metrics,
+        );
+
+        assert!(!access_plan.should_scan(0));
+    }
+
+    #[test]
+    fn page_pruning_ignores_unsigned_stats_with_mismatched_column_order() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
+        let parquet_metadata = page_index_metadata(
+            Arc::clone(&schema),
+            PhysicalType::INT32,
+            (-1i32).to_le_bytes().to_vec(),
+            0i32.to_le_bytes().to_vec(),
+            Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)]),
+        );
+
+        let predicate = logical2physical(&col("c1").eq(lit(0u32)), &schema);
+        let page_filter =
+            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
+
+        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
+        let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
+        let access_plan = page_filter.prune_plan_with_page_index(
+            ParquetAccessPlan::new_all(1),
+            &schema,
+            parquet_metadata.file_metadata().schema_descr(),
+            &parquet_metadata,
+            &file_metrics,
+        );
+
+        assert!(access_plan.should_scan(0));
+    }
+
+    #[test]
+    fn page_pruning_ignores_string_stats_without_column_order() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
+        let parquet_metadata = page_index_metadata(
+            Arc::clone(&schema),
+            PhysicalType::BYTE_ARRAY,
+            b"a".to_vec(),
+            b"m".to_vec(),
+            None,
+        );
+
+        let predicate = logical2physical(&col("c1").eq(lit("z")), &schema);
+        let page_filter =
+            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
+
+        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
+        let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
+        let access_plan = page_filter.prune_plan_with_page_index(
+            ParquetAccessPlan::new_all(1),
+            &schema,
+            parquet_metadata.file_metadata().schema_descr(),
+            &parquet_metadata,
+            &file_metrics,
+        );
+
+        assert!(access_plan.should_scan(0));
+    }
+
+    #[test]
+    fn page_pruning_uses_string_stats_with_column_order() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
+        let parquet_metadata = page_index_metadata(
+            Arc::clone(&schema),
+            PhysicalType::BYTE_ARRAY,
+            b"a".to_vec(),
+            b"m".to_vec(),
+            Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)]),
+        );
+
+        let predicate = logical2physical(&col("c1").eq(lit("z")), &schema);
+        let page_filter =
+            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
+
+        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
+        let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
+        let access_plan = page_filter.prune_plan_with_page_index(
+            ParquetAccessPlan::new_all(1),
+            &schema,
+            parquet_metadata.file_metadata().schema_descr(),
+            &parquet_metadata,
+            &file_metrics,
+        );
+
+        assert!(!access_plan.should_scan(0));
+    }
+
+    fn unsigned_page_index_metadata(schema: SchemaRef) -> ParquetMetaData {
+        page_index_metadata(
+            schema,
+            PhysicalType::INT32,
+            (-1i32).to_le_bytes().to_vec(),
+            0i32.to_le_bytes().to_vec(),
+            None,
+        )
+    }
+
+    fn page_index_metadata(
+        schema: SchemaRef,
+        physical_type: PhysicalType,
+        min_value: Vec<u8>,
+        max_value: Vec<u8>,
+        column_orders: Option<Vec<ColumnOrder>>,
+    ) -> ParquetMetaData {
+        let schema_descr =
+            Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap());
+
+        let column = ColumnChunkMetaData::builder(schema_descr.column(0))
+            .set_num_values(10)
+            .build()
+            .unwrap();
+        let row_group = RowGroupMetaData::builder(Arc::clone(&schema_descr))
+            .set_num_rows(10)
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap();
+
+        let file_metadata = FileMetaData::new(
+            1,
+            10,
+            None,
+            None,
+            Arc::clone(&schema_descr),
+            column_orders,
+        );
+
+        let mut column_index = ColumnIndexBuilder::new(physical_type);
+        column_index.append(false, min_value, max_value, 0);
+        let column_index = column_index.build().unwrap();
+
+        let mut offset_index = OffsetIndexBuilder::new();
+        offset_index.append_row_count(10);
+        offset_index.append_offset_and_size(0, 1);
+        let offset_index = offset_index.build();
+
+        ParquetMetaDataBuilder::new(file_metadata)
+            .set_row_groups(vec![row_group])
+            .set_column_index(Some(vec![vec![column_index]]))
+            .set_offset_index(Some(vec![vec![offset_index]]))
+            .build()
     }
 }

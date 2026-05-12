@@ -38,6 +38,9 @@ pub mod source;
 mod supported_predicates;
 mod writer;
 
+use parquet::basic::{ColumnOrder, SortOrder};
+use parquet::schema::types::SchemaDescriptor;
+
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
@@ -47,3 +50,42 @@ pub use row_filter::build_row_filter;
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use row_group_filter::RowGroupAccessPlanFilter;
 pub use writer::plan_to_parquet;
+
+/// Returns whether Parquet min/max statistics are safe to use for a column.
+///
+/// If `column_orders` is missing, DataFusion follows parquet-rs behavior and
+/// treats the stats as legacy signed-order stats. This means columns whose
+/// natural order is not signed, such as unsigned integers, strings, binary
+/// values, and booleans, do not use min/max pruning for legacy files without
+/// `column_orders`.
+///
+/// Deprecated row group statistics also use legacy signed ordering, so they are
+/// rejected for columns whose natural order is not signed.
+pub(crate) fn can_use_min_max_statistics(
+    parquet_schema: &SchemaDescriptor,
+    parquet_column_index: usize,
+    column_orders: Option<&[ColumnOrder]>,
+    has_deprecated_min_max: bool,
+) -> bool {
+    let column = parquet_schema.column(parquet_column_index);
+    let expected_order = column.sort_order();
+    if has_deprecated_min_max && !expected_order.is_signed() {
+        return false;
+    }
+
+    if expected_order == SortOrder::UNDEFINED {
+        return false;
+    }
+
+    let actual_order = match column_orders {
+        Some(column_orders) => column_orders
+            .get(parquet_column_index)
+            .map(ColumnOrder::sort_order),
+        // Missing column_orders means legacy undefined column order. Parquet-rs
+        // maps that to signed ordering. As a result, columns with non-signed
+        // natural order lose min/max pruning for legacy files.
+        None => Some(SortOrder::SIGNED),
+    };
+
+    actual_order.is_some_and(|actual_order| actual_order == expected_order)
+}
