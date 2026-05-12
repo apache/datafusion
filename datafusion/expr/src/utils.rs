@@ -39,7 +39,7 @@ use datafusion_common::{
 };
 
 #[cfg(not(feature = "sql"))]
-use crate::expr::{ExceptSelectItem, ExcludeSelectItem};
+use crate::sql::{ExceptSelectItem, ExcludeSelectItem};
 use indexmap::IndexSet;
 #[cfg(feature = "sql")]
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
