@@ -496,6 +496,9 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     /// Append a row whose bytes are produced by mapping each byte of `src`
     /// through `map`, in order. Output length equals `src.len()`.
     ///
+    /// Because output length is known up front, this is more efficient than
+    /// `append_with` when computing a byte-to-byte mapping.
+    ///
     /// # Safety
     ///
     /// The bytes produced by `map` over `src.iter()`, in order, must form
@@ -606,13 +609,14 @@ impl StringWriter for GenericStringWriter<'_> {
 }
 
 /// Write `bytes` into `value_buffer`. For repeated small writes,
-/// MutableBuffer::extend_from_slice is quite slow (memcpy per call), so we
-/// extend the buffer here directly.
+/// MutableBuffer::extend_from_slice can be slow (memcpy per call), so we extend
+/// the buffer here directly and force inlining.
 #[inline(always)]
 fn push_bytes_to_mutable_buffer(value_buffer: &mut MutableBuffer, bytes: &[u8]) {
     let n = bytes.len();
     let old_len = value_buffer.len();
     value_buffer.reserve(n);
+
     // SAFETY: we reserved `n` bytes; the source and destination do not alias
     // because `bytes` was passed in by the caller and `value_buffer` is owned.
     unsafe {
@@ -639,6 +643,7 @@ fn push_char_to_mutable_buffer(value_buffer: &mut MutableBuffer, c: char) {
     let len = c.len_utf8();
     let old_len = value_buffer.len();
     value_buffer.reserve(len);
+
     // SAFETY: we reserved `len` bytes above, write valid UTF-8 into those
     // bytes, then update the initialized length to include them.
     unsafe {
