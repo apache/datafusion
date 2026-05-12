@@ -58,6 +58,12 @@ get_or_init_udwf!(
     WindowShift::lead
 );
 
+#[derive(Debug)]
+enum DefaultValue {
+    Literal(ScalarValue),
+    Expression,
+}
+
 /// Create an expression to represent the `lag` window function
 ///
 /// returns value evaluated at the row that is offset rows before the current row within the partition;
@@ -250,9 +256,19 @@ impl WindowUDFImpl for WindowShift {
     ///
     /// For more details see: <https://github.com/apache/datafusion/issues/12717>
     fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
-        parse_expr(expr_args.input_exprs(), expr_args.input_fields())
-            .into_iter()
-            .collect::<Vec<_>>()
+        let input_exprs = expr_args.input_exprs();
+        let input_fields = expr_args.input_fields();
+        let mut result = Vec::with_capacity(input_exprs.len());
+
+        // Refine the first argument (the value expression)
+        if let Some(first) = input_exprs.first() {
+            result.push(
+                parse_expr(input_exprs, input_fields).unwrap_or_else(|_| Arc::clone(first)),
+            );
+        }
+        // Keep all remaining arguments unchanged
+        result.extend(input_exprs.iter().skip(1).cloned());
+        result
     }
 
     fn partition_evaluator(
@@ -391,20 +407,33 @@ fn parse_expr_field(input_fields: &[FieldRef]) -> Result<FieldRef> {
 fn parse_default_value(
     input_exprs: &[Arc<dyn PhysicalExpr>],
     input_types: &[FieldRef],
-) -> Result<ScalarValue> {
+) -> Result<DefaultValue> {
     let expr_field = parse_expr_field(input_types)?;
-    let unparsed = get_scalar_value_from_args(input_exprs, 2)?;
+    let default_value = input_exprs.get(2).cloned();
 
-    unparsed
-        .filter(|v| !v.data_type().is_null())
-        .map(|v| v.cast_to(expr_field.data_type()))
-        .unwrap_or_else(|| ScalarValue::try_from(expr_field.data_type()))
+    match default_value {
+        Some(expr) => {
+            if let Some(literal) = expr.downcast_ref::<expressions::Literal>() {
+                let scalar = literal.value();
+                let scalar = if !scalar.data_type().is_null() {
+                    scalar.cast_to(expr_field.data_type())
+                } else {
+                    ScalarValue::try_from(expr_field.data_type())
+                }?;
+                Ok(DefaultValue::Literal(scalar))
+            } else {
+                Ok(DefaultValue::Expression)
+            }
+            
+        }
+        None => Ok(DefaultValue::Literal(ScalarValue::try_from(expr_field.data_type())?))
+    }
 }
 
 #[derive(Debug)]
 struct WindowShiftEvaluator {
     shift_offset: i64,
-    default_value: ScalarValue,
+    default_value: DefaultValue,
     ignore_nulls: bool,
     // VecDeque contains offset values that between non-null entries
     non_null_offsets: VecDeque<usize>,
@@ -417,7 +446,6 @@ impl WindowShiftEvaluator {
     }
 }
 
-// implement ignore null for evaluate_all
 fn evaluate_all_with_ignore_null(
     array: &ArrayRef,
     offset: i64,
@@ -468,7 +496,7 @@ fn evaluate_all_with_ignore_null(
     let new_array = new_array_results?;
     ScalarValue::iter_to_array(new_array)
 }
-// TODO: change the original arrow::compute::kernels::window::shift impl to support an optional default value
+
 fn shift_with_default_value(
     array: &ArrayRef,
     offset: i64,
@@ -499,6 +527,90 @@ fn shift_with_default_value(
                 .map_err(|e| arrow_datafusion_err!(e))
         }
     }
+}
+
+fn shift_with_array_default(
+    array: &ArrayRef,
+    offset: i64,
+    default_values: &ArrayRef,
+) -> Result<ArrayRef> {
+    use datafusion_common::arrow::compute::concat;
+
+    let value_len = array.len() as i64;
+    if offset == 0 {
+        return Ok(Arc::clone(array));
+    }
+    if offset == i64::MIN || offset.abs() >= value_len {
+        return Ok(default_values.clone());
+    }
+    
+    let slice_offset = (-offset).clamp(0, value_len) as usize;
+    let length = array.len() - offset.unsigned_abs() as usize;
+    let slice = array.slice(slice_offset, length);
+
+    let defaults_slice = if offset > 0 {
+        // Lag: defaults go at the beginning
+        default_values.slice(0, offset.unsigned_abs() as usize)
+    } else {
+        // Lead: defaults go at the end
+        let start = default_values.len() - offset.unsigned_abs() as usize;
+        default_values.slice(start, offset.unsigned_abs() as usize)
+    };
+
+    if offset > 0 {
+        concat(&[defaults_slice.as_ref(), slice.as_ref()])
+    } else {
+        concat(&[slice.as_ref(), defaults_slice.as_ref()])
+    }
+    .map_err(|e| arrow_datafusion_err!(e))
+}
+
+fn evaluate_all_with_ignore_null_and_array_default(
+    array: &ArrayRef,
+    offset: i64,
+    default_values: &ArrayRef,
+    is_lag: bool,
+) -> Result<ArrayRef> {
+    let valid_indices: Vec<usize> =
+        array.nulls().unwrap().valid_indices().collect();
+    let direction = !is_lag;
+    let results: Result<Vec<_>> = (0..array.len())
+        .map(|id| {
+            let result_index = match valid_indices.binary_search(&id) {
+                Ok(pos) => if direction {
+                    pos.checked_add(offset as usize)
+                } else {
+                    pos.checked_sub(offset.unsigned_abs() as usize)
+                }
+                .and_then(|new_pos| {
+                    if new_pos < valid_indices.len() {
+                        Some(valid_indices[new_pos])
+                    } else {
+                        None
+                    }
+                }),
+                Err(pos) => if direction {
+                    pos.checked_add(offset as usize)
+                } else if pos > 0 {
+                    pos.checked_sub(offset.unsigned_abs() as usize)
+                } else {
+                    None
+                }
+                .and_then(|new_pos| {
+                    if new_pos < valid_indices.len() {
+                        Some(valid_indices[new_pos])
+                    } else {
+                        None
+                    }
+                }),
+            };
+            match result_index {
+                Some(index) => ScalarValue::try_from_array(array, index),
+                None => ScalarValue::try_from_array(&default_values, id),
+            }
+        })
+        .collect();
+    ScalarValue::iter_to_array(results?)
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
@@ -532,8 +644,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     }
 
     fn is_causal(&self) -> bool {
-        // Lagging windows are causal by definition:
-        self.is_lag()
+        true
     }
 
     fn evaluate(
@@ -542,7 +653,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         range: &Range<usize>,
     ) -> Result<ScalarValue> {
         let array = &values[0];
-        let len = array.len();
+        let len: usize = array.len();
 
         // LAG mode
         let i = if self.is_lag() {
@@ -640,8 +751,35 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         if !(idx.is_none() || (self.ignore_nulls && array.is_null(idx.unwrap()))) {
             ScalarValue::try_from_array(array, idx.unwrap())
         } else {
-            Ok(self.default_value.clone())
-        }
+            match &self.default_value {
+                DefaultValue::Literal(scalar) => {
+                    // Cast the scalar to match the array type
+                    let casted_scalar = if scalar.data_type() != *array.data_type() {
+                        scalar.cast_to(array.data_type())?
+                    } else {
+                        scalar.clone()
+                    };
+                    Ok(casted_scalar)
+                }
+                DefaultValue::Expression => {
+                    let row_idx = if self.is_lag() {
+                        range.end.saturating_sub(1)
+                    } else {
+                        range.start
+                    };
+                    values.get(2)
+                        .map(|defaults| {
+                            let scalar = ScalarValue::try_from_array(defaults, row_idx)?;
+                            if scalar.data_type() != *array.data_type() {
+                                scalar.cast_to(array.data_type())
+                            } else {
+                                Ok(scalar)
+                            }
+                        })
+                        .unwrap_or_else(|| ScalarValue::try_from(array.data_type()))
+                                }
+                            }
+                        }
     }
 
     fn evaluate_all(
@@ -650,16 +788,44 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         _num_rows: usize,
     ) -> Result<ArrayRef> {
         // LEAD, LAG window functions take single column, values will have size 1
+        eprintln!("evaluate_all called, values.len()={}", values.len());
         let value = &values[0];
-        if !self.ignore_nulls {
-            shift_with_default_value(value, self.shift_offset, &self.default_value)
-        } else {
-            evaluate_all_with_ignore_null(
-                value,
-                self.shift_offset,
-                &self.default_value,
-                self.is_lag(),
-            )
+        match &self.default_value {
+            DefaultValue::Literal(scalar) => {
+                // Cast scalar to match value array type
+                let scalar = if scalar.data_type() != *value.data_type() {
+                    scalar.cast_to(value.data_type())?
+                } else {
+                    scalar.clone()
+                };
+                if !self.ignore_nulls {
+                    shift_with_default_value(value, self.shift_offset, &scalar)
+                } else {
+                    evaluate_all_with_ignore_null(value, self.shift_offset, &scalar, self.is_lag())
+                }
+            }
+            DefaultValue::Expression => {
+                let default_array = values.get(2).cloned().unwrap_or_else(|| {
+                    Arc::new(arrow::array::NullArray::new(value.len()))
+                });
+                // Cast default array to match value array type
+                let default_array = if default_array.data_type() != value.data_type() {
+                    arrow::compute::kernels::cast::cast(&default_array, value.data_type())
+                        .map_err(|e| arrow_datafusion_err!(e))?
+                } else {
+                    default_array
+                };
+                if !self.ignore_nulls {
+                    shift_with_array_default(value, self.shift_offset, &default_array)
+                } else {
+                    evaluate_all_with_ignore_null_and_array_default(
+                        value,
+                        self.shift_offset,
+                        &default_array,
+                        self.is_lag(),
+                    )
+                }
+            }
         }
     }
 
@@ -671,9 +837,51 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::*;
+    use arrow::{array::*, datatypes::Schema};
     use datafusion_common::cast::as_int32_array;
-    use datafusion_physical_expr::expressions::{Column, Literal};
+    use datafusion_expr::ColumnarValue;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+
+    fn make_batch(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(
+            columns
+            .iter()
+            .map(|(name, arr)| Field::new(*name, arr.data_type().clone(), true))
+            .collect::<Vec<_>>()
+        ));
+
+        RecordBatch::try_new(schema, columns.into_iter().map(|(_, arr)| arr).collect()).unwrap()
+    }
+
+    fn evaluate_window_on_batch(
+        window_expr: &WindowShift,
+        input_exprs: &[Arc<dyn PhysicalExpr>],
+        input_fields: &[FieldRef],
+        is_reversed: bool,
+        ignore_nulls: bool,
+        batch: &RecordBatch,
+    ) -> Result<ArrayRef> {
+        let args: Vec<ArrayRef> = input_exprs.iter()
+            .map(|expr| {
+                match expr.evaluate(batch)? {
+                    ColumnarValue::Array(arr) => Ok(arr),
+                    ColumnarValue::Scalar(scalar) => {
+                        scalar.to_array_of_size(batch.num_rows())
+                    }
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let args_struct = PartitionEvaluatorArgs::new(
+            input_exprs,
+            input_fields,
+            is_reversed,
+            ignore_nulls,
+        );
+        let mut evaluator = window_expr.partition_evaluator(args_struct)?;
+
+        evaluator.evaluate_all(&args, batch.num_rows())
+    }
 
     fn test_i32_result(
         expr: WindowShift,
@@ -692,11 +900,347 @@ mod tests {
     }
 
     #[test]
+    fn test_lag_with_column_default() -> Result<()> {
+        let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300, 400, 500, 600, 700, 800]));
+
+        let batch = make_batch(vec![
+            ("salary", salary.clone()),
+            ("bonus", bonus.clone()),
+        ]);
+
+        let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
+        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
+
+        let input_exprs = [salary_expr, offset_expr, default_expr];
+        let input_fields: Vec<FieldRef> = vec![
+            Field::new("salary", DataType::Int32, true).into(),
+            Field::new("offset", DataType::Int64, true).into(),
+            Field::new("bonus", DataType::Int32, true).into(),
+        ];
+
+        let result = evaluate_window_on_batch(
+            &WindowShift::lag(),
+            &input_exprs,
+            &input_fields,
+            false,
+            false,
+            &batch,
+        )?;
+
+        let result = as_int32_array(&result)?;
+        let expected = [
+            Some(100),
+            Some(1),   
+            Some(-2), 
+            Some(3), 
+            Some(-4), 
+            Some(5),  
+            Some(-6),
+            Some(7),
+        ].iter().collect::<Int32Array>();
+
+        assert_eq!(result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_lead_with_column_default() -> Result<()> {
+        let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300, 400, 500, 600, 700, 800]));
+
+        let batch = make_batch(vec![
+            ("salary", salary.clone()),
+            ("bonus", bonus.clone()),
+        ]);
+
+        let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
+        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
+
+        let input_exprs = [salary_expr, offset_expr, default_expr];
+        let input_fields: Vec<FieldRef> = vec![
+            Field::new("salary", DataType::Int32, true).into(),
+            Field::new("offset", DataType::Int64, true).into(),
+            Field::new("bonus", DataType::Int32, true).into(),
+        ];
+
+        let result = evaluate_window_on_batch(
+            &WindowShift::lead(),
+            &input_exprs,
+            &input_fields,
+            false,
+            false,
+            &batch,
+        )?;
+
+        let result = as_int32_array(&result)?;
+        let expected = [
+            Some(-2), 
+            Some(3),
+            Some(-4),
+            Some(5),
+            Some(-6),
+            Some(7), 
+            Some(8),  
+            Some(800),
+        ].iter().collect::<Int32Array>();
+
+        assert_eq!(result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_with_expression_offset_2() -> Result<()> {
+        let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80]));
+
+        let batch = make_batch(vec![
+            ("salary", salary.clone()),
+            ("bonus", bonus.clone()),
+        ]);
+
+        let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
+        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
+
+        let input_exprs = [salary_expr, offset_expr, default_expr];
+        let input_fields: Vec<FieldRef> = vec![
+            Field::new("salary", DataType::Int32, true).into(),
+            Field::new("offset", DataType::Int64, true).into(),
+            Field::new("bonus", DataType::Int32, true).into(),
+        ];
+
+        let result = evaluate_window_on_batch(
+            &WindowShift::lag(),
+            &input_exprs,
+            &input_fields,
+            false,
+            false,
+            &batch,
+        )?;
+
+        let result = as_int32_array(&result)?;
+        let expected = [
+            Some(10), 
+            Some(20),
+            Some(1), 
+            Some(2), 
+            Some(3), 
+            Some(4), 
+            Some(5), 
+            Some(6), 
+        ].iter().collect::<Int32Array>();
+
+        assert_eq!(result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_lead_with_offset_3() -> Result<()> {
+        let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80]));
+
+        let batch = make_batch(vec![
+            ("salary", salary.clone()),
+            ("bonus", bonus.clone()),
+        ]);
+
+        let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
+        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(3)))) as Arc<dyn PhysicalExpr>;
+        let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
+
+        let input_exprs = [salary_expr, offset_expr, default_expr];
+        let input_fields: Vec<FieldRef> = vec![
+            Field::new("salary", DataType::Int32, true).into(),
+            Field::new("offset", DataType::Int64, true).into(),
+            Field::new("bonus", DataType::Int32, true).into(),
+        ];
+
+        let result = evaluate_window_on_batch(
+            &WindowShift::lead(),
+            &input_exprs,
+            &input_fields,
+            false,
+            false,
+            &batch,
+        )?;
+
+        let result = as_int32_array(&result)?;
+        let expected = [
+            Some(4),
+            Some(5), 
+            Some(6), 
+            Some(7), 
+            Some(8), 
+            Some(60), 
+            Some(70), 
+            Some(80), 
+        ].iter().collect::<Int32Array>();
+
+        assert_eq!(result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_with_null_data_and_expression_default() -> Result<()> {
+        let salary: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1), None, Some(3), None, Some(5), Some(6), None, Some(8)
+        ]));
+        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(10), Some(20), Some(30), Some(40), Some(50), Some(60), Some(70), Some(80)
+        ]));
+
+        let batch = make_batch(vec![
+            ("salary", salary.clone()),
+            ("bonus", bonus.clone()),
+        ]);
+
+        let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
+        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
+
+        let input_exprs = [salary_expr, offset_expr, default_expr];
+        let input_fields: Vec<FieldRef> = vec![
+            Field::new("salary", DataType::Int32, true).into(),
+            Field::new("offset", DataType::Int64, true).into(),
+            Field::new("bonus", DataType::Int32, true).into(),
+        ];
+
+        let result = evaluate_window_on_batch(
+            &WindowShift::lag(),
+            &input_exprs,
+            &input_fields,
+            false,
+            false,
+            &batch,
+        )?;
+
+        let result = as_int32_array(&result)?;
+        let expected = [
+            Some(10), 
+            Some(1),  
+            None,  
+            Some(3),  
+            None,  
+            Some(5),
+            Some(6),
+            None,
+        ].iter().collect::<Int32Array>();
+
+        assert_eq!(result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_ignore_nulls_with_expression_default() -> Result<()> {
+        let salary: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1), None, Some(3), None, Some(5), Some(6), None, Some(8)
+        ]));
+        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(10), Some(20), Some(30), Some(40), Some(50), Some(60), Some(70), Some(80)
+        ]));
+
+        let batch = make_batch(vec![
+            ("salary", salary.clone()),
+            ("bonus", bonus.clone()),
+        ]);
+
+        let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
+        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
+
+        let input_exprs = [salary_expr, offset_expr, default_expr];
+        let input_fields: Vec<FieldRef> = vec![
+            Field::new("salary", DataType::Int32, true).into(),
+            Field::new("offset", DataType::Int64, true).into(),
+            Field::new("bonus", DataType::Int32, true).into(),
+        ];
+
+        let result = evaluate_window_on_batch(
+            &WindowShift::lag(),
+            &input_exprs,
+            &input_fields,
+            false,
+            true,
+            &batch,
+        )?;
+
+        let result = as_int32_array(&result)?;
+        let expected = [
+            Some(10), 
+            Some(1),
+            Some(1),  
+            Some(3), 
+            Some(3),
+            Some(5), 
+            Some(6),  
+            Some(6),
+        ].iter().collect::<Int32Array>();
+
+        assert_eq!(result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_with_complex_expression_default() -> Result<()> {
+        let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80]));
+
+        let batch = make_batch(vec![
+            ("salary", salary.clone()),
+            ("bonus", bonus.clone()),
+        ]);
+
+        let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
+        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+        
+        let default_expr = BinaryExpr::new(
+            Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>,
+            datafusion_expr::Operator::Multiply,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>,
+        );
+        let default_expr = Arc::new(default_expr) as Arc<dyn PhysicalExpr>;
+
+        let input_exprs = [salary_expr, offset_expr, default_expr];
+        let input_fields: Vec<FieldRef> = vec![
+            Field::new("salary", DataType::Int32, true).into(),
+            Field::new("offset", DataType::Int64, true).into(),
+            Field::new("default", DataType::Int32, true).into(),
+        ];
+
+        let result = evaluate_window_on_batch(
+            &WindowShift::lag(),
+            &input_exprs,
+            &input_fields,
+            false,
+            false,
+            &batch,
+        )?;
+
+        let result = as_int32_array(&result)?;
+        let expected = [
+            Some(20),  // bonus * 2
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+            Some(7),
+        ].iter().collect::<Int32Array>();
+
+        assert_eq!(result, &expected);
+        Ok(())
+    }
+
+    #[test]
     fn lead_lag_get_range() -> Result<()> {
         // LAG(2)
         let lag_fn = WindowShiftEvaluator {
             shift_offset: 2,
-            default_value: ScalarValue::Null,
+            default_value: DefaultValue::Literal(ScalarValue::Null),
             ignore_nulls: false,
             non_null_offsets: Default::default(),
         };
@@ -706,7 +1250,7 @@ mod tests {
         // LAG(2 ignore nulls)
         let lag_fn = WindowShiftEvaluator {
             shift_offset: 2,
-            default_value: ScalarValue::Null,
+            default_value: DefaultValue::Literal(ScalarValue::Null),
             ignore_nulls: true,
             // models data received [<Some>, <Some>, <Some>, NULL, <Some>, NULL, <current row>, ...]
             non_null_offsets: vec![2, 2].into(), // [1, 1, 2, 2] actually, just last 2 is used
@@ -716,7 +1260,7 @@ mod tests {
         // LEAD(2)
         let lead_fn = WindowShiftEvaluator {
             shift_offset: -2,
-            default_value: ScalarValue::Null,
+            default_value: DefaultValue::Literal(ScalarValue::Null),
             ignore_nulls: false,
             non_null_offsets: Default::default(),
         };
@@ -726,7 +1270,7 @@ mod tests {
         // LEAD(2 ignore nulls)
         let lead_fn = WindowShiftEvaluator {
             shift_offset: -2,
-            default_value: ScalarValue::Null,
+            default_value: DefaultValue::Literal(ScalarValue::Null),
             ignore_nulls: true,
             // models data received [..., <current row>, NULL, <Some>, NULL, <Some>, ..]
             non_null_offsets: vec![2, 2].into(),

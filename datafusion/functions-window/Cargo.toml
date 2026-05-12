@@ -54,6 +54,8 @@ log = { workspace = true }
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
+datafusion = { workspace = true, features = ["sql"] }  # Add this
+tokio = { workspace = true, features = ["macros", "rt"] }  # Add this
 
 [[bench]]
 name = "nth_value"
