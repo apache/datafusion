@@ -347,7 +347,7 @@ fn general_replace<O: OffsetSizeTrait>(
         let mut counter = 0;
 
         // All elements are false, no need to replace, just copy original data
-        if !eq_array.has_true() {
+        if n <= 0 || !eq_array.has_true() {
             mutable.extend(
                 original_idx.to_usize().unwrap(),
                 start.to_usize().unwrap(),
@@ -358,9 +358,18 @@ fn general_replace<O: OffsetSizeTrait>(
             continue;
         }
 
+        let mut pending_retain: Option<O> = None;
         for (i, to_replace) in eq_array.iter().enumerate() {
             let i = O::usize_as(i);
-            if let Some(true) = to_replace {
+            if to_replace == Some(true) && counter < n {
+                // Flush any pending retain run before emitting the replacement.
+                if let Some(rs) = pending_retain.take() {
+                    mutable.extend(
+                        original_idx.to_usize().unwrap(),
+                        (start + rs).to_usize().unwrap(),
+                        (start + i).to_usize().unwrap(),
+                    );
+                }
                 mutable.extend(replace_idx.to_usize().unwrap(), row_index, row_index + 1);
                 counter += 1;
                 if counter == n {
@@ -372,14 +381,21 @@ fn general_replace<O: OffsetSizeTrait>(
                     );
                     break;
                 }
-            } else {
-                // copy original data for false / null matches
-                mutable.extend(
-                    original_idx.to_usize().unwrap(),
-                    (start + i).to_usize().unwrap(),
-                    (start + i).to_usize().unwrap() + 1,
-                );
+            } else if pending_retain.is_none() {
+                pending_retain = Some(i);
             }
+        }
+
+        // Flush trailing retain run when we exited the loop without ever
+        // hitting `counter == n` (i.e. fewer than `n` matches in this row).
+        if counter < n
+            && let Some(rs) = pending_retain
+        {
+            mutable.extend(
+                original_idx.to_usize().unwrap(),
+                (start + rs).to_usize().unwrap(),
+                end.to_usize().unwrap(),
+            );
         }
 
         offsets.push(offsets[row_index] + (end - start));

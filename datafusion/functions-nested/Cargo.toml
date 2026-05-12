@@ -108,6 +108,10 @@ name = "array_remove"
 
 [[bench]]
 harness = false
+name = "array_replace"
+
+[[bench]]
+harness = false
 name = "array_repeat"
 
 [[bench]]
