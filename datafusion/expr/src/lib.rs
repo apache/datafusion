@@ -80,6 +80,8 @@ pub mod statistics {
 mod predicate_bounds;
 pub mod preimage;
 pub mod ptr_eq;
+#[cfg(not(feature = "sql"))]
+pub mod sql;
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;

@@ -100,7 +100,7 @@ fn spark_array_repeat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
     let return_type = return_field.data_type().clone();
 
     // A NULL element should be repeated into the array, not cause a NULL result.
-    let null_mask = compute_null_mask(&arg_values[1..], number_rows)?;
+    let null_mask = compute_null_mask(&arg_values[1..]);
 
     // If count is null then return NULL immediately
     if matches!(null_mask, NullMaskResolution::ReturnNull) {

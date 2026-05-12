@@ -148,6 +148,32 @@ impl Unparser<'_> {
                 ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+
+                Ok(ast::Expr::Nested(Box::new(ast::Expr::IsDistinctFrom(
+                    Box::new(l),
+                    Box::new(r),
+                ))))
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsNotDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+
+                Ok(ast::Expr::Nested(Box::new(ast::Expr::IsNotDistinctFrom(
+                    Box::new(l),
+                    Box::new(r),
+                ))))
+            }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
@@ -3680,5 +3706,26 @@ mod tests {
         assert_eq!(actual, "CAST(`a` AS TIMESTAMP)");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_is_distinct_from() {
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS DISTINCT FROM true)");
+
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsNotDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS NOT DISTINCT FROM true)");
     }
 }
