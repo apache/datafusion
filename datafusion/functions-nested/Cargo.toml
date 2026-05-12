@@ -133,3 +133,7 @@ name = "string_to_array"
 [[bench]]
 harness = false
 name = "array_resize"
+
+[[bench]]
+harness = false
+name = "array_range"
