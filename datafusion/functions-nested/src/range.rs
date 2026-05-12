@@ -33,8 +33,7 @@ use arrow::{
 };
 use datafusion_common::internal_err;
 use datafusion_common::{
-    Result, exec_datafusion_err, exec_err, not_impl_datafusion_err,
-    utils::take_function_args,
+    Result, exec_datafusion_err, exec_err, utils::take_function_args,
 };
 use datafusion_common::{
     ScalarValue,
@@ -324,15 +323,12 @@ impl Range {
                     );
                 }
                 Some((start, stop, step)) => {
-                    // Below, we utilize `usize` to represent steps.
-                    // On 32-bit targets, the absolute value of `i64` may fail to fit into `usize`.
-                    let step_abs =
-                        usize::try_from(step.unsigned_abs()).map_err(|_| {
-                            not_impl_datafusion_err!("step {} can't fit into usize", step)
-                        })?;
-                    values.extend(
-                        gen_range_iter(start, stop, step < 0, self.include_upper_bound)
-                            .step_by(step_abs),
+                    generate_range_values(
+                        start,
+                        stop,
+                        step,
+                        self.include_upper_bound,
+                        &mut values,
                     );
                     offsets.push(values.len() as i32);
                     valid.append_non_null();
@@ -542,32 +538,59 @@ fn retrieve_range_args(
     Some((start, stop, step))
 }
 
-/// Returns an iterator of i64 values from start to stop
-fn gen_range_iter(
+/// Generate integer range values directly into the provided buffer.
+#[inline]
+fn generate_range_values(
     start: i64,
     stop: i64,
-    decreasing: bool,
+    step: i64,
     include_upper: bool,
-) -> Box<dyn Iterator<Item = i64>> {
-    match (decreasing, include_upper) {
-        // Decreasing range, stop is inclusive
-        (true, true) => Box::new((stop..=start).rev()),
-        // Decreasing range, stop is exclusive
-        (true, false) => {
-            if stop == i64::MAX {
-                // start is never greater than stop, and stop is exclusive,
-                // so the decreasing range must be empty.
-                Box::new(std::iter::empty())
-            } else {
-                // Increase the stop value by one to exclude it.
-                // Since stop is not i64::MAX, `stop + 1` will not overflow.
-                Box::new((stop + 1..=start).rev())
+    values: &mut Vec<i64>,
+) {
+    if !include_upper && start == stop {
+        return;
+    }
+
+    if step > 0 {
+        let limit = if include_upper {
+            stop
+        } else {
+            stop.saturating_sub(1)
+        };
+        if start > limit {
+            return;
+        }
+        let count =
+            (start.abs_diff(limit) / step.unsigned_abs()).saturating_add(1) as usize;
+        values.reserve(count);
+        let mut current = start;
+        while current <= limit {
+            values.push(current);
+            match current.checked_add(step) {
+                Some(next) => current = next,
+                None => break,
             }
         }
-        // Increasing range, stop is inclusive
-        (false, true) => Box::new(start..=stop),
-        // Increasing range, stop is exclusive
-        (false, false) => Box::new(start..stop),
+    } else if step < 0 {
+        let limit = if include_upper {
+            stop
+        } else {
+            stop.saturating_add(1)
+        };
+        if start < limit {
+            return;
+        }
+        let count =
+            (start.abs_diff(limit) / step.unsigned_abs()).saturating_add(1) as usize;
+        values.reserve(count);
+        let mut current = start;
+        while current >= limit {
+            values.push(current);
+            match current.checked_add(step) {
+                Some(next) => current = next,
+                None => break,
+            }
+        }
     }
 }
 

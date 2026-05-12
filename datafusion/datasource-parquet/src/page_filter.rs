@@ -199,9 +199,16 @@ impl PagePruningAccessPlanFilter {
         for row_group_index in row_group_indexes {
             // The selection for this particular row group
             let mut overall_selection = None;
-            let mut total_pages_in_group = 0;
+
+            let total_pages_in_group =
+                parquet_metadata.offset_index().map_or(0, |offset_index| {
+                    offset_index[row_group_index]
+                        .first()
+                        .map_or(0, |column| column.page_locations.len())
+                });
             // stores the indexes of the matched pages
-            let mut matched_pages_in_group: Option<HashSet<usize>> = None;
+            let mut matched_pages_in_group: HashSet<usize> =
+                HashSet::from_iter(0..total_pages_in_group);
 
             for predicate in page_index_predicates {
                 let column = predicate
@@ -245,19 +252,13 @@ impl PagePruningAccessPlanFilter {
                     predicate.predicate_expr(),
                 );
 
-                total_pages_in_group = pages.len();
                 let matched_pages_indexes: HashSet<_> = pages
                     .into_iter()
                     .enumerate()
                     .filter(|x| x.1)
                     .map(|x| x.0)
                     .collect();
-                if let Some(ref mut m) = matched_pages_in_group {
-                    // only keep pages that also matched in the previous predicate(s)
-                    m.retain(|x| matched_pages_indexes.contains(x));
-                } else {
-                    matched_pages_in_group = Some(matched_pages_indexes);
-                }
+                matched_pages_in_group.retain(|x| matched_pages_indexes.contains(x));
 
                 overall_selection = update_selection(overall_selection, selection);
 
@@ -293,9 +294,12 @@ impl PagePruningAccessPlanFilter {
                         skipping all {rows_skipped} rows in row group {row_group_index}"
                     );
                 }
+            } else {
+                total_select +=
+                    parquet_metadata.row_group(row_group_index).num_rows() as usize;
             }
 
-            let pages_matched = matched_pages_in_group.map_or(0, |m| m.len());
+            let pages_matched = matched_pages_in_group.len();
             total_pages_select += pages_matched;
             total_pages_skip += total_pages_in_group - pages_matched;
         }

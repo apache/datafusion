@@ -1777,6 +1777,15 @@ fn make_i32_batch(
     RecordBatch::try_new(schema, vec![array]).map_err(DataFusionError::from)
 }
 
+fn make_nullable_i32_batch(
+    name: &str,
+    values: Vec<Option<i32>>,
+) -> datafusion_common::error::Result<RecordBatch> {
+    let schema = Arc::new(Schema::new(vec![Field::new(name, DataType::Int32, true)]));
+    let array: ArrayRef = Arc::new(Int32Array::from(values));
+    RecordBatch::try_new(schema, vec![array]).map_err(DataFusionError::from)
+}
+
 // Helper function to create a batch with two Int32 columns
 fn make_two_col_i32_batch(
     name_a: &str,
@@ -1791,6 +1800,72 @@ fn make_two_col_i32_batch(
     let array_a: ArrayRef = Arc::new(Int32Array::from(values_a));
     let array_b: ArrayRef = Arc::new(Int32Array::from(values_b));
     RecordBatch::try_new(schema, vec![array_a, array_b]).map_err(DataFusionError::from)
+}
+
+#[tokio::test]
+async fn prune_is_not_distinct_from_i32() -> datafusion_common::error::Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batches = vec![
+        make_nullable_i32_batch("a", vec![None, None])?,
+        make_nullable_i32_batch("a", vec![Some(0), Some(0)])?,
+        make_nullable_i32_batch("a", vec![Some(0), Some(1)])?,
+        make_nullable_i32_batch("a", vec![Some(2), Some(3)])?,
+        make_nullable_i32_batch("a", vec![None, Some(5)])?,
+    ];
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Int)
+        .with_query("SELECT a FROM t WHERE a IS NOT DISTINCT FROM 0")
+        .with_expected_errors(Some(0))
+        .with_expected_rows(3)
+        .with_pruned_files(Some(0))
+        .with_matched_by_stats(Some(2))
+        .with_fully_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(3))
+        .with_limit_pruned_row_groups(Some(0))
+        .test_row_group_prune_with_custom_data(schema.clone(), batches.clone(), 2)
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Int)
+        .with_query("SELECT a FROM t WHERE a IS NOT DISTINCT FROM NULL")
+        .with_expected_errors(Some(0))
+        .with_expected_rows(3)
+        .with_pruned_files(Some(0))
+        .with_matched_by_stats(Some(2))
+        .with_fully_matched_by_stats(Some(0))
+        .with_pruned_by_stats(Some(3))
+        .with_limit_pruned_row_groups(Some(0))
+        .test_row_group_prune_with_custom_data(schema.clone(), batches.clone(), 2)
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Int)
+        .with_query("SELECT a FROM t WHERE a IS DISTINCT FROM 0")
+        .with_expected_errors(Some(0))
+        .with_expected_rows(7)
+        .with_pruned_files(Some(0))
+        .with_matched_by_stats(Some(4))
+        .with_fully_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_limit_pruned_row_groups(Some(0))
+        .test_row_group_prune_with_custom_data(schema.clone(), batches.clone(), 2)
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Int)
+        .with_query("SELECT a FROM t WHERE a IS DISTINCT FROM NULL")
+        .with_expected_errors(Some(0))
+        .with_expected_rows(7)
+        .with_pruned_files(Some(0))
+        .with_matched_by_stats(Some(4))
+        .with_fully_matched_by_stats(Some(3))
+        .with_pruned_by_stats(Some(1))
+        .with_limit_pruned_row_groups(Some(0))
+        .test_row_group_prune_with_custom_data(schema, batches, 2)
+        .await;
+
+    Ok(())
 }
 
 #[tokio::test]
