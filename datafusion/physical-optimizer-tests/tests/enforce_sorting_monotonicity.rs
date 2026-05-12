@@ -15,7 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_optimizer::test_utils::{
+// `EnforceSortingTest` (below) takes its plan field by value, matching the
+// duplicated source from `tests/enforce_sorting.rs`. Silence the lint at
+// file level so we don't have to touch the duplicated helper.
+#![expect(clippy::needless_pass_by_value)]
+
+// `test_utils` is shared with `core/tests/physical_optimizer/*` —
+// pull it in via `#[path]` so the helper file has a single source
+// of truth. Each integration-test binary only uses a subset of the
+// helpers, so silence `dead_code` for the others. `clippy::allow_attributes`
+// (in the same allow) silences clippy's complaint about the `allow`
+// itself, which the workspace lints would otherwise reject.
+#[allow(dead_code, clippy::allow_attributes)]
+#[path = "../../core/tests/physical_optimizer/test_utils.rs"]
+mod test_utils;
+
+use test_utils::{
     create_test_schema, parquet_exec_with_sort, sort_exec, sort_expr_options,
 };
 use arrow::datatypes::DataType;
@@ -34,8 +49,119 @@ use datafusion_physical_plan::windows::{
     BoundedWindowAggExec, WindowAggExec, create_window_expr,
 };
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode};
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{
+    OrderPreservationContext, replace_with_order_preserving_variants,
+};
+use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{
+    SortPushDown, assign_initial_requirements, pushdown_sorts,
+};
+use datafusion_physical_optimizer::enforce_sorting::{
+    EnforceSorting, PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort,
+    ensure_sorting, parallelize_sorts,
+};
+use datafusion_physical_plan::displayable;
 use insta::assert_snapshot;
 use std::sync::{Arc, LazyLock};
+use test_utils::check_integrity;
+
+/// Runs the sort enforcement optimizer and asserts the plan against the
+/// original and expected plans.
+///
+/// Duplicated from `tests/enforce_sorting.rs` because each integration test
+/// is its own crate root and cannot reach into a sibling integration test's
+/// `pub(crate)` items. The duplication is intentional and transient — once
+/// `EnsureRequirements` lands (apache/datafusion#21976) this helper goes
+/// away with the rule it tests.
+pub(crate) struct EnforceSortingTest {
+    plan: Arc<dyn ExecutionPlan>,
+    repartition_sorts: bool,
+}
+
+impl EnforceSortingTest {
+    pub(crate) fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            plan,
+            repartition_sorts: false,
+        }
+    }
+
+    pub(crate) fn with_repartition_sorts(mut self, repartition_sorts: bool) -> Self {
+        self.repartition_sorts = repartition_sorts;
+        self
+    }
+
+    pub(crate) fn run(&self) -> String {
+        let mut config = ConfigOptions::new();
+        config.optimizer.repartition_sorts = self.repartition_sorts;
+
+        {
+            let plan_requirements =
+                PlanWithCorrespondingSort::new_default(Arc::clone(&self.plan));
+            let adjusted = plan_requirements
+                .transform_up(ensure_sorting)
+                .data()
+                .and_then(check_integrity)
+                .expect("check_integrity failed after ensure_sorting");
+
+            let new_plan = if config.optimizer.repartition_sorts {
+                let plan_with_coalesce_partitions =
+                    PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
+                let parallel = plan_with_coalesce_partitions
+                    .transform_up(parallelize_sorts)
+                    .data()
+                    .and_then(check_integrity)
+                    .expect("check_integrity failed after parallelize_sorts");
+                parallel.plan
+            } else {
+                adjusted.plan
+            };
+
+            let plan_with_pipeline_fixer =
+                OrderPreservationContext::new_default(new_plan);
+            let updated_plan = plan_with_pipeline_fixer
+                .transform_up(|plan_with_pipeline_fixer| {
+                    replace_with_order_preserving_variants(
+                        plan_with_pipeline_fixer,
+                        false,
+                        true,
+                        &config,
+                    )
+                })
+                .data()
+                .and_then(check_integrity)
+                .expect(
+                    "check_integrity failed after replace_with_order_preserving_variants",
+                );
+
+            let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
+            assign_initial_requirements(&mut sort_pushdown);
+            check_integrity(
+                pushdown_sorts(sort_pushdown).expect("pushdown_sorts failed"),
+            )
+            .expect("check_integrity failed after pushdown_sorts");
+        }
+        let input_plan_string = displayable(self.plan.as_ref()).indent(true).to_string();
+
+        let optimized_physical_plan = EnforceSorting::new()
+            .optimize(Arc::clone(&self.plan), &config)
+            .expect("enforce_sorting failed");
+
+        let optimized_plan_string = displayable(optimized_physical_plan.as_ref())
+            .indent(true)
+            .to_string();
+
+        if input_plan_string == optimized_plan_string {
+            format!("Input / Optimized Plan:\n{input_plan_string}",)
+        } else {
+            format!(
+                "Input Plan:\n{input_plan_string}\nOptimized Plan:\n{optimized_plan_string}",
+            )
+        }
+    }
+}
 
 // Function definition - Alias of the resulting column - Arguments of the function
 #[derive(Clone)]
@@ -207,7 +333,7 @@ impl TestWindowCase {
         let ordering = LexOrdering::new(sort_expr).unwrap();
         let physical_plan = sort_exec(ordering, window_exec);
 
-        crate::physical_optimizer::enforce_sorting::EnforceSortingTest::new(physical_plan)
+        EnforceSortingTest::new(physical_plan)
             .with_repartition_sorts(true)
             .run()
     }

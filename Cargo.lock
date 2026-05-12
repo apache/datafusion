@@ -2407,6 +2407,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-physical-optimizer-tests"
+version = "53.1.0"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "bytes",
+ "datafusion",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-expr-common",
+ "datafusion-functions",
+ "datafusion-functions-aggregate",
+ "datafusion-functions-window",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-optimizer",
+ "datafusion-physical-plan",
+ "futures",
+ "insta",
+ "object_store",
+ "regex",
+ "rstest",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "datafusion-physical-plan"
 version = "53.1.0"
 dependencies = [

@@ -20,10 +20,10 @@
 #[expect(clippy::needless_pass_by_value)]
 mod aggregate_statistics;
 mod combine_partial_final_agg;
-#[expect(clippy::needless_pass_by_value)]
-mod enforce_distribution;
-mod enforce_sorting;
-mod enforce_sorting_monotonicity;
+// `enforce_distribution`, `enforce_sorting`, `enforce_sorting_monotonicity`,
+// and `replace_with_order_preserving_variants` have moved to
+// `datafusion/physical-optimizer/tests/` so they live alongside the rules
+// they exercise. See <https://github.com/apache/datafusion/pull/21976>.
 mod filter_pushdown;
 mod join_selection;
 #[expect(clippy::needless_pass_by_value)]
@@ -32,9 +32,13 @@ mod limited_distinct_aggregation;
 mod partition_statistics;
 mod projection_pushdown;
 mod pushdown_sort;
-mod replace_with_order_preserving_variants;
 mod sanity_checker;
-#[expect(clippy::needless_pass_by_value)]
+// `test_utils` still hosts shared helpers for the remaining integration
+// tests in this directory. Some helpers were only consumed by the four
+// modules that moved to `physical-optimizer/tests/`, so the unused ones
+// are dead from this binary's perspective — silence the lint here until
+// the rest of these tests move alongside their rules.
+#[expect(clippy::needless_pass_by_value, dead_code)]
 mod test_utils;
 mod window_optimize;
 mod window_topn;

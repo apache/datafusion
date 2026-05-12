@@ -15,11 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Matches the `#[expect(clippy::needless_pass_by_value)]` annotation the
+// previous `core/tests/physical_optimizer/mod.rs` carried on this module.
+#![expect(clippy::needless_pass_by_value)]
+
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::{
+// `test_utils` is shared with `core/tests/physical_optimizer/*` —
+// pull it in via `#[path]` so the helper file has a single source
+// of truth. Each integration-test binary only uses a subset of the
+// helpers, so silence `dead_code` for the others. `clippy::allow_attributes`
+// (in the same allow) silences clippy's complaint about the `allow`
+// itself, which the workspace lints would otherwise reject.
+#[allow(dead_code, clippy::allow_attributes)]
+#[path = "../../core/tests/physical_optimizer/test_utils.rs"]
+mod test_utils;
+
+use test_utils::{
     check_integrity, coalesce_partitions_exec, parquet_exec_with_sort,
     parquet_exec_with_stats, repartition_exec, schema, sort_exec,
     sort_exec_with_preserve_partitioning, sort_merge_join_exec,
@@ -527,14 +541,7 @@ fn hash_join_exec(
     join_on: &JoinOn,
     join_type: &JoinType,
 ) -> Arc<dyn ExecutionPlan> {
-    crate::physical_optimizer::test_utils::hash_join_exec(
-        left,
-        right,
-        join_on.clone(),
-        None,
-        join_type,
-    )
-    .unwrap()
+    test_utils::hash_join_exec(left, right, join_on.clone(), None, join_type).unwrap()
 }
 
 fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -2559,7 +2566,6 @@ fn repartition_transitively_past_sort_with_filter() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "parquet")]
 fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()> {
     let schema = schema();
     let sort_key = [PhysicalSortExpr {

@@ -15,9 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Some helpers below take `Vec` / `Arc<dyn ...>` by value; the
+// upstream `core` tests inherited a `#[expect(clippy::needless_pass_by_value)]`
+// from the parent module that no longer applies once this file becomes
+// its own integration-test binary, so re-apply it at file level.
+#![expect(clippy::needless_pass_by_value)]
+
 use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::{
+// `test_utils` is shared with `core/tests/physical_optimizer/*` —
+// pull it in via `#[path]` so the helper file has a single source
+// of truth. Each integration-test binary only uses a subset of the
+// helpers, so silence `dead_code` for the others. `clippy::allow_attributes`
+// (in the same allow) silences clippy's complaint about the `allow`
+// itself, which the workspace lints would otherwise reject.
+#[allow(dead_code, clippy::allow_attributes)]
+#[path = "../../core/tests/physical_optimizer/test_utils.rs"]
+mod test_utils;
+
+use test_utils::{
     check_integrity, coalesce_partitions_exec, create_test_schema3,
     parquet_exec_with_sort, sort_exec, sort_exec_with_preserve_partitioning,
     sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,

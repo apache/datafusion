@@ -15,10 +15,55 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Some helpers below take `Vec` / `Arc<dyn ...>` by value; the
+// upstream `core` tests inherited a `#[expect(clippy::needless_pass_by_value)]`
+// from the parent module that no longer applies once this file becomes
+// its own integration-test binary, so re-apply it at file level.
+#![expect(clippy::needless_pass_by_value)]
+
 use std::sync::Arc;
 
-use crate::memory_limit::DummyStreamPartition;
-use crate::physical_optimizer::test_utils::{
+use arrow::datatypes::SchemaRef as DummyStreamSchema;
+use arrow::record_batch::RecordBatch as DummyStreamRecordBatch;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::streaming::PartitionStream;
+use futures::StreamExt;
+
+/// Minimal `PartitionStream` used by a handful of tests below. Inlined here
+/// (copied from `core/tests/memory_limit/mod.rs::DummyStreamPartition`) so
+/// this integration test stays self-contained instead of taking a fragile
+/// `#[path]` reference into another integration-test binary.
+#[derive(Debug)]
+pub(crate) struct DummyStreamPartition {
+    pub(crate) schema: DummyStreamSchema,
+    pub(crate) batches: Vec<DummyStreamRecordBatch>,
+}
+
+impl PartitionStream for DummyStreamPartition {
+    fn schema(&self) -> &DummyStreamSchema {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            futures::stream::iter(self.batches.clone()).map(Ok),
+        ))
+    }
+}
+
+// `test_utils` is shared with `core/tests/physical_optimizer/*` —
+// pull it in via `#[path]` so the helper file has a single source
+// of truth. Each integration-test binary only uses a subset of the
+// helpers, so silence `dead_code` for the others. `clippy::allow_attributes`
+// (in the same allow) silences clippy's complaint about the `allow`
+// itself, which the workspace lints would otherwise reject.
+#[allow(dead_code, clippy::allow_attributes)]
+#[path = "../../core/tests/physical_optimizer/test_utils.rs"]
+mod test_utils;
+
+use test_utils::{
     RequirementsTestExec, aggregate_exec, bounded_window_exec,
     bounded_window_exec_with_partition, check_integrity, coalesce_partitions_exec,
     create_test_schema, create_test_schema2, create_test_schema3, filter_exec,
@@ -61,10 +106,10 @@ use datafusion::prelude::*;
 use arrow::array::{record_batch, ArrayRef, Int32Array, RecordBatch};
 use arrow::datatypes::{Field};
 use arrow_schema::Schema;
-use datafusion_execution::TaskContext;
+// `TaskContext` already imported above for `DummyStreamPartition`.
 use datafusion_catalog::streaming::StreamingTable;
 
-use futures::StreamExt;
+// `futures::StreamExt` already imported above for `DummyStreamPartition`.
 use insta::{Settings, assert_snapshot};
 
 /// Create a sorted Csv exec

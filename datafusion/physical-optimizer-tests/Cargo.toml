@@ -1,0 +1,73 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "datafusion-physical-optimizer-tests"
+description = "Integration tests for the DataFusion physical optimizer rules"
+keywords = ["datafusion", "tests"]
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+# This crate hosts integration tests that need to drive the optimizer
+# through the high-level `datafusion::prelude::SessionContext`. It must
+# not appear in the runtime dependency graph of any publishable crate
+# (otherwise `datafusion -> datafusion-physical-optimizer-tests ->
+# datafusion` would be a publish-blocking cycle), so it is excluded
+# from publication.
+publish = false
+
+[lints]
+workspace = true
+
+# No library — this crate exists purely to host integration tests under
+# `tests/`. Disable the default `lib` and `bin` autodiscovery.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The crate has no runtime dependencies — the empty lib.rs only exists
+# so cargo treats this directory as a workspace member with `tests/`.
+
+[dev-dependencies]
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+bytes = { workspace = true }
+datafusion = { workspace = true, default-features = true }
+datafusion-catalog = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
+datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
+datafusion-functions = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-window = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
+datafusion-physical-optimizer = { workspace = true }
+datafusion-physical-plan = { workspace = true }
+futures = { workspace = true }
+insta = { workspace = true }
+object_store = { workspace = true }
+regex = { workspace = true }
+rstest = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
+url = { workspace = true }

@@ -44,6 +44,7 @@ members = [
     "datafusion/physical-expr-adapter",
     "datafusion/physical-expr-common",
     "datafusion/physical-optimizer",
+    "datafusion/physical-optimizer-tests",
     "datafusion/pruning",
     "datafusion/physical-plan",
     "datafusion/proto",
