@@ -8160,6 +8160,11 @@ CREATE TABLE t1(v1 int);
 statement error DataFusion error: Error during planning: Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead
 SELECT v1 FROM t1 WHERE ((count(v1) % 1) << 1) > 0;
 
+# issue: https://github.com/apache/datafusion/issues/11748
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false HAVING false;
+----
+
 statement ok
 DROP TABLE t1;
 
