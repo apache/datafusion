@@ -350,7 +350,14 @@ impl ExternalSorter {
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
     ///
-    /// Updates memory usage metrics, and possibly triggers spilling to disk
+    /// Updates memory usage metrics, and possibly triggers spilling to disk.
+    ///
+    /// The live `(false, None)` path in [`SortExec::execute`] inlines this
+    /// logic so that the inner `try_grow_async` await runs inside a
+    /// `select!` that also drains `reclaim_rx` — see the closure in
+    /// `execute`. This method is retained for tests that drive an
+    /// `ExternalSorter` directly without a reclaim channel.
+    #[cfg(test)]
     async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
         if input.num_rows() == 0 {
             return Ok(());
@@ -769,6 +776,10 @@ impl ExternalSorter {
 
     /// Reserves memory to be able to accommodate the given batch.
     /// If memory is scarce, tries to spill current in-memory batches to disk first.
+    ///
+    /// Only called from [`Self::insert_batch`], which itself only runs
+    /// in tests now — see comment there.
+    #[cfg(test)]
     async fn reserve_memory_for_batch_and_maybe_spill(
         &mut self,
         input: &RecordBatch,
@@ -1314,17 +1325,24 @@ impl ExecutionPlan for SortExec {
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
-                        // State machine: spill or insert, never both. The
-                        // freed-byte reply is sent only after the spill
-                        // completes, so the pool sees recoverable bytes.
-                        // `biased` ensures spill wins over insert under
-                        // pressure.
+                        // State machine: spill or insert. The inner
+                        // `try_grow_async` award for an incoming batch
+                        // is wrapped in its own `select!` against
+                        // `reclaim_rx` so that a sibling targeting this
+                        // sorter for reclaim is serviced even while we
+                        // ourselves are waiting for memory — otherwise
+                        // a fat sorter sitting in `try_grow_async.await`
+                        // would never drain its inbound reclaim queue,
+                        // and a concurrent sibling's
+                        // `reclaimer.reclaim(...).await` would never
+                        // resolve. `biased` ensures reclaim wins over
+                        // insert under pressure.
                         //
                         // Cancellation: selecting reclaim drops the in-flight
                         // `input.next()`. Safe for cancellation-safe inputs
                         // (channel receivers, e.g. RepartitionExec); other
                         // inputs could drop a batch here.
-                        loop {
+                        'outer: loop {
                             tokio::select! {
                                 biased;
                                 Some(resp_tx) = reclaim_rx.recv() => {
@@ -1344,11 +1362,79 @@ impl ExecutionPlan for SortExec {
                                     let _ = resp_tx
                                         .send(before.saturating_sub(after));
                                 }
-                                next = input.next() => match next {
-                                    Some(batch) => {
-                                        sorter.insert_batch(batch?).await?;
+                                next = input.next() => {
+                                    let Some(batch_result) = next else {
+                                        break 'outer;
+                                    };
+                                    let batch = batch_result?;
+                                    if batch.num_rows() == 0 {
+                                        continue;
                                     }
-                                    None => break,
+                                    sorter.reserve_memory_for_merge()?;
+                                    let size =
+                                        get_reserved_bytes_for_record_batch(&batch)?;
+
+                                    // Reclaim-cooperative grow: while
+                                    // awaiting `try_grow_async`, keep
+                                    // draining `reclaim_rx`. On an
+                                    // inbound reclaim, spill our
+                                    // in-memory batches; that almost
+                                    // always frees enough that a sync
+                                    // `try_grow` succeeds, so we can
+                                    // skip the next async wait.
+                                    loop {
+                                        tokio::select! {
+                                            biased;
+                                            Some(resp_tx) = reclaim_rx.recv() => {
+                                                if sorter.in_mem_batches.is_empty() {
+                                                    let _ = resp_tx.send(0);
+                                                    continue;
+                                                }
+                                                let before = sorter.used();
+                                                sorter
+                                                    .sort_and_spill_in_mem_batches()
+                                                    .await?;
+                                                let after = sorter.used();
+                                                let _ = resp_tx
+                                                    .send(before.saturating_sub(after));
+                                                if sorter
+                                                    .reservation
+                                                    .try_grow(size)
+                                                    .is_ok()
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                            r = sorter
+                                                .reservation
+                                                .try_grow_async(size) => {
+                                                match r {
+                                                    Ok(()) => break,
+                                                    Err(_) if !sorter
+                                                        .in_mem_batches
+                                                        .is_empty() =>
+                                                    {
+                                                        sorter
+                                                            .sort_and_spill_in_mem_batches()
+                                                            .await?;
+                                                        sorter
+                                                            .reservation
+                                                            .try_grow(size)
+                                                            .map_err(
+                                                                ExternalSorter::err_with_oom_context,
+                                                            )?;
+                                                        break;
+                                                    }
+                                                    Err(e) => {
+                                                        return Err(
+                                                            ExternalSorter::err_with_oom_context(e),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    sorter.in_mem_batches.push(batch);
                                 }
                             }
                         }
