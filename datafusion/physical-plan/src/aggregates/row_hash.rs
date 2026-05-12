@@ -1297,13 +1297,15 @@ impl GroupedHashAggregateStream {
 
             // Recreate `group_values` for streaming merge so group ids are assigned
             // in first-seen order, as required by `GroupOrderingFull`.
-            // The pre-spill multi-column collector may use `vectorized_intern`, which
-            // can assign new group ids out of input order under hash collisions.
+            // The pre-spill collector may not track group ids for DISTINCT-only
+            // aggregation. The pre-spill multi-column collector may use
+            // `vectorized_intern`, which can assign new group ids out of input
+            // order under hash collisions.
             let group_schema = self
                 .spill_state
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
-            if group_schema.fields().len() > 1 {
+            if self.accumulators.is_empty() || group_schema.fields().len() > 1 {
                 self.group_values = new_group_values(group_schema, &self.group_ordering)?;
             }
 
@@ -1393,9 +1395,12 @@ mod tests {
     use super::*;
     use crate::InputOrderMode;
     use crate::execution_plan::ExecutionPlan;
+    use crate::metrics::MetricValue;
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -1503,6 +1508,80 @@ mod tests {
             total_output_groups, num_groups,
             "Unexpected number of groups",
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_distinct_single_primitive_group_by() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            DataType::Int32,
+            false,
+        )]));
+
+        let num_distinct = 512;
+        let num_spills = 24;
+        let input_partitions = vec![
+            (0..num_spills)
+                .map(|_| {
+                    Ok(RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int32Array::from_iter_values(0..num_distinct))],
+                    )?)
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ];
+
+        let session_config = SessionConfig::new().with_batch_size(4);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(FairSpillPool::new(6000)))
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime),
+        );
+
+        let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
+        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(group_expr),
+            Vec::<Arc<AggregateFunctionExpr>>::new(),
+            vec![],
+            exec,
+            Arc::clone(&schema),
+        )?;
+
+        let mut stream =
+            GroupedHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
+        let mut values = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            let batch = result?;
+            let group_col = batch
+                .column(0)
+                .as_primitive::<arrow::datatypes::Int32Type>();
+            values.extend(group_col.values().iter().copied());
+        }
+
+        let spill_count = aggregate_exec
+            .metrics()
+            .unwrap()
+            .iter()
+            .find_map(|metric| match metric.value() {
+                MetricValue::SpillCount(count) => Some(count.value()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(spill_count > 0, "expected test to exercise spilling");
+
+        values.sort_unstable();
+        let expected = (0..num_distinct).collect::<Vec<_>>();
+        assert_eq!(values, expected);
 
         Ok(())
     }
