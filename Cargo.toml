@@ -88,11 +88,11 @@ version = "53.1.0"
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "58.2.0", features = [
+arrow = { version = "58.3.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-avro = { version = "58.2.0", default-features = false, features = [
+arrow-avro = { version = "58.3.0", default-features = false, features = [
     "deflate",
     "snappy",
     "zstd",
@@ -101,7 +101,7 @@ arrow-avro = { version = "58.2.0", default-features = false, features = [
 ] }
 arrow-buffer = { version = "58.2.0", default-features = false }
 arrow-data = { version = "58.2.0", default-features = false }
-arrow-flight = { version = "58.2.0", features = [
+arrow-flight = { version = "58.3.0", features = [
     "flight-sql-experimental",
 ] }
 # Both codecs are required here to make sure that code paths like
@@ -176,7 +176,7 @@ memchr = "2.8.0"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.2", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "58.2.0", default-features = false, features = [
+parquet = { version = "58.3.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
