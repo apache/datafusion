@@ -263,7 +263,8 @@ impl WindowUDFImpl for WindowShift {
         // Refine the first argument (the value expression)
         if let Some(first) = input_exprs.first() {
             result.push(
-                parse_expr(input_exprs, input_fields).unwrap_or_else(|_| Arc::clone(first)),
+                parse_expr(input_exprs, input_fields)
+                    .unwrap_or_else(|_| Arc::clone(first)),
             );
         }
         // Keep all remaining arguments unchanged
@@ -424,9 +425,10 @@ fn parse_default_value(
             } else {
                 Ok(DefaultValue::Expression)
             }
-            
         }
-        None => Ok(DefaultValue::Literal(ScalarValue::try_from(expr_field.data_type())?))
+        None => Ok(DefaultValue::Literal(ScalarValue::try_from(
+            expr_field.data_type(),
+        )?)),
     }
 }
 
@@ -543,7 +545,7 @@ fn shift_with_array_default(
     if offset == i64::MIN || offset.abs() >= value_len {
         return Ok(default_values.clone());
     }
-    
+
     let slice_offset = (-offset).clamp(0, value_len) as usize;
     let length = array.len() - offset.unsigned_abs() as usize;
     let slice = array.slice(slice_offset, length);
@@ -571,8 +573,7 @@ fn evaluate_all_with_ignore_null_and_array_default(
     default_values: &ArrayRef,
     is_lag: bool,
 ) -> Result<ArrayRef> {
-    let valid_indices: Vec<usize> =
-        array.nulls().unwrap().valid_indices().collect();
+    let valid_indices: Vec<usize> = array.nulls().unwrap().valid_indices().collect();
     let direction = !is_lag;
     let results: Result<Vec<_>> = (0..array.len())
         .map(|id| {
@@ -767,7 +768,8 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                     } else {
                         range.start
                     };
-                    values.get(2)
+                    values
+                        .get(2)
                         .map(|defaults| {
                             let scalar = ScalarValue::try_from_array(defaults, row_idx)?;
                             if scalar.data_type() != *array.data_type() {
@@ -777,9 +779,9 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                             }
                         })
                         .unwrap_or_else(|| ScalarValue::try_from(array.data_type()))
-                                }
-                            }
-                        }
+                }
+            }
+        }
     }
 
     fn evaluate_all(
@@ -801,7 +803,12 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                 if !self.ignore_nulls {
                     shift_with_default_value(value, self.shift_offset, &scalar)
                 } else {
-                    evaluate_all_with_ignore_null(value, self.shift_offset, &scalar, self.is_lag())
+                    evaluate_all_with_ignore_null(
+                        value,
+                        self.shift_offset,
+                        &scalar,
+                        self.is_lag(),
+                    )
                 }
             }
             DefaultValue::Expression => {
@@ -845,12 +852,13 @@ mod tests {
     fn make_batch(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
         let schema = Arc::new(Schema::new(
             columns
-            .iter()
-            .map(|(name, arr)| Field::new(*name, arr.data_type().clone(), true))
-            .collect::<Vec<_>>()
+                .iter()
+                .map(|(name, arr)| Field::new(*name, arr.data_type().clone(), true))
+                .collect::<Vec<_>>(),
         ));
 
-        RecordBatch::try_new(schema, columns.into_iter().map(|(_, arr)| arr).collect()).unwrap()
+        RecordBatch::try_new(schema, columns.into_iter().map(|(_, arr)| arr).collect())
+            .unwrap()
     }
 
     fn evaluate_window_on_batch(
@@ -861,13 +869,12 @@ mod tests {
         ignore_nulls: bool,
         batch: &RecordBatch,
     ) -> Result<ArrayRef> {
-        let args: Vec<ArrayRef> = input_exprs.iter()
-            .map(|expr| {
-                match expr.evaluate(batch)? {
-                    ColumnarValue::Array(arr) => Ok(arr),
-                    ColumnarValue::Scalar(scalar) => {
-                        scalar.to_array_of_size(batch.num_rows())
-                    }
+        let args: Vec<ArrayRef> = input_exprs
+            .iter()
+            .map(|expr| match expr.evaluate(batch)? {
+                ColumnarValue::Array(arr) => Ok(arr),
+                ColumnarValue::Scalar(scalar) => {
+                    scalar.to_array_of_size(batch.num_rows())
                 }
             })
             .collect::<Result<Vec<_>>>()?;
@@ -901,16 +908,18 @@ mod tests {
 
     #[test]
     fn test_lag_with_column_default() -> Result<()> {
-        let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
-        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300, 400, 500, 600, 700, 800]));
+        let salary: ArrayRef =
+            Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![
+            100, 200, 300, 400, 500, 600, 700, 800,
+        ]));
 
-        let batch = make_batch(vec![
-            ("salary", salary.clone()),
-            ("bonus", bonus.clone()),
-        ]);
+        let batch =
+            make_batch(vec![("salary", salary.clone()), ("bonus", bonus.clone())]);
 
         let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
-        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let offset_expr =
+            Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
         let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
 
         let input_exprs = [salary_expr, offset_expr, default_expr];
@@ -932,14 +941,16 @@ mod tests {
         let result = as_int32_array(&result)?;
         let expected = [
             Some(100),
-            Some(1),   
-            Some(-2), 
-            Some(3), 
-            Some(-4), 
-            Some(5),  
+            Some(1),
+            Some(-2),
+            Some(3),
+            Some(-4),
+            Some(5),
             Some(-6),
             Some(7),
-        ].iter().collect::<Int32Array>();
+        ]
+        .iter()
+        .collect::<Int32Array>();
 
         assert_eq!(result, &expected);
         Ok(())
@@ -947,16 +958,18 @@ mod tests {
 
     #[test]
     fn test_lead_with_column_default() -> Result<()> {
-        let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
-        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300, 400, 500, 600, 700, 800]));
+        let salary: ArrayRef =
+            Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![
+            100, 200, 300, 400, 500, 600, 700, 800,
+        ]));
 
-        let batch = make_batch(vec![
-            ("salary", salary.clone()),
-            ("bonus", bonus.clone()),
-        ]);
+        let batch =
+            make_batch(vec![("salary", salary.clone()), ("bonus", bonus.clone())]);
 
         let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
-        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let offset_expr =
+            Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
         let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
 
         let input_exprs = [salary_expr, offset_expr, default_expr];
@@ -977,15 +990,17 @@ mod tests {
 
         let result = as_int32_array(&result)?;
         let expected = [
-            Some(-2), 
+            Some(-2),
             Some(3),
             Some(-4),
             Some(5),
             Some(-6),
-            Some(7), 
-            Some(8),  
+            Some(7),
+            Some(8),
             Some(800),
-        ].iter().collect::<Int32Array>();
+        ]
+        .iter()
+        .collect::<Int32Array>();
 
         assert_eq!(result, &expected);
         Ok(())
@@ -994,15 +1009,15 @@ mod tests {
     #[test]
     fn test_lag_with_expression_offset_2() -> Result<()> {
         let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]));
-        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80]));
+        let bonus: ArrayRef =
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80]));
 
-        let batch = make_batch(vec![
-            ("salary", salary.clone()),
-            ("bonus", bonus.clone()),
-        ]);
+        let batch =
+            make_batch(vec![("salary", salary.clone()), ("bonus", bonus.clone())]);
 
         let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
-        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let offset_expr =
+            Arc::new(Literal::new(ScalarValue::Int64(Some(2)))) as Arc<dyn PhysicalExpr>;
         let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
 
         let input_exprs = [salary_expr, offset_expr, default_expr];
@@ -1023,15 +1038,17 @@ mod tests {
 
         let result = as_int32_array(&result)?;
         let expected = [
-            Some(10), 
+            Some(10),
             Some(20),
-            Some(1), 
-            Some(2), 
-            Some(3), 
-            Some(4), 
-            Some(5), 
-            Some(6), 
-        ].iter().collect::<Int32Array>();
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+        ]
+        .iter()
+        .collect::<Int32Array>();
 
         assert_eq!(result, &expected);
         Ok(())
@@ -1040,15 +1057,15 @@ mod tests {
     #[test]
     fn test_lead_with_offset_3() -> Result<()> {
         let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]));
-        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80]));
+        let bonus: ArrayRef =
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80]));
 
-        let batch = make_batch(vec![
-            ("salary", salary.clone()),
-            ("bonus", bonus.clone()),
-        ]);
+        let batch =
+            make_batch(vec![("salary", salary.clone()), ("bonus", bonus.clone())]);
 
         let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
-        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(3)))) as Arc<dyn PhysicalExpr>;
+        let offset_expr =
+            Arc::new(Literal::new(ScalarValue::Int64(Some(3)))) as Arc<dyn PhysicalExpr>;
         let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
 
         let input_exprs = [salary_expr, offset_expr, default_expr];
@@ -1070,14 +1087,16 @@ mod tests {
         let result = as_int32_array(&result)?;
         let expected = [
             Some(4),
-            Some(5), 
-            Some(6), 
-            Some(7), 
-            Some(8), 
-            Some(60), 
-            Some(70), 
-            Some(80), 
-        ].iter().collect::<Int32Array>();
+            Some(5),
+            Some(6),
+            Some(7),
+            Some(8),
+            Some(60),
+            Some(70),
+            Some(80),
+        ]
+        .iter()
+        .collect::<Int32Array>();
 
         assert_eq!(result, &expected);
         Ok(())
@@ -1086,19 +1105,32 @@ mod tests {
     #[test]
     fn test_lag_with_null_data_and_expression_default() -> Result<()> {
         let salary: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1), None, Some(3), None, Some(5), Some(6), None, Some(8)
+            Some(1),
+            None,
+            Some(3),
+            None,
+            Some(5),
+            Some(6),
+            None,
+            Some(8),
         ]));
         let bonus: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(10), Some(20), Some(30), Some(40), Some(50), Some(60), Some(70), Some(80)
+            Some(10),
+            Some(20),
+            Some(30),
+            Some(40),
+            Some(50),
+            Some(60),
+            Some(70),
+            Some(80),
         ]));
 
-        let batch = make_batch(vec![
-            ("salary", salary.clone()),
-            ("bonus", bonus.clone()),
-        ]);
+        let batch =
+            make_batch(vec![("salary", salary.clone()), ("bonus", bonus.clone())]);
 
         let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
-        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let offset_expr =
+            Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
         let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
 
         let input_exprs = [salary_expr, offset_expr, default_expr];
@@ -1119,15 +1151,17 @@ mod tests {
 
         let result = as_int32_array(&result)?;
         let expected = [
-            Some(10), 
-            Some(1),  
-            None,  
-            Some(3),  
-            None,  
+            Some(10),
+            Some(1),
+            None,
+            Some(3),
+            None,
             Some(5),
             Some(6),
             None,
-        ].iter().collect::<Int32Array>();
+        ]
+        .iter()
+        .collect::<Int32Array>();
 
         assert_eq!(result, &expected);
         Ok(())
@@ -1136,19 +1170,32 @@ mod tests {
     #[test]
     fn test_lag_ignore_nulls_with_expression_default() -> Result<()> {
         let salary: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1), None, Some(3), None, Some(5), Some(6), None, Some(8)
+            Some(1),
+            None,
+            Some(3),
+            None,
+            Some(5),
+            Some(6),
+            None,
+            Some(8),
         ]));
         let bonus: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(10), Some(20), Some(30), Some(40), Some(50), Some(60), Some(70), Some(80)
+            Some(10),
+            Some(20),
+            Some(30),
+            Some(40),
+            Some(50),
+            Some(60),
+            Some(70),
+            Some(80),
         ]));
 
-        let batch = make_batch(vec![
-            ("salary", salary.clone()),
-            ("bonus", bonus.clone()),
-        ]);
+        let batch =
+            make_batch(vec![("salary", salary.clone()), ("bonus", bonus.clone())]);
 
         let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
-        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let offset_expr =
+            Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
         let default_expr = Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>;
 
         let input_exprs = [salary_expr, offset_expr, default_expr];
@@ -1169,15 +1216,17 @@ mod tests {
 
         let result = as_int32_array(&result)?;
         let expected = [
-            Some(10), 
+            Some(10),
             Some(1),
-            Some(1),  
-            Some(3), 
+            Some(1),
             Some(3),
-            Some(5), 
-            Some(6),  
+            Some(3),
+            Some(5),
             Some(6),
-        ].iter().collect::<Int32Array>();
+            Some(6),
+        ]
+        .iter()
+        .collect::<Int32Array>();
 
         assert_eq!(result, &expected);
         Ok(())
@@ -1186,16 +1235,16 @@ mod tests {
     #[test]
     fn test_lag_with_complex_expression_default() -> Result<()> {
         let salary: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]));
-        let bonus: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80]));
+        let bonus: ArrayRef =
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80]));
 
-        let batch = make_batch(vec![
-            ("salary", salary.clone()),
-            ("bonus", bonus.clone()),
-        ]);
+        let batch =
+            make_batch(vec![("salary", salary.clone()), ("bonus", bonus.clone())]);
 
         let salary_expr = Arc::new(Column::new("salary", 0)) as Arc<dyn PhysicalExpr>;
-        let offset_expr = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
-        
+        let offset_expr =
+            Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+
         let default_expr = BinaryExpr::new(
             Arc::new(Column::new("bonus", 1)) as Arc<dyn PhysicalExpr>,
             datafusion_expr::Operator::Multiply,
@@ -1221,7 +1270,7 @@ mod tests {
 
         let result = as_int32_array(&result)?;
         let expected = [
-            Some(20),  // bonus * 2
+            Some(20), // bonus * 2
             Some(1),
             Some(2),
             Some(3),
@@ -1229,7 +1278,9 @@ mod tests {
             Some(5),
             Some(6),
             Some(7),
-        ].iter().collect::<Int32Array>();
+        ]
+        .iter()
+        .collect::<Int32Array>();
 
         assert_eq!(result, &expected);
         Ok(())
