@@ -856,7 +856,7 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::Field;
     use datafusion_datasource::PartitionedFile;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{Expr, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
     use datafusion_pruning::FilePruner;
@@ -915,72 +915,22 @@ mod tests {
 
     #[test]
     fn file_pruning_ignores_unsigned_min_max_without_column_order() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
-        let metadata = unsigned_metadata_without_column_order(Arc::clone(&schema));
-
-        let statistics =
-            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &schema)
-                .unwrap();
-        assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
-        assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
-        assert_eq!(
-            statistics.column_statistics[0].null_count,
-            Precision::Exact(0)
-        );
-
-        let predicate = logical2physical(&col("c1").eq(lit(0u32)), &schema);
-        let metrics = ExecutionPlanMetricsSet::new();
-        let predicate_creation_errors =
-            MetricBuilder::new(&metrics).global_counter("predicate_creation_errors");
-        let file = PartitionedFile::new("file.parquet", 10)
-            .with_statistics(Arc::new(statistics));
-        let mut file_pruner =
-            FilePruner::try_new(predicate, &schema, &file, predicate_creation_errors)
-                .unwrap();
-
-        assert!(!file_pruner.should_prune().unwrap());
-    }
-
-    #[test]
-    fn file_pruning_ignores_string_min_max_without_column_order() {
-        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
-        let metadata = metadata_with_column_order(
-            Arc::clone(&schema),
-            ParquetStatistics::byte_array(
-                Some(ByteArray::from("a".as_bytes().to_vec())),
-                Some(ByteArray::from("m".as_bytes().to_vec())),
-                None,
-                Some(0),
-                false,
-            ),
+        let schema = test_schema(DataType::UInt32);
+        let statistics = parquet_file_statistics(
+            &schema,
+            ParquetStatistics::int32(Some(-1), Some(0), None, Some(0), true),
             None,
         );
 
-        let statistics =
-            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &schema)
-                .unwrap();
-        assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
-        assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
-
-        let predicate = logical2physical(&col("c1").eq(lit("z")), &schema);
-        let metrics = ExecutionPlanMetricsSet::new();
-        let predicate_creation_errors =
-            MetricBuilder::new(&metrics).global_counter("predicate_creation_errors");
-        let file = PartitionedFile::new("file.parquet", 10)
-            .with_statistics(Arc::new(statistics));
-        let mut file_pruner =
-            FilePruner::try_new(predicate, &schema, &file, predicate_creation_errors)
-                .unwrap();
-
-        assert!(!file_pruner.should_prune().unwrap());
+        assert_min_max_absent(&statistics);
+        assert_file_pruning(&schema, statistics, col("c1").eq(lit(0u32)), false);
     }
 
     #[test]
     fn file_pruning_uses_string_min_max_with_column_order() {
-        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
-        let metadata = metadata_with_column_order(
-            Arc::clone(&schema),
+        let schema = test_schema(DataType::Utf8);
+        let statistics = parquet_file_statistics(
+            &schema,
             ParquetStatistics::byte_array(
                 Some(ByteArray::from("a".as_bytes().to_vec())),
                 Some(ByteArray::from("m".as_bytes().to_vec())),
@@ -991,9 +941,6 @@ mod tests {
             Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)]),
         );
 
-        let statistics =
-            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &schema)
-                .unwrap();
         assert_eq!(
             statistics.column_statistics[0].min_value,
             Precision::Exact(ScalarValue::Utf8(Some("a".to_string())))
@@ -1002,33 +949,37 @@ mod tests {
             statistics.column_statistics[0].max_value,
             Precision::Exact(ScalarValue::Utf8(Some("m".to_string())))
         );
-
-        let predicate = logical2physical(&col("c1").eq(lit("z")), &schema);
-        let metrics = ExecutionPlanMetricsSet::new();
-        let predicate_creation_errors =
-            MetricBuilder::new(&metrics).global_counter("predicate_creation_errors");
-        let file = PartitionedFile::new("file.parquet", 10)
-            .with_statistics(Arc::new(statistics));
-        let mut file_pruner =
-            FilePruner::try_new(predicate, &schema, &file, predicate_creation_errors)
-                .unwrap();
-
-        assert!(file_pruner.should_prune().unwrap());
+        assert_file_pruning(&schema, statistics, col("c1").eq(lit("z")), true);
     }
 
     #[test]
     fn file_pruning_ignores_deprecated_unsigned_min_max_with_column_order() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
-        let metadata = metadata_with_column_order(
-            Arc::clone(&schema),
+        let schema = test_schema(DataType::UInt32);
+        let statistics = parquet_file_statistics(
+            &schema,
             ParquetStatistics::int32(Some(-1), Some(0), None, Some(0), true),
             Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)]),
         );
 
-        let statistics =
-            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &schema)
-                .unwrap();
+        assert_min_max_absent(&statistics);
+        assert_file_pruning(&schema, statistics, col("c1").eq(lit(0u32)), false);
+    }
+
+    fn test_schema(data_type: DataType) -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("c1", data_type, false)]))
+    }
+
+    fn parquet_file_statistics(
+        schema: &SchemaRef,
+        statistics: ParquetStatistics,
+        column_orders: Option<Vec<ColumnOrder>>,
+    ) -> Statistics {
+        let metadata =
+            metadata_with_column_order(Arc::clone(schema), statistics, column_orders);
+        DFParquetMetadata::statistics_from_parquet_metadata(&metadata, schema).unwrap()
+    }
+
+    fn assert_min_max_absent(statistics: &Statistics) {
         assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
         assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
         assert_eq!(
@@ -1037,12 +988,23 @@ mod tests {
         );
     }
 
-    fn unsigned_metadata_without_column_order(schema: SchemaRef) -> ParquetMetaData {
-        metadata_with_column_order(
-            schema,
-            ParquetStatistics::int32(Some(-1), Some(0), None, Some(0), true),
-            None,
-        )
+    fn assert_file_pruning(
+        schema: &SchemaRef,
+        statistics: Statistics,
+        predicate: Expr,
+        expected_should_prune: bool,
+    ) {
+        let predicate = logical2physical(&predicate, schema);
+        let metrics = ExecutionPlanMetricsSet::new();
+        let predicate_creation_errors =
+            MetricBuilder::new(&metrics).global_counter("predicate_creation_errors");
+        let file = PartitionedFile::new("file.parquet", 10)
+            .with_statistics(Arc::new(statistics));
+        let mut file_pruner =
+            FilePruner::try_new(predicate, schema, &file, predicate_creation_errors)
+                .unwrap();
+
+        assert_eq!(file_pruner.should_prune().unwrap(), expected_should_prune);
     }
 
     fn metadata_with_column_order(
