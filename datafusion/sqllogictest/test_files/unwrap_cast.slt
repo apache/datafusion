@@ -36,8 +36,7 @@ ORDER BY column1;
 0
 9
 
-# The corresponding plan keeps the TRY_CAST. Rewriting this to `column1 < 10`
-# would incorrectly include the out-of-Int32-domain value above.
+# plan keeps the TRY_CAST; the outer CAST to Int64 has been unwrapped.
 query TT
 EXPLAIN SELECT column1
 FROM (VALUES
@@ -54,11 +53,11 @@ logical_plan
 01)Sort: t.column1 ASC NULLS LAST
 02)--SubqueryAlias: t
 03)----Projection: column1 AS column1
-04)------Filter: CAST(TRY_CAST(column1 AS Int32) AS Int64) < Int64(10)
-05)--------Values: <slt:ignore>
+04)------Filter: TRY_CAST(column1 AS Int32) < Int32(10)
+05)--------Values: (Int64(-2147483649)), (Int64(-1)), (Int64(0)), (Int64(9)), (Int64(10))
 physical_plan
 01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--FilterExec: CAST(TRY_CAST(column1@0 AS Int32) AS Int64) < 10
+02)--FilterExec: TRY_CAST(column1@0 AS Int32) < 10
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Timestamp-to-date is many-to-one: every timestamp during the date matches.
@@ -74,8 +73,7 @@ WHERE CAST(ts AS DATE) = DATE '2024-01-01';
 ----
 2
 
-# Integer widening behaves like a direct comparison, but comparison unwrap is
-# closed-by-default and currently only allows timestamp precision widening.
+# Integer widening (Int32→Int64) is now unwrapped: the CAST is moved to the literal side.
 query I
 SELECT column1
 FROM (VALUES
@@ -91,8 +89,7 @@ ORDER BY column1;
 0
 9
 
-# The plan keeps the integer cast because comparison unwrap is intentionally
-# restricted to timestamp precision widening.
+# The EXPLAIN plan confirms unwrap: CAST is moved to the literal side.
 query TT
 EXPLAIN SELECT column1
 FROM (VALUES
@@ -108,11 +105,11 @@ logical_plan
 01)Sort: t.column1 ASC NULLS LAST
 02)--SubqueryAlias: t
 03)----Projection: column1 AS column1
-04)------Filter: CAST(column1 AS Int64) < Int64(10)
+04)------Filter: column1 < Int32(10)
 05)--------Values: (Int32(-1) AS Int64(-1)), (Int32(0) AS Int64(0)), (Int32(9) AS Int64(9)), (Int32(10) AS Int64(10))
 physical_plan
 01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--FilterExec: CAST(column1@0 AS Int64) < 10
+02)--FilterExec: column1@0 < 10
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # String equality rewrites must round-trip exactly. The padded string literal is

@@ -243,11 +243,14 @@ mod tests {
     #[test]
     fn test_unwrap_cast_comparison() {
         let schema = expr_test_schema();
-        // Non-timestamp casts are not currently unwrapped.
+        // Int32→Int64 widening cast is now unwrapped: literal 16i64 is cast back to 16i32.
         let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64));
-        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+        let expected = col("c1").lt(lit(16i32));
+        assert_eq!(optimize_test(expr_lt, &schema), expected);
+        // try_cast Int32→Int64 widening is also unwrapped.
         let expr_lt = try_cast(col("c1"), DataType::Int64).lt(lit(16i64));
-        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+        let expected = col("c1").lt(lit(16i32));
+        assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // Int64 source domain is wider than Int32.
         let c2_eq_lit = cast(col("c2"), DataType::Int32).eq(lit(16i32));
@@ -287,10 +290,11 @@ mod tests {
 
     #[test]
     fn test_unwrap_cast_comparison_unsigned() {
-        // Non-timestamp casts are not currently unwrapped.
+        // UInt32→UInt64 widening is now unwrapped.
         let schema = expr_test_schema();
         let expr_input = cast(col("c6"), DataType::UInt64).eq(lit(0u64));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        let expected = col("c6").eq(lit(0u32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
 
         // cast(c6, UTF8) = "123" is not currently unwrapped.
         let expr_input = cast(col("c6"), DataType::Utf8).eq(lit("123"));
@@ -436,12 +440,16 @@ mod tests {
     #[test]
     fn test_not_unwrap_list_cast_comparison() {
         let schema = expr_test_schema();
-        // Non-timestamp casts are not currently unwrapped.
+        // Int32→Int64 widening IN-list is now unwrapped.
         let expr_lt = cast(col("c1"), DataType::Int64).in_list(
             vec![lit(12i64), lit(23i64), lit(34i64), lit(56i64), lit(78i64)],
             false,
         );
-        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+        let expected = col("c1").in_list(
+            vec![lit(12i32), lit(23i32), lit(34i32), lit(56i32), lit(78i32)],
+            false,
+        );
+        assert_eq!(optimize_test(expr_lt, &schema), expected);
         // Int32 cannot represent the full Int64 source domain.
         let expr_lt = cast(col("c2"), DataType::Int32).in_list(
             vec![null_i32(), lit(24i32), lit(34i64), lit(56i64), lit(78i64)],
@@ -475,21 +483,23 @@ mod tests {
     #[test]
     fn aliased() {
         let schema = expr_test_schema();
-        // Non-timestamp casts are not currently unwrapped.
+        // Int32→Int64 widening with alias is now unwrapped.
         let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64)).alias("x");
-        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+        let expected = col("c1").lt(lit(16i32)).alias("x");
+        assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
     #[test]
     fn nested() {
         let schema = expr_test_schema();
-        // Non-timestamp casts are not currently unwrapped.
+        // Int32→Int64 widening in nested OR is now unwrapped.
         let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64)).or(cast(
             col("c1"),
             DataType::Int64,
         )
         .gt(lit(32i64)));
-        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+        let expected = col("c1").lt(lit(16i32)).or(col("c1").gt(lit(32i32)));
+        assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
     #[test]

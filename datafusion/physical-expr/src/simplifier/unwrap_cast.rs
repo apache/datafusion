@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_unwrap_cast_in_binary_comparison() {
+    fn test_unwrap_cast_simple() {
         let schema = test_schema();
 
         let column_expr = col("c1", &schema).unwrap();
@@ -161,11 +161,15 @@ mod tests {
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
-        assert!(!result.transformed);
+        assert!(result.transformed);
+        let optimized = result.data.downcast_ref::<BinaryExpr>().unwrap();
+        assert!(!is_cast_expr(optimized.left()));
+        let right_literal = optimized.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(right_literal.value(), &ScalarValue::Int32(Some(10)));
     }
 
     #[test]
-    fn test_no_unwrap_cast_with_literal_on_left() {
+    fn test_unwrap_cast_with_literal_on_left() {
         let schema = test_schema();
 
         let column_expr = col("c1", &schema).unwrap();
@@ -176,7 +180,7 @@ mod tests {
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
-        assert!(!result.transformed);
+        assert!(result.transformed);
     }
 
     #[test]
@@ -207,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_unwrap_cast_literal_on_left_side() {
+    fn test_no_unwrap_cast_decimal_literal_on_left_side() {
         // Decimal casts are not currently unwrapped.
         let schema = Schema::new(vec![Field::new(
             "decimal_col",
@@ -231,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_unwrap_cast_with_different_comparison_operators() {
+    fn test_unwrap_cast_with_different_comparison_operators() {
         let schema = Schema::new(vec![Field::new("int_col", DataType::Int32, false)]);
 
         let operators = vec![
@@ -252,7 +256,7 @@ mod tests {
 
             let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
-            assert!(!result.transformed, "unexpected unwrap for {original_op:?}");
+            assert!(result.transformed, "expected unwrap for {original_op:?}");
         }
     }
 
@@ -660,7 +664,7 @@ mod tests {
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
-        assert!(!result.transformed);
+        assert!(result.transformed);
     }
 
     #[test]
@@ -679,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_unwrap_cast_preserves_non_comparison_operators() {
+    fn test_unwrap_cast_preserves_non_comparison_operators() {
         let schema = Schema::new(vec![Field::new("int_col", DataType::Int32, false)]);
 
         let column_expr = col("int_col", &schema).unwrap();
@@ -702,11 +706,11 @@ mod tests {
             .transform_down(|node| unwrap_cast_in_comparison(node, &schema))
             .unwrap();
 
-        assert!(!result.transformed);
+        assert!(result.transformed);
     }
 
     #[test]
-    fn test_try_cast_unwrapping() {
+    fn test_unwrap_try_cast_in_comparison() {
         let schema = test_schema();
 
         let column_expr = col("c1", &schema).unwrap();
@@ -717,7 +721,7 @@ mod tests {
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
-        assert!(!result.transformed);
+        assert!(result.transformed);
     }
 
     #[test]
@@ -751,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn test_complex_nested_expression() {
+    fn test_unwrap_cast_with_complex_expressions() {
         let schema = test_schema();
 
         let c1_expr = col("c1", &schema).unwrap();
@@ -770,6 +774,6 @@ mod tests {
             .transform_down(|node| unwrap_cast_in_comparison(node, &schema))
             .unwrap();
 
-        assert!(!result.transformed);
+        assert!(result.transformed);
     }
 }

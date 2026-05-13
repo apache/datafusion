@@ -157,10 +157,17 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
 
 /// Returns true when a cast preserves comparison semantics when unwrapped.
 ///
-/// Only same-timezone timestamp casts with same or finer target precision
-/// are allowed (e.g. `Timestamp(ms) -> Timestamp(ns)` or same-precision
-/// `Timestamp(ms) -> Timestamp(ms)`). The literal must also round-trip exactly
-/// (checked separately in `try_cast_literal_for_comparison_unwrap`).
+/// Allowed cases:
+/// - Same-timezone timestamp casts where target precision is the same or finer
+///   (e.g. `Timestamp(ms) -> Timestamp(ns)` or same-precision identity).
+/// - Integer widening from smaller to larger type within the same sign family,
+///   or from unsigned to a strictly larger signed type.
+///   (e.g. `Int32 -> Int64`, `UInt8 -> Int32`).
+///   Integer narrowing (e.g. `Int64 -> Int32`) is NOT allowed.
+///   Signed-to-unsigned is NEVER allowed.
+///
+/// The literal must also round-trip exactly (checked separately in
+/// `try_cast_literal_for_comparison_unwrap`).
 fn is_supported_comparison_unwrap_cast(from_type: &DataType, to_type: &DataType) -> bool {
     match (from_type, to_type) {
         (
@@ -170,8 +177,35 @@ fn is_supported_comparison_unwrap_cast(from_type: &DataType, to_type: &DataType)
             from_tz == to_tz
                 && timestamp_unit_scale(from_unit) <= timestamp_unit_scale(to_unit)
         }
-        _ => false,
+        _ => is_integer_widening_safe(from_type, to_type),
     }
+}
+
+/// Returns true when an integer cast from `from` to `to` is widening:
+/// - Same-sign: target has at least as many bits as source
+/// - Unsigned → larger signed: `UIntX → IntY` where Y has strictly more bits than X
+/// - Signed → unsigned: NEVER safe (negative values cannot be represented)
+/// Integer widening: same-sign or unsigned→larger signed.
+/// Same-type identity casts are also safe.
+fn is_integer_widening_safe(from: &DataType, to: &DataType) -> bool {
+    use DataType::*;
+    matches!(
+        (from, to),
+        // Same-type identity
+        (Int8, Int8) | (Int16, Int16) | (Int32, Int32) | (Int64, Int64)
+            | (UInt8, UInt8) | (UInt16, UInt16) | (UInt32, UInt32) | (UInt64, UInt64)
+            // Same-sign widening
+            | (Int8, Int16 | Int32 | Int64)
+            | (Int16, Int32 | Int64)
+            | (Int32, Int64)
+            | (UInt8, UInt16 | UInt32 | UInt64)
+            | (UInt16, UInt32 | UInt64)
+            | (UInt32, UInt64)
+            // Unsigned → larger signed
+            | (UInt8, Int16 | Int32 | Int64)
+            | (UInt16, Int32 | Int64)
+            | (UInt32, Int64)
+    )
 }
 
 fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
@@ -687,16 +721,19 @@ mod tests {
             DataType::Decimal128(12, 4),
         );
 
-        expect_no_comparison_unwrap(
+        // Integer widening: Int32 -> Int64 is safe.
+        expect_comparison_unwrap(
             ScalarValue::Int64(Some(16)),
             DataType::Int32,
             DataType::Int64,
+            ScalarValue::Int32(Some(16)),
         );
-        expect_no_comparison_unwrap_with_op(
+        expect_comparison_unwrap_with_op(
             ScalarValue::Int64(Some(16)),
             DataType::Int32,
             DataType::Int64,
             Operator::IsNotDistinctFrom,
+            ScalarValue::Int32(Some(16)),
         );
         expect_no_comparison_unwrap(
             ScalarValue::Int32(Some(16)),
@@ -714,11 +751,14 @@ mod tests {
             DataType::Int32,
             DataType::UInt32,
         );
-        expect_no_comparison_unwrap(
+        // Unsigned to larger signed: UInt32 -> Int64 is safe.
+        expect_comparison_unwrap(
             ScalarValue::Int64(Some(16)),
             DataType::UInt32,
             DataType::Int64,
+            ScalarValue::UInt32(Some(16)),
         );
+        // Unsigned to same-width signed: UInt64 -> Int64 is NOT safe.
         expect_no_comparison_unwrap(
             ScalarValue::Int64(Some(16)),
             DataType::UInt64,
@@ -800,6 +840,57 @@ mod tests {
         assert!(!is_supported_comparison_unwrap_cast(
             &DataType::Duration(TimeUnit::Millisecond),
             &DataType::Duration(TimeUnit::Nanosecond)
+        ));
+
+        // Integer widening: same-sign
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Int8,
+            &DataType::Int32
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Int32,
+            &DataType::Int64
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::UInt8,
+            &DataType::UInt32
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::UInt16,
+            &DataType::UInt64
+        ));
+        // Same-precision identity
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Int32,
+            &DataType::Int32
+        ));
+
+        // Unsigned → larger signed
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::UInt8,
+            &DataType::Int32
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::UInt32,
+            &DataType::Int64
+        ));
+
+        // NOT allowed: narrowing, signed→unsigned, same-width unsigned→signed
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::Int64,
+            &DataType::Int32
+        ));
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::Int32,
+            &DataType::UInt32
+        ));
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::UInt64,
+            &DataType::Int64
+        ));
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::Int8,
+            &DataType::UInt16
         ));
     }
 
