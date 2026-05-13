@@ -271,9 +271,6 @@ impl PhysicalOptimizerRule for EnsureRequirementsNoPushdown {
 }
 
 #[cfg(test)]
-mod new_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
