@@ -561,7 +561,7 @@ fn test_streaming_table_after_projection() -> Result<()> {
                 Field::new("e", DataType::Int32, true),
             ])),
         }) as _],
-        Some(&vec![0_usize, 2, 4, 3]),
+        Some(&[0_usize, 2, 4, 3]),
         vec![
             [
                 PhysicalSortExpr {

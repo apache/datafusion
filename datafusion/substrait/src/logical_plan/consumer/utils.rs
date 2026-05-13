@@ -58,7 +58,7 @@ pub(super) fn next_struct_field_name(
 /// Traverse through the field, renaming the provided field itself and all its inner struct fields.
 pub fn rename_field(
     field: &Field,
-    dfs_names: &Vec<String>,
+    dfs_names: &[String],
     unnamed_field_suffix: usize, // If Substrait doesn't provide a name, we'll use this "c{unnamed_field_suffix}"
     name_idx: &mut usize,        // Index into dfs_names
 ) -> datafusion::common::Result<Field> {
@@ -69,7 +69,7 @@ pub fn rename_field(
 /// Rename the field's data type but not the field itself.
 pub fn rename_fields_data_type(
     field: Field,
-    dfs_names: &Vec<String>,
+    dfs_names: &[String],
     name_idx: &mut usize, // Index into dfs_names
 ) -> datafusion::common::Result<Field> {
     let dt = rename_data_type(field.data_type(), dfs_names, name_idx)?;
@@ -79,7 +79,7 @@ pub fn rename_fields_data_type(
 /// Traverse through the data type (incl. lists/maps/etc), renaming all inner struct fields.
 pub fn rename_data_type(
     data_type: &DataType,
-    dfs_names: &Vec<String>,
+    dfs_names: &[String],
     name_idx: &mut usize, // Index into dfs_names
 ) -> datafusion::common::Result<DataType> {
     match data_type {
@@ -227,7 +227,7 @@ pub fn rename_data_type(
 /// to rename the schema to match the expected names.
 pub(super) fn make_renamed_schema(
     schema: &DFSchemaRef,
-    dfs_names: &Vec<String>,
+    dfs_names: &[String],
 ) -> datafusion::common::Result<DFSchema> {
     let mut name_idx = 0;
 
@@ -458,7 +458,7 @@ impl NameTracker {
 /// Convert Substrait Sorts to DataFusion Exprs
 pub async fn from_substrait_sorts(
     consumer: &impl SubstraitConsumer,
-    substrait_sorts: &Vec<SortField>,
+    substrait_sorts: &[SortField],
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Sort>> {
     let mut sorts: Vec<Sort> = vec![];

@@ -225,8 +225,9 @@ pub(crate) fn digest_process(
                     .digest_scalar(a.as_ref().map(|s: &String| s.as_bytes()))),
                 ScalarValue::Binary(a)
                 | ScalarValue::LargeBinary(a)
-                | ScalarValue::BinaryView(a) => Ok(digest_algorithm
-                    .digest_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
+                | ScalarValue::BinaryView(a) => {
+                    Ok(digest_algorithm.digest_scalar(a.as_deref()))
+                }
                 other => exec_err!(
                     "Unsupported data type {other:?} for function {digest_algorithm}"
                 ),

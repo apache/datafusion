@@ -117,7 +117,7 @@ pub async fn from_substrait_extended_expr(
     extended_expr: &ExtendedExpression,
 ) -> datafusion::common::Result<ExprContainer> {
     // Register function extension
-    let extensions = Extensions::try_from(&extended_expr.extensions)?;
+    let extensions = Extensions::try_from(extended_expr.extensions.as_slice())?;
     if !extensions.type_variations.is_empty() {
         return not_impl_err!("Type variation extensions are not supported");
     }
@@ -185,7 +185,7 @@ pub struct ExprContainer {
 /// Convert Substrait Expressions to DataFusion Exprs
 pub async fn from_substrait_rex_vec(
     consumer: &impl SubstraitConsumer,
-    exprs: &Vec<Expression>,
+    exprs: &[Expression],
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Expr>> {
     let mut expressions: Vec<Expr> = vec![];

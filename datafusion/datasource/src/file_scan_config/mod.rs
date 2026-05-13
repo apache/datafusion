@@ -1068,7 +1068,7 @@ impl FileScanConfig {
     }
 
     /// Get the table partition columns
-    pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
+    pub fn table_partition_cols(&self) -> &[FieldRef] {
         self.file_source.table_schema().table_partition_cols()
     }
 

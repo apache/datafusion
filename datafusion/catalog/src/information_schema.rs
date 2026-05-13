@@ -318,7 +318,7 @@ impl InformationSchemaConfig {
         let catalog_name = &config_options.catalog.default_catalog;
         let schema_name = &config_options.catalog.default_schema;
         let mut add_parameters = |func_name: &str,
-                                  args: Option<&Vec<(String, String)>>,
+                                  args: Option<&[(String, String)]>,
                                   arg_types: Vec<String>,
                                   return_type: Option<String>,
                                   is_variadic: bool,
@@ -361,7 +361,7 @@ impl InformationSchemaConfig {
             for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
                 add_parameters(
                     func_name,
-                    args.as_ref(),
+                    args.as_deref(),
                     arg_types,
                     return_type,
                     Self::is_variadic(udf.signature()),
@@ -376,7 +376,7 @@ impl InformationSchemaConfig {
             for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
                 add_parameters(
                     func_name,
-                    args.as_ref(),
+                    args.as_deref(),
                     arg_types,
                     return_type,
                     Self::is_variadic(udaf.signature()),
@@ -391,7 +391,7 @@ impl InformationSchemaConfig {
             for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
                 add_parameters(
                     func_name,
-                    args.as_ref(),
+                    args.as_deref(),
                     arg_types,
                     return_type,
                     Self::is_variadic(udwf.signature()),

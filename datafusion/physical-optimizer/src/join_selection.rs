@@ -587,7 +587,7 @@ pub(crate) fn swap_join_according_to_unboundedness(
 /// auxiliary boundedness information, is in the `PipelineStatePropagator` object.
 fn apply_subrules(
     mut input: Arc<dyn ExecutionPlan>,
-    subrules: &Vec<Box<PipelineFixerSubrule>>,
+    subrules: &[Box<PipelineFixerSubrule>],
     config_options: &ConfigOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let original = Arc::clone(&input);

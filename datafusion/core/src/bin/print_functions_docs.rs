@@ -300,7 +300,7 @@ impl DocProvider for Arc<dyn HigherOrderUDF> {
 }
 
 #[expect(clippy::borrowed_box)]
-fn get_names_and_aliases(functions: &Vec<&Box<dyn DocProvider>>) -> Vec<String> {
+fn get_names_and_aliases(functions: &[&Box<dyn DocProvider>]) -> Vec<String> {
     functions
         .iter()
         .flat_map(|f| {

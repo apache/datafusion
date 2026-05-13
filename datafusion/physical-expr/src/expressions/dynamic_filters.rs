@@ -213,7 +213,7 @@ impl DynamicFilterPhysicalExpr {
 
     fn remap_children(
         children: &[Arc<dyn PhysicalExpr>],
-        remapped_children: Option<&Vec<Arc<dyn PhysicalExpr>>>,
+        remapped_children: Option<&[Arc<dyn PhysicalExpr>]>,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         if let Some(remapped_children) = remapped_children {
@@ -250,7 +250,7 @@ impl DynamicFilterPhysicalExpr {
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
         let expr = Arc::clone(self.inner.read().expr());
-        Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
+        Self::remap_children(&self.children, self.remapped_children.as_deref(), expr)
     }
 
     /// Update the current expression and notify all waiters.
@@ -266,7 +266,7 @@ impl DynamicFilterPhysicalExpr {
         // and the same externally facing `PhysicalExpr` is used for both `with_new_children` and `update()`.`
         let new_expr = Self::remap_children(
             &self.children,
-            self.remapped_children.as_ref(),
+            self.remapped_children.as_deref(),
             new_expr,
         )?;
 

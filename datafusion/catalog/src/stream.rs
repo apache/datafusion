@@ -336,7 +336,7 @@ impl TableProvider for StreamTable {
         Ok(Arc::new(StreamingTableExec::try_new(
             Arc::clone(self.0.source.schema()),
             vec![Arc::new(StreamRead(Arc::clone(&self.0))) as _],
-            projection,
+            projection.map(Vec::as_slice),
             projected_schema,
             true,
             limit,

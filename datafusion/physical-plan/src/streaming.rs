@@ -77,7 +77,7 @@ impl StreamingTableExec {
     pub fn try_new(
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         projected_output_ordering: impl IntoIterator<Item = LexOrdering>,
         infinite: bool,
         limit: Option<usize>,
@@ -108,7 +108,7 @@ impl StreamingTableExec {
         Ok(Self {
             partitions,
             projected_schema,
-            projection: projection.cloned().map(Into::into),
+            projection: projection.map(Into::into),
             projected_output_ordering,
             infinite,
             limit,
@@ -117,7 +117,7 @@ impl StreamingTableExec {
         })
     }
 
-    pub fn partitions(&self) -> &Vec<Arc<dyn PartitionStream>> {
+    pub fn partitions(&self) -> &[Arc<dyn PartitionStream>] {
         &self.partitions
     }
 
@@ -318,7 +318,7 @@ impl ExecutionPlan for StreamingTableExec {
 
         StreamingTableExec::try_new(
             Arc::clone(self.partition_schema()),
-            self.partitions().clone(),
+            self.partitions().to_vec(),
             Some(new_projections.as_ref()),
             lex_orderings,
             self.is_infinite(),
@@ -421,7 +421,7 @@ mod test {
             StreamingTableExec::try_new(
                 self.schema.unwrap(),
                 self.partitions,
-                self.projection.as_ref(),
+                self.projection.as_deref(),
                 self.projected_output_ordering,
                 self.infinite,
                 self.limit,

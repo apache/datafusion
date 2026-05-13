@@ -85,7 +85,7 @@ fn bytes_bench(
     group: &mut BenchmarkGroup<WallTime>,
     bench_prefix: &str,
     size: usize,
-    rows: &Vec<usize>,
+    rows: &[usize],
     null_density: f32,
     input: &ArrayRef,
 ) {
@@ -182,7 +182,7 @@ fn primitive_vectorized_append(c: &mut Criterion) {
 fn bench_single_primitive<const NULLABLE: bool>(
     group: &mut BenchmarkGroup<WallTime>,
     size: usize,
-    rows: &Vec<usize>,
+    rows: &[usize],
     null_density: f32,
 ) {
     if !NULLABLE {

@@ -161,7 +161,7 @@ impl UnionExec {
     }
 
     /// Get inputs of the execution plan
-    pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
+    pub fn inputs(&self) -> &[Arc<dyn ExecutionPlan>] {
         &self.inputs
     }
 
@@ -526,7 +526,7 @@ impl InterleaveExec {
     }
 
     /// Get inputs of the execution plan
-    pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
+    pub fn inputs(&self) -> &[Arc<dyn ExecutionPlan>] {
         &self.inputs
     }
 

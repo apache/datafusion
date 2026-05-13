@@ -30,7 +30,7 @@ pub async fn from_substrait_plan(
     plan: &Plan,
 ) -> datafusion::common::Result<LogicalPlan> {
     // Register function extension
-    let extensions = Extensions::try_from(&plan.extensions)?;
+    let extensions = Extensions::try_from(plan.extensions.as_slice())?;
     if !extensions.type_variations.is_empty() {
         return not_impl_err!("Type variation extensions are not supported");
     }

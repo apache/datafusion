@@ -24,7 +24,7 @@ use substrait::proto::function_argument::ArgType;
 /// Convert Substrait FunctionArguments to DataFusion Exprs
 pub async fn from_substrait_func_args(
     consumer: &impl SubstraitConsumer,
-    arguments: &Vec<FunctionArgument>,
+    arguments: &[FunctionArgument],
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Expr>> {
     let mut args: Vec<Expr> = vec![];

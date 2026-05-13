@@ -274,7 +274,7 @@ impl ListingTable {
     }
 
     /// Get paths ref
-    pub fn table_paths(&self) -> &Vec<ListingTableUrl> {
+    pub fn table_paths(&self) -> &[ListingTableUrl] {
         &self.table_paths
     }
 
@@ -662,7 +662,7 @@ impl TableProvider for ListingTable {
         let config = FileSinkConfig {
             original_url: String::default(),
             object_store_url: self.table_paths()[0].object_store(),
-            table_paths: self.table_paths().clone(),
+            table_paths: self.table_paths().to_vec(),
             file_group,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),

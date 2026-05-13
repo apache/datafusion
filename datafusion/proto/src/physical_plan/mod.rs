@@ -3485,7 +3485,7 @@ impl protobuf::PhysicalPlanNode {
         let generators = exec.generators();
 
         // ensure we only have one generator
-        let [generator] = generators.as_slice() else {
+        let [generator] = generators else {
             return Ok(None);
         };
 
