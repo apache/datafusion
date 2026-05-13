@@ -54,6 +54,8 @@ mod null_equality;
 pub mod parquet_config;
 pub mod parsers;
 pub mod pruning;
+#[doc(hidden)]
+pub mod recursive_schema;
 pub mod rounding;
 pub mod scalar;
 pub mod spans;

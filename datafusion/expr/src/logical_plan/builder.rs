@@ -53,6 +53,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::recursive_schema::recursive_query_output_schema;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
     TableReference, ToDFSchema, UnnestOptions, exec_err,
@@ -65,30 +66,6 @@ use indexmap::IndexSet;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
-
-fn recursive_query_output_schema(
-    static_schema: &DFSchema,
-    recursive_schema: &DFSchema,
-) -> Result<DFSchemaRef> {
-    let fields = static_schema
-        .iter()
-        .zip(recursive_schema.iter())
-        .map(|((qualifier, static_field), (_, recursive_field))| {
-            let field = static_field
-                .as_ref()
-                .clone()
-                .with_nullable(
-                    static_field.is_nullable() || recursive_field.is_nullable(),
-                )
-                .into();
-            (qualifier.cloned(), field)
-        })
-        .collect::<Vec<_>>();
-    Ok(DFSchemaRef::new(DFSchema::new_with_metadata(
-        fields,
-        static_schema.metadata().clone(),
-    )?))
-}
 
 fn plan_with_schema(plan: LogicalPlan, schema: DFSchemaRef) -> Result<LogicalPlan> {
     match plan {
