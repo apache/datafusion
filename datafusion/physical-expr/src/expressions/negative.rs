@@ -31,6 +31,7 @@ use arrow::{
 use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{
     self, Bernoulli, Exponential, Gaussian, Generic, Uniform,
 };
@@ -134,6 +135,7 @@ impl PhysicalExpr for NegativeExpr {
             .map(|result| vec![result]))
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         match children[0] {
             Uniform(u) => Distribution::new_uniform(u.range().arithmetic_negate()?),
@@ -258,6 +260,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
 
@@ -337,6 +340,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_propagate_statistics_range_holders() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let original_child_interval = Interval::make(Some(-2), Some(3))?;

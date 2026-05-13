@@ -58,6 +58,7 @@ use std::task::{Context, Poll};
 
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -403,6 +404,9 @@ impl PartialSortStream {
             // Check if we've already reached the fetch limit
             if self.fetch == Some(0) {
                 self.is_closed = true;
+                // Release the input pipeline's resources.
+                let input_schema = self.input.schema();
+                self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                 return Poll::Ready(None);
             }
 
@@ -436,6 +440,9 @@ impl PartialSortStream {
                 Some(Err(e)) => return Poll::Ready(Some(Err(e))),
                 None => {
                     self.is_closed = true;
+                    // Release the input pipeline's resources before sorting.
+                    let input_schema = self.input.schema();
+                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     // Once input is consumed, sort the rest of the inserted batches
                     let remaining_batch = self.sort_in_mem_batch()?;
                     return if remaining_batch.num_rows() > 0 {
