@@ -1334,3 +1334,88 @@ select unnest(arrow_cast(['a','b','c'], 'LargeListView(Utf8)'));
 a
 b
 c
+
+###############################################
+# Unused UNNEST output projection-pruning cases #
+###############################################
+
+statement ok
+CREATE TABLE unused_unnest_pruning AS
+SELECT * FROM (
+    VALUES
+        (1, make_array(10, 20)),
+        (2, make_array()),
+        (3, arrow_cast(NULL, 'List(Int64)'))
+) AS t(id, arr);
+
+# Reproducer for the optimization gap: the unused `elem` output is duplicate-insensitive
+# below this GROUP BY, but the current plan still keeps Unnest/UnnestExec.
+query I
+SELECT id
+FROM (
+    SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+    FROM unused_unnest_pruning
+)
+GROUP BY id
+ORDER BY id;
+----
+1
+2
+3
+
+query TT
+EXPLAIN SELECT id
+FROM (
+    SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+    FROM unused_unnest_pruning
+)
+GROUP BY id;
+----
+logical_plan
+<slt:ignore>Unnest:<slt:ignore>
+physical_plan
+<slt:ignore>UnnestExec<slt:ignore>
+
+# Counterexample: removing UNNEST here would change cardinality.
+query I rowsort
+SELECT id
+FROM (
+    SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+    FROM unused_unnest_pruning
+);
+----
+1
+1
+1
+2
+2
+2
+3
+3
+3
+
+# Counterexample with data-dependent empty/null arrays: current select-list
+# UNNEST semantics drop rows for the empty and NULL arrays in this dataset.
+# This documents the preserve-nulls/cardinality contract that follow-up optimizer
+# rules must preserve; removing UNNEST here would return ids 2 and 3 too.
+query II rowsort
+SELECT id, elem
+FROM (
+    SELECT id, UNNEST(arr) AS elem
+    FROM unused_unnest_pruning
+);
+----
+1 10
+1 20
+
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT id, UNNEST(arr) AS elem
+    FROM unused_unnest_pruning
+);
+----
+2
+
+statement ok
+DROP TABLE unused_unnest_pruning;

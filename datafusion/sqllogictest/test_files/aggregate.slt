@@ -693,6 +693,18 @@ from data
 ----
 1
 
+# correlation_with_group_by_and_nullable_filter
+query IR rowsort
+SELECT g, corr(x, y) FILTER (WHERE b < 1) AS r
+FROM (VALUES
+  (0, 1.0, 1.0, CAST(NULL AS INT)),
+  (0, 2.0, 2.0, CAST(NULL AS INT)),
+  (0, 3.0, 4.0, 2)
+) AS t(g, x, y, b)
+GROUP BY g
+----
+0 NULL
+
 # group correlation_query_with_nans_f32
 query IR
 select id, corr(f, b)
@@ -6176,6 +6188,14 @@ SELECT
 FROM test_table
 ----
 2
+
+# count_with_group_by_and_nullable_filter
+query II rowsort
+SELECT g, COUNT(a) FILTER (WHERE b < 1) AS count_a
+FROM (VALUES (0, 1, CAST(NULL AS INT)), (0, 2, 2)) AS t(g, a, b)
+GROUP BY g
+----
+0 0
 
 # query_with_and_without_filter
 query III rowsort
