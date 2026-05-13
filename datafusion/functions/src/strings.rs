@@ -510,9 +510,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         self.offsets_buffer.push(next_offset);
     }
 
-    /// See [`BulkNullStringArrayBuilder::append_with`]. Bytes written by the
-    /// closure go directly into the value buffer; there is no intermediate
-    /// scratch.
+    /// See [`BulkNullStringArrayBuilder::append_with`].
     ///
     /// # Panics
     ///
@@ -740,8 +738,9 @@ impl StringViewArrayBuilder {
     /// into the in-progress block at `offset`. `prefix_bytes` is the row's
     /// data slice (or any slice starting with the row's first 4 bytes).
     ///
-    /// Built inline rather than going through `make_view`, which is
-    /// `[inline(never)]`.
+    /// Built inline rather than going through Arrow's `make_view`: that
+    /// function is `[inline(never)]` and has to handle short strings, so
+    /// building the view here ourselves is faster.
     #[inline]
     fn make_long_view(&self, length: u32, offset: u32, prefix_bytes: &[u8]) -> u128 {
         let buffer_index: u32 = i32::try_from(self.completed.len())
@@ -793,9 +792,7 @@ impl StringViewArrayBuilder {
             .push(self.make_long_view(length, offset, &self.in_progress[cursor..]));
     }
 
-    /// See [`BulkNullStringArrayBuilder::append_with`]. The writer is a
-    /// [`StringViewWriter`]; see its documentation for how short rows stay
-    /// inline.
+    /// See [`BulkNullStringArrayBuilder::append_with`].
     ///
     /// # Panics
     ///
