@@ -123,8 +123,7 @@ pub struct FFI_RatioMetrics {
     pub display_raw_values: bool,
 }
 
-/// FFI-stable mirror of [`MetricValue`]. The variant order is load-bearing
-/// across the FFI boundary; new variants must only be appended.
+/// FFI-stable mirror of [`MetricValue`].
 #[repr(C, u8)]
 #[derive(Debug, Clone)]
 pub enum FFI_MetricValue {
