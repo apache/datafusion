@@ -8165,6 +8165,18 @@ query R
 SELECT AVG(v1) FROM t1 GROUP BY false HAVING false;
 ----
 
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false;
+----
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3);
+
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false;
+----
+2
+
 statement ok
 DROP TABLE t1;
 
