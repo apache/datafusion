@@ -4014,8 +4014,8 @@ mod test {
                 wildcard_with_options(wildcard_options(
                     None,
                     Some(ExcludeSelectItem::Multiple(vec![
-                        Ident::from("c1"),
-                        Ident::from("c2")
+                        Ident::from("c1").into(),
+                        Ident::from("c2").into()
                     ])),
                     None,
                     None,
