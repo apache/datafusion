@@ -126,10 +126,10 @@ impl EnforceSortingTest {
         // existing convention in `enforce_distribution.rs`.
         config.execution.target_partitions = 10;
 
-        // This file has 4 rules that use tree node, apply these rules as in the
-        // EnforceSorting::optimize implementation
-        // After these operations tree nodes should be in a consistent state.
-        // This code block makes sure that these rules doesn't violate tree node integrity.
+        // This file has 4 sub-rules that use tree node; apply them in the same
+        // order EnsureRequirements does internally. After these operations the
+        // tree nodes should be in a consistent state; this block exists to make
+        // sure those sub-rules don't violate tree node integrity.
         {
             let plan_requirements =
                 PlanWithCorrespondingSort::new_default(Arc::clone(&self.plan));

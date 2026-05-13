@@ -49,13 +49,12 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-/// This is a "data class" we use within the [`EnforceSorting`] rule to push
-/// down [`SortExec`] in the plan. In some cases, we can reduce the total
-/// computational cost by pushing down `SortExec`s through some executors. The
-/// object carries the parent required ordering and the (optional) `fetch` value
-/// of the parent node as its data.
-///
-/// [`EnforceSorting`]: crate::enforce_sorting::EnforceSorting
+/// "Data class" used by sort pushdown (now driven from `EnsureRequirements`)
+/// to push down [`SortExec`] in the plan. In some cases the total
+/// computational cost is reduced by pushing down `SortExec`s through certain
+/// executors. The object carries the parent required ordering, the (optional)
+/// `fetch` value of the parent node, and the parent's distribution requirement
+/// (used by the distribution-aware pushdown path) as its data.
 #[derive(Clone, Debug)]
 pub struct ParentRequirements {
     ordering_requirement: Option<OrderingRequirements>,

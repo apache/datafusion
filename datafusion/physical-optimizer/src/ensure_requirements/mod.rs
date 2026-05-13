@@ -892,13 +892,13 @@ mod tests {
     // preserve_partitioning=true without inserting SortPreservingMergeExec.
     // ========================================================================
 
-    /// Regression for PR #53: OutputRequirementExec(SinglePartition) wrapping
-    /// a multi-partition source. EnforceSorting's ensure_sorting must insert
-    /// SortPreservingMergeExec to satisfy SinglePartition requirement.
+    /// Regression: `OutputRequirementExec(SinglePartition)` wrapping a
+    /// multi-partition source. `ensure_sorting` must insert a
+    /// `SortPreservingMergeExec` to satisfy the `SinglePartition` requirement.
     ///
-    /// The final ensure_distribution pass catches the distribution violation
-    /// from pushdown_sorts, producing a valid plan (via CoalescePartitionsExec
-    /// or SortPreservingMergeExec).
+    /// The final `ensure_distribution` pass catches the distribution
+    /// violation from `pushdown_sorts`, producing a valid plan (via
+    /// `CoalescePartitionsExec` or `SortPreservingMergeExec`).
     #[test]
     fn test_pr53_output_requirement_single_partition_multi_partition_source() {
         let source = Arc::new(MockMultiPartitionExec::new(10));
@@ -920,7 +920,7 @@ mod tests {
             Some(21),
         ));
 
-        // Run EnsureRequirements (which includes EnforceSorting internally)
+        // Run EnsureRequirements (which composes distribution + sorting internally)
         let config = ConfigOptions::default();
         let optimized = EnsureRequirements::new()
             .optimize(output_req, &config)
@@ -1246,8 +1246,8 @@ mod tests {
             .expect("SanityCheckPlan failed on pass 3");
     }
 
-    /// Regression for #14150: EnforceDistribution claims to be idempotent
-    /// but loses fetch when applied twice. Verify EnsureRequirements
+    /// Regression for #14150: the standalone distribution enforcement path
+    /// lost `fetch` when applied twice. Verify `EnsureRequirements`
     /// preserves fetch across multiple passes.
     #[test]
     fn test_issue_14150_fetch_survives_multiple_passes() {

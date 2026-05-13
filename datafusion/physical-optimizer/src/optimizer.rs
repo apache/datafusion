@@ -155,11 +155,11 @@ impl PhysicalOptimizer {
             Arc::new(AggregateStatistics::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
-            // EnforceDistribution and EnforceSorting rules as they decide whether to add additional
-            // repartitioning and local sorting steps to meet distribution and ordering requirements.
-            // Therefore, it should run before EnforceDistribution and EnforceSorting.
+            // EnsureRequirements rule as it decides whether to add additional repartitioning and
+            // local sorting steps to meet distribution and ordering requirements. Therefore, it
+            // should run before EnsureRequirements.
             Arc::new(JoinSelection::new()),
-            // The LimitedDistinctAggregation rule should be applied before the EnforceDistribution rule,
+            // The LimitedDistinctAggregation rule should be applied before EnsureRequirements,
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
@@ -179,7 +179,7 @@ impl PhysicalOptimizer {
             Arc::new(OptimizeAggregateOrder::new()),
             // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER) → Sort
             // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
-            // Must run after EnforceSorting (which inserts SortExec) and before
+            // Must run after EnsureRequirements (which inserts SortExec) and before
             // ProjectionPushdown (which embeds projections into FilterExec).
             Arc::new(WindowTopN::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
@@ -194,7 +194,7 @@ impl PhysicalOptimizer {
             Arc::new(TopKAggregation::new()),
             // Tries to push limits down through window functions, growing as appropriate
             // This can possibly be combined with [LimitPushdown]
-            // It needs to come after [EnforceSorting]
+            // It needs to come after [EnsureRequirements] (which handles sort enforcement)
             Arc::new(LimitPushPastWindows::new()),
             // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
             // in the prob side of hash joins. That way, the probe side gets eagerly polled before
