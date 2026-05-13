@@ -433,12 +433,8 @@ impl From<&MetricValue> for FFI_MetricValue {
                 name: SString::from(name.as_ref()),
                 time_ns: time.value() as u64,
             },
-            MetricValue::StartTimestamp(ts) => {
-                Self::StartTimestampNsUTC(timestamp_to_ffi(ts))
-            }
-            MetricValue::EndTimestamp(ts) => {
-                Self::EndTimestampNsUTC(timestamp_to_ffi(ts))
-            }
+            MetricValue::StartTimestamp(ts) => Self::StartTimestampNsUTC(timestamp_to_ffi(ts)),
+            MetricValue::EndTimestamp(ts) => Self::EndTimestampNsUTC(timestamp_to_ffi(ts)),
             MetricValue::PruningMetrics {
                 name,
                 pruning_metrics,
