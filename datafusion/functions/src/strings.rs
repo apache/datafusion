@@ -1254,6 +1254,16 @@ mod tests {
         }};
     }
 
+    fn assert_finish_errs_on_length_mismatch<B>(mut builder: B)
+    where
+        B: BulkNullStringArrayBuilder,
+    {
+        builder.append_value("a");
+        builder.append_value("b");
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        assert!(builder.finish(Some(nulls)).is_err());
+    }
+
     #[test]
     #[should_panic(expected = "capacity integer overflow")]
     fn test_overflow_concat_string_builder() {
@@ -1315,9 +1325,15 @@ mod tests {
     }
 
     #[test]
-    fn bulk_append_with_basic() {
+    fn bulk_append_with() {
         check_on_all_builders!(
-            &[Some("hello"), None, Some("hello world"), Some("")],
+            &[
+                Some("hello"),
+                None,
+                Some("hello world"),
+                Some("a long string of 25 bytes"),
+                Some(""),
+            ],
             |b| {
                 b.append_with(|w| w.write_str("hello"));
                 b.append_placeholder();
@@ -1325,6 +1341,7 @@ mod tests {
                     w.write_str("hello ");
                     w.write_str("world");
                 });
+                b.append_with(|w| w.write_str("a long string of 25 bytes"));
                 b.append_with(|_w| {});
             },
         );
@@ -1353,30 +1370,14 @@ mod tests {
     }
 
     #[test]
-    fn bulk_append_with_long_value_and_placeholder() {
-        check_on_all_builders!(
-            &[
-                Some("hello"),
-                None,
-                Some("a long string of 25 bytes"),
-                Some(""),
-            ],
-            |b| {
-                b.append_with(|w| w.write_str("hello"));
-                b.append_placeholder();
-                b.append_with(|w| w.write_str("a long string of 25 bytes"));
-                b.append_with(|_w| {});
-            },
+    fn bulk_finish_errors_on_null_buffer_length_mismatch() {
+        assert_finish_errs_on_length_mismatch(
+            GenericStringArrayBuilder::<i32>::with_capacity(2, 4),
         );
-    }
-
-    #[test]
-    fn string_array_builder_null_buffer_length_mismatch() {
-        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(2, 4);
-        builder.append_value("a");
-        builder.append_value("b");
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        assert!(builder.finish(Some(nulls)).is_err());
+        assert_finish_errs_on_length_mismatch(
+            GenericStringArrayBuilder::<i64>::with_capacity(2, 4),
+        );
+        assert_finish_errs_on_length_mismatch(StringViewArrayBuilder::with_capacity(2));
     }
 
     #[test]
@@ -1398,15 +1399,6 @@ mod tests {
         let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(1, 4);
         builder.append_placeholder();
         let _ = builder.finish(None);
-    }
-
-    #[test]
-    fn string_view_array_builder_null_buffer_length_mismatch() {
-        let mut builder = StringViewArrayBuilder::with_capacity(2);
-        builder.append_value("a");
-        builder.append_value("b");
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        assert!(builder.finish(Some(nulls)).is_err());
     }
 
     #[test]
