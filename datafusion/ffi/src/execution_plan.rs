@@ -33,7 +33,7 @@ use tokio::runtime::Handle;
 
 use crate::config::FFI_ConfigOptions;
 use crate::execution::FFI_TaskContext;
-use crate::metrics::FFI_MetricsSet;
+use crate::physical_expr::metrics::FFI_MetricsSet;
 use crate::plan_properties::FFI_PlanProperties;
 use crate::record_batch_stream::FFI_RecordBatchStream;
 use crate::util::{FFI_Option, FFI_Result};

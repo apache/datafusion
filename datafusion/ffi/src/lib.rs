@@ -34,7 +34,6 @@ pub mod execution_plan;
 pub mod expr;
 pub mod ffi_option;
 pub mod insert_op;
-pub mod metrics;
 pub mod physical_expr;
 pub mod physical_optimizer;
 pub mod plan_properties;
