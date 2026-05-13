@@ -31,6 +31,7 @@ use datafusion_common::{Result, ffi_datafusion_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr::statistics::Distribution;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -295,6 +296,7 @@ unsafe extern "C" fn propagate_constraints_fn_wrapper(
     FFI_Result::Ok(result.into())
 }
 
+#[expect(deprecated)]
 unsafe extern "C" fn evaluate_statistics_fn_wrapper(
     expr: &FFI_PhysicalExpr,
     children: SVec<FFI_Distribution>,
@@ -313,6 +315,7 @@ unsafe extern "C" fn evaluate_statistics_fn_wrapper(
     )
 }
 
+#[expect(deprecated)]
 unsafe extern "C" fn propagate_statistics_fn_wrapper(
     expr: &FFI_PhysicalExpr,
     parent: FFI_Distribution,
@@ -630,6 +633,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         unsafe {
             let children = children
@@ -643,6 +647,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn propagate_statistics(
         &self,
         parent: &Distribution,
@@ -739,6 +744,7 @@ mod tests {
     use datafusion_common::tree_node::DynTreeNode;
     use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::interval_arithmetic::Interval;
+    #[expect(deprecated)]
     use datafusion_expr::statistics::Distribution;
     use datafusion_physical_expr::expressions::{Column, NegativeExpr, NotExpr};
     use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
@@ -879,6 +885,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn ffi_physical_expr_statistics() -> Result<(), DataFusionError> {
         let (negative_expr, foreign_neg) = create_test_negative_expr();
         let interval =
