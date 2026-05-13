@@ -771,7 +771,5 @@ mod tests {
             .unwrap();
 
         assert!(!result.transformed);
-
-        assert!(!result.transformed);
     }
 }

@@ -4073,12 +4073,12 @@ async fn right_semi_with_alias_filter() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r"
+        @"
     RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]
       Projection: t1.a [a:UInt32]
-        Filter: t1.c > Int32(1) [a:UInt32, c:Int32]
+        Filter: CAST(t1.c AS Int64) > Int64(1) [a:UInt32, c:Int32]
           TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]
-      Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]
+      Filter: CAST(t2.c AS Int64) > Int64(1) [a:UInt32, b:Utf8, c:Int32]
         TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
     "
     );
@@ -4120,10 +4120,10 @@ async fn right_anti_filter_push_down() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r"
-    RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]
+        @"
+    RightAnti Join: t1.a = t2.a Filter: CAST(t2.c AS Int64) > Int64(1) [a:UInt32, b:Utf8, c:Int32]
       Projection: t1.a [a:UInt32]
-        Filter: t1.c > Int32(1) [a:UInt32, c:Int32]
+        Filter: CAST(t1.c AS Int64) > Int64(1) [a:UInt32, c:Int32]
           TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]
       TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
     "

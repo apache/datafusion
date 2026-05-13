@@ -34,24 +34,31 @@
 //! 3. `cast(literal_expr) IN (expr1, expr2, ...)`
 //! 4. `literal_expr IN (cast(expr1) , cast(expr2), ...)`
 //!
-//! If the expression matches one of the forms above, the rule will
-//! ensure the value of `literal` is in range(min, max) of the
-//! expr's data_type, and if the scalar is within range, the literal
-//! will be casted to the data type of expr on the other side, and the
-//! cast will be removed from the other side.
+//! ## Safety
 //!
-//! # Example
+//! Unwrap is **closed by default**: it is only allowed when the cast is
+//! known to preserve comparison semantics. Currently the only allowed
+//! case is same-timezone timestamp casts where the target precision is
+//! the same or finer than the source (e.g. `Timestamp(ms) -> Timestamp(ns)`),
+//! and the literal round-trips exactly through both types.
 //!
-//! If the DataType of c1 is INT32. Given the filter
+//! All other type combinations (integer, float, decimal, string, dictionary,
+//! binary, etc.) are NOT unwrapped because the cast can lose precision, change
+//! domain, or break comparison ordering/equality.
+//!
+//! # Example (allowed)
+//!
+//! If `ts` has DataType `Timestamp(Millisecond, None)`. Given the filter:
 //!
 //! ```text
-//! cast(c1 as INT64) > INT64(10)`
+//! CAST(ts AS Timestamp(Nanosecond, None)) = TimestampNanosecond(1000000, None)
 //! ```
 //!
-//! This rule will remove the cast and rewrite the expression to:
+//! Since the literal round-trips exactly (1000000ns / 1e6 = 1ms, 1ms * 1e6 = 1000000ns),
+//! this rule will remove the cast and rewrite the expression to:
 //!
 //! ```text
-//! c1 > INT32(10)
+//! ts = TimestampMillisecond(1, None)
 //! ```
 
 use arrow::datatypes::DataType;
@@ -60,7 +67,7 @@ use datafusion_common::{internal_err, tree_node::Transformed};
 use datafusion_expr::{BinaryExpr, lit};
 use datafusion_expr::{Cast, Expr, Operator, TryCast, simplify::SimplifyContext};
 use datafusion_expr_common::casts::{
-    CastComparisonRewrite, is_supported_type, try_cast_literal_for_comparison_unwrap,
+    CastComparisonRewrite, try_cast_literal_for_comparison_unwrap,
     try_cast_literal_to_type,
 };
 
@@ -122,14 +129,12 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
                 return false;
             };
 
-            let Ok(lit_type) = info.get_data_type(literal) else {
+            if info.get_data_type(literal).is_err() {
                 return false;
             };
 
             comparison_unwrap_literal(lit_val, &expr_type, field.data_type(), op)
                 .is_some()
-                && is_supported_type(&expr_type)
-                && is_supported_type(&lit_type)
         }
         _ => false,
     }
@@ -156,18 +161,10 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
         return false;
     };
 
-    if !is_supported_type(&expr_type) {
-        return false;
-    }
-
     for right in list {
-        let Ok(right_type) = info.get_data_type(right) else {
+        let Ok(_right_type) = info.get_data_type(right) else {
             return false;
         };
-
-        if !is_supported_type(&right_type) {
-            return false;
-        }
 
         match right {
             Expr::Literal(lit_val, _)
@@ -224,7 +221,7 @@ mod tests {
         let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(99999999999i64));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
-        // cast(c1, UTF8) < '123', only eq/not_eq should be optimized
+        // cast(c1, UTF8) < '123', inequality with string cast is not unwrapped
         let expr_lt = cast(col("c1"), DataType::Utf8).lt(lit("123"));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 

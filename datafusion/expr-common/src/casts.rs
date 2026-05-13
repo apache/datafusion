@@ -76,7 +76,10 @@ pub fn try_cast_literal_to_type(
         .or_else(|| try_cast_binary(lit_value, target_type))
 }
 
-/// Returns true if unwrap_cast_in_comparison supports this data type
+/// Returns true if the type can be used as a source or target for
+/// literal casting during comparison unwrap. This is broader than
+/// the actual allowlist; the caller must further validate via
+/// `is_supported_comparison_unwrap_cast`.
 pub fn is_supported_type(data_type: &DataType) -> bool {
     is_supported_numeric_type(data_type)
         || is_supported_string_type(data_type)
@@ -152,8 +155,12 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
     )
 }
 
-/// Returns true when a cast is known to preserve comparison semantics after
-/// moving the cast from the expression to the literal side.
+/// Returns true when a cast preserves comparison semantics when unwrapped.
+///
+/// Only same-timezone timestamp casts with same or finer target precision
+/// are allowed (e.g. `Timestamp(ms) -> Timestamp(ns)` or same-precision
+/// `Timestamp(ms) -> Timestamp(ms)`). The literal must also round-trip exactly
+/// (checked separately in `try_cast_literal_for_comparison_unwrap`).
 fn is_supported_comparison_unwrap_cast(from_type: &DataType, to_type: &DataType) -> bool {
     match (from_type, to_type) {
         (
