@@ -349,15 +349,15 @@ fn from_substrait_struct_type(
     for (i, f) in s.types.iter().enumerate() {
         let name = next_struct_field_name(i, dfs_names, name_idx)?;
         let data_type = from_substrait_type(consumer, f, dfs_names, name_idx)?;
-        let field = Field::new(name, data_type, type_is_nullable(f));
+        let field = Field::new(name, data_type, type_is_nullable(f)?);
         fields.push(field);
     }
     Ok(fields.into())
 }
 
-fn type_is_nullable(dt: &Type) -> bool {
+fn type_is_nullable(dt: &Type) -> datafusion::common::Result<bool> {
     let Some(kind) = dt.kind.as_ref() else {
-        return true;
+        return Ok(true);
     };
 
     let nullability = match kind {
@@ -401,12 +401,11 @@ fn type_is_nullable(dt: &Type) -> bool {
     is_nullable(nullability)
 }
 
-fn is_nullable(nullability: i32) -> bool {
+fn is_nullable(nullability: i32) -> datafusion::common::Result<bool> {
     match r#type::Nullability::try_from(nullability) {
-        Ok(r#type::Nullability::Required) => false,
-        Ok(r#type::Nullability::Nullable | r#type::Nullability::Unspecified) | Err(_) => {
-            true
-        }
+        Ok(r#type::Nullability::Required) => Ok(false),
+        Ok(r#type::Nullability::Nullable | r#type::Nullability::Unspecified) => Ok(true),
+        Err(_) => not_impl_err!("Unsupported Substrait Nullability value {nullability}"),
     }
 }
 
@@ -423,20 +422,23 @@ mod tests {
         let dt = Type {
             kind: Some(Kind::UserDefinedTypeReference(0)),
         };
-        assert!(!type_is_nullable(&dt));
+        assert!(!type_is_nullable(&dt).unwrap());
     }
 
     #[test]
     fn type_is_nullable_missing_kind_defaults_to_nullable() {
         // Defensive: a Type whose kind is None is treated as nullable.
         let dt = Type { kind: None };
-        assert!(type_is_nullable(&dt));
+        assert!(type_is_nullable(&dt).unwrap());
     }
 
     #[test]
-    fn is_nullable_handles_unrecognized_enum_value() {
-        // Defensive: an unrecognized Nullability enum value (one prost
-        // doesn't know about) is treated as nullable.
-        assert!(is_nullable(i32::MAX));
+    fn is_nullable_rejects_unrecognized_enum_value() {
+        let err = is_nullable(i32::MAX).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unsupported Substrait Nullability"),
+            "got: {err}"
+        );
     }
 }
