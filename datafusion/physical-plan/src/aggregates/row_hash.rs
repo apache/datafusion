@@ -33,6 +33,7 @@ use crate::aggregates::{
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -837,6 +838,10 @@ impl Stream for GroupedHashAggregateStream {
                                     self.group_values.len()
                                 )));
                             }
+                            // Release the input pipeline's resources.
+                            let input_schema = self.input.schema();
+                            self.input =
+                                Box::pin(EmptyRecordBatchStream::new(input_schema));
                             self.exec_state = ExecutionState::Done;
                         }
                     }
@@ -1320,6 +1325,11 @@ impl GroupedHashAggregateStream {
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
         self.group_ordering.input_done();
+        // Release the original input pipeline's resources now that we're done
+        // reading from it. In the spill branch below, `self.input` is replaced
+        // again with a stream that merges spill files.
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
