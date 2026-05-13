@@ -940,6 +940,19 @@ are stored as <code class="docutils literal notranslate"><span class="pre">Arc&l
 read <code class="docutils literal notranslate"><span class="pre">partitioned_file.extensions</span></code> and downcast manually.</p></li>
 </ul>
 </section>
+<section id="arrays-zip-struct-field-names-changed">
+<h3><code class="docutils literal notranslate"><span class="pre">arrays_zip</span></code> struct field names changed<a class="headerlink" href="#arrays-zip-struct-field-names-changed" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">arrays_zip</span></code> (and its alias <code class="docutils literal notranslate"><span class="pre">list_zip</span></code>) scalar function now names its
+output struct fields <code class="docutils literal notranslate"><span class="pre">&quot;1&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;2&quot;</span></code>, …, <code class="docutils literal notranslate"><span class="pre">&quot;n&quot;</span></code> (1-indexed, matching DuckDB and
+Spark) instead of <code class="docutils literal notranslate"><span class="pre">c0</span></code>, <code class="docutils literal notranslate"><span class="pre">c1</span></code>, …, <code class="docutils literal notranslate"><span class="pre">c{n-1}</span></code>.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Queries or downstream code that references the output struct fields by name
+(e.g. <code class="docutils literal notranslate"><span class="pre">arrays_zip(a,</span> <span class="pre">b)[1]['c0']</span></code>). Update field accessors to <code class="docutils literal notranslate"><span class="pre">'1'</span></code>, <code class="docutils literal notranslate"><span class="pre">'2'</span></code>,
+etc. (e.g. <code class="docutils literal notranslate"><span class="pre">arrays_zip(a,</span> <span class="pre">b)[1]['1']</span></code>).</p></li>
+</ul>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/20886">PR #20886</a> for details.</p>
+</section>
 <section id="box-c-and-arc-c-treenodecontainer-impls-now-require-c-default">
 <h3><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code><a class="headerlink" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default" title="Link to this heading">#</a></h3>
 <p>The generic <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> implementations for <code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> now
@@ -1031,6 +1044,7 @@ allocation-free variant:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#conversion-from-configfileencryptionproperties-configfiledecryptionproperties-is-now-fallible">Conversion from <code class="docutils literal notranslate"><span class="pre">ConfigFileEncryptionProperties</span></code> / <code class="docutils literal notranslate"><span class="pre">ConfigFileDecryptionProperties</span></code> is now fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats"><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_median</span></code> now coerce to floats</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partitionedfile-extensions-is-now-a-type-keyed-map"><code class="docutils literal notranslate"><span class="pre">PartitionedFile::extensions</span></code> is now a type-keyed map</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#arrays-zip-struct-field-names-changed"><code class="docutils literal notranslate"><span class="pre">arrays_zip</span></code> struct field names changed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default"><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code></a></li>
 </ul>
 </li>
