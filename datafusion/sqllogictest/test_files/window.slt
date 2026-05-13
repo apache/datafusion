@@ -4178,6 +4178,286 @@ select lag(a, 1, null) over (order by a) from (select 1 a union all select 2 a)
 NULL
 1
 
+# test LAG with another column as default (first row falls back to b)
+query II
+select a, lag(a, 1, b) over (order by a)
+from (select 1 a, 10 b union all select 2 a, 20 b union all select 3 a, 30 b)
+----
+1 10
+2 1
+3 2
+
+# test LEAD with another column as default (last row falls back to b)
+query II
+select a, lead(a, 1, b) over (order by a)
+from (select 1 a, 10 b union all select 2 a, 20 b union all select 3 a, 30 b)
+----
+1 2
+2 3
+3 30
+
+# test LAG with offset 2 and column default (first 2 rows fall back to b)
+query II
+select a, lag(a, 2, b) over (order by a)
+from (select 1 a, 10 b union all select 2 a, 20 b union all select 3 a, 30 b union all select 4 a, 40 b)
+----
+1 10
+2 20
+3 1
+4 2
+
+# test LEAD with offset 2 and column default (last 2 rows fall back to b)
+query II
+select a, lead(a, 2, b) over (order by a)
+from (select 1 a, 10 b union all select 2 a, 20 b union all select 3 a, 30 b union all select 4 a, 40 b)
+----
+1 3
+2 4
+3 30
+4 40
+
+# test LAG with column expression default
+query II
+select a, lag(a, 1, b / 2) over (order by a)
+from (select 1 a, 10 b union all select 2 a, 20 b union all select 3 a, 30 b union all select 4 a, 40 b)
+----
+1 5
+2 1
+3 2
+4 3
+
+# test LAG with mixed-column expression default
+query II
+select a, lag(a, 1, b * c) over (order by a)
+from (
+    select 1 a, 10 b, 100 c union all select 2 a, 20 b, 200 c
+    union all select 3 a, 30 b, 300 c 
+    union all select 4 a, 40 b, 400 c
+)
+----
+1 1000
+2 1
+3 2
+4 3
+
+# test LAG with a * 2 as default
+query II
+select a, lag(a, 1, a * 2) over (order by a)
+from (select 1 a union all select 2 a)
+----
+1 2
+2 1
+
+# test LAG with offset 2 and a * 3 as default
+query II
+select a, lag(a, 2, a * 3) over (order by a)
+from (select 1 a union all select 2 a union all select 3 a)
+----
+1 3
+2 6
+3 1
+
+# test LEAD with a * 2 as default
+query II
+select a, lead(a, 1, a * 2) over (order by a)
+from (select 1 a union all select 2 a union all select 3 a)
+----
+1 2
+2 3
+3 6
+
+# test LEAD with offset 2 and a * 3 as default
+query II
+select a, lead(a, 2, a * 3) over (order by a)
+from (select 1 a union all select 2 a union all select 3 a union all select 4 a)
+----
+1 3
+2 4
+3 9
+4 12
+
+# test Both lag and lead in same query with expression defaults
+query III
+select a,
+       lag(a, 1, a * 2) over (order by a),
+       lead(a, 1, a * 3) over (order by a)
+from (select 1 a union all select 2 a union all select 3 a)
+----
+1 2 2
+2 1 3
+3 2 9
+
+# test LAG default is sum of two columns
+query II
+select a, lag(a, 1, b + c) over (order by a)
+from (select 1 a, 10 b, 100 c union all select 2 a, 20 b, 200 c union all select 3 a, 30 b, 300 c)
+----
+1 110
+2 1
+3 2
+
+# test LEAD default is product of two columns
+query II
+select a, lead(a, 1, b * c) over (order by a)
+from (select 1 a, 2 b, 3 c union all select 2 a, 4 b, 5 c union all select 3 a, 6 b, 7 c)
+----
+1 2
+2 3
+3 42
+
+# test LAG with PARTITION BY and column default
+query III
+select dept, salary, lag(salary, 1, salary * 2) over (partition by dept order by salary)
+from (
+    select 1 dept, 1000 salary union all
+    select 1 dept, 2000 salary union all
+    select 2 dept, 3000 salary union all
+    select 2 dept, 4000 salary
+)
+order by dept, salary
+----
+1 1000 2000
+1 2000 1000
+2 3000 6000
+2 4000 3000
+
+# test LEAD with PARTITION BY and column default
+query III
+select dept, salary, lead(salary, 1, salary * 2) over (partition by dept order by salary)
+from (
+    select 1 dept, 1000 salary union all
+    select 1 dept, 2000 salary union all
+    select 2 dept, 3000 salary union all
+    select 2 dept, 4000 salary
+)
+order by dept, salary
+----
+1 1000 2000
+1 2000 4000
+2 3000 4000
+2 4000 8000
+
+# test LEAD with NULLs in main column and column default
+query II
+select a, lead(a, 1, b) over (order by b)
+from (
+    select 1 a, 1 b union all
+    select NULL a, 2 b union all
+    select 3    a, 3 b
+)
+----
+1 NULL
+NULL 3
+3 3
+
+# test LAG on single row — always returns default expression value
+query II
+select a, lag(a, 1, a * 99) over (order by a)
+from (select 5 a)
+----
+5 495
+
+# test LEAD on single row — always returns default expression value
+query II
+select a, lead(a, 1, a * 99) over (order by a)
+from (select 5 a)
+----
+5 495
+
+# test each row's default is its own value * 10; only first/last rows use it
+query II
+select a, lag(a, 1, a * 10) over (order by a)
+from (
+    select 1 a union all
+    select 2 a union all
+    select 3 a union all
+    select 4 a
+)
+----
+1 10
+2 1
+3 2
+4 3
+
+# test lead with rows'default value as its own * 10 
+query II
+select a, lead(a, 1, a * 10) over (order by a)
+from (
+    select 1 a union all
+    select 2 a union all
+    select 3 a union all
+    select 4 a
+)
+----
+1 2
+2 3
+3 4
+4 40
+
+# test literal default and expression default in same query
+query III
+select a,
+       lag(a, 1, 0)     over (order by a) as lag_literal,
+       lag(a, 1, a * 2) over (order by a) as lag_expr
+from (select 1 a union all select 2 a union all select 3 a)
+----
+1 0 2
+2 1 1
+3 2 2
+
+query III
+select a,
+       lead(a, 1, 0)     over (order by a) as lead_literal,
+       lead(a, 1, a * 2) over (order by a) as lead_expr
+from (select 1 a union all select 2 a union all select 3 a)
+----
+1 2 2
+2 3 3
+3 0 6
+
+
+# test LAG offset 3: first 3 rows use default
+query II
+select a, lag(a, 3, a * 100) over (order by a)
+from (
+    select 1 a union all select 2 a union all select 3 a union all
+    select 4 a union all select 5 a
+)
+----
+1 100
+2 200
+3 300
+4 1
+5 2
+
+# test LEAD offset 3: last 3 rows use default
+query II
+select a, lead(a, 3, a * 100) over (order by a)
+from (
+    select 1 a union all select 2 a union all select 3 a union all
+    select 4 a union all select 5 a
+)
+----
+1 4
+2 5
+3 300
+4 400
+5 500
+
+# test LAG with very large offset: all rows use default
+query II
+select a, lead(a, 100, a * 10) over (order by a)
+from (
+    select 1 a union all select 2 a union all select 3 a union all
+    select 4 a union all select 5 a
+)
+----
+1 10
+2 20
+3 30
+4 40
+5 50
+
 # test LEAD window function with string default value
 query T
 select lead(a, 1, 'default') over (order by a) from (select '1' a union all select '2' a)

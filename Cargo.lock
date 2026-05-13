@@ -2276,7 +2276,6 @@ version = "53.1.0"
 dependencies = [
  "arrow",
  "criterion",
- "datafusion",
  "datafusion-common",
  "datafusion-doc",
  "datafusion-expr",
@@ -2285,7 +2284,6 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "log",
- "tokio",
 ]
 
 [[package]]

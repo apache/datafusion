@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::Field;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
+
+use crate::lead_lag::DefaultValue;
 
 pub(crate) fn get_signed_integer(value: &ScalarValue) -> Result<i64> {
     if value.is_null() {
@@ -49,6 +52,31 @@ pub(crate) fn get_scalar_value_from_args(
     } else {
         None
     })
+}
+
+pub(crate) fn get_default_value_from_args(
+    args: &[Arc<dyn PhysicalExpr>],
+    index: usize,
+    field: Arc<Field>,
+) -> Result<DefaultValue> {
+    match args.get(index) {
+        Some(expr) => {
+            if let Some(literal) = expr.downcast_ref::<Literal>() {
+                let scalar = literal.value().clone();
+                let scalar = if !scalar.data_type().is_null() {
+                    scalar.cast_to(field.data_type())
+                } else {
+                    ScalarValue::try_from(field.data_type())
+                }?;
+                Ok(DefaultValue::Literal(scalar))
+            } else {
+                Ok(DefaultValue::Expression)
+            }
+        }
+        None => {
+            Ok(DefaultValue::Literal(ScalarValue::try_from(field.data_type())?))
+        }
+    }
 }
 
 pub(crate) fn get_unsigned_integer(value: &ScalarValue) -> Result<u64> {
