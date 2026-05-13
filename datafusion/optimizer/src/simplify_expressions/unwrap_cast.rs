@@ -70,12 +70,6 @@ pub(super) fn unwrap_cast_in_comparison_for_binary(
     literal: &Expr,
     op: Operator,
 ) -> Result<Transformed<Expr>> {
-    let original = Expr::BinaryExpr(BinaryExpr {
-        left: Box::new(cast_expr.clone()),
-        op,
-        right: Box::new(literal.clone()),
-    });
-
     match (cast_expr, literal) {
         (
             Expr::TryCast(TryCast { expr, field }) | Expr::Cast(Cast { expr, field }),
@@ -95,6 +89,11 @@ pub(super) fn unwrap_cast_in_comparison_for_binary(
                 })));
             };
 
+            let original = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(cast_expr.clone()),
+                op,
+                right: Box::new(literal.clone()),
+            });
             Ok(Transformed::no(original))
         }
         _ => internal_err!("Expect cast expr and literal"),
