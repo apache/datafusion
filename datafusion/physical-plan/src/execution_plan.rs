@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::display::{DefaultDisplay, VerboseDisplay};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -24,6 +24,7 @@ pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
+pub use datafusion_common::display::{DisplayAs, DisplayFormatType};
 
 use arrow_schema::Schema;
 pub use datafusion_common::hash_utils;
