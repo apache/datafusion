@@ -15,18 +15,36 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::memory_pool::reclaimer::reclaimer_state;
 use crate::memory_pool::{
-    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation, human_readable_size,
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReclaimer, MemoryReservation,
+    human_readable_size,
 };
 use datafusion_common::HashMap;
 use datafusion_common::{DataFusionError, Result, resources_datafusion_err};
 use log::debug;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::fmt::{Display, Formatter};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
 use std::{
     num::NonZeroUsize,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
+
+/// How long [`TrackConsumersPool::try_grow_async`] waits for an
+/// in-flight sibling to finish reclaiming before retrying. Kept short
+/// so we don't stall the requestor longer than the typical reclaim
+/// (mpsc send + spill commit).
+const RECLAIM_RETRY_SLEEP: Duration = Duration::from_millis(50);
+
+/// Maximum number of times [`TrackConsumersPool::try_grow_async`]
+/// retries the candidate walk while siblings are still in-flight.
+/// Bounds the total wait at `MAX_RECLAIM_RETRIES * RECLAIM_RETRY_SLEEP`
+/// so a livelock surfaces as OOM rather than a hang.
+const MAX_RECLAIM_RETRIES: usize = 3;
 
 /// A [`MemoryPool`] that enforces no limit
 #[derive(Debug, Default)]
@@ -324,6 +342,51 @@ struct TrackedConsumer {
     can_spill: bool,
     reserved: AtomicUsize,
     peak: AtomicUsize,
+    reclaimer: Option<Arc<dyn MemoryReclaimer>>,
+    /// Tri-state eligibility flag for [`reclaimer`], encoded per
+    /// [`reclaimer_state`]. The pool flips `AVAILABLE` ↔ `IN_FLIGHT`
+    /// for dedup; the reclaimer's owner may sticky-set `DISABLED` once
+    /// it can no longer free memory. Shared `Arc` so the reclaimer
+    /// side and the pool see the same cell. `None` reclaimer ⇒ flag
+    /// is unused but still allocated.
+    reclaimer_state: Arc<AtomicU8>,
+}
+
+/// RAII guard for the [`IN_FLIGHT`] slot of a [`TrackedConsumer`]'s
+/// `reclaimer_state` flag. `Drop` only restores `AVAILABLE` if the
+/// state is still `IN_FLIGHT` — leaves a sticky `DISABLED` alone.
+///
+/// [`IN_FLIGHT`]: reclaimer_state::IN_FLIGHT
+struct ReclaimerStateGuard {
+    flag: Arc<AtomicU8>,
+}
+
+impl Drop for ReclaimerStateGuard {
+    fn drop(&mut self) {
+        let _ = self.flag.compare_exchange(
+            reclaimer_state::IN_FLIGHT,
+            reclaimer_state::AVAILABLE,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        );
+    }
+}
+
+impl ReclaimerStateGuard {
+    /// Try to transition the flag from `AVAILABLE` to `IN_FLIGHT`.
+    /// Fails on contention or on a sticky `DISABLED`.
+    fn try_acquire(flag: &Arc<AtomicU8>) -> Option<Self> {
+        flag.compare_exchange(
+            reclaimer_state::AVAILABLE,
+            reclaimer_state::IN_FLIGHT,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        )
+        .ok()
+        .map(|_| Self {
+            flag: Arc::clone(flag),
+        })
+    }
 }
 
 impl TrackedConsumer {
@@ -339,9 +402,29 @@ impl TrackedConsumer {
 
     /// Grows the tracked consumer's reserved size,
     /// should be called after the pool has successfully performed the grow().
+    ///
+    /// Uses the value `reserved` definitely held immediately after this
+    /// thread's `fetch_add` as the peak candidate, then bumps `peak` via a
+    /// monotone-max CAS loop. This avoids the race in the previous
+    /// `peak.fetch_max(self.reserved())` form, where a concurrent `shrink`
+    /// between the load of `reserved` and the max-write to `peak` could
+    /// record a peak below the true high-water mark.
     fn grow(&self, additional: usize) {
-        self.reserved.fetch_add(additional, Ordering::Relaxed);
-        self.peak.fetch_max(self.reserved(), Ordering::Relaxed);
+        let prev = self.reserved.fetch_add(additional, Ordering::Relaxed);
+        let new = prev + additional;
+
+        let mut peak = self.peak.load(Ordering::Relaxed);
+        while peak < new {
+            match self.peak.compare_exchange_weak(
+                peak,
+                new,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => peak = actual,
+            }
+        }
     }
 
     /// Reduce the tracked consumer's reserved size,
@@ -407,8 +490,19 @@ pub struct TrackConsumersPool<I> {
     inner: I,
     /// The amount of consumers to report(ordered top to bottom by reservation size)
     top: NonZeroUsize,
-    /// Maps consumer_id --> TrackedConsumer
-    tracked_consumers: Mutex<HashMap<usize, TrackedConsumer>>,
+    /// Cap on the number of reclaim candidates considered per
+    /// [`try_grow_async`] call. Bounds reclaim work when many consumers
+    /// are registered. Defaults to 4; override with
+    /// [`Self::with_reclaim_candidate_limit`].
+    reclaim_candidate_limit: NonZeroUsize,
+    /// Maps consumer_id --> TrackedConsumer.
+    ///
+    /// Protected by an [`RwLock`] rather than a [`Mutex`]: registration
+    /// (insert) and unregistration (remove) take the write lock; grow,
+    /// shrink, try_grow, metrics, and report_top take the read lock and run
+    /// concurrently. The per-consumer [`AtomicUsize`] fields are mutated
+    /// under the shared read lock — see [`TrackedConsumer::grow`].
+    tracked_consumers: RwLock<HashMap<usize, TrackedConsumer>>,
 }
 
 impl<I: MemoryPool> Display for TrackConsumersPool<I> {
@@ -464,8 +558,16 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
         Self {
             inner,
             top,
+            reclaim_candidate_limit: NonZeroUsize::new(4).unwrap(),
             tracked_consumers: Default::default(),
         }
+    }
+
+    /// Override the cap on reclaim candidates considered per
+    /// [`try_grow_async`] call (default `4`).
+    pub fn with_reclaim_candidate_limit(mut self, n: NonZeroUsize) -> Self {
+        self.reclaim_candidate_limit = n;
+        self
     }
 
     /// Returns a reference to the wrapped inner [`MemoryPool`].
@@ -476,7 +578,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
     /// Returns a snapshot of all currently tracked consumers.
     pub fn metrics(&self) -> Vec<MemoryConsumerMetrics> {
         self.tracked_consumers
-            .lock()
+            .read()
             .values()
             .map(Into::into)
             .collect()
@@ -486,7 +588,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
     pub fn report_top(&self, top: usize) -> String {
         let mut consumers = self
             .tracked_consumers
-            .lock()
+            .read()
             .iter()
             .map(|(consumer_id, tracked_consumer)| {
                 (
@@ -525,7 +627,17 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
     fn register(&self, consumer: &MemoryConsumer) {
         self.inner.register(consumer);
 
-        let mut guard = self.tracked_consumers.lock();
+        let reclaimer = consumer.reclaimer().cloned();
+        // Reuse the reclaimer's own flag when it provides one — that
+        // way the reclaimer side can sticky-set `DISABLED` and the
+        // pool sees it on the next filter pass. Otherwise allocate a
+        // fresh `AVAILABLE` flag for in-flight dedup only.
+        let state = reclaimer
+            .as_ref()
+            .and_then(|r| r.reclaimer_state())
+            .unwrap_or_else(|| Arc::new(AtomicU8::new(reclaimer_state::AVAILABLE)));
+
+        let mut guard = self.tracked_consumers.write();
         let existing = guard.insert(
             consumer.id(),
             TrackedConsumer {
@@ -533,6 +645,8 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 can_spill: consumer.can_spill(),
                 reserved: Default::default(),
                 peak: Default::default(),
+                reclaimer,
+                reclaimer_state: state,
             },
         );
 
@@ -544,27 +658,29 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 
     fn unregister(&self, consumer: &MemoryConsumer) {
         self.inner.unregister(consumer);
-        self.tracked_consumers.lock().remove(&consumer.id());
+        self.tracked_consumers.write().remove(&consumer.id());
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.inner.grow(reservation, additional);
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.grow(additional);
-            });
+        if let Some(tracked) = self
+            .tracked_consumers
+            .read()
+            .get(&reservation.consumer().id())
+        {
+            tracked.grow(additional);
+        }
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         self.inner.shrink(reservation, shrink);
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.shrink(shrink);
-            });
+        if let Some(tracked) = self
+            .tracked_consumers
+            .read()
+            .get(&reservation.consumer().id())
+        {
+            tracked.shrink(shrink);
+        }
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
@@ -584,13 +700,168 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 _ => e,
             })?;
 
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.grow(additional);
-            });
+        if let Some(tracked) = self
+            .tracked_consumers
+            .read()
+            .get(&reservation.consumer().id())
+        {
+            tracked.grow(additional);
+        }
         Ok(())
+    }
+
+    fn try_grow_async<'a>(
+        &'a self,
+        reservation: &'a MemoryReservation,
+        additional: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // Fast path.
+            let initial_err = match self.try_grow(reservation, additional) {
+                Ok(()) => return Ok(()),
+                Err(e) => e,
+            };
+
+            // Mark the requestor as IN_FLIGHT for the duration of this
+            // walk. Without this, a victim's reclaim handler that
+            // recursively triggers `pool.reclaim` (e.g. a merge stream
+            // started inside an `ExternalSorter` spill) could pick the
+            // requestor as its own victim, send it a reclaim oneshot,
+            // and deadlock — the requestor is blocked here at
+            // `reclaimer.reclaim().await` and can't drain its own
+            // reclaim channel. Sticky-disabled or already-in-flight
+            // requestors aren't acquired; the walk proceeds without
+            // protection (the candidate filter still rejects the
+            // requestor by id).
+            let requestor_id = reservation.consumer().id();
+            let _self_guard = self
+                .tracked_consumers
+                .read()
+                .get(&requestor_id)
+                .and_then(|tc| ReclaimerStateGuard::try_acquire(&tc.reclaimer_state));
+
+            let mut retries: usize = 0;
+            loop {
+                // Snapshot reclaimers. Only consumers strictly larger than
+                // the requestor are eligible: smaller-or-equal siblings would
+                // free less than the requestor itself can, so the requestor
+                // should self-spill instead. This rule also breaks the
+                // mutual-reclaim cycle (A targets B while B targets A) — at
+                // most one side of any pair can hold strictly more memory,
+                // so the other side has no candidates and surfaces an error
+                // for the caller's self-spill fallback. Filter out anyone
+                // whose `reclaimer_state` flag is not `AVAILABLE` (in-flight or
+                // sticky-disabled). Also count IN_FLIGHT siblings so we know
+                // whether to wait briefly for them to finish before giving up.
+                // Drop the read guard before awaiting any reclaim.
+                let requestor_reserved = {
+                    let guard = self.tracked_consumers.read();
+                    guard
+                        .get(&requestor_id)
+                        .map(|tc| tc.reserved())
+                        .unwrap_or(0)
+                };
+                let mut in_flight_seen: usize = 0;
+                let mut candidates: Vec<(
+                    usize,
+                    Arc<dyn MemoryReclaimer>,
+                    Arc<AtomicU8>,
+                )> = {
+                    let guard = self.tracked_consumers.read();
+                    guard
+                        .iter()
+                        .filter_map(|(cid, tc)| {
+                            if *cid == requestor_id {
+                                return None;
+                            }
+                            // Track in-flight siblings (any size) so we can
+                            // decide whether a retry has any chance of helping.
+                            let state = tc.reclaimer_state.load(Ordering::Acquire);
+                            if state == reclaimer_state::IN_FLIGHT {
+                                in_flight_seen += 1;
+                            }
+                            let reclaimer = tc.reclaimer.as_ref()?;
+                            if tc.reserved() <= requestor_reserved {
+                                return None;
+                            }
+                            if state != reclaimer_state::AVAILABLE {
+                                return None;
+                            }
+                            Some((
+                                tc.reserved(),
+                                Arc::clone(reclaimer),
+                                Arc::clone(&tc.reclaimer_state),
+                            ))
+                        })
+                        .collect()
+                };
+                // Order: priority desc, then reservation size desc.
+                candidates.sort_by(|(lr, l, _), (rr, r, _)| {
+                    r.priority().cmp(&l.priority()).then_with(|| rr.cmp(lr))
+                });
+                // Cap reclaim work — only consider the top-ranked candidates.
+                candidates.truncate(self.reclaim_candidate_limit.get());
+
+                // For each candidate: try to claim its in-flight slot
+                // (skip on contention or sticky-disabled so we work on a
+                // different victim rather than serializing behind a
+                // sibling's reclaim); re-check `try_grow` before reclaiming
+                // in case a sibling already freed enough; reclaim; retry
+                // `try_grow`. The retry path goes through `self.try_grow`,
+                // which already updates the tracked consumer's atomic
+                // reservation — no manual accounting needed here.
+                for (_, reclaimer, flag) in candidates {
+                    let _g = match ReclaimerStateGuard::try_acquire(&flag) {
+                        Some(g) => g,
+                        None => continue,
+                    };
+                    if self.try_grow(reservation, additional).is_ok() {
+                        return Ok(());
+                    }
+                    if let Err(e) = reclaimer.reclaim(additional).await {
+                        debug!("memory reclaimer returned error: {e}");
+                        continue;
+                    }
+                    if self.try_grow(reservation, additional).is_ok() {
+                        return Ok(());
+                    }
+                }
+
+                // Walk produced nothing usable. If other consumers are
+                // currently reclaiming for someone else, their freed bytes
+                // may land in the pool shortly — wait briefly and retry
+                // before falling through to OOM. Bounded so we don't stall
+                // forever on a livelock.
+                if in_flight_seen > 0 && retries < MAX_RECLAIM_RETRIES {
+                    retries += 1;
+                    tokio::time::sleep(RECLAIM_RETRY_SLEEP).await;
+                    // Quick fast-path retry: an in-flight sibling may have
+                    // freed bytes during the sleep.
+                    if self.try_grow(reservation, additional).is_ok() {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                break;
+            }
+
+            // Fall through to the inner pool's own reclaim path, if any.
+            // The default impl just re-runs `inner.try_grow`, which
+            // bypasses `TrackConsumersPool::try_grow`, so the
+            // consumer-side update is still required.
+            self.inner
+                .try_grow_async(reservation, additional)
+                .await
+                .map_err(|_| initial_err)?;
+            if let Some(tracked) = self
+                .tracked_consumers
+                .read()
+                .get(&reservation.consumer().id())
+            {
+                tracked.grow(additional);
+            }
+            Ok(())
+        })
     }
 
     fn reserved(&self) -> usize {
@@ -1045,5 +1316,127 @@ mod tests {
             "track_consumers(inner_pool: unbounded(used: 0.0 B), num_of_top_consumers: 5)",
             "TrackConsumersPool<UnboundedMemoryPool> Display"
         );
+    }
+
+    /// N threads each call `grow(STEP)` then `shrink(STEP)` once on the same
+    /// consumer. Final `reserved == 0`. Peak hit at least once and at most
+    /// `THREADS * STEP` — validates that `fetch_add` on `reserved` is correct
+    /// under concurrent readers of the `RwLock`-protected map.
+    #[test]
+    fn test_tracked_consumer_concurrent_grow() {
+        const THREADS: usize = 16;
+        const STEP: usize = 7;
+
+        let tracked = Arc::new(TrackConsumersPool::new(
+            UnboundedMemoryPool::default(),
+            NonZeroUsize::new(5).unwrap(),
+        ));
+        let tracked_clone = Arc::clone(&tracked);
+        let pool: Arc<dyn MemoryPool> = tracked_clone;
+        let r = Arc::new(MemoryConsumer::new("c").register(&pool));
+
+        std::thread::scope(|s| {
+            for _ in 0..THREADS {
+                let r = Arc::clone(&r);
+                s.spawn(move || {
+                    let local = r.new_empty();
+                    local.grow(STEP);
+                    local.shrink(STEP);
+                });
+            }
+        });
+
+        let metrics = tracked.metrics();
+        let entry = metrics.iter().find(|m| m.name == "c").unwrap();
+        assert_eq!(entry.reserved, 0);
+        assert!(entry.peak >= STEP);
+        assert!(entry.peak <= THREADS * STEP);
+    }
+
+    /// N threads run interleaved `grow`/`shrink` pairs on the same consumer.
+    /// Final `reserved` must be 0; `peak` must be at least `STEP` (any grow
+    /// records its own bump) and at most `THREADS * STEP`. Validates the
+    /// monotone-max CAS on `peak`, fixing today's `fetch_max(self.reserved())`
+    /// race where an intervening shrink could drop `reserved` below the value
+    /// used to bump `peak`.
+    #[test]
+    fn test_tracked_consumer_concurrent_peak_monotone() {
+        const THREADS: usize = 16;
+        const ITERS: usize = 10_000;
+        const STEP: usize = 3;
+
+        let tracked = Arc::new(TrackConsumersPool::new(
+            UnboundedMemoryPool::default(),
+            NonZeroUsize::new(5).unwrap(),
+        ));
+        let tracked_clone = Arc::clone(&tracked);
+        let pool: Arc<dyn MemoryPool> = tracked_clone;
+        let r = Arc::new(MemoryConsumer::new("c").register(&pool));
+
+        std::thread::scope(|s| {
+            for _ in 0..THREADS {
+                let r = Arc::clone(&r);
+                s.spawn(move || {
+                    let local = r.new_empty();
+                    for _ in 0..ITERS {
+                        local.grow(STEP);
+                        local.shrink(STEP);
+                    }
+                });
+            }
+        });
+
+        let entry = tracked
+            .metrics()
+            .into_iter()
+            .find(|m| m.name == "c")
+            .unwrap();
+        assert_eq!(entry.reserved, 0, "all grows undone by shrinks");
+        assert!(entry.peak >= STEP);
+        assert!(entry.peak <= THREADS * STEP);
+    }
+
+    /// One thread loops register/unregister, another loops grow/shrink on a
+    /// stable consumer. Verifies no panics or deadlocks across the `RwLock`
+    /// boundary, and that the stable consumer's accounting is preserved
+    /// when a writer briefly takes the exclusive lock.
+    #[test]
+    fn test_tracked_consumers_pool_register_grow_concurrent() {
+        const ITERS: usize = 1_000;
+
+        let tracked = Arc::new(TrackConsumersPool::new(
+            UnboundedMemoryPool::default(),
+            NonZeroUsize::new(5).unwrap(),
+        ));
+        let tracked_clone = Arc::clone(&tracked);
+        let pool: Arc<dyn MemoryPool> = tracked_clone;
+
+        let r = Arc::new(MemoryConsumer::new("stable").register(&pool));
+
+        std::thread::scope(|s| {
+            let pool_w = Arc::clone(&pool);
+            s.spawn(move || {
+                for i in 0..ITERS {
+                    let _churn =
+                        MemoryConsumer::new(format!("churn-{i}")).register(&pool_w);
+                }
+            });
+
+            let r_inner = Arc::clone(&r);
+            s.spawn(move || {
+                let local = r_inner.new_empty();
+                for _ in 0..ITERS {
+                    local.grow(5);
+                    local.shrink(5);
+                }
+            });
+        });
+
+        let metrics = tracked.metrics();
+        let stable = metrics.iter().find(|m| m.name == "stable").unwrap();
+        assert_eq!(stable.reserved, 0);
+        assert!(stable.peak >= 5);
+        assert!(metrics.iter().all(|m| !m.name.starts_with("churn-")));
+        drop(r);
     }
 }

@@ -65,7 +65,9 @@ use datafusion_common::{
     unwrap_or_internal_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryReclaimer, MemoryReservation, reclaimer_state,
+};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
@@ -73,6 +75,34 @@ use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
+
+/// Reclaimer for an [`ExternalSorter`] partition. Hands a oneshot off to
+/// the partition's stream loop (the sorter's sole owner), which spills and
+/// replies with the freed byte count.
+#[derive(Debug)]
+struct ExternalSorterReclaimer {
+    tx: tokio::sync::mpsc::Sender<tokio::sync::oneshot::Sender<usize>>,
+    /// Shared with the pool's `TrackedConsumer` entry. Stream loop
+    /// flips it to `DISABLED` on merge entry so the pool stops
+    /// targeting this consumer.
+    reclaimer_state: Arc<std::sync::atomic::AtomicU8>,
+}
+
+#[async_trait::async_trait]
+impl MemoryReclaimer for ExternalSorterReclaimer {
+    async fn reclaim(&self, _target: usize) -> Result<usize> {
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        // Stream loop terminated, or response dropped: report 0.
+        if self.tx.send(resp_tx).await.is_err() {
+            return Ok(0);
+        }
+        Ok(resp_rx.await.unwrap_or(0))
+    }
+
+    fn reclaimer_state(&self) -> Option<Arc<std::sync::atomic::AtomicU8>> {
+        Some(Arc::clone(&self.reclaimer_state))
+    }
+}
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -279,11 +309,16 @@ impl ExternalSorter {
         spill_compression: SpillCompression,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
+        // Reclaimer attached to this partition's `MemoryConsumer`.
+        reclaimer: Option<Arc<dyn MemoryReclaimer>>,
     ) -> Result<Self> {
         let metrics = ExternalSorterMetrics::new(metrics, partition_id);
-        let reservation = MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
-            .with_can_spill(true)
-            .register(&runtime.memory_pool);
+        let mut consumer = MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
+            .with_can_spill(true);
+        if let Some(r) = reclaimer {
+            consumer = consumer.with_reclaimer(r);
+        }
+        let reservation = consumer.register(&runtime.memory_pool);
 
         let merge_reservation =
             MemoryConsumer::new(format!("ExternalSorterMerge[{partition_id}]"))
@@ -315,7 +350,14 @@ impl ExternalSorter {
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
     ///
-    /// Updates memory usage metrics, and possibly triggers spilling to disk
+    /// Updates memory usage metrics, and possibly triggers spilling to disk.
+    ///
+    /// The live `(false, None)` path in [`SortExec::execute`] inlines this
+    /// logic so that the inner `try_grow_async` await runs inside a
+    /// `select!` that also drains `reclaim_rx` — see the closure in
+    /// `execute`. This method is retained for tests that drive an
+    /// `ExternalSorter` directly without a reclaim channel.
+    #[cfg(test)]
     async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
         if input.num_rows() == 0 {
             return Ok(());
@@ -492,6 +534,10 @@ impl ExternalSorter {
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
             let sorted_size = get_reserved_bytes_for_record_batch(&batch)?;
+            // Sync `try_grow`, not `try_grow_async`: we are already in the
+            // spill path (freeing memory). A recursive reclaim here can
+            // close a cycle between two sorters that are each waiting on
+            // the other's spill to complete.
             if self.reservation.try_grow(sorted_size).is_err() {
                 // Although the reservation is not enough, the batch is
                 // already in memory, so it's okay to combine it with previously
@@ -730,20 +776,26 @@ impl ExternalSorter {
 
     /// Reserves memory to be able to accommodate the given batch.
     /// If memory is scarce, tries to spill current in-memory batches to disk first.
+    ///
+    /// Only called from [`Self::insert_batch`], which itself only runs
+    /// in tests now — see comment there.
+    #[cfg(test)]
     async fn reserve_memory_for_batch_and_maybe_spill(
         &mut self,
         input: &RecordBatch,
     ) -> Result<()> {
         let size = get_reserved_bytes_for_record_batch(input)?;
 
-        match self.reservation.try_grow(size) {
+        match self.reservation.try_grow_async(size).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 if self.in_mem_batches.is_empty() {
                     return Err(Self::err_with_oom_context(e));
                 }
 
-                // Spill and try again.
+                // Sibling reclaim was already attempted by `try_grow_async`
+                // (which skips this consumer). Spill our own buffer, retry
+                // sync — siblings won't free more on a second pass.
                 self.sort_and_spill_in_mem_batches().await?;
                 self.reservation
                     .try_grow(size)
@@ -1246,6 +1298,18 @@ impl ExecutionPlan for SortExec {
                 )))
             }
             (false, None) => {
+                // Spill-request channel; drained by the stream loop below.
+                let (reclaim_tx, mut reclaim_rx) =
+                    tokio::sync::mpsc::channel::<tokio::sync::oneshot::Sender<usize>>(4);
+                let state = Arc::new(std::sync::atomic::AtomicU8::new(
+                    reclaimer_state::AVAILABLE,
+                ));
+                let reclaimer: Arc<dyn MemoryReclaimer> =
+                    Arc::new(ExternalSorterReclaimer {
+                        tx: reclaim_tx,
+                        reclaimer_state: Arc::clone(&state),
+                    });
+
                 let mut sorter = ExternalSorter::new(
                     partition,
                     input.schema(),
@@ -1256,14 +1320,136 @@ impl ExecutionPlan for SortExec {
                     context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
+                    Some(reclaimer),
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
-                        while let Some(batch) = input.next().await {
-                            let batch = batch?;
-                            sorter.insert_batch(batch).await?;
+                        // State machine: spill or insert. The inner
+                        // `try_grow_async` award for an incoming batch
+                        // is wrapped in its own `select!` against
+                        // `reclaim_rx` so that a sibling targeting this
+                        // sorter for reclaim is serviced even while we
+                        // ourselves are waiting for memory — otherwise
+                        // a fat sorter sitting in `try_grow_async.await`
+                        // would never drain its inbound reclaim queue,
+                        // and a concurrent sibling's
+                        // `reclaimer.reclaim(...).await` would never
+                        // resolve. `biased` ensures reclaim wins over
+                        // insert under pressure.
+                        //
+                        // Cancellation: selecting reclaim drops the in-flight
+                        // `input.next()`. Safe for cancellation-safe inputs
+                        // (channel receivers, e.g. RepartitionExec); other
+                        // inputs could drop a batch here.
+                        'outer: loop {
+                            tokio::select! {
+                                biased;
+                                Some(resp_tx) = reclaim_rx.recv() => {
+                                    // A reclaim can be dequeued just after a
+                                    // prior spill drained `in_mem_batches`
+                                    // (sibling sent during the spill's awaits;
+                                    // pool's zero-byte filter can transiently
+                                    // miss us via split reservations). Nothing
+                                    // local to free — reply 0 and keep going.
+                                    if sorter.in_mem_batches.is_empty() {
+                                        let _ = resp_tx.send(0);
+                                        continue;
+                                    }
+                                    let before = sorter.used();
+                                    sorter.sort_and_spill_in_mem_batches().await?;
+                                    let after = sorter.used();
+                                    let _ = resp_tx
+                                        .send(before.saturating_sub(after));
+                                }
+                                next = input.next() => {
+                                    let Some(batch_result) = next else {
+                                        break 'outer;
+                                    };
+                                    let batch = batch_result?;
+                                    if batch.num_rows() == 0 {
+                                        continue;
+                                    }
+                                    sorter.reserve_memory_for_merge()?;
+                                    let size =
+                                        get_reserved_bytes_for_record_batch(&batch)?;
+
+                                    // Reclaim-cooperative grow: while
+                                    // awaiting `try_grow_async`, keep
+                                    // draining `reclaim_rx`. On an
+                                    // inbound reclaim, spill our
+                                    // in-memory batches; that almost
+                                    // always frees enough that a sync
+                                    // `try_grow` succeeds, so we can
+                                    // skip the next async wait.
+                                    loop {
+                                        tokio::select! {
+                                            biased;
+                                            Some(resp_tx) = reclaim_rx.recv() => {
+                                                if sorter.in_mem_batches.is_empty() {
+                                                    let _ = resp_tx.send(0);
+                                                    continue;
+                                                }
+                                                let before = sorter.used();
+                                                sorter
+                                                    .sort_and_spill_in_mem_batches()
+                                                    .await?;
+                                                let after = sorter.used();
+                                                let _ = resp_tx
+                                                    .send(before.saturating_sub(after));
+                                                if sorter
+                                                    .reservation
+                                                    .try_grow(size)
+                                                    .is_ok()
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                            r = sorter
+                                                .reservation
+                                                .try_grow_async(size) => {
+                                                match r {
+                                                    Ok(()) => break,
+                                                    Err(_) if !sorter
+                                                        .in_mem_batches
+                                                        .is_empty() =>
+                                                    {
+                                                        sorter
+                                                            .sort_and_spill_in_mem_batches()
+                                                            .await?;
+                                                        sorter
+                                                            .reservation
+                                                            .try_grow(size)
+                                                            .map_err(
+                                                                ExternalSorter::err_with_oom_context,
+                                                            )?;
+                                                        break;
+                                                    }
+                                                    Err(e) => {
+                                                        return Err(
+                                                            ExternalSorter::err_with_oom_context(e),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    sorter.in_mem_batches.push(batch);
+                                }
+                            }
                         }
+                        // Sticky-disable so concurrent `try_grow_async`
+                        // callers stop targeting this consumer once we
+                        // enter the merge phase. Set before dropping
+                        // the receiver to close any window where the
+                        // pool would observe `AVAILABLE` after the
+                        // channel is gone (and hence get `Ok(0)` from a
+                        // wasted `reclaim`).
+                        state.store(
+                            reclaimer_state::DISABLED,
+                            std::sync::atomic::Ordering::Release,
+                        );
+                        drop(reclaim_rx);
                         sorter.sort().await
                     })
                     .try_flatten(),
@@ -2766,6 +2952,7 @@ mod tests {
             SpillCompression::Uncompressed,
             &metrics_set,
             Arc::clone(&runtime),
+            None,
         )?;
 
         // Insert enough data to force spilling.

@@ -2090,6 +2090,7 @@ dependencies = [
  "parquet",
  "rand 0.9.4",
  "tempfile",
+ "tokio",
  "url",
 ]
 
