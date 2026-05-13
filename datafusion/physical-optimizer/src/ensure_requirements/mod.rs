@@ -1317,11 +1317,75 @@ mod tests {
         assert_eq!(s2, s3, "Plan changed between pass 2 and 3:\n{s2}\nvs\n{s3}");
     }
 
-    // Note: a previous `test_issue_14150_enforce_distribution_idempotent`
-    // test asserted idempotency of the standalone `EnforceDistribution`
-    // pass. With that rule retired, the relevant property is covered by
-    // `test_issue_14150_fetch_survives_multiple_passes` above, which
-    // exercises `EnsureRequirements` end-to-end.
+    /// Sharper #14150 reproduce: input plan already contains a
+    /// `SortPreservingMergeExec` with an explicit `fetch`, sitting directly
+    /// above a `SortExec(fetch=…)` on a multi-partition source. This is the
+    /// exact shape that originally triggered the bug — the old
+    /// `EnforceDistribution::optimize` path would call
+    /// `remove_dist_changing_operators()` on this SPM, strip it, and then
+    /// `add_merge_on_top()` re-create an SPM **without** copying the saved
+    /// `fetch`. Pass 2 saw an SPM with no fetch and #14150 silently bit.
+    ///
+    /// `EnsureRequirements` preserves the `fetch` value across every pass.
+    /// Note: it may legitimately deduplicate the `fetch` field between
+    /// adjacent operators (e.g. push it onto the surrounding
+    /// `GlobalLimitExec` and drop it from the SPM), so this test asserts
+    /// the #14150 property — \"`fetch=5` must appear somewhere in the
+    /// plan after every pass\" — rather than byte-identical idempotency
+    /// (which is covered by `test_issue_14150_fetch_survives_multiple_passes`
+    /// on the more realistic input shape where the SPM is inserted by the
+    /// optimizer itself).
+    #[test]
+    fn test_issue_14150_fetch_survives_with_input_spm() {
+        let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
+
+        let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        )])
+        .unwrap();
+
+        // Sort with fetch=5 (TopK).
+        let sort = Arc::new(
+            SortExec::new(sort_expr.clone(), Arc::clone(&source)).with_fetch(Some(5)),
+        );
+
+        // SPM with fetch=5 above the sort — this is what `EnforceDistribution`
+        // used to strip and re-add without `fetch`.
+        let spm: Arc<dyn ExecutionPlan> =
+            Arc::new(SortPreservingMergeExec::new(sort_expr, sort).with_fetch(Some(5)));
+
+        let limit: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(spm, 0, Some(5)));
+
+        let config = ConfigOptions::default();
+
+        let p1 = EnsureRequirements::new()
+            .optimize(Arc::clone(&limit), &config)
+            .unwrap();
+        let s1 = datafusion_physical_plan::displayable(p1.as_ref())
+            .indent(true)
+            .to_string();
+
+        let p2 = EnsureRequirements::new()
+            .optimize(Arc::clone(&p1), &config)
+            .unwrap();
+        let s2 = datafusion_physical_plan::displayable(p2.as_ref())
+            .indent(true)
+            .to_string();
+
+        // The #14150 property: `fetch=5` must survive both passes (the
+        // historical bug was that pass 2 dropped it when the SPM got
+        // re-created in `add_merge_on_top`).
+        assert!(s1.contains("fetch=5"), "fetch=5 lost after pass 1:\n{s1}");
+        assert!(
+            s2.contains("fetch=5"),
+            "fetch=5 lost after pass 2 (#14150 regression):\n{s2}"
+        );
+    }
 
     // ========================================================================
     // Mock operator with configurable distribution / ordering requirements
