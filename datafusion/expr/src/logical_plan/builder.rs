@@ -66,6 +66,30 @@ use indexmap::IndexSet;
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
+fn recursive_query_output_schema(
+    static_schema: &DFSchema,
+    recursive_schema: &DFSchema,
+) -> Result<DFSchemaRef> {
+    let fields = static_schema
+        .iter()
+        .zip(recursive_schema.iter())
+        .map(|((qualifier, static_field), (_, recursive_field))| {
+            let field = static_field
+                .as_ref()
+                .clone()
+                .with_nullable(
+                    static_field.is_nullable() || recursive_field.is_nullable(),
+                )
+                .into();
+            (qualifier.cloned(), field)
+        })
+        .collect::<Vec<_>>();
+    Ok(DFSchemaRef::new(DFSchema::new_with_metadata(
+        fields,
+        static_schema.metadata().clone(),
+    )?))
+}
+
 /// Options for [`LogicalPlanBuilder`]
 #[derive(Default, Debug, Clone)]
 pub struct LogicalPlanBuilderOptions {
@@ -192,11 +216,20 @@ impl LogicalPlanBuilder {
         // Ensure that the recursive term has the same field types as the static term
         let coerced_recursive_term =
             coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
+        let output_schema = recursive_query_output_schema(
+            self.plan.schema(),
+            coerced_recursive_term.schema(),
+        )?;
+        let static_term =
+            coerce_plan_expr_for_schema(Arc::unwrap_or_clone(self.plan), &output_schema)?;
+        let recursive_term =
+            coerce_plan_expr_for_schema(coerced_recursive_term, &output_schema)?;
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
             name,
-            static_term: self.plan,
-            recursive_term: Arc::new(coerced_recursive_term),
+            static_term: Arc::new(static_term),
+            recursive_term: Arc::new(recursive_term),
             is_distinct,
+            schema: output_schema,
         })))
     }
 

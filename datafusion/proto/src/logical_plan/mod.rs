@@ -56,8 +56,7 @@ use datafusion_datasource_json::file_format::{
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RecursiveQuery, SkipType,
-    TableSource, Unnest,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, SkipType, TableSource, Unnest,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
@@ -1085,12 +1084,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: recursive_query_node.name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    is_distinct: recursive_query_node.is_distinct,
-                }))
+                LogicalPlanBuilder::from(static_term)
+                    .to_recursive_query(
+                        recursive_query_node.name.clone(),
+                        recursive_term,
+                        recursive_query_node.is_distinct,
+                    )?
+                    .build()
             }
             LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
                 let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;

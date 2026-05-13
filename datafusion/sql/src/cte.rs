@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::{Schema, SchemaRef};
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{
@@ -133,9 +135,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // ---------- Step 2: Create a temporary relation ------------------
         // Step 2.1: Create a table source for the temporary relation
-        let work_table_source = self
-            .context_provider
-            .create_cte_work_table(cte_name, Arc::clone(static_plan.schema().inner()))?;
+        let work_table_source = self.context_provider.create_cte_work_table(
+            cte_name,
+            nullable_schema(static_plan.schema().inner()),
+        )?;
 
         // Step 2.2: Create a temporary relation logical plan that will be used
         // as the input to the recursive term
@@ -182,6 +185,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .to_recursive_query(name, recursive_plan, distinct)?
             .build()
     }
+}
+
+fn nullable_schema(schema: &SchemaRef) -> SchemaRef {
+    Arc::new(Schema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone().with_nullable(true))
+            .collect::<Vec<_>>(),
+        schema.metadata().clone(),
+    ))
 }
 
 fn has_work_table_reference(

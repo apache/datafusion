@@ -353,10 +353,7 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
-            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
-                // we take the schema of the static term as the schema of the entire recursive query
-                static_term.schema()
-            }
+            LogicalPlan::RecursiveQuery(RecursiveQuery { schema, .. }) => schema,
         }
     }
 
@@ -1076,7 +1073,10 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Distinct(distinct))
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
-                name, is_distinct, ..
+                name,
+                is_distinct,
+                schema,
+                ..
             }) => {
                 self.assert_no_expressions(expr)?;
                 let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
@@ -1085,6 +1085,7 @@ impl LogicalPlan {
                     static_term: Arc::new(static_term),
                     recursive_term: Arc::new(recursive_term),
                     is_distinct: *is_distinct,
+                    schema: Arc::clone(schema),
                 }))
             }
             LogicalPlan::Analyze(a) => {
@@ -2246,7 +2247,7 @@ impl PartialOrd for EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -2258,6 +2259,28 @@ pub struct RecursiveQuery {
     /// Should the output of the recursive term be deduplicated (`UNION`) or
     /// not (`UNION ALL`).
     pub is_distinct: bool,
+    /// The output schema of the recursive query.
+    pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for RecursiveQuery {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.name
+            .partial_cmp(&other.name)
+            .and_then(|ordering| match ordering {
+                Ordering::Equal => self.static_term.partial_cmp(&other.static_term),
+                _ => Some(ordering),
+            })
+            .and_then(|ordering| match ordering {
+                Ordering::Equal => self.recursive_term.partial_cmp(&other.recursive_term),
+                _ => Some(ordering),
+            })
+            .and_then(|ordering| match ordering {
+                Ordering::Equal => self.is_distinct.partial_cmp(&other.is_distinct),
+                _ => Some(ordering),
+            })
+    }
 }
 
 /// Values expression. See

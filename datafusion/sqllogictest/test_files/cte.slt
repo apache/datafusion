@@ -171,7 +171,7 @@ logical_plan
 07)--------TableScan: nodes projection=[id]
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
-02)--ProjectionExec: expr=[1 as id]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as id]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[id@0 + 1 as id]
@@ -194,6 +194,21 @@ SELECT * FROM nodes
 2
 3
 4
+
+# recursive self-reference must use conservative nullability even when the
+# anchor term uses non-null literals. Otherwise optimizer nullability-based
+# simplification can remove this semantically required IS NOT NULL guard.
+query II rowsort
+WITH RECURSIVE t(a, b) AS (
+  SELECT 0 AS a, 0 AS b
+  UNION ALL
+  SELECT b AS a, CAST(NULL AS INT) AS b FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t
+----
+0 0
+0 NULL
+NULL NULL
 
 # deduplicating recursive CTE with two variables works
 query II
@@ -1079,7 +1094,7 @@ logical_plan
 07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
-02)--ProjectionExec: expr=[1 as n]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[n@0 + 1 as n]
@@ -1104,7 +1119,7 @@ logical_plan
 07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
-02)--ProjectionExec: expr=[1 as n]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[n@0 + 1 as n]
@@ -1161,7 +1176,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--RecursiveQueryExec: name=r, is_distinct=false
-03)----ProjectionExec: expr=[0 as k, 0 as v]
+03)----ProjectionExec: expr=[CAST(0 AS Int64) as k, CAST(0 AS Int64) as v]
 04)------PlaceholderRowExec
 05)----SortExec: TopK(fetch=1), expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false]
 06)------WorkTableExec: name=r
