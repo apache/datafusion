@@ -423,8 +423,11 @@ mod tests {
             .expect("SanityCheckPlan failed on second pass");
     }
 
-    /// Multi-partition sort + GlobalLimitExec must produce valid plan.
-    /// Regression test for UXX0/HRC 502s (April 2026).
+    /// Multi-partition sort + `GlobalLimitExec` must produce a valid plan.
+    /// Regression for the `SanityCheckPlan` failure that motivated this PR:
+    /// `pushdown_sorts` setting `preserve_partitioning=true` on multi-partition
+    /// input without inserting `SortPreservingMergeExec` violated the
+    /// `SinglePartition` requirement from `GlobalLimitExec`.
     #[test]
     fn test_multi_partition_sort_limit_sanity_check() {
         let source = Arc::new(MockMultiPartitionExec::new(32));
@@ -886,9 +889,9 @@ mod tests {
     }
 
     // ========================================================================
-    // PR #53 / #54 regression tests — pushdown_sorts distribution awareness
-    // These test the specific bug where pushdown_sorts pushes SortExec through
-    // an intermediate node onto a multi-partition source, setting
+    // pushdown_sorts distribution-awareness regression tests.
+    // These cover the specific bug where pushdown_sorts pushed a SortExec
+    // through an intermediate node onto a multi-partition source, setting
     // preserve_partitioning=true without inserting SortPreservingMergeExec.
     // ========================================================================
 
@@ -900,7 +903,7 @@ mod tests {
     /// violation from `pushdown_sorts`, producing a valid plan (via
     /// `CoalescePartitionsExec` or `SortPreservingMergeExec`).
     #[test]
-    fn test_pr53_output_requirement_single_partition_multi_partition_source() {
+    fn test_output_requirement_single_partition_over_multi_partition_source() {
         let source = Arc::new(MockMultiPartitionExec::new(10));
 
         let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
@@ -939,15 +942,17 @@ mod tests {
         );
     }
 
-    /// Regression for PR #54: pushdown_sorts pushes sort through ProjectionExec
-    /// onto multi-partition source. The sort must include SortPreservingMergeExec
-    /// when parent requires SinglePartition.
+    /// Regression: `pushdown_sorts` pushes a sort through a `ProjectionExec`
+    /// onto a multi-partition source. The result must include a
+    /// `SortPreservingMergeExec` (or equivalent) when the parent requires
+    /// `SinglePartition`.
     ///
-    /// Currently fails because `pushdown_sorts` doesn't propagate distribution
-    /// The final ensure_distribution pass catches the distribution violation,
-    /// inserting CoalescePartitionsExec to satisfy SinglePartition.
+    /// Without the distribution-aware pushdown the standalone
+    /// `pushdown_sorts` traversal would not propagate distribution; the
+    /// final `ensure_distribution` pass then catches the violation and
+    /// inserts a `CoalescePartitionsExec` to satisfy `SinglePartition`.
     #[test]
-    fn test_pr54_sort_pushdown_through_projection_adds_spm() {
+    fn test_sort_pushdown_through_projection_adds_spm() {
         let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(10));
 
         // Identity projection
@@ -1047,10 +1052,10 @@ mod tests {
     // makes EnsureRequirements idempotent for the bug-triggering topologies.
     // ========================================================================
 
-    /// Idempotency for PR #53 scenario: OutputRequirementExec(SinglePartition)
-    /// + multi-partition source. Running twice must produce the same plan.
+    /// Idempotency for the `OutputRequirementExec(SinglePartition)` +
+    /// multi-partition source scenario. Running twice must produce the same plan.
     #[test]
-    fn test_idempotent_pr53_output_requirement() {
+    fn test_idempotent_output_requirement_single_partition() {
         let source = Arc::new(MockMultiPartitionExec::new(10));
         let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
             Arc::new(Column::new("a", 0)),
@@ -1071,10 +1076,10 @@ mod tests {
         assert_idempotent(output_req);
     }
 
-    /// Idempotency for PR #54 scenario: OutputRequirementExec(SinglePartition)
-    /// → ProjectionExec → multi-partition source.
+    /// Idempotency for the `OutputRequirementExec(SinglePartition)` →
+    /// `ProjectionExec` → multi-partition source scenario.
     #[test]
-    fn test_idempotent_pr54_projection_multi_partition() {
+    fn test_idempotent_projection_over_multi_partition_with_single_partition_requirement() {
         let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(10));
         let proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
             (Arc::new(Column::new("a", 0)), "a".to_string()),
