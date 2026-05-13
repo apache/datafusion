@@ -25,7 +25,6 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::optimizer::PhysicalOptimizerRule;
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
@@ -36,7 +35,7 @@ use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::logical_plan::{Aggregate, JoinType};
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
@@ -63,9 +62,15 @@ use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use itertools::izip;
 
-/// The `EnforceDistribution` rule ensures that distribution requirements are
-/// met. In doing so, this rule will increase the parallelism in the plan by
-/// introducing repartitioning operators to the physical plan.
+// The `EnforceDistribution` rule was retired in favour of `EnsureRequirements`,
+// which composes distribution and sorting enforcement into a single idempotent
+// pass. The helper functions below (`adjust_input_keys_ordering`,
+// `reorder_join_keys_to_inputs`, `DistributionContext`, `ensure_distribution`,
+// etc.) remain — `EnsureRequirements` calls into them directly.
+
+/// (Historical) introductory documentation for the `EnforceDistribution`
+/// rule. Kept here as background reading for the helper functions below,
+/// which `EnsureRequirements` now drives directly.
 ///
 /// For example, given an input such as:
 ///
@@ -180,58 +185,6 @@ use itertools::izip;
 ///
 /// This rule only chooses the exact match and satisfies the Distribution(a, b, c)
 /// by a HashPartition(a, b, c).
-#[derive(Default, Debug)]
-pub struct EnforceDistribution {}
-
-impl EnforceDistribution {
-    #[expect(missing_docs)]
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl PhysicalOptimizerRule for EnforceDistribution {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
-
-        let adjusted = if top_down_join_key_reordering {
-            // Run a top-down process to adjust input key ordering recursively
-            let plan_requirements = PlanWithKeyRequirements::new_default(plan);
-            let adjusted = plan_requirements
-                .transform_down(adjust_input_keys_ordering)
-                .data()?;
-            adjusted.plan
-        } else {
-            // Run a bottom-up process
-            plan.transform_up(|plan| {
-                Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
-            })
-            .data()?
-        };
-
-        let distribution_context = DistributionContext::new_default(adjusted);
-        // Distribution enforcement needs to be applied bottom-up.
-        let distribution_context = distribution_context
-            .transform_up(|distribution_context| {
-                ensure_distribution(distribution_context, config)
-            })
-            .data()?;
-        Ok(distribution_context.plan)
-    }
-
-    fn name(&self) -> &str {
-        "EnforceDistribution"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
-
 #[derive(Debug, Clone)]
 struct JoinKeyPairs {
     left_keys: Vec<Arc<dyn PhysicalExpr>>,

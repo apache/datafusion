@@ -296,7 +296,6 @@ mod tests {
         Partitioning, PlanProperties, SendableRecordBatchStream,
     };
 
-    use crate::enforce_distribution::EnforceDistribution;
     use crate::output_requirements::OutputRequirementExec;
     use crate::sanity_checker::SanityCheckPlan;
 
@@ -1315,67 +1314,11 @@ mod tests {
         assert_eq!(s2, s3, "Plan changed between pass 2 and 3:\n{s2}\nvs\n{s3}");
     }
 
-    /// Regression for #14150: verify EnforceDistribution::optimize itself
-    /// is idempotent — running it twice on a sort+limit plan must preserve fetch.
-    #[test]
-    fn test_issue_14150_enforce_distribution_idempotent() {
-        let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
-
-        let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-            Arc::new(Column::new("a", 0)),
-            SortOptions {
-                descending: false,
-                nulls_first: true,
-            },
-        )])
-        .unwrap();
-
-        // Sort with fetch=5 (TopK)
-        let sort = Arc::new(
-            SortExec::new(sort_expr.clone(), Arc::clone(&source)).with_fetch(Some(5)),
-        );
-
-        // SPM with fetch=5 above sort
-        let spm: Arc<dyn ExecutionPlan> =
-            Arc::new(SortPreservingMergeExec::new(sort_expr, sort).with_fetch(Some(5)));
-
-        let limit: Arc<dyn ExecutionPlan> =
-            Arc::new(GlobalLimitExec::new(spm, 0, Some(5)));
-
-        let config = ConfigOptions::default();
-
-        // Pass 1
-        let p1 = EnforceDistribution::new()
-            .optimize(Arc::clone(&limit), &config)
-            .unwrap();
-        let s1 = datafusion_physical_plan::displayable(p1.as_ref())
-            .indent(true)
-            .to_string();
-
-        // Pass 2 — this is where #14150 loses fetch
-        let p2 = EnforceDistribution::new()
-            .optimize(Arc::clone(&p1), &config)
-            .unwrap();
-        let s2 = datafusion_physical_plan::displayable(p2.as_ref())
-            .indent(true)
-            .to_string();
-
-        // fetch=5 must survive both passes
-        assert!(
-            s1.contains("fetch=5"),
-            "fetch=5 lost after EnforceDistribution pass 1:\n{s1}"
-        );
-        assert!(
-            s2.contains("fetch=5"),
-            "fetch=5 lost after EnforceDistribution pass 2 (#14150):\n{s2}"
-        );
-
-        // Plans should be identical
-        assert_eq!(
-            s1, s2,
-            "EnforceDistribution not idempotent:\nPass 1:\n{s1}\nPass 2:\n{s2}"
-        );
-    }
+    // Note: a previous `test_issue_14150_enforce_distribution_idempotent`
+    // test asserted idempotency of the standalone `EnforceDistribution`
+    // pass. With that rule retired, the relevant property is covered by
+    // `test_issue_14150_fetch_survives_multiple_passes` above, which
+    // exercises `EnsureRequirements` end-to-end.
 
     // ========================================================================
     // Mock operator with configurable distribution / ordering requirements
@@ -1725,10 +1668,10 @@ mod tests {
         );
 
         let config = ConfigOptions::default();
-        let p1 = EnforceDistribution::new()
+        let p1 = EnsureRequirements::new()
             .optimize(Arc::clone(&join), &config)
             .expect("first EnforceDistribution failed");
-        let p2 = EnforceDistribution::new()
+        let p2 = EnsureRequirements::new()
             .optimize(Arc::clone(&p1), &config)
             .expect("second EnforceDistribution failed");
 

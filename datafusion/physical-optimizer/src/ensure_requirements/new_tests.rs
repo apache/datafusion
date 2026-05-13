@@ -662,10 +662,9 @@ fn test_projection_over_hash_join_sort_limit() {
 // identical plans (fixes #14150).
 // =========================================================================
 
-/// EnforceDistribution twice on multi-partition + sort + limit
+/// EnsureRequirements twice on multi-partition + sort + limit
 #[test]
 fn test_enforce_dist_idempotent_sort_limit() {
-    use crate::enforce_distribution::EnforceDistribution;
     use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
     let source: Arc<dyn ExecutionPlan> = Arc::new(MockExec::new(8));
@@ -679,10 +678,10 @@ fn test_enforce_dist_idempotent_sort_limit() {
     let plan: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(spm, 0, Some(10)));
 
     let config = ConfigOptions::default();
-    let p1 = EnforceDistribution::new()
+    let p1 = EnsureRequirements::new()
         .optimize(Arc::clone(&plan), &config)
         .unwrap();
-    let p2 = EnforceDistribution::new()
+    let p2 = EnsureRequirements::new()
         .optimize(Arc::clone(&p1), &config)
         .unwrap();
 
@@ -690,16 +689,15 @@ fn test_enforce_dist_idempotent_sort_limit() {
     let s2 = plan_display(p2.as_ref());
     assert_eq!(
         s1, s2,
-        "EnforceDistribution not idempotent (sort+limit):\nPass 1:\n{s1}\nPass 2:\n{s2}"
+        "EnsureRequirements not idempotent (sort+limit):\nPass 1:\n{s1}\nPass 2:\n{s2}"
     );
     // fetch must survive
     assert!(s2.contains("fetch=10"), "fetch lost:\n{s2}");
 }
 
-/// EnforceDistribution twice on hash join
+/// EnsureRequirements twice on hash join
 #[test]
 fn test_enforce_dist_idempotent_hash_join() {
-    use crate::enforce_distribution::EnforceDistribution;
     use datafusion_physical_plan::joins::HashJoinExec;
     use datafusion_physical_plan::joins::utils::JoinOn;
 
@@ -722,10 +720,10 @@ fn test_enforce_dist_idempotent_hash_join() {
     );
 
     let config = ConfigOptions::default();
-    let p1 = EnforceDistribution::new()
+    let p1 = EnsureRequirements::new()
         .optimize(Arc::clone(&join), &config)
         .unwrap();
-    let p2 = EnforceDistribution::new()
+    let p2 = EnsureRequirements::new()
         .optimize(Arc::clone(&p1), &config)
         .unwrap();
 
@@ -733,7 +731,7 @@ fn test_enforce_dist_idempotent_hash_join() {
     let s2 = plan_display(p2.as_ref());
     assert_eq!(
         s1, s2,
-        "EnforceDistribution not idempotent (hash join):\nPass 1:\n{s1}\nPass 2:\n{s2}"
+        "EnsureRequirements not idempotent (hash join):\nPass 1:\n{s1}\nPass 2:\n{s2}"
     );
 }
 
