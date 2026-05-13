@@ -19,6 +19,7 @@
 pub mod benchmark_runner;
 pub mod cancellation;
 pub mod clickbench;
+pub mod dict;
 pub mod h2o;
 pub mod hj;
 pub mod imdb;

@@ -124,6 +124,7 @@ impl PhysicalExpr for Column {
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        self.bounds_check(input_schema)?;
         Ok(input_schema.field(self.index).clone().into())
     }
 
