@@ -1079,7 +1079,8 @@ mod tests {
     /// Idempotency for the `OutputRequirementExec(SinglePartition)` →
     /// `ProjectionExec` → multi-partition source scenario.
     #[test]
-    fn test_idempotent_projection_over_multi_partition_with_single_partition_requirement() {
+    fn test_idempotent_projection_over_multi_partition_with_single_partition_requirement()
+    {
         let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(10));
         let proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
             (Arc::new(Column::new("a", 0)), "a".to_string()),
