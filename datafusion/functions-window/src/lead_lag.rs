@@ -294,17 +294,18 @@ impl WindowUDFImpl for WindowShift {
 
     /// Handles cases:
     /// - where `NULL` expression is passed as an argument to `lead`/`lag`. The type is refined depending
-    /// on the default value argument.
+    ///   on the default value argument.
     /// - where input expression contains another expression (PhysicalExpr)
-    /// in this case, in later evaluate() and evaluate_all() we will have result of applying 
-    /// this PhysicalExpr to the RecordBatch (thus, we can use it as a default value)
+    ///   in this case, in later evaluate() and evaluate_all() we will have result of applying
+    ///   this PhysicalExpr to the RecordBatch (thus, we can use it as a default value)
     ///
     /// For more details see: <https://github.com/apache/datafusion/issues/12717>
     fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
         let input_exprs = expr_args.input_exprs();
         let mut result = Vec::new();
 
-        let main_expr = parse_expr(expr_args.input_exprs(), expr_args.input_fields()).unwrap();
+        let main_expr =
+            parse_expr(expr_args.input_exprs(), expr_args.input_fields()).unwrap();
         result.push(main_expr);
 
         // Pushing the expression (not a literal value) to the result, so it would be executed
@@ -452,7 +453,7 @@ fn parse_default_value(
     input_types: &[FieldRef],
 ) -> Result<DefaultValue> {
     let expr_field = parse_expr_field(input_types)?;
-    get_default_value_from_args(input_exprs, 2, expr_field)
+    get_default_value_from_args(input_exprs, 2, &expr_field)
 }
 
 #[derive(Debug)]
@@ -778,7 +779,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             ScalarValue::try_from_array(array, idx.unwrap())
         } else {
             match &self.default_value {
-                DefaultValue::Literal(scalar) => { Ok(scalar.clone()) }
+                DefaultValue::Literal(scalar) => Ok(scalar.clone()),
                 DefaultValue::Expression => {
                     let current_row = if self.is_lag() {
                         range.end.saturating_sub(1)
@@ -789,7 +790,8 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                     values
                         .get(1)
                         .map(|defaults| {
-                            let scalar = ScalarValue::try_from_array(defaults, current_row)?;
+                            let scalar =
+                                ScalarValue::try_from_array(defaults, current_row)?;
                             if scalar.data_type() != *array.data_type() {
                                 scalar.cast_to(array.data_type())
                             } else {
@@ -825,11 +827,9 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                 }
             }
             DefaultValue::Expression => {
-                let default_array = values.get(1)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        Arc::new(arrow::array::NullArray::new(value.len()))
-                    });
+                let default_array = values.get(1).cloned().unwrap_or_else(|| {
+                    Arc::new(arrow::array::NullArray::new(value.len()))
+                });
                 let default_array = if default_array.data_type() != value.data_type() {
                     arrow::compute::kernels::cast::cast(&default_array, value.data_type())
                         .map_err(|e| arrow_datafusion_err!(e))?

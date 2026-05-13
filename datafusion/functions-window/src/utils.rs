@@ -18,7 +18,7 @@
 use arrow::datatypes::Field;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
-use datafusion_physical_expr::expressions::{Literal};
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
@@ -57,7 +57,7 @@ pub(crate) fn get_scalar_value_from_args(
 pub(crate) fn get_default_value_from_args(
     args: &[Arc<dyn PhysicalExpr>],
     index: usize,
-    field: Arc<Field>,
+    field: &Arc<Field>,
 ) -> Result<DefaultValue> {
     match args.get(index) {
         Some(expr) => {
@@ -73,9 +73,9 @@ pub(crate) fn get_default_value_from_args(
                 Ok(DefaultValue::Expression)
             }
         }
-        None => {
-            Ok(DefaultValue::Literal(ScalarValue::try_from(field.data_type())?))
-        }
+        None => Ok(DefaultValue::Literal(ScalarValue::try_from(
+            field.data_type(),
+        )?)),
     }
 }
 
