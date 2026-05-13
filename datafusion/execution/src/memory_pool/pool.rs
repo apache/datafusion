@@ -734,26 +734,39 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             // protection (the candidate filter still rejects the
             // requestor by id).
             let requestor_id = reservation.consumer().id();
-            let _self_guard = self
-                .tracked_consumers
-                .read()
-                .get(&requestor_id)
-                .and_then(|tc| ReclaimerStateGuard::try_acquire(&tc.reclaimer_state));
+            let (_self_guard, requestor_has_reclaimer) = {
+                let guard = self.tracked_consumers.read();
+                let tc = guard.get(&requestor_id);
+                let has_reclaimer = tc.map(|tc| tc.reclaimer.is_some()).unwrap_or(false);
+                let g = tc
+                    .and_then(|tc| ReclaimerStateGuard::try_acquire(&tc.reclaimer_state));
+                (g, has_reclaimer)
+            };
 
             let mut retries: usize = 0;
             loop {
-                // Snapshot reclaimers. Only consumers strictly larger than
-                // the requestor are eligible: smaller-or-equal siblings would
-                // free less than the requestor itself can, so the requestor
-                // should self-spill instead. This rule also breaks the
-                // mutual-reclaim cycle (A targets B while B targets A) — at
-                // most one side of any pair can hold strictly more memory,
-                // so the other side has no candidates and surfaces an error
-                // for the caller's self-spill fallback. Filter out anyone
-                // whose `reclaimer_state` flag is not `AVAILABLE` (in-flight or
-                // sticky-disabled). Also count IN_FLIGHT siblings so we know
-                // whether to wait briefly for them to finish before giving up.
-                // Drop the read guard before awaiting any reclaim.
+                // Snapshot reclaimers. When the requestor has its own reclaimer,
+                // only consumers strictly larger than the requestor are
+                // eligible: smaller-or-equal siblings would free less than the
+                // requestor itself can, so the requestor should self-spill
+                // instead. This size-ordering also breaks mutual-reclaim
+                // cycles among reclaimable consumers (A targets B while B
+                // targets A) — at most one side of any pair can hold strictly
+                // more memory, so the other side has no candidates and
+                // surfaces an error for the caller's self-spill fallback.
+                //
+                // When the requestor has no reclaimer it cannot self-spill,
+                // so this filter is skipped — any positive sibling is a
+                // valid victim. No cycle is possible through a no-reclaimer
+                // requestor: it can never be selected as a candidate (the
+                // `reclaimer.as_ref()?` guard below rejects it), so no other
+                // walk can target it.
+                //
+                // Filter out anyone whose `reclaimer_state` flag is not
+                // `AVAILABLE` (in-flight or sticky-disabled). Also count
+                // IN_FLIGHT siblings so we know whether to wait briefly for
+                // them to finish before giving up. Drop the read guard
+                // before awaiting any reclaim.
                 let requestor_reserved = {
                     let guard = self.tracked_consumers.read();
                     guard
@@ -781,7 +794,9 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                                 in_flight_seen += 1;
                             }
                             let reclaimer = tc.reclaimer.as_ref()?;
-                            if tc.reserved() <= requestor_reserved {
+                            if requestor_has_reclaimer
+                                && tc.reserved() <= requestor_reserved
+                            {
                                 return None;
                             }
                             if state != reclaimer_state::AVAILABLE {
