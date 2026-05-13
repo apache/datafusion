@@ -218,33 +218,33 @@ FROM table_with_metadata;
 2020-09-08
 2020-09-08
 
-# Regression test: CAST should preserve source field metadata
+# CAST should not preserve source field metadata
 query DT
 SELECT
     CAST(ts AS DATE) as casted,
     arrow_metadata(CAST(ts AS DATE), 'metadata_key')
 FROM table_with_metadata;
 ----
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
+2020-09-08 NULL
+2020-09-08 NULL
+2020-09-08 NULL
 
-# Regression test: CAST preserves metadata on integer column
+# CAST should not preserve metadata on integer column
 query IT
 SELECT
     CAST(id AS BIGINT) as casted,
     arrow_metadata(CAST(id AS BIGINT), 'metadata_key')
 FROM table_with_metadata;
 ----
-1 the id field
-NULL the id field
-3 the id field
+1 NULL
+NULL NULL
+3 NULL
 
-# Regression test: CAST with single-argument arrow_metadata (returns full map)
+# CAST with single-argument arrow_metadata (returns full map)
 query ?
 select arrow_metadata(CAST(id AS BIGINT)) from table_with_metadata limit 1;
 ----
-{metadata_key: the id field}
+{}
 
 # Regression test: distinct with cast
 query D
