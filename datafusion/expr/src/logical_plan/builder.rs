@@ -96,10 +96,11 @@ fn plan_with_schema(plan: LogicalPlan, schema: DFSchemaRef) -> Result<LogicalPla
             Projection::try_new_with_schema(expr, input, schema)
                 .map(LogicalPlan::Projection)
         }
-        _ => Ok(LogicalPlan::Projection(Projection::new_from_schema(
-            Arc::new(plan),
-            schema,
-        ))),
+        _ => {
+            let exprs = plan.schema().iter().map(Expr::from).collect();
+            Projection::try_new_with_schema(exprs, Arc::new(plan), schema)
+                .map(LogicalPlan::Projection)
+        }
     }
 }
 

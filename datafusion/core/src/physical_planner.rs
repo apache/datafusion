@@ -115,7 +115,11 @@ use itertools::{Itertools, multiunzip};
 use log::debug;
 use tokio::sync::Mutex;
 
-fn contains_recursive_query(plan: &LogicalPlan) -> bool {
+/// Aggregate planning normally verifies that the physical input schema satisfies
+/// the logical input schema exactly. Recursive CTEs are an exception only for
+/// nullability widening: logical planning may conservatively expose nullable
+/// recursive output after the aggregate's logical input schema was derived.
+fn contains_recursive_query_input(plan: &LogicalPlan) -> bool {
     let mut found = false;
     let _ = plan.apply(|node| {
         if matches!(node, LogicalPlan::RecursiveQuery(_)) {
@@ -128,27 +132,45 @@ fn contains_recursive_query(plan: &LogicalPlan) -> bool {
     found
 }
 
-fn reconcile_logical_schema_nullability(
+fn reconcile_recursive_query_input_nullability(
     logical_schema: &DFSchema,
     physical_schema: &Schema,
-) -> Result<DFSchema> {
-    let fields = logical_schema
-        .iter()
-        .zip(physical_schema.fields())
-        .map(|((qualifier, logical_field), physical_field)| {
-            let field = logical_field
-                .as_ref()
-                .clone()
-                .with_nullable(
-                    logical_field.is_nullable() || physical_field.is_nullable(),
-                )
-                .into();
-            (qualifier.cloned(), field)
-        })
-        .collect::<Vec<_>>();
+) -> Result<Option<DFSchema>> {
+    if logical_schema.metadata() != physical_schema.metadata()
+        || logical_schema.fields().len() != physical_schema.fields().len()
+    {
+        return Ok(None);
+    }
+
+    let mut widened_nullability = false;
+    let mut fields = Vec::with_capacity(logical_schema.fields().len());
+    for ((qualifier, logical_field), physical_field) in
+        logical_schema.iter().zip(physical_schema.fields())
+    {
+        if logical_field.name() != physical_field.name()
+            || logical_field.data_type() != physical_field.data_type()
+            || logical_field.metadata() != physical_field.metadata()
+        {
+            return Ok(None);
+        }
+
+        widened_nullability |=
+            !logical_field.is_nullable() && physical_field.is_nullable();
+        let field = logical_field
+            .as_ref()
+            .clone()
+            .with_nullable(logical_field.is_nullable() || physical_field.is_nullable())
+            .into();
+        fields.push((qualifier.cloned(), field));
+    }
+
+    if !widened_nullability {
+        return Ok(None);
+    }
 
     DFSchema::new_with_metadata(fields, logical_schema.metadata().clone())?
         .with_functional_dependencies(logical_schema.functional_dependencies().clone())
+        .map(Some)
 }
 
 /// Physical query planner that converts a `LogicalPlan` to an
@@ -1027,15 +1049,17 @@ impl DefaultPhysicalPlanner {
                 let logical_input_schema = if schema_satisfied_by(
                     logical_input_schema.inner(),
                     &physical_input_schema,
-                ) || !contains_recursive_query(input)
+                ) || !contains_recursive_query_input(input)
                 {
                     logical_input_schema
-                } else {
-                    reconciled_logical_schema = reconcile_logical_schema_nullability(
-                        logical_input_schema,
-                        &physical_input_schema,
-                    )?;
+                } else if let Some(schema) = reconcile_recursive_query_input_nullability(
+                    logical_input_schema,
+                    &physical_input_schema,
+                )? {
+                    reconciled_logical_schema = schema;
                     &reconciled_logical_schema
+                } else {
+                    logical_input_schema
                 };
                 let physical_input_schema_from_logical = logical_input_schema.inner();
 
@@ -4894,6 +4918,59 @@ digraph {
         .unwrap_err();
 
         assert_contains!(err.to_string(), "field data type at index");
+    }
+
+    #[test]
+    fn recursive_query_input_nullability_reconciliation_only_widens_nullability() {
+        let logical_schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)])
+            .to_dfschema_ref()
+            .unwrap();
+        let physical_schema = Schema::new(vec![Field::new("c1", DataType::Int32, true)]);
+
+        let reconciled = reconcile_recursive_query_input_nullability(
+            &logical_schema,
+            &physical_schema,
+        )
+        .unwrap()
+        .expect("nullability widening should reconcile");
+
+        assert!(reconciled.field(0).is_nullable());
+        assert_eq!(reconciled.field(0).name(), "c1");
+        assert_eq!(reconciled.field(0).data_type(), &DataType::Int32);
+    }
+
+    #[test]
+    fn recursive_query_input_nullability_reconciliation_rejects_other_mismatches() {
+        let logical_schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)])
+            .to_dfschema_ref()
+            .unwrap();
+
+        let cases = [
+            Schema::new(vec![
+                Field::new("c1", DataType::Int32, true),
+                Field::new("c2", DataType::Int32, true),
+            ]),
+            Schema::new(vec![Field::new("different", DataType::Int32, true)]),
+            Schema::new(vec![Field::new("c1", DataType::Int64, true)]),
+            Schema::new(vec![
+                Field::new("c1", DataType::Int32, true)
+                    .with_metadata(HashMap::from([("key".into(), "value".into())])),
+            ]),
+            Schema::new(vec![Field::new("c1", DataType::Int32, true)])
+                .with_metadata(HashMap::from([("key".into(), "value".into())])),
+        ];
+
+        for physical_schema in cases {
+            assert!(
+                reconcile_recursive_query_input_nullability(
+                    &logical_schema,
+                    &physical_schema,
+                )
+                .unwrap()
+                .is_none(),
+                "should not reconcile unsupported mismatch: {physical_schema:?}"
+            );
+        }
     }
 
     #[tokio::test]
