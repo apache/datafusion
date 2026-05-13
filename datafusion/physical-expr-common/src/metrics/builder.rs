@@ -117,6 +117,19 @@ impl<'a> MetricBuilder<'a> {
         self
     }
 
+    /// Switches to a conditional builder for metrics controlled by
+    /// `datafusion.explain.analyze_level`.
+    ///
+    /// The returned builder preserves this builder's labels, category, and
+    /// [`MetricType`], but its terminal methods return `Option<T>` and skip
+    /// registration when `enabled_level` does not include this builder's
+    /// [`MetricType`].
+    pub fn if_enabled(self, enabled_level: MetricType) -> ConditionalMetricBuilder<'a> {
+        ConditionalMetricBuilder {
+            builder: enabled_level.includes(self.metric_type).then_some(self),
+        }
+    }
+
     /// Consume self and create a metric of the specified value
     /// registered with the MetricsSet
     pub fn build(self, value: MetricValue) {
@@ -331,5 +344,53 @@ impl<'a> MetricBuilder<'a> {
                 ratio_metrics: ratio_metrics.clone(),
             });
         ratio_metrics
+    }
+}
+
+/// A conditional metric builder used after [`MetricBuilder::if_enabled`].
+///
+/// This type intentionally mirrors a subset of [`MetricBuilder`], but its
+/// terminal methods return `Option<T>`.
+/// - `Some(T)` means the metric was registered and can be updated.
+/// - `None` means the configured metric level does not include this metric,
+///   so the caller should do no metric work.
+pub struct ConditionalMetricBuilder<'a> {
+    builder: Option<MetricBuilder<'a>>,
+}
+
+impl<'a> ConditionalMetricBuilder<'a> {
+    /// Add a label to the metric being constructed, if this builder is enabled.
+    pub fn with_label(mut self, label: Label) -> Self {
+        self.builder = self.builder.map(|builder| builder.with_label(label));
+        self
+    }
+
+    /// Set the semantic category for the metric being constructed, if this
+    /// builder is enabled.
+    pub fn with_category(mut self, category: MetricCategory) -> Self {
+        self.builder = self.builder.map(|builder| builder.with_category(category));
+        self
+    }
+
+    /// Consume self and conditionally create a new timer for recording some
+    /// subset of an operator's execution time.
+    pub fn subset_time(
+        self,
+        subset_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Option<Time> {
+        self.builder
+            .map(|builder| builder.subset_time(subset_name, partition))
+    }
+
+    /// Consume self and conditionally create a new counter for recording some
+    /// arbitrary metric of an operator.
+    pub fn counter(
+        self,
+        counter_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Option<Count> {
+        self.builder
+            .map(|builder| builder.counter(counter_name, partition))
     }
 }

@@ -42,6 +42,19 @@ DataFusion operators expose runtime metrics so you can understand where time is 
 | ----------- | ----------------------------------------------------------------- |
 | selectivity | Selectivity of the filter, calculated as output_rows / input_rows |
 
+### RepartitionExec
+
+| Metric            | Level    | Description                                                                                                    |
+| ----------------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| fetch_time        | dev      | Time spent polling input partitions for batches.                                                               |
+| repartition_time  | dev      | End-to-end time spent repartitioning input batches, excluding input fetch and output channel send time.        |
+| send_time         | dev      | Time spent preparing and sending partitioned batches to each output partition channel.                         |
+| hash_compute_time | internal | Hash repartition only: time spent evaluating partitioning expressions and computing row hashes.                |
+| route_time        | internal | Hash repartition only: time spent assigning hashed row indices to output partitions.                           |
+| batch_build_time  | internal | Hash repartition only: time spent materializing output batches from routed row indices.                        |
+| channel_wait_time | internal | Time spent waiting for output channel capacity while sending partitioned batches.                              |
+| spill_write_time  | internal | Time spent writing partitioned batches to spill storage when memory reservation for an output channel is full. |
+
 ## TODO
 
 Add metrics for the remaining operators

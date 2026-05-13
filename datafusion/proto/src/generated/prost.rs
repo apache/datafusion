@@ -1831,6 +1831,10 @@ pub struct AnalyzeExecNode {
     pub has_metric_categories: bool,
     #[prost(string, repeated, tag = "6")]
     pub metric_categories: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Metric type filters for EXPLAIN ANALYZE output.
+    /// Empty preserves the legacy default of summary and dev metrics.
+    #[prost(string, repeated, tag = "7")]
+    pub metric_types: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CrossJoinExecNode {

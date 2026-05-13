@@ -1549,14 +1549,26 @@ fn roundtrip_analyze() -> Result<()> {
     let schema = Schema::new(vec![field_a, field_b]);
     let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
 
-    roundtrip_test(Arc::new(AnalyzeExec::new(
+    let metric_types = vec![MetricType::Summary, MetricType::Dev, MetricType::Internal];
+    let plan = Arc::new(AnalyzeExec::new(
         false,
         false,
-        vec![MetricType::Summary, MetricType::Dev],
+        metric_types.clone(),
         None,
         input,
         Arc::new(schema),
-    )))
+    ));
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtripped = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+    let analyze = roundtripped
+        .downcast_ref::<AnalyzeExec>()
+        .expect("roundtripped AnalyzeExec");
+    assert_eq!(analyze.metric_types(), metric_types.as_slice());
+
+    Ok(())
 }
 
 #[tokio::test]

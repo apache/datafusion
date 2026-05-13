@@ -249,6 +249,6 @@ EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
 
 By default `EXPLAIN ANALYZE` shows the aggregated metrics from all partitions for each operator. If you need to display per-partition metrics, use `EXPLAIN ANALYZE VERBOSE`.
 
-You can also set `datafusion.explain.analyze_level` from the [configuration value] to control the detail level for the metrics displayed.
+You can also set `datafusion.explain.analyze_level` from the [configuration value] to control the detail level for the metrics displayed. The levels are `summary`, `dev`, and `internal`; `internal` includes low-level kernel debugging metrics intended for DataFusion development.
 
 [configuration value]: ../configs.md
