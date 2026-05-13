@@ -104,7 +104,10 @@ pub struct FFI_PruningMetrics {
 
 /// FFI-stable mirror of [`RatioMergeStrategy`].
 #[expect(non_camel_case_types)]
-#[expect(clippy::enum_variant_names, reason="match RatioMergeStrategy variants")]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "match RatioMergeStrategy variants"
+)]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FFI_RatioMergeStrategy {
