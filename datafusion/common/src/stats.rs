@@ -553,10 +553,10 @@ impl Statistics {
                 num_rows: Precision::Inexact(nr),
                 ..
             } => {
-                // Here, the inexact case gives us an upper bound on the number of rows.
+                // Here, the inexact case gives us an estimate of the number of rows.
                 if nr <= skip {
                     // All input data will be skipped. Preserve the exactness of
-                    // the input estimate: if the upper bound was inexact, the
+                    // the input estimate: if the input was inexact, the
                     // resulting zero is also inexact.
                     check_num_rows(Some(0), self.num_rows.is_exact().unwrap())
                 } else if nr <= fetch_val && skip == 0 {
