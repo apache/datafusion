@@ -773,8 +773,6 @@ impl StringViewArrayBuilder {
         let length: u32 =
             i32::try_from(src.len()).expect("value length exceeds i32::MAX") as u32;
         if length <= 12 {
-            // `iter_mut().zip()` over a stack array is the canonical autovec
-            // pattern.
             let mut bytes = [0u8; 12];
             for (d, &b) in bytes[..src.len()].iter_mut().zip(src) {
                 *d = map(b);
@@ -961,20 +959,8 @@ impl StringWriter for StringViewWriter<'_> {
 
 #[inline]
 fn push_char_to_vec(v: &mut Vec<u8>, c: char) {
-    let len = c.len_utf8();
-    let old_len = v.len();
-    v.reserve(len);
-    // SAFETY: we reserved `len` bytes above, write valid UTF-8 into those
-    // bytes, then update the initialized length to include them.
-    unsafe {
-        let dst = v.as_mut_ptr().add(old_len);
-        if len == 1 {
-            *dst = c as u8;
-        } else {
-            c.encode_utf8(std::slice::from_raw_parts_mut(dst, len));
-        }
-        v.set_len(old_len + len);
-    }
+    let mut buf = [0u8; 4];
+    v.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
 }
 
 /// Trait abstracting over the bulk-NULL string array builders.
@@ -1209,6 +1195,65 @@ impl ColumnarValueRef<'_> {
 mod tests {
     use super::*;
 
+    /// Run `scenario` against `builder`, finish with a null buffer derived
+    /// from `expected` (a bit is set wherever `expected[i].is_some()`), and
+    /// assert the resulting array equals the corresponding
+    /// `*Array::from(expected)`.
+    ///
+    /// The caller is responsible for driving NULLs in `scenario` — usually
+    /// by calling `append_placeholder` at each index where `expected[i]` is
+    /// `None`.
+    fn run_scenario<B, F>(mut builder: B, expected: &[Option<&str>], scenario: F)
+    where
+        B: BulkNullStringArrayBuilder,
+        F: FnOnce(&mut B),
+    {
+        scenario(&mut builder);
+        let bits: Vec<bool> = expected.iter().map(|x| x.is_some()).collect();
+        let nulls = if bits.iter().any(|v| !v) {
+            Some(NullBuffer::from(bits))
+        } else {
+            None
+        };
+        let array = builder.finish(nulls).unwrap();
+        let owned: Vec<Option<&str>> = expected.to_vec();
+        if let Some(a) = array.as_any().downcast_ref::<StringArray>() {
+            assert_eq!(a, &StringArray::from(owned));
+        } else if let Some(a) = array.as_any().downcast_ref::<LargeStringArray>() {
+            assert_eq!(a, &LargeStringArray::from(owned));
+        } else if let Some(a) = array.as_any().downcast_ref::<StringViewArray>() {
+            assert_eq!(a, &StringViewArray::from(owned));
+        } else {
+            panic!("unexpected array type");
+        }
+    }
+
+    /// Run `$scenario` against all three bulk-null builders, asserting each
+    /// produces an array equivalent to `$expected`. `$scenario` is a closure
+    /// `|builder| { ... }`; it is duplicated syntactically at each call site
+    /// so the `BulkNullStringArrayBuilder::Writer` GAT can specialize per
+    /// builder.
+    macro_rules! check_on_all_builders {
+        ($expected:expr, $scenario:expr $(,)?) => {{
+            let expected = $expected;
+            run_scenario(
+                GenericStringArrayBuilder::<i32>::with_capacity(0, 0),
+                expected,
+                $scenario,
+            );
+            run_scenario(
+                GenericStringArrayBuilder::<i64>::with_capacity(0, 0),
+                expected,
+                $scenario,
+            );
+            run_scenario(
+                StringViewArrayBuilder::with_capacity(0),
+                expected,
+                $scenario,
+            );
+        }};
+    }
+
     #[test]
     #[should_panic(expected = "capacity integer overflow")]
     fn test_overflow_concat_string_builder() {
@@ -1222,38 +1267,107 @@ mod tests {
     }
 
     #[test]
-    fn string_array_builder_empty() {
-        let builder = GenericStringArrayBuilder::<i32>::with_capacity(0, 0);
-        let array = builder.finish(None).unwrap();
-        assert_eq!(array.len(), 0);
+    fn bulk_append_value_with_nulls() {
+        check_on_all_builders!(
+            &[
+                Some("a string longer than twelve bytes"),
+                None,
+                Some("short"),
+                None,
+            ],
+            |b| {
+                b.append_value("a string longer than twelve bytes");
+                b.append_placeholder();
+                b.append_value("short");
+                b.append_placeholder();
+            },
+        );
     }
 
     #[test]
-    fn string_array_builder_no_nulls() {
-        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(3, 16);
-        builder.append_value("foo");
-        builder.append_value("");
-        builder.append_value("hello world");
-        let array = builder.finish(None).unwrap();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.value(0), "foo");
-        assert_eq!(array.value(1), "");
-        assert_eq!(array.value(2), "hello world");
-        assert_eq!(array.null_count(), 0);
+    fn bulk_empty_builder() {
+        check_on_all_builders!(&[], |_b| {});
     }
 
     #[test]
-    fn string_array_builder_with_nulls() {
-        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(3, 8);
-        builder.append_value("a");
-        builder.append_placeholder();
-        builder.append_value("c");
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        let array = builder.finish(Some(nulls)).unwrap();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.value(0), "a");
-        assert!(array.is_null(1));
-        assert_eq!(array.value(2), "c");
+    fn bulk_all_placeholders() {
+        check_on_all_builders!(&[None, None, None], |b| {
+            b.append_placeholder();
+            b.append_placeholder();
+            b.append_placeholder();
+        });
+    }
+
+    #[test]
+    fn bulk_append_value_no_nulls() {
+        check_on_all_builders!(
+            &[
+                Some("foo"),
+                Some(""),
+                Some("a string longer than twelve bytes")
+            ],
+            |b| {
+                b.append_value("foo");
+                b.append_value("");
+                b.append_value("a string longer than twelve bytes");
+            },
+        );
+    }
+
+    #[test]
+    fn bulk_append_with_basic() {
+        check_on_all_builders!(
+            &[Some("hello"), None, Some("hello world"), Some("")],
+            |b| {
+                b.append_with(|w| w.write_str("hello"));
+                b.append_placeholder();
+                b.append_with(|w| {
+                    w.write_str("hello ");
+                    w.write_str("world");
+                });
+                b.append_with(|_w| {});
+            },
+        );
+    }
+
+    #[test]
+    fn bulk_append_with_chars() {
+        check_on_all_builders!(&[Some("hé!"), Some("x")], |b| {
+            b.append_with(|w| {
+                w.write_char('h');
+                w.write_char('é');
+                w.write_char('!');
+            });
+            b.append_with(|w| w.write_char('x'));
+        });
+    }
+
+    #[test]
+    fn bulk_append_byte_map() {
+        // SAFETY: ASCII inputs and ASCII outputs in every call.
+        check_on_all_builders!(&[Some("HELLO"), Some("aXcaX"), Some("")], |b| unsafe {
+            b.append_byte_map(b"hello", |x| x.to_ascii_uppercase());
+            b.append_byte_map(b"abcab", |x| if x == b'b' { b'X' } else { x });
+            b.append_byte_map(b"", |x| x);
+        },);
+    }
+
+    #[test]
+    fn bulk_append_with_long_value_and_placeholder() {
+        check_on_all_builders!(
+            &[
+                Some("hello"),
+                None,
+                Some("a long string of 25 bytes"),
+                Some(""),
+            ],
+            |b| {
+                b.append_with(|w| w.write_str("hello"));
+                b.append_placeholder();
+                b.append_with(|w| w.write_str("a long string of 25 bytes"));
+                b.append_with(|_w| {});
+            },
+        );
     }
 
     #[test]
@@ -1284,130 +1398,6 @@ mod tests {
         let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(1, 4);
         builder.append_placeholder();
         let _ = builder.finish(None);
-    }
-
-    #[test]
-    fn string_array_builder_all_placeholders() {
-        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(3, 0);
-        builder.append_placeholder();
-        builder.append_placeholder();
-        builder.append_placeholder();
-        let nulls = NullBuffer::from(vec![false, false, false]);
-        let array = builder.finish(Some(nulls)).unwrap();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.null_count(), 3);
-        assert!((0..3).all(|i| array.is_null(i)));
-    }
-
-    #[test]
-    fn string_array_builder_append_with_basic() {
-        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(4, 32);
-        builder.append_with(|w| w.write_str("hello"));
-        builder.append_placeholder();
-        builder.append_with(|w| {
-            w.write_str("hello ");
-            w.write_str("world");
-        });
-        builder.append_with(|_w| {});
-        let nulls = NullBuffer::from(vec![true, false, true, true]);
-        let array = builder.finish(Some(nulls)).unwrap();
-        assert_eq!(array.len(), 4);
-        assert_eq!(array.value(0), "hello");
-        assert!(array.is_null(1));
-        assert_eq!(array.value(2), "hello world");
-        assert_eq!(array.value(3), "");
-    }
-
-    #[test]
-    fn string_array_builder_append_with_chars() {
-        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(2, 16);
-        builder.append_with(|w| {
-            w.write_char('h');
-            w.write_char('é');
-            w.write_char('!');
-        });
-        builder.append_with(|w| w.write_char('x'));
-        let array = builder.finish(None).unwrap();
-        assert_eq!(array.value(0), "hé!");
-        assert_eq!(array.value(1), "x");
-    }
-
-    #[test]
-    fn string_array_builder_append_byte_map() {
-        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(3, 32);
-        // SAFETY: ASCII inputs and ASCII outputs.
-        unsafe {
-            builder.append_byte_map(b"hello", |b| b.to_ascii_uppercase());
-            builder.append_byte_map(b"abcab", |b| if b == b'b' { b'X' } else { b });
-            builder.append_byte_map(b"", |b| b);
-        }
-        let array = builder.finish(None).unwrap();
-        assert_eq!(array.value(0), "HELLO");
-        assert_eq!(array.value(1), "aXcaX");
-        assert_eq!(array.value(2), "");
-    }
-
-    #[test]
-    fn large_string_array_builder_with_nulls() {
-        let mut builder = GenericStringArrayBuilder::<i64>::with_capacity(3, 8);
-        builder.append_value("a");
-        builder.append_placeholder();
-        builder.append_value("c");
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        let array = builder.finish(Some(nulls)).unwrap();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.value(0), "a");
-        assert!(array.is_null(1));
-        assert_eq!(array.value(2), "c");
-    }
-
-    #[test]
-    fn string_view_array_builder_empty() {
-        let builder = StringViewArrayBuilder::with_capacity(0);
-        let array = builder.finish(None).unwrap();
-        assert_eq!(array.len(), 0);
-    }
-
-    #[test]
-    fn string_view_array_builder_inline_and_buffer() {
-        let mut builder = StringViewArrayBuilder::with_capacity(3);
-        builder.append_value("short"); // ≤ 12 bytes, inline
-        builder.append_value("a string longer than twelve bytes");
-        builder.append_value("");
-        let array = builder.finish(None).unwrap();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.value(0), "short");
-        assert_eq!(array.value(1), "a string longer than twelve bytes");
-        assert_eq!(array.value(2), "");
-    }
-
-    #[test]
-    fn string_view_array_builder_with_nulls() {
-        let mut builder = StringViewArrayBuilder::with_capacity(4);
-        builder.append_value("a string longer than twelve bytes");
-        builder.append_placeholder();
-        builder.append_value("short");
-        builder.append_placeholder();
-        let nulls = NullBuffer::from(vec![true, false, true, false]);
-        let array = builder.finish(Some(nulls)).unwrap();
-        assert_eq!(array.len(), 4);
-        assert_eq!(array.value(0), "a string longer than twelve bytes");
-        assert!(array.is_null(1));
-        assert_eq!(array.value(2), "short");
-        assert!(array.is_null(3));
-    }
-
-    #[test]
-    fn string_view_array_builder_all_placeholders() {
-        let mut builder = StringViewArrayBuilder::with_capacity(3);
-        builder.append_placeholder();
-        builder.append_placeholder();
-        builder.append_placeholder();
-        let nulls = NullBuffer::from(vec![false, false, false]);
-        let array = builder.finish(Some(nulls)).unwrap();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.null_count(), 3);
-        assert!((0..3).all(|i| array.is_null(i)));
     }
 
     #[test]
@@ -1557,17 +1547,6 @@ mod tests {
     }
 
     #[test]
-    fn string_view_array_builder_append_with_empty_row() {
-        let mut builder = StringViewArrayBuilder::with_capacity(2);
-        builder.append_with(|_w| {});
-        builder.append_with(|w| w.write_str("nonempty"));
-        let array = builder.finish(None).unwrap();
-        assert_eq!(array.value(0), "");
-        assert_eq!(array.value(1), "nonempty");
-        assert_eq!(array.data_buffers().len(), 0);
-    }
-
-    #[test]
     fn string_view_array_builder_append_with_block_rotation() {
         // 40 long rows, 500 bytes each, exceeds the first doubled block
         // (~16 KiB). Forces the builder to rotate blocks between rows.
@@ -1593,21 +1572,6 @@ mod tests {
     }
 
     #[test]
-    fn string_view_array_builder_append_with_mixed_with_placeholders() {
-        let mut builder = StringViewArrayBuilder::with_capacity(4);
-        builder.append_with(|w| w.write_str("hello"));
-        builder.append_placeholder();
-        builder.append_with(|w| w.write_str("a long string of 25 bytes"));
-        builder.append_with(|_w| {});
-        let nulls = NullBuffer::from(vec![true, false, true, true]);
-        let array = builder.finish(Some(nulls)).unwrap();
-        assert_eq!(array.value(0), "hello");
-        assert!(array.is_null(1));
-        assert_eq!(array.value(2), "a long string of 25 bytes");
-        assert_eq!(array.value(3), "");
-    }
-
-    #[test]
     fn string_view_array_builder_flushes_full_blocks() {
         // Each value is 300 bytes. The first data block is 2 × STRING_VIEW_INIT_BLOCK_SIZE
         // = 16 KiB, so ~50 values saturate it and the rest spill into additional
@@ -1627,95 +1591,5 @@ mod tests {
         for i in 0..100 {
             assert_eq!(array.value(i), value);
         }
-    }
-
-    /// Build an array via `BulkNullStringArrayBuilder` to verify that the
-    /// trait methods produce the same result as the inherent methods.
-    fn build_via_trait<B: BulkNullStringArrayBuilder>(
-        mut builder: B,
-        nulls: Option<NullBuffer>,
-    ) -> ArrayRef {
-        builder.append_value("a");
-        builder.append_placeholder();
-        builder.append_value("hello world!");
-        builder.finish(nulls).unwrap()
-    }
-
-    #[test]
-    fn bulk_null_trait_string_i32() {
-        let builder = GenericStringArrayBuilder::<i32>::with_capacity(3, 16);
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        let array = build_via_trait(builder, Some(nulls));
-        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.value(0), "a");
-        assert!(array.is_null(1));
-        assert_eq!(array.value(2), "hello world!");
-    }
-
-    #[test]
-    fn bulk_null_trait_string_i64() {
-        let builder = GenericStringArrayBuilder::<i64>::with_capacity(3, 16);
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        let array = build_via_trait(builder, Some(nulls));
-        let array = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.value(0), "a");
-        assert!(array.is_null(1));
-        assert_eq!(array.value(2), "hello world!");
-    }
-
-    #[test]
-    fn bulk_null_trait_string_view() {
-        let builder = StringViewArrayBuilder::with_capacity(3);
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        let array = build_via_trait(builder, Some(nulls));
-        let array = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.value(0), "a");
-        assert!(array.is_null(1));
-        assert_eq!(array.value(2), "hello world!");
-    }
-
-    #[test]
-    fn bulk_null_trait_no_nulls() {
-        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(2, 8);
-        BulkNullStringArrayBuilder::append_value(&mut builder, "x");
-        BulkNullStringArrayBuilder::append_value(&mut builder, "yy");
-        let array = BulkNullStringArrayBuilder::finish(builder, None).unwrap();
-        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(array.len(), 2);
-        assert_eq!(array.value(0), "x");
-        assert_eq!(array.value(1), "yy");
-        assert_eq!(array.null_count(), 0);
-    }
-
-    /// Exercise `append_with` through the trait against both builder types
-    /// to confirm GAT-based dispatch works.
-    fn build_with_append_with<B: BulkNullStringArrayBuilder>(mut builder: B) -> ArrayRef {
-        builder.append_with(|w| w.write_str("hello"));
-        builder.append_with(|w| {
-            w.write_str("hello ");
-            w.write_str("world!");
-        });
-        builder.finish(None).unwrap()
-    }
-
-    #[test]
-    fn bulk_null_trait_append_with_string() {
-        let builder = GenericStringArrayBuilder::<i32>::with_capacity(2, 32);
-        let array = build_with_append_with(builder);
-        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(array.value(0), "hello");
-        assert_eq!(array.value(1), "hello world!");
-    }
-
-    #[test]
-    fn bulk_null_trait_append_with_string_view() {
-        let builder = StringViewArrayBuilder::with_capacity(2);
-        let array = build_with_append_with(builder);
-        let array = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-        assert_eq!(array.value(0), "hello");
-        assert_eq!(array.value(1), "hello world!");
     }
 }
