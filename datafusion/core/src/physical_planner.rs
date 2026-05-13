@@ -115,6 +115,42 @@ use itertools::{Itertools, multiunzip};
 use log::debug;
 use tokio::sync::Mutex;
 
+fn contains_recursive_query(plan: &LogicalPlan) -> bool {
+    let mut found = false;
+    let _ = plan.apply(|node| {
+        if matches!(node, LogicalPlan::RecursiveQuery(_)) {
+            found = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    });
+    found
+}
+
+fn reconcile_logical_schema_nullability(
+    logical_schema: &DFSchema,
+    physical_schema: &Schema,
+) -> Result<DFSchema> {
+    let fields = logical_schema
+        .iter()
+        .zip(physical_schema.fields())
+        .map(|((qualifier, logical_field), physical_field)| {
+            let field = logical_field
+                .as_ref()
+                .clone()
+                .with_nullable(
+                    logical_field.is_nullable() || physical_field.is_nullable(),
+                )
+                .into();
+            (qualifier.cloned(), field)
+        })
+        .collect::<Vec<_>>();
+
+    DFSchema::new_with_metadata(fields, logical_schema.metadata().clone())?
+        .with_functional_dependencies(logical_schema.functional_dependencies().clone())
+}
+
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
 #[async_trait]
@@ -987,6 +1023,20 @@ impl DefaultPhysicalPlanner {
                 let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
+                let reconciled_logical_schema;
+                let logical_input_schema = if schema_satisfied_by(
+                    logical_input_schema.inner(),
+                    &physical_input_schema,
+                ) || !contains_recursive_query(input)
+                {
+                    logical_input_schema
+                } else {
+                    reconciled_logical_schema = reconcile_logical_schema_nullability(
+                        logical_input_schema,
+                        &physical_input_schema,
+                    )?;
+                    &reconciled_logical_schema
+                };
                 let physical_input_schema_from_logical = logical_input_schema.inner();
 
                 if !options.execution.skip_physical_aggregate_schema_check

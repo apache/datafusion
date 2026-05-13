@@ -90,6 +90,19 @@ fn recursive_query_output_schema(
     )?))
 }
 
+fn plan_with_schema(plan: LogicalPlan, schema: DFSchemaRef) -> Result<LogicalPlan> {
+    match plan {
+        LogicalPlan::Projection(Projection { expr, input, .. }) => {
+            Projection::try_new_with_schema(expr, input, schema)
+                .map(LogicalPlan::Projection)
+        }
+        _ => Ok(LogicalPlan::Projection(Projection::new_from_schema(
+            Arc::new(plan),
+            schema,
+        ))),
+    }
+}
+
 /// Options for [`LogicalPlanBuilder`]
 #[derive(Default, Debug, Clone)]
 pub struct LogicalPlanBuilderOptions {
@@ -220,16 +233,19 @@ impl LogicalPlanBuilder {
             self.plan.schema(),
             coerced_recursive_term.schema(),
         )?;
-        let static_term =
-            coerce_plan_expr_for_schema(Arc::unwrap_or_clone(self.plan), &output_schema)?;
-        let recursive_term =
-            coerce_plan_expr_for_schema(coerced_recursive_term, &output_schema)?;
+        let static_term = plan_with_schema(
+            coerce_plan_expr_for_schema(Arc::unwrap_or_clone(self.plan), &output_schema)?,
+            Arc::clone(&output_schema),
+        )?;
+        let recursive_term = plan_with_schema(
+            coerce_plan_expr_for_schema(coerced_recursive_term, &output_schema)?,
+            output_schema,
+        )?;
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
             name,
             static_term: Arc::new(static_term),
             recursive_term: Arc::new(recursive_term),
             is_distinct,
-            schema: output_schema,
         })))
     }
 
