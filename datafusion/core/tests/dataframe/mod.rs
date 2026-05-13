@@ -4400,6 +4400,269 @@ async fn unnest_column_nulls() -> Result<()> {
     Ok(())
 }
 
+/// Spark `explode_outer` semantics on a string list. Each input row is one
+/// of: a list with values, a list with values *including a NULL element*,
+/// an empty list, or a NULL list. The new `PreserveAndExpandEmpty` mode
+/// must preserve inner NULL elements (they are different from "empty"),
+/// preserve NULL input rows as a single NULL output row, *and* also turn
+/// each empty list into a single NULL output row.
+#[tokio::test]
+async fn unnest_explode_outer_string_list_with_inner_nulls() -> Result<()> {
+    let mut list_builder = ListBuilder::new(StringBuilder::new());
+    let mut id_builder = StringBuilder::new();
+
+    // ['x', 'y'], id = A
+    list_builder.values().append_value("x");
+    list_builder.values().append_value("y");
+    list_builder.append(true);
+    id_builder.append_value("A");
+
+    // ['p', NULL, 'q'], id = B  (inner NULL must survive)
+    list_builder.values().append_value("p");
+    list_builder.values().append_null();
+    list_builder.values().append_value("q");
+    list_builder.append(true);
+    id_builder.append_value("B");
+
+    // [], id = C  (empty list)
+    list_builder.append(true);
+    id_builder.append_value("C");
+
+    // NULL, id = D  (null list)
+    list_builder.append(false);
+    id_builder.append_value("D");
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("tag", Arc::new(list_builder.finish()) as ArrayRef),
+        ("id", Arc::new(id_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("tags", batch)?;
+    let df = ctx.table("tags").await?;
+
+    let options = UnnestOptions::new()
+        .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
+    let results = df
+        .unnest_columns_with_options(&["tag"], options)?
+        .collect()
+        .await?;
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r"
+    +-----+----+
+    | tag | id |
+    +-----+----+
+    | x   | A  |
+    | y   | A  |
+    | p   | B  |
+    |     | B  |
+    | q   | B  |
+    |     | C  |
+    |     | D  |
+    +-----+----+
+    "
+    );
+
+    Ok(())
+}
+
+/// Spark `explode_outer` on a list-of-struct column. Verifies that
+/// (a) struct elements unnest into flattened sub-columns and
+/// (b) NULL and empty lists both still produce a single output row whose
+///     struct sub-columns are all NULL.
+#[tokio::test]
+async fn unnest_explode_outer_list_of_struct() -> Result<()> {
+    use arrow::array::{Int32Array, StructArray};
+
+    // Per-row sub-list lengths: 2, 1, 0 (empty), 0 (null)
+    let names = StringArray::from(vec!["alice", "bob", "carol"]);
+    let ages = Int32Array::from(vec![30, 40, 50]);
+    let struct_values = StructArray::from(vec![
+        (
+            Arc::new(Field::new("name", DataType::Utf8, true)),
+            Arc::new(names) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("age", DataType::Int32, true)),
+            Arc::new(ages) as ArrayRef,
+        ),
+    ]);
+    let struct_field =
+        Arc::new(Field::new("item", struct_values.data_type().clone(), true));
+    let offsets = arrow::buffer::OffsetBuffer::<i32>::from_lengths([2, 1, 0, 0]);
+    let validity = arrow::buffer::NullBuffer::from(vec![true, true, true, false]);
+    let people = ListArray::new(
+        struct_field,
+        offsets,
+        Arc::new(struct_values),
+        Some(validity),
+    );
+    let group = Int32Array::from(vec![1, 2, 3, 4]);
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("people", Arc::new(people) as ArrayRef),
+        ("group", Arc::new(group) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("teams", batch)?;
+    let df = ctx.table("teams").await?;
+
+    let options = UnnestOptions::new()
+        .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
+    let results = df
+        // Unnest the list, then expand the resulting struct rows into columns.
+        .unnest_columns_with_options(&["people"], options.clone())?
+        .unnest_columns_with_options(&["people"], options)?
+        .collect()
+        .await?;
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r"
+    +-------------+------------+-------+
+    | people.name | people.age | group |
+    +-------------+------------+-------+
+    | alice       | 30         | 1     |
+    | bob         | 40         | 1     |
+    | carol       | 50         | 2     |
+    |             |            | 3     |
+    |             |            | 4     |
+    +-------------+------------+-------+
+    "
+    );
+
+    Ok(())
+}
+
+/// Spark `explode_outer` semantics applied to a `FixedSizeList` column.
+/// For fixed-size lists, every non-null row has the fixed length, so
+/// "empty" never occurs — `PreserveAndExpandEmpty` should behave identically
+/// to `Preserve` here. The test pins that equivalence so we notice if it
+/// ever diverges.
+#[tokio::test]
+async fn unnest_explode_outer_fixed_size_list() -> Result<()> {
+    let batch = get_fixed_list_batch()?;
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let preserve_results = df
+        .clone()
+        .unnest_columns_with_options(
+            &["tags"],
+            UnnestOptions::new().with_preserve_nulls(true),
+        )?
+        .collect()
+        .await?;
+    let explode_outer_results = df
+        .unnest_columns_with_options(
+            &["tags"],
+            UnnestOptions::new().with_null_handling(
+                datafusion_common::NullHandling::PreserveAndExpandEmpty,
+            ),
+        )?
+        .collect()
+        .await?;
+    assert_eq!(
+        batches_to_sort_string(&preserve_results),
+        batches_to_sort_string(&explode_outer_results),
+        "FixedSizeList has no empty case, so PreserveAndExpandEmpty must \
+         match Preserve exactly"
+    );
+
+    // And the snapshot itself, to make the expected shape explicit.
+    assert_snapshot!(
+        batches_to_sort_string(&explode_outer_results),
+        @r"
+    +----------+-------+
+    | shape_id | tags  |
+    +----------+-------+
+    | 1        |       |
+    | 2        | tag21 |
+    | 2        | tag22 |
+    | 3        | tag31 |
+    | 3        | tag32 |
+    | 4        |       |
+    | 5        | tag51 |
+    | 5        | tag52 |
+    | 6        | tag61 |
+    | 6        | tag62 |
+    +----------+-------+
+    "
+    );
+
+    Ok(())
+}
+
+/// Chain `explode` (drop nulls + empties) followed by `explode_outer`
+/// (preserve nulls + empties) on a `list<list<int>>` input, exercising the
+/// "mixed modes in one query plan" path: each `UnnestExec` carries its own
+/// `UnnestOptions`. The outer NULL row is dropped by the first stage, then
+/// any NULL inner sub-list produced by the first stage is *preserved* by
+/// the second stage as a NULL output row.
+#[tokio::test]
+async fn unnest_explode_then_explode_outer() -> Result<()> {
+    // outer: [[1,2,3], null, [4,5]],   [[7], []],   null
+    let inner = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(1), Some(2), Some(3)]),
+        None,
+        Some(vec![Some(4), Some(5)]),
+        Some(vec![Some(7)]),
+        Some(vec![]),
+    ]);
+    let inner_ref = Arc::new(inner) as ArrayRef;
+    let offsets = arrow::buffer::OffsetBuffer::<i32>::from_lengths([3, 2, 0]);
+    let validity = arrow::buffer::NullBuffer::from(vec![true, true, false]);
+    let outer_field = Arc::new(Field::new("item", inner_ref.data_type().clone(), true));
+    let outer = ListArray::new(outer_field, offsets, inner_ref, Some(validity));
+    let id = Int32Array::from(vec![100, 200, 300]);
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("col", Arc::new(outer) as ArrayRef),
+        ("id", Arc::new(id) as ArrayRef),
+    ])?;
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?;
+
+    // Stage 1: explode — outer NULL row is dropped, empty inner row also dropped.
+    // Stage 2: explode_outer — any NULL produced by stage 1 (the null sub-list
+    //   from row 0) is kept as a NULL output row.
+    let results = df
+        .unnest_columns_with_options(
+            &["col"],
+            UnnestOptions::new().with_preserve_nulls(false),
+        )?
+        .unnest_columns_with_options(
+            &["col"],
+            UnnestOptions::new().with_null_handling(
+                datafusion_common::NullHandling::PreserveAndExpandEmpty,
+            ),
+        )?
+        .collect()
+        .await?;
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r"
+    +-----+-----+
+    | col | id  |
+    +-----+-----+
+    | 1   | 100 |
+    | 2   | 100 |
+    | 3   | 100 |
+    |     | 100 |
+    | 4   | 100 |
+    | 5   | 100 |
+    | 7   | 200 |
+    |     | 200 |
+    +-----+-----+
+    "
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn unnest_fixed_list() -> Result<()> {
     let batch = get_fixed_list_batch()?;
