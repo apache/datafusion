@@ -432,20 +432,20 @@ impl ConcatLargeStringBuilder {
 // Bulk-nulls builders
 //
 // These builders are similar to Arrow's `GenericStringBuilder` and
-// `StringViewBuilder`, except that callers must pass the NULL bitmap to
-// `finish()`, rather than maintaining it iteratively (per-row). For callers
-// that can compute the NULL bitmap in bulk (which is true of many
-// string-related UDFs), this can be significantly more efficient.
+// `StringViewBuilder` but tuned for string UDFs along two axes:
 //
-// For a row known to be null, call `append_placeholder` to advance the row
-// count without touching the value buffer; the caller MUST ensure that the
-// corresponding bit is cleared (0 = null) in the null buffer passed to
-// `finish`.
+//   * Bulk-NULL handling. The NULL bitmap is passed to `finish()` rather than
+//     maintained per-row. Many string UDFs can compute the bitmap in bulk,
+//     where this is significantly more efficient.
+//   * Closure-based row emission. Beyond `append_value(&str)`, the builders
+//     expose `append_with` (fragments written into the builder via a
+//     `StringWriter`) and `append_byte_map` (byte-to-byte mapping of an input
+//     slice), letting UDFs emit a row without first assembling it in a scratch
+//     `String`.
 // ----------------------------------------------------------------------------
 
-/// Builder for a [`GenericStringArray<O>`] that defers null tracking to
-/// `finish`. Instantiate with `O = i32` for [`StringArray`] (Utf8) or
-/// `O = i64` for [`LargeStringArray`] (LargeUtf8).
+/// Builder for a [`GenericStringArray<O>`]. Instantiate with `O = i32` for
+/// [`StringArray`] (Utf8) or `O = i64` for [`LargeStringArray`] (LargeUtf8).
 pub(crate) struct GenericStringArrayBuilder<O: OffsetSizeTrait> {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
@@ -470,7 +470,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         }
     }
 
-    /// Append `value` as the next row.
+    /// See [`BulkNullStringArrayBuilder::append_value`].
     ///
     /// # Panics
     ///
@@ -483,8 +483,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         self.offsets_buffer.push(next_offset);
     }
 
-    /// Append an empty placeholder row. The corresponding slot must be masked
-    /// as null by the null buffer passed to `finish`.
+    /// See [`BulkNullStringArrayBuilder::append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
         let next_offset =
@@ -493,16 +492,12 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         self.placeholder_count += 1;
     }
 
-    /// Append a row whose bytes are produced by mapping each byte of `src`
-    /// through `map`, in order. Output length equals `src.len()`.
-    ///
-    /// Because output length is known up front, this is more efficient than
-    /// `append_with` when computing a byte-to-byte mapping.
+    /// See [`BulkNullStringArrayBuilder::append_byte_map`].
     ///
     /// # Safety
     ///
-    /// The bytes produced by `map` over `src.iter()`, in order, must form
-    /// valid UTF-8.
+    /// The bytes produced by applying `map` to each byte of `src`, in order,
+    /// must form valid UTF-8.
     ///
     /// # Panics
     ///
@@ -515,12 +510,9 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         self.offsets_buffer.push(next_offset);
     }
 
-    /// Append a row whose bytes are produced by `f` calling write methods on
-    /// the supplied [`StringWriter`].
-    ///
-    /// The closure can call `write_str` / `write_char` any number of times
-    /// (including zero, for an empty row). Bytes written go directly into the
-    /// builder's value buffer; there is no intermediate scratch.
+    /// See [`BulkNullStringArrayBuilder::append_with`]. Bytes written by the
+    /// closure go directly into the value buffer; there is no intermediate
+    /// scratch.
     ///
     /// # Panics
     ///
@@ -657,10 +649,8 @@ fn push_char_to_mutable_buffer(value_buffer: &mut MutableBuffer, c: char) {
     }
 }
 
-/// Builder for a [`StringViewArray`] that defers null tracking to `finish`.
+/// Builder for a [`StringViewArray`].
 ///
-/// Modeled on Arrow's [`arrow::array::builder::StringViewBuilder`] but
-/// without per-row [`arrow::array::builder::NullBufferBuilder`] maintenance.
 /// Short strings (≤ 12 bytes) are inlined into the view itself; long strings
 /// are appended into an in-progress data block. When the in-progress block
 /// fills up it is flushed into `completed` and a new block — double the size
@@ -692,7 +682,7 @@ impl StringViewArrayBuilder {
         self.block_size
     }
 
-    /// Append `value` as the next row.
+    /// See [`BulkNullStringArrayBuilder::append_value`].
     ///
     /// # Panics
     ///
@@ -724,8 +714,7 @@ impl StringViewArrayBuilder {
         self.views.push(self.make_long_view(length, offset, v));
     }
 
-    /// Append an empty placeholder row. The corresponding slot must be
-    /// masked as null by the null buffer passed to `finish`.
+    /// See [`BulkNullStringArrayBuilder::append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
         // Zero-length inline view — `length` field is 0, no buffer ref.
@@ -768,16 +757,12 @@ impl StringViewArrayBuilder {
         .into()
     }
 
-    /// Append a row whose bytes are produced by mapping each byte of `src`
-    /// through `map`, in order. Output length equals `src.len()`.
-    ///
-    /// Because output length is known up front, this is more efficient than
-    /// `append_with` when computing a byte-to-byte mapping.
+    /// See [`BulkNullStringArrayBuilder::append_byte_map`].
     ///
     /// # Safety
     ///
-    /// The bytes produced by `map` over `src.iter()`, in order, must form
-    /// valid UTF-8.
+    /// The bytes produced by applying `map` to each byte of `src`, in order,
+    /// must form valid UTF-8.
     ///
     /// # Panics
     ///
@@ -808,14 +793,9 @@ impl StringViewArrayBuilder {
             .push(self.make_long_view(length, offset, &self.in_progress[cursor..]));
     }
 
-    /// Append a row whose bytes are produced by `f` calling write methods on
-    /// the supplied [`StringWriter`].
-    ///
-    /// Initial writes accumulate in a 12-byte stack buffer. If the row stays
-    /// at or below 12 bytes, it is finalized as an inline view and never
-    /// touches the data block. If it exceeds 12 bytes, the buffered prefix is
-    /// flushed into the in-progress block and subsequent writes go directly
-    /// there.
+    /// See [`BulkNullStringArrayBuilder::append_with`]. The writer is a
+    /// [`StringViewWriter`]; see its documentation for how short rows stay
+    /// inline.
     ///
     /// # Panics
     ///
@@ -1005,6 +985,27 @@ fn push_char_to_vec(v: &mut Vec<u8>, c: char) {
 /// Similar to Arrow's `StringLikeArrayBuilder`, this allows generic dispatch
 /// over the three string array types (Utf8, LargeUtf8, Utf8View) when the
 /// function body is uniform across them.
+///
+/// Three methods append a non-null row; which method to pick depends on how the
+/// row is produced:
+///
+/// - [`append_value`](Self::append_value) pushes an already-finished `&str`.
+///   Use it when the row is forwarded from an existing slice (e.g. an input
+///   column) — there is nothing to elide.
+/// - [`append_byte_map`](Self::append_byte_map) emits a row whose bytes are a
+///   byte-to-byte mapping of an input slice. Output length is known up front
+///   and the inner loop is straight-line, so this is the fastest path when the
+///   shape fits.
+/// - [`append_with`](Self::append_with) emits a row by feeding fragments to a
+///   [`StringWriter`]. Use it when the row is computed from multiple sources or
+///   when the output length is not known up front. Bytes are written directly
+///   into the builder, so it is typically faster than assembling a `String` and
+///   calling `append_value(&scratch)`.
+///
+/// For a NULL row, call [`append_placeholder`](Self::append_placeholder) to
+/// advance the row count without writing into the value buffer; the caller MUST
+/// clear the corresponding bit in the null buffer passed to
+/// [`finish`](Self::finish).
 pub(crate) trait BulkNullStringArrayBuilder {
     /// Per-builder concrete writer type, exposed as a GAT so generic callers
     /// can use the inherent (non-`dyn`) writer methods without vtable
@@ -1013,12 +1014,56 @@ pub(crate) trait BulkNullStringArrayBuilder {
     where
         Self: 'a;
 
+    /// Append `value` as the next row.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting array would exceed the per-implementation
+    /// size limit. See the inherent method on each builder for specifics.
     fn append_value(&mut self, value: &str);
+
+    /// Append an empty placeholder row. The corresponding slot MUST be masked
+    /// as null by the null buffer passed to [`finish`](Self::finish).
     fn append_placeholder(&mut self);
+
+    /// Append a row whose bytes are produced by `f` calling write methods on
+    /// the supplied [`StringWriter`].
+    ///
+    /// The closure can call `write_str` or `write_char` on the supplied
+    /// `StringWriter` zero or more times. Zero calls produces a row containing
+    /// the empty string.
+    ///
+    /// # Panics
+    ///
+    /// See [`append_value`](Self::append_value).
     fn append_with<F>(&mut self, f: F)
     where
         F: for<'a> FnOnce(&mut Self::Writer<'a>);
+
+    /// Append a row whose bytes are produced by mapping each byte of `src`
+    /// through `map`, in order. Output length equals `src.len()`.
+    ///
+    /// Because the output length is known up front and the inner loop is
+    /// straight-line, this is more efficient than
+    /// [`append_with`](Self::append_with) for byte-to-byte mappings and
+    /// autovectorizes well.
+    ///
+    /// # Safety
+    ///
+    /// The bytes produced by applying `map` to each byte of `src`, in order,
+    /// must form valid UTF-8.
+    ///
+    /// # Panics
+    ///
+    /// See [`append_value`](Self::append_value).
     unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F);
+
+    /// Finalize into a concrete array using the caller-supplied null buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `null_buffer.len()` does not match the number
+    /// of appended rows.
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef>;
 }
 
