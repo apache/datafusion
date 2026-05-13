@@ -519,9 +519,16 @@ impl Accumulator for AvgAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Float64(
-            self.sum.map(|f| f / self.count as f64),
-        ))
+        // In sliding-window mode `retract_batch` can bring `count` back to 0
+        // while `sum` remains `Some(..)` (possibly zero or a floating-point
+        // residual). Guard against that so the frame with no non-NULL values
+        // yields NULL rather than NaN / ±Inf.
+        let avg = if self.count == 0 {
+            None
+        } else {
+            self.sum.map(|f| f / self.count as f64)
+        };
+        Ok(ScalarValue::Float64(avg))
     }
 
     fn size(&self) -> usize {
@@ -584,17 +591,23 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let v = self
-            .sum
-            .map(|v| {
-                DecimalAverager::<T>::try_new(
-                    self.sum_scale,
-                    self.target_precision,
-                    self.target_scale,
-                )?
-                .avg(v, T::Native::from_usize(self.count as usize).unwrap())
-            })
-            .transpose()?;
+        // `count == 0` can occur in sliding-window mode after `retract_batch`
+        // removes every contributing value. Return NULL rather than dividing
+        // by zero (which would panic for integer decimal types).
+        let v = if self.count == 0 {
+            None
+        } else {
+            self.sum
+                .map(|v| {
+                    DecimalAverager::<T>::try_new(
+                        self.sum_scale,
+                        self.target_precision,
+                        self.target_scale,
+                    )?
+                    .avg(v, T::Native::from_usize(self.count as usize).unwrap())
+                })
+                .transpose()?
+        };
 
         ScalarValue::new_primitive::<T>(
             v,
@@ -670,7 +683,14 @@ impl Accumulator for DurationAvgAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let avg = self.sum.map(|sum| sum / self.count as i64);
+        // Guard against `count == 0` which can happen in sliding-window mode
+        // after every contributing value has been retracted. Without this
+        // check we would integer-divide by zero.
+        let avg = if self.count == 0 {
+            None
+        } else {
+            self.sum.map(|sum| sum / self.count as i64)
+        };
 
         match self.result_unit {
             TimeUnit::Second => Ok(ScalarValue::DurationSecond(avg)),
