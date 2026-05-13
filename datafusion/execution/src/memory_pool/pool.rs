@@ -722,26 +722,26 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 Err(e) => e,
             };
 
-            // Mark the requestor as IN_FLIGHT for the duration of this
-            // walk. Without this, a victim's reclaim handler that
-            // recursively triggers `pool.reclaim` (e.g. a merge stream
-            // started inside an `ExternalSorter` spill) could pick the
-            // requestor as its own victim, send it a reclaim oneshot,
-            // and deadlock — the requestor is blocked here at
-            // `reclaimer.reclaim().await` and can't drain its own
-            // reclaim channel. Sticky-disabled or already-in-flight
-            // requestors aren't acquired; the walk proceeds without
-            // protection (the candidate filter still rejects the
-            // requestor by id).
+            // We deliberately do NOT mark the requestor as IN_FLIGHT
+            // here. Doing so would cause N walkers running concurrently
+            // (e.g. many sort partitions all hitting `try_grow_async`
+            // in lock-step) to all set themselves IN_FLIGHT, at which
+            // point the candidate filter rejects every one of them and
+            // no walk has any victims — leading to spurious OOM after
+            // the retry budget elapses. Cycle defenses are still in
+            // place: the candidate filter rejects the requestor by id;
+            // `strictly-larger` (for reclaimer requestors) breaks
+            // size-ordered A↔B mutual-reclaim cycles; and a caller
+            // that drains its own `reclaim_rx` while awaiting
+            // `try_grow_async` (e.g. via a `select!`) cooperatively
+            // services any recursive reclaim that targets it.
             let requestor_id = reservation.consumer().id();
-            let (_self_guard, requestor_has_reclaimer) = {
-                let guard = self.tracked_consumers.read();
-                let tc = guard.get(&requestor_id);
-                let has_reclaimer = tc.map(|tc| tc.reclaimer.is_some()).unwrap_or(false);
-                let g = tc
-                    .and_then(|tc| ReclaimerStateGuard::try_acquire(&tc.reclaimer_state));
-                (g, has_reclaimer)
-            };
+            let requestor_has_reclaimer = self
+                .tracked_consumers
+                .read()
+                .get(&requestor_id)
+                .map(|tc| tc.reclaimer.is_some())
+                .unwrap_or(false);
 
             let mut retries: usize = 0;
             loop {
