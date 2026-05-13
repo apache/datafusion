@@ -308,11 +308,14 @@ impl WindowUDFImpl for NthValue {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
-        let input_field = field_args
-            .input_fields()
-            .first()
-            .cloned()
-            .unwrap_or_else(|| Arc::new(Field::new("", DataType::Null, true)));
+        let input_field =
+            field_args
+                .input_fields()
+                .first()
+                .cloned()
+                .unwrap_or_else(|| {
+                    Arc::new(Field::new(field_args.name(), DataType::Null, true))
+                });
 
         // Clone the input field to preserve metadata, update name and nullability
         Ok(input_field
