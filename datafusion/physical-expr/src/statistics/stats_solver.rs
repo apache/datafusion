@@ -15,6 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! DAG-based statistics propagation for the Statistics V2 framework.
+//!
+//! All public items in this module are **deprecated** as of `54.0.0`.
+//! See <https://github.com/apache/datafusion/pull/22071> for details.
+
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use crate::expressions::Literal;
@@ -35,6 +42,10 @@ use petgraph::visit::DfsPostOrder;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute statistics/distributions for expressions hierarchically.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+)]
 #[derive(Clone, Debug)]
 pub struct ExprStatisticsGraph {
     graph: StableGraph<ExprStatisticsGraphNode, usize>,
@@ -43,6 +54,10 @@ pub struct ExprStatisticsGraph {
 
 /// This is a node in the DAEG; it encapsulates a reference to the actual
 /// [`PhysicalExpr`] as well as its statistics/distribution.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+)]
 #[derive(Clone, Debug)]
 pub struct ExprStatisticsGraphNode {
     expr: Arc<dyn PhysicalExpr>,
