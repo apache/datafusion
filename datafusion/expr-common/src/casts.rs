@@ -160,11 +160,18 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
 /// Allowed cases:
 /// - Same-timezone timestamp casts where target precision is the same or finer
 ///   (e.g. `Timestamp(ms) -> Timestamp(ns)` or same-precision identity).
+///   NOTE: Precision widening can overflow on the source side when the
+///   source value is outside the target timestamp's i64 domain (e.g.
+///   `Timestamp(Second)` cannot hold all widened `Timestamp(Nanosecond)`
+///   values). In practice, real-world timestamps are well within range.
 /// - Integer widening from smaller to larger type within the same sign family,
 ///   or from unsigned to a strictly larger signed type.
 ///   (e.g. `Int32 -> Int64`, `UInt8 -> Int32`).
 ///   Integer narrowing (e.g. `Int64 -> Int32`) is NOT allowed.
 ///   Signed-to-unsigned is NEVER allowed.
+/// - Binary widening from fixed-size to variable-length
+///   (e.g. `FixedSizeBinary(n) -> Binary`).
+///   Binary narrowing or FixedSizeBinary length changes are NOT allowed.
 ///
 /// The literal must also round-trip exactly (checked separately in
 /// `try_cast_literal_for_comparison_unwrap`).
@@ -177,7 +184,10 @@ fn is_supported_comparison_unwrap_cast(from_type: &DataType, to_type: &DataType)
             from_tz == to_tz
                 && timestamp_unit_scale(from_unit) <= timestamp_unit_scale(to_unit)
         }
-        _ => is_integer_widening_safe(from_type, to_type),
+        _ => {
+            is_integer_widening_safe(from_type, to_type)
+                || is_binary_widening_safe(from_type, to_type)
+        }
     }
 }
 
@@ -185,8 +195,7 @@ fn is_supported_comparison_unwrap_cast(from_type: &DataType, to_type: &DataType)
 /// - Same-sign: target has at least as many bits as source
 /// - Unsigned → larger signed: `UIntX → IntY` where Y has strictly more bits than X
 /// - Signed → unsigned: NEVER safe (negative values cannot be represented)
-/// Integer widening: same-sign or unsigned→larger signed.
-/// Same-type identity casts are also safe.
+/// - Same-type identity casts are also safe.
 fn is_integer_widening_safe(from: &DataType, to: &DataType) -> bool {
     use DataType::*;
     matches!(
@@ -205,6 +214,25 @@ fn is_integer_widening_safe(from: &DataType, to: &DataType) -> bool {
             | (UInt8, Int16 | Int32 | Int64)
             | (UInt16, Int32 | Int64)
             | (UInt32, Int64)
+    )
+}
+
+/// Returns true for binary widening casts that preserve comparison semantics.
+///
+/// Allowed: `FixedSizeBinary` → `Binary` (fixed-size is a subset of
+/// variable-length binary; values don't change).
+///
+/// NOT allowed: `Binary` → `FixedSizeBinary` (narrowing), FixedSizeBinary
+/// length changes, or any other binary type transitions.
+fn is_binary_widening_safe(from: &DataType, to: &DataType) -> bool {
+    use DataType::*;
+    matches!(
+        (from, to),
+        // FixedSizeBinary → Binary: always safe (widening)
+        (FixedSizeBinary(_), Binary)
+            // Identity
+            | (FixedSizeBinary(_), FixedSizeBinary(_))
+            | (Binary, Binary)
     )
 }
 
@@ -540,10 +568,25 @@ fn try_cast_binary(
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     match (lit_value, target_type) {
+        // Binary → Binary (identity)
+        (ScalarValue::Binary(v), DataType::Binary) => {
+            Some(ScalarValue::Binary(v.clone()))
+        }
+        // Binary → FixedSizeBinary (narrowing, length must match)
         (ScalarValue::Binary(Some(v)), DataType::FixedSizeBinary(n))
             if v.len() == *n as usize =>
         {
             Some(ScalarValue::FixedSizeBinary(*n, Some(v.clone())))
+        }
+        // FixedSizeBinary → Binary (widening)
+        (ScalarValue::FixedSizeBinary(_n, v), DataType::Binary) => {
+            Some(ScalarValue::Binary(v.clone()))
+        }
+        // FixedSizeBinary → FixedSizeBinary (identity, length must match)
+        (ScalarValue::FixedSizeBinary(from_n, v), DataType::FixedSizeBinary(to_n))
+            if from_n == to_n =>
+        {
+            Some(ScalarValue::FixedSizeBinary(*to_n, v.clone()))
         }
         _ => None,
     }

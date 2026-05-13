@@ -37,16 +37,24 @@
 //! ## Safety
 //!
 //! Unwrap is **closed by default**: it is only allowed when the cast is
-//! known to preserve comparison semantics. Currently the only allowed
-//! case is same-timezone timestamp casts where the target precision is
-//! the same or finer than the source (e.g. `Timestamp(ms) -> Timestamp(ns)`),
-//! and the literal round-trips exactly through both types.
+//! known to preserve comparison semantics. Currently two cast families are
+//! allowed, provided the literal round-trips exactly through both types:
 //!
-//! All other type combinations (integer, float, decimal, string, dictionary,
-//! binary, etc.) are NOT unwrapped because the cast can lose precision, change
-//! domain, or break comparison ordering/equality.
+//! 1. **Same-timezone timestamp casts** where target precision is the same
+//!    or finer than the source (e.g. `Timestamp(ms) -> Timestamp(ns)` or
+//!    same-precision identity).
 //!
-//! # Example (allowed)
+//! 2. **Integer widening casts** from smaller to larger type within the
+//!    same sign family, or from unsigned to a strictly larger signed type
+//!    (e.g. `Int32 -> Int64`, `UInt8 -> Int32`, `UInt32 -> Int64`).
+//!    Integer narrowing and signed-to-unsigned are never unwrapped.
+//!
+//! All other type combinations (float, decimal, string, dictionary,
+//! binary, date↔timestamp, timezone changes, etc.) are NOT unwrapped
+//! because the cast can lose precision, change domain, or break
+//! comparison ordering/equality.
+//!
+//! # Examples
 //!
 //! If `ts` has DataType `Timestamp(Millisecond, None)`. Given the filter:
 //!
@@ -59,6 +67,18 @@
 //!
 //! ```text
 //! ts = TimestampMillisecond(1, None)
+//! ```
+//!
+//! If `c1` has DataType `Int32`. Given the filter:
+//!
+//! ```text
+//! CAST(c1 AS Int64) > Int64(10)
+//! ```
+//!
+//! Since `Int64(10)` round-trips exactly through `Int32`, this rule rewrites to:
+//!
+//! ```text
+//! c1 > Int32(10)
 //! ```
 
 use arrow::datatypes::DataType;
@@ -184,7 +204,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
 }
 
 /// Tries to move a cast from an expression to the literal side of a comparison.
-fn comparison_unwrap_literal(
+pub(super) fn comparison_unwrap_literal(
     lit_value: &ScalarValue,
     from_type: &DataType,
     to_type: &DataType,

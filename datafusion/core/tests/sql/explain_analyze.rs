@@ -419,7 +419,7 @@ async fn csv_explain_plans() {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @"
+        @r"
     Explain [plan_type:Utf8, plan:Utf8]
       Projection: aggregate_test_100.c1 [c1:Utf8View]
         Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8View, c2:Int8]
@@ -432,7 +432,7 @@ async fn csv_explain_plans() {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @"
+        @r"
     Explain
       Projection: aggregate_test_100.c1
         Filter: aggregate_test_100.c2 > Int8(10)
@@ -530,16 +530,18 @@ async fn csv_explain_inlist_verbose() {
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
 
-    // before optimization (Int64 literals)
+    // Before optimization: type coercion may present Int64 literals.
+    // After note: unwrap_cast converts CAST(c2 AS Int64) IN [Int64(…)]
+    // → c2 IN [Int8(…)], so the optimized plan shows Int8 literals below.
     assert_contains!(
         &actual,
         "aggregate_test_100.c2 IN ([Int64(1), Int64(2), Int64(4), Int64(5)])"
     );
-    // Comparison casts are no longer unwrapped for non-timestamp types;
-    // the optimized plan keeps the original Int64 literals.
+    // After unwrap_cast: CAST(c2 AS Int64) is removed, Int64 literals
+    // become Int8 literals since Int8→Int64 is a widening cast.
     assert_contains!(
         &actual,
-        "aggregate_test_100.c2 IN ([Int64(1), Int64(2), Int64(4), Int64(5)])"
+        "aggregate_test_100.c2 IN ([Int8(1), Int8(2), Int8(4), Int8(5)])"
     );
 }
 
@@ -636,7 +638,7 @@ async fn csv_explain_verbose_plans() {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @"
+        @r"
     Explain [plan_type:Utf8, plan:Utf8]
       Projection: aggregate_test_100.c1 [c1:Utf8View]
         Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8View, c2:Int8]
@@ -649,7 +651,7 @@ async fn csv_explain_verbose_plans() {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @"
+        @r"
     Explain
       Projection: aggregate_test_100.c1
         Filter: aggregate_test_100.c2 > Int8(10)

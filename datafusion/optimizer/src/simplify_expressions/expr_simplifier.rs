@@ -57,6 +57,7 @@ use super::utils::*;
 use crate::simplify_expressions::SimplifyContext;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
+    comparison_unwrap_literal,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
     unwrap_cast_in_comparison_for_binary,
@@ -66,7 +67,6 @@ use crate::{
     simplify_expressions::udf_preimage::rewrite_with_preimage,
 };
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
-use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
 use regex::Regex;
 
@@ -1965,24 +1965,34 @@ impl TreeNodeRewriter for Simplifier<'_> {
             ) =>
             {
                 let (Expr::TryCast(TryCast {
-                    expr: left_expr, ..
+                    expr: left_expr,
+                    field,
                 })
                 | Expr::Cast(Cast {
-                    expr: left_expr, ..
+                    expr: left_expr,
+                    field,
                 })) = left.as_mut()
                 else {
                     return internal_err!("Expect cast expr, but got {:?}", left)?;
                 };
 
                 let expr_type = info.get_data_type(left_expr)?;
+                let cast_type = field.data_type().clone();
                 let right_exprs = list
                     .into_iter()
                     .map(|right| {
                         match right {
                             Expr::Literal(right_lit_value, _) => {
-                                // if the right_lit_value can be casted to the type of internal_left_expr
-                                // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
-                                let Some(value) = try_cast_literal_to_type(&right_lit_value, &expr_type) else {
+                                // Use comparison_unwrap_literal, the same helper
+                                // called by the IN-list eligibility check
+                                // is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
+                                // so rewrite can't diverge from what was approved.
+                                let Some(value) = comparison_unwrap_literal(
+                                    &right_lit_value,
+                                    &expr_type,
+                                    &cast_type,
+                                    Eq,
+                                ) else {
                                     internal_err!(
                                         "Can't cast the list expr {:?} to type {}",
                                         right_lit_value, &expr_type
