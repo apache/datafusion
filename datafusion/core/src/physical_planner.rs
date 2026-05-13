@@ -121,16 +121,9 @@ use tokio::sync::Mutex;
 /// nullability widening: logical planning may conservatively expose nullable
 /// recursive output after the aggregate's logical input schema was derived.
 fn contains_recursive_query_input(plan: &LogicalPlan) -> bool {
-    let mut found = false;
-    let _ = plan.apply(|node| {
-        if matches!(node, LogicalPlan::RecursiveQuery(_)) {
-            found = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
-    });
-    found
+    plan.exists(|node| Ok(matches!(node, LogicalPlan::RecursiveQuery(_))))
+        // Closure always returns Ok
+        .unwrap()
 }
 
 /// Physical query planner that converts a `LogicalPlan` to an

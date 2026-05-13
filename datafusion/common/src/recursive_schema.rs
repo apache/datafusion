@@ -65,14 +65,16 @@ pub fn recursive_query_output_schema(
         .iter()
         .zip(recursive_schema.fields())
         .map(|((qualifier, static_field), recursive_field)| {
-            let field = static_field
-                .as_ref()
-                .clone()
-                .with_nullable(
-                    static_field.is_nullable() || recursive_field.is_nullable(),
-                )
-                .into();
-            (qualifier.cloned(), field)
+            (
+                qualifier.cloned(),
+                static_field
+                    .as_ref()
+                    .clone()
+                    .with_nullable(
+                        static_field.is_nullable() || recursive_field.is_nullable(),
+                    )
+                    .into(),
+            )
         })
         .collect::<Vec<_>>();
 
@@ -95,8 +97,10 @@ pub fn reconcile_dfschema_with_schema_nullability(
         return Ok(None);
     }
 
-    let physical_fields = physical_schema.fields().iter();
-    widen_dfschema_nullability_with_fields(logical_schema, physical_fields)
+    widen_dfschema_nullability_with_fields(
+        logical_schema,
+        physical_schema.fields().iter(),
+    )
 }
 
 fn widen_dfschema_nullability_with_fields<'a>(
@@ -117,12 +121,14 @@ fn widen_dfschema_nullability_with_fields<'a>(
         }
 
         widened_nullability |= !base_field.is_nullable() && widening_field.is_nullable();
-        let field = base_field
-            .as_ref()
-            .clone()
-            .with_nullable(base_field.is_nullable() || widening_field.is_nullable())
-            .into();
-        fields.push((qualifier.cloned(), field));
+        fields.push((
+            qualifier.cloned(),
+            base_field
+                .as_ref()
+                .clone()
+                .with_nullable(base_field.is_nullable() || widening_field.is_nullable())
+                .into(),
+        ));
     }
 
     if !widened_nullability {

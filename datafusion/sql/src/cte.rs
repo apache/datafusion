@@ -20,9 +20,8 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{
-    Result, not_impl_err, plan_err,
-    recursive_schema::make_schema_nullable,
-    tree_node::{TreeNode, TreeNodeRecursion},
+    Result, not_impl_err, plan_err, recursive_schema::make_schema_nullable,
+    tree_node::TreeNode,
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
 use sqlparser::ast::{Query, SetExpr, SetOperator, With};
@@ -190,17 +189,9 @@ fn has_work_table_reference(
     plan: &LogicalPlan,
     work_table_source: &Arc<dyn TableSource>,
 ) -> bool {
-    let mut has_reference = false;
-    plan.apply(|node| {
-        if let LogicalPlan::TableScan(scan) = node
-            && Arc::ptr_eq(&scan.source, work_table_source)
-        {
-            has_reference = true;
-            return Ok(TreeNodeRecursion::Stop);
-        }
-        Ok(TreeNodeRecursion::Continue)
+    plan.exists(|node| {
+        Ok(matches!(node, LogicalPlan::TableScan(scan) if Arc::ptr_eq(&scan.source, work_table_source)))
     })
-    // Closure always return Ok
-    .unwrap();
-    has_reference
+    // Closure always returns Ok
+    .unwrap()
 }
