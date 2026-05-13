@@ -577,10 +577,16 @@ mod tests {
     use super::*;
     use datafusion_physical_expr_common::metrics::Label;
 
-    fn assert_value_roundtrip(value: MetricValue) {
+    /// Round-trips `value` through the FFI representation, asserts the
+    /// `PartialEq`-based equality, and returns the reconstructed value so
+    /// callers can additionally assert fields that `MetricValue`'s
+    /// `PartialEq` impl does not compare (e.g. `PruningMetrics::fully_matched`,
+    /// `RatioMetrics::merge_strategy`).
+    fn assert_value_roundtrip(value: MetricValue) -> MetricValue {
         let ffi: FFI_MetricValue = (&value).into();
         let back: MetricValue = ffi.into();
         assert_eq!(value, back, "round-trip mismatch for {value:?}");
+        back
     }
 
     #[test]
@@ -647,20 +653,50 @@ mod tests {
         pruning.add_pruned(3);
         pruning.add_matched(5);
         pruning.add_fully_matched(2);
-        assert_value_roundtrip(MetricValue::PruningMetrics {
+        let back = assert_value_roundtrip(MetricValue::PruningMetrics {
             name: Cow::Borrowed("file_prune"),
             pruning_metrics: pruning,
         });
+        match back {
+            MetricValue::PruningMetrics {
+                name,
+                pruning_metrics,
+            } => {
+                assert_eq!(name.as_ref(), "file_prune");
+                assert_eq!(pruning_metrics.pruned(), 3);
+                assert_eq!(pruning_metrics.matched(), 5);
+                assert_eq!(pruning_metrics.fully_matched(), 2);
+            }
+            other => panic!("expected PruningMetrics, got {other:?}"),
+        }
 
         let ratio = RatioMetrics::new()
             .with_merge_strategy(RatioMergeStrategy::SetPartAddTotal)
             .with_display_raw_values(false);
         ratio.set_part(20);
         ratio.set_total(100);
-        assert_value_roundtrip(MetricValue::Ratio {
+        // `RatioMetrics`'s `PartialEq` does not compare `merge_strategy`,
+        // so assert it explicitly after the round-trip.
+        let back = assert_value_roundtrip(MetricValue::Ratio {
             name: Cow::Borrowed("selectivity"),
             ratio_metrics: ratio,
         });
+        match back {
+            MetricValue::Ratio {
+                name,
+                ratio_metrics,
+            } => {
+                assert_eq!(name.as_ref(), "selectivity");
+                assert_eq!(ratio_metrics.part(), 20);
+                assert_eq!(ratio_metrics.total(), 100);
+                assert!(matches!(
+                    ratio_metrics.merge_strategy(),
+                    RatioMergeStrategy::SetPartAddTotal
+                ));
+                assert!(!ratio_metrics.display_raw_values());
+            }
+            other => panic!("expected Ratio, got {other:?}"),
+        }
     }
 
     #[test]
@@ -741,6 +777,24 @@ mod tests {
 
         let ffi: FFI_MetricsSet = (&set).into();
         let back: MetricsSet = ffi.into();
+
+        // Aggregate check.
         assert_eq!(back.output_rows(), Some(3));
+
+        // Per-metric check: ordering, partition, and per-partition value must
+        // all survive the round-trip (the aggregate above can't catch a lost
+        // partition or a metric count mismatch).
+        let metrics: Vec<_> = back.iter().collect();
+        assert_eq!(metrics.len(), 2);
+        assert_eq!(metrics[0].partition(), Some(0));
+        assert_eq!(
+            metrics[0].value(),
+            &MetricValue::OutputRows(count_from_value(1))
+        );
+        assert_eq!(metrics[1].partition(), Some(1));
+        assert_eq!(
+            metrics[1].value(),
+            &MetricValue::OutputRows(count_from_value(2))
+        );
     }
 }
