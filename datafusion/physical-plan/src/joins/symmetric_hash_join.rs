@@ -50,6 +50,7 @@ use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_filter, update_join_on,
 };
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -1406,6 +1407,19 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
         }
     }
+
+    /// Release the right input pipeline's resources.
+    fn cleanup_depleted_right_stream(&mut self) {
+        let right_schema = self.right_stream.schema();
+        self.right_stream = Box::pin(EmptyRecordBatchStream::new(right_schema));
+    }
+
+    /// Release the left input pipeline's resources.
+    fn cleanup_depleted_left_stream(&mut self) {
+        let left_schema = self.left_stream.schema();
+        self.left_stream = Box::pin(EmptyRecordBatchStream::new(left_schema));
+    }
+
     /// Asynchronously pulls the next batch from the right stream.
     ///
     /// This default implementation checks for the next value in the right stream.
@@ -1429,6 +1443,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::RightExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1458,6 +1473,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::LeftExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1487,6 +1503,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });
@@ -1518,6 +1535,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });
