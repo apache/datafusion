@@ -31,12 +31,10 @@ use arrow::array::{
     cast::AsArray,
 };
 use arrow::array::{
-    ArrowPrimitiveType, Datum, GenericListArray, Int32Array, Int64Array,
-    MutableArrayData, PrimitiveArray, make_array,
+    ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array, MutableArrayData, PrimitiveArray, make_array
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::compute::kernels::cmp::neq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{
@@ -1142,17 +1140,18 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             &Int64Array::new_scalar(0)
         };
 
-        let not_empty = neq(&lengths, zero)?;
-        let null_and_non_empty = &!nulls.inner() & not_empty.values();
-
-        if null_and_non_empty.count_set_bits() > 0 {
+        let empty = arrow::compute::kernels::cmp::eq(&lengths, zero)?;
+        let valid_or_empty = empty.values() | nulls.inner();
+        let valid_or_empty = BooleanArray::from(valid_or_empty);
+    
+        if valid_or_empty.has_false() {
             let array_data = list.values().to_data();
             let offsets = list.offsets();
             let capacity = offsets[offsets.len() - 1] - offsets[0];
             let mut mutable_array_data =
                 MutableArrayData::new(vec![&array_data], false, capacity.as_usize());
 
-            let valid_or_empty = nulls.inner() | &!not_empty.values();
+            let (valid_or_empty, _nulls) = valid_or_empty.into_parts();
 
             for (start, end) in valid_or_empty.set_slices() {
                 mutable_array_data.extend(
