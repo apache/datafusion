@@ -31,7 +31,8 @@ use arrow::array::{
     cast::AsArray,
 };
 use arrow::array::{
-    ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array, MutableArrayData, PrimitiveArray, make_array
+    ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array,
+    MutableArrayData, PrimitiveArray, make_array,
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
@@ -1143,7 +1144,7 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
         let empty = arrow::compute::kernels::cmp::eq(&lengths, zero)?;
         let valid_or_empty = empty.values() | nulls.inner();
         let valid_or_empty = BooleanArray::from(valid_or_empty);
-    
+
         if valid_or_empty.has_false() {
             let array_data = list.values().to_data();
             let offsets = list.offsets();
