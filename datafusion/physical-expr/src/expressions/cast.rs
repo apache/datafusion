@@ -153,12 +153,20 @@ impl CastExpr {
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
         if is_default_target_field(&self.target_field) {
             self.expr.return_field(input_schema).map(|field| {
-                Arc::new(
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_data_type(self.cast_type().clone()),
-                )
+                let cast_type = self.cast_type();
+                let mut out_field =
+                    field.as_ref().clone().with_data_type(cast_type.clone());
+
+                // If we modify the storage type we can't ensure that the metadata
+                // is valid on the target type (e.g., a cast from UUID with extension
+                // metadata to Utf8 should not result in extension metadata
+                // on a Utf8 type, which would be invalid and may be rejected by
+                // consumers).
+                if field.data_type() != cast_type {
+                    out_field = out_field.with_metadata(Default::default());
+                }
+
+                Arc::new(out_field)
             })
         } else {
             Ok(Arc::clone(&self.target_field))
