@@ -735,8 +735,8 @@ impl StringViewArrayBuilder {
 
     /// Ensure the in-progress block has room for `length` more bytes,
     /// flushing the current block and starting a new (doubled) one if not.
-    /// Caller must only invoke this between rows — flushing mid-row would
-    /// orphan partial row data.
+    /// Caller must invoke this only when no bytes of the current row are
+    /// yet in `in_progress` — flushing mid-row would orphan partial data.
     #[inline]
     fn ensure_long_capacity(&mut self, length: u32) {
         let required_cap = self.in_progress.len() + length as usize;
@@ -931,57 +931,54 @@ impl StringWriter for StringViewWriter<'_> {
     #[inline]
     fn write_str(&mut self, s: &str) {
         let bytes = s.as_bytes();
-        match self.spill_cursor {
-            None => {
-                let inline_len = self.inline_len as usize;
-                let new_len = inline_len + bytes.len();
-                if new_len <= 12 {
-                    self.inline_buf[inline_len..new_len].copy_from_slice(bytes);
-                    self.inline_len = new_len as u8;
-                } else {
-                    // First spill of this row: reserve capacity (which may
-                    // flush the current block — safe, no row-data is in it
-                    // yet for this row), copy the buffered prefix, then
-                    // write the new bytes.
-                    self.builder.ensure_long_capacity(new_len as u32);
-                    let cursor = self.builder.in_progress.len();
-                    self.builder
-                        .in_progress
-                        .extend_from_slice(&self.inline_buf[..inline_len]);
-                    self.builder.in_progress.extend_from_slice(bytes);
-                    self.spill_cursor = Some(cursor);
-                }
-            }
-            Some(_) => {
-                self.builder.in_progress.extend_from_slice(bytes);
-            }
+        if self.spill_cursor.is_some() {
+            self.builder.in_progress.extend_from_slice(bytes);
+            return;
         }
+
+        let inline_len = self.inline_len as usize;
+        let new_len = inline_len + bytes.len();
+        if new_len <= 12 {
+            self.inline_buf[inline_len..new_len].copy_from_slice(bytes);
+            self.inline_len = new_len as u8;
+            return;
+        }
+
+        // First spill of this row: `ensure_long_capacity` may flush the
+        // current block, which is safe because no row-data for this row
+        // is in it yet — the inline prefix is still in `inline_buf`.
+        self.builder.ensure_long_capacity(new_len as u32);
+        let cursor = self.builder.in_progress.len();
+        self.builder
+            .in_progress
+            .extend_from_slice(&self.inline_buf[..inline_len]);
+        self.builder.in_progress.extend_from_slice(bytes);
+        self.spill_cursor = Some(cursor);
     }
 
     #[inline]
     fn write_char(&mut self, c: char) {
         let len = c.len_utf8();
-        match self.spill_cursor {
-            None => {
-                let inline_len = self.inline_len as usize;
-                let new_len = inline_len + len;
-                if new_len <= 12 {
-                    c.encode_utf8(&mut self.inline_buf[inline_len..new_len]);
-                    self.inline_len = new_len as u8;
-                } else {
-                    self.builder.ensure_long_capacity(new_len as u32);
-                    let cursor = self.builder.in_progress.len();
-                    self.builder
-                        .in_progress
-                        .extend_from_slice(&self.inline_buf[..inline_len]);
-                    push_char_to_vec(&mut self.builder.in_progress, c);
-                    self.spill_cursor = Some(cursor);
-                }
-            }
-            Some(_) => {
-                push_char_to_vec(&mut self.builder.in_progress, c);
-            }
+        if self.spill_cursor.is_some() {
+            push_char_to_vec(&mut self.builder.in_progress, c);
+            return;
         }
+
+        let inline_len = self.inline_len as usize;
+        let new_len = inline_len + len;
+        if new_len <= 12 {
+            c.encode_utf8(&mut self.inline_buf[inline_len..new_len]);
+            self.inline_len = new_len as u8;
+            return;
+        }
+
+        self.builder.ensure_long_capacity(new_len as u32);
+        let cursor = self.builder.in_progress.len();
+        self.builder
+            .in_progress
+            .extend_from_slice(&self.inline_buf[..inline_len]);
+        push_char_to_vec(&mut self.builder.in_progress, c);
+        self.spill_cursor = Some(cursor);
     }
 }
 

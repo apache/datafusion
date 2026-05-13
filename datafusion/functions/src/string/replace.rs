@@ -250,8 +250,25 @@ fn apply_replace<B: BulkNullStringArrayBuilder>(
     from: &str,
     to: &str,
 ) {
+    // Hot path: single ASCII byte → single ASCII byte. An ASCII byte (< 0x80)
+    // cannot appear inside a multi-byte UTF-8 sequence, so any multi-byte
+    // sequences in `string` pass through unchanged and output stays valid
+    // UTF-8.
+    if let (&[from_byte], &[to_byte]) = (from.as_bytes(), to.as_bytes())
+        && from_byte.is_ascii()
+        && to_byte.is_ascii()
+    {
+        // SAFETY: see the contract above.
+        unsafe {
+            builder.append_byte_map(string.as_bytes(), |b| {
+                if b == from_byte { to_byte } else { b }
+            });
+        }
+        return;
+    }
+
     if from.is_empty() {
-        // Empty `from`: insert `to` before each character and at both ends
+        // Empty `from`: insert `to` before each character and at both ends.
         builder.append_with(|w| {
             w.write_str(to);
             for ch in string.chars() {
@@ -259,25 +276,6 @@ fn apply_replace<B: BulkNullStringArrayBuilder>(
                 w.write_str(to);
             }
         });
-        return;
-    }
-
-    // Fast-path for replacing one ASCII byte with another
-    if let ([from_byte], [to_byte]) = (from.as_bytes(), to.as_bytes())
-        && from_byte.is_ascii()
-        && to_byte.is_ascii()
-    {
-        let from_byte = *from_byte;
-        let to_byte = *to_byte;
-        // SAFETY: an ASCII byte (< 0x80) cannot appear inside a multi-byte
-        // UTF-8 sequence, so the closure below only replaces ASCII bytes.
-        // `string` might be UTF-8, but any multi-byte sequences pass through
-        // unchanged. Output is valid UTF-8.
-        unsafe {
-            builder.append_byte_map(string.as_bytes(), |b| {
-                if b == from_byte { to_byte } else { b }
-            });
-        }
         return;
     }
 
