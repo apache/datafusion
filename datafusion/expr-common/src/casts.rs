@@ -114,8 +114,11 @@ impl CastComparisonRewrite {
 }
 
 /// Tries to rewrite the literal so a cast can be removed from the expression.
-/// Operator and literal checks are needed for round-trips such as
-/// `CAST(int_col AS Utf8) = '123'`; lossy or partial casts are rejected.
+///
+/// This is intentionally closed-by-default: only casts explicitly allowed by
+/// [`is_supported_comparison_unwrap_cast`] are eligible. Literal round-tripping
+/// is required so rewrites such as `CAST(ts_ms AS Timestamp(ns)) = lit_ns` are
+/// only applied when `lit_ns` lies exactly on a millisecond boundary.
 pub fn try_cast_literal_for_comparison_unwrap(
     lit_value: &ScalarValue,
     from_type: &DataType,
@@ -123,16 +126,16 @@ pub fn try_cast_literal_for_comparison_unwrap(
     op: Operator,
 ) -> Option<CastComparisonRewrite> {
     if !is_supported_comparison_unwrap_operator(op)
-        || !is_supported_type(from_type)
-        || !is_supported_type(to_type)
-        || is_cast_unsafe_for_simple_comparison_unwrap(from_type, to_type)
+        || !is_supported_comparison_unwrap_cast(from_type, to_type)
     {
         return None;
     }
 
-    try_cast_string_literal_for_comparison_unwrap(lit_value, from_type, to_type, op)
-        .or_else(|| try_cast_literal_to_type(lit_value, from_type))
-        .map(CastComparisonRewrite::Literal)
+    let casted = try_cast_literal_to_type(lit_value, from_type)?;
+    let round_tripped = try_cast_literal_to_type(&casted, to_type)?;
+
+    (round_tripped == *lit_value && round_tripped.data_type() == lit_value.data_type())
+        .then_some(CastComparisonRewrite::Literal(casted))
 }
 
 fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
@@ -149,60 +152,16 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
     )
 }
 
-/// Returns true when source/cast domains make a simple literal rewrite unsafe.
-/// Partial casts need guarded/preimage rewrites to preserve NULL and cast-error
-/// semantics; literal-specific checks run after this guard.
-fn is_cast_unsafe_for_simple_comparison_unwrap(
-    from_type: &DataType,
-    to_type: &DataType,
-) -> bool {
-    is_lossy_temporal_cast(from_type, to_type)
-        || is_temporal_precision_downcast(from_type, to_type)
-        || is_decimal_comparison_unwrap_lossy(from_type, to_type)
-        || is_decimal_to_integer_lossy_cast(from_type, to_type)
-        || is_float_to_integer_cast(from_type, to_type)
-        || is_float_precision_downcast(from_type, to_type)
-        || !is_source_domain_preserved_for_comparison_unwrap(from_type, to_type)
-}
-
-fn try_cast_string_literal_for_comparison_unwrap(
-    lit_value: &ScalarValue,
-    from_type: &DataType,
-    to_type: &DataType,
-    op: Operator,
-) -> Option<ScalarValue> {
-    if !matches!(
-        op,
-        Operator::Eq
-            | Operator::NotEq
-            | Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-    ) || !is_supported_string_type(to_type)
-        || !is_integer_type(from_type)
-        || !matches!(
-            lit_value,
-            ScalarValue::Utf8(Some(_))
-                | ScalarValue::Utf8View(Some(_))
-                | ScalarValue::LargeUtf8(Some(_))
-        )
-    {
-        return None;
-    }
-
-    let casted = lit_value.cast_to(from_type).ok()?;
-    let round_tripped = casted.cast_to(&lit_value.data_type()).ok()?;
-    (lit_value == &round_tripped).then_some(casted)
-}
-
-fn is_temporal_precision_downcast(from_type: &DataType, to_type: &DataType) -> bool {
+/// Returns true when a cast is known to preserve comparison semantics after
+/// moving the cast from the expression to the literal side.
+fn is_supported_comparison_unwrap_cast(from_type: &DataType, to_type: &DataType) -> bool {
     match (from_type, to_type) {
-        (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _))
-        | (DataType::Duration(from_unit), DataType::Duration(to_unit))
-        | (DataType::Time32(from_unit), DataType::Time32(to_unit))
-        | (DataType::Time32(from_unit), DataType::Time64(to_unit))
-        | (DataType::Time64(from_unit), DataType::Time32(to_unit))
-        | (DataType::Time64(from_unit), DataType::Time64(to_unit)) => {
-            timestamp_unit_scale(from_unit) > timestamp_unit_scale(to_unit)
+        (
+            DataType::Timestamp(from_unit, from_tz),
+            DataType::Timestamp(to_unit, to_tz),
+        ) => {
+            from_tz == to_tz
+                && timestamp_unit_scale(from_unit) <= timestamp_unit_scale(to_unit)
         }
         _ => false,
     }
@@ -214,194 +173,6 @@ fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
         TimeUnit::Millisecond => MILLISECONDS as i128,
         TimeUnit::Microsecond => MICROSECONDS as i128,
         TimeUnit::Nanosecond => NANOSECONDS as i128,
-    }
-}
-
-fn decimal_scale(data_type: &DataType) -> Option<i8> {
-    decimal_precision_and_scale(data_type).map(|(_, scale)| scale)
-}
-
-fn decimal_precision_and_scale(data_type: &DataType) -> Option<(u8, i8)> {
-    match data_type {
-        DataType::Decimal32(precision, scale)
-        | DataType::Decimal64(precision, scale)
-        | DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
-        _ => None,
-    }
-}
-
-fn is_decimal_comparison_unwrap_lossy(from_type: &DataType, to_type: &DataType) -> bool {
-    match (
-        decimal_precision_and_scale(from_type),
-        decimal_precision_and_scale(to_type),
-    ) {
-        (Some((from_precision, from_scale)), Some((to_precision, to_scale))) => {
-            let from_integer_digits = from_precision as i16 - from_scale as i16;
-            let to_integer_digits = to_precision as i16 - to_scale as i16;
-
-            from_scale > to_scale || from_integer_digits > to_integer_digits
-        }
-        _ => false,
-    }
-}
-
-fn is_decimal_to_integer_lossy_cast(from_type: &DataType, to_type: &DataType) -> bool {
-    decimal_scale(from_type).is_some_and(|scale| scale > 0) && is_integer_type(to_type)
-}
-
-fn is_float_to_integer_cast(from_type: &DataType, to_type: &DataType) -> bool {
-    is_floating_point_type(from_type) && is_integer_type(to_type)
-}
-
-fn is_float_precision_downcast(from_type: &DataType, to_type: &DataType) -> bool {
-    match (
-        float_precision_rank(from_type),
-        float_precision_rank(to_type),
-    ) {
-        (Some(from_rank), Some(to_rank)) => from_rank > to_rank,
-        _ => false,
-    }
-}
-
-fn is_source_domain_preserved_for_comparison_unwrap(
-    from_type: &DataType,
-    to_type: &DataType,
-) -> bool {
-    match (from_type, to_type) {
-        (from, to) if is_integer_type(from) && is_integer_type(to) => {
-            source_integer_domain_fits_integer_target(from, to)
-        }
-        (from, to)
-            if is_integer_type(from) && decimal_precision_and_scale(to).is_some() =>
-        {
-            source_integer_domain_fits_decimal_target(from, to)
-        }
-        (from, to)
-            if decimal_precision_and_scale(from).is_some() && is_integer_type(to) =>
-        {
-            source_decimal_domain_fits_integer_target(from, to)
-        }
-        _ => true,
-    }
-}
-
-fn source_integer_domain_fits_integer_target(
-    from_type: &DataType,
-    to_type: &DataType,
-) -> bool {
-    match (integer_bounds(from_type), integer_bounds(to_type)) {
-        (Some((from_min, from_max)), Some((to_min, to_max))) => {
-            from_min >= to_min && from_max <= to_max
-        }
-        _ => false,
-    }
-}
-
-fn source_integer_domain_fits_decimal_target(
-    from_type: &DataType,
-    to_type: &DataType,
-) -> bool {
-    let Some((_, scale)) = decimal_precision_and_scale(to_type) else {
-        return false;
-    };
-    let Some((from_min, from_max)) = integer_bounds(from_type) else {
-        return false;
-    };
-    let Some((to_min, to_max)) = decimal_bounds(to_type) else {
-        return false;
-    };
-    let Ok(scale) = u32::try_from(scale) else {
-        return false;
-    };
-
-    let multiplier = 10_i128.pow(scale);
-    match (
-        from_min.checked_mul(multiplier),
-        from_max.checked_mul(multiplier),
-    ) {
-        (Some(from_min), Some(from_max)) => from_min >= to_min && from_max <= to_max,
-        _ => false,
-    }
-}
-
-fn source_decimal_domain_fits_integer_target(
-    from_type: &DataType,
-    to_type: &DataType,
-) -> bool {
-    let Some((_, scale)) = decimal_precision_and_scale(from_type) else {
-        return false;
-    };
-    if scale != 0 {
-        return false;
-    }
-
-    match (decimal_bounds(from_type), integer_bounds(to_type)) {
-        (Some((from_min, from_max)), Some((to_min, to_max))) => {
-            from_min >= to_min && from_max <= to_max
-        }
-        _ => false,
-    }
-}
-
-fn integer_bounds(data_type: &DataType) -> Option<(i128, i128)> {
-    match data_type {
-        DataType::UInt8 => Some((u8::MIN as i128, u8::MAX as i128)),
-        DataType::UInt16 => Some((u16::MIN as i128, u16::MAX as i128)),
-        DataType::UInt32 => Some((u32::MIN as i128, u32::MAX as i128)),
-        DataType::UInt64 => Some((u64::MIN as i128, u64::MAX as i128)),
-        DataType::Int8 => Some((i8::MIN as i128, i8::MAX as i128)),
-        DataType::Int16 => Some((i16::MIN as i128, i16::MAX as i128)),
-        DataType::Int32 => Some((i32::MIN as i128, i32::MAX as i128)),
-        DataType::Int64 => Some((i64::MIN as i128, i64::MAX as i128)),
-        _ => None,
-    }
-}
-
-fn decimal_bounds(data_type: &DataType) -> Option<(i128, i128)> {
-    match data_type {
-        DataType::Decimal32(precision, _) => Some((
-            MIN_DECIMAL32_FOR_EACH_PRECISION[*precision as usize] as i128,
-            MAX_DECIMAL32_FOR_EACH_PRECISION[*precision as usize] as i128,
-        )),
-        DataType::Decimal64(precision, _) => Some((
-            MIN_DECIMAL64_FOR_EACH_PRECISION[*precision as usize] as i128,
-            MAX_DECIMAL64_FOR_EACH_PRECISION[*precision as usize] as i128,
-        )),
-        DataType::Decimal128(precision, _) => Some((
-            MIN_DECIMAL128_FOR_EACH_PRECISION[*precision as usize],
-            MAX_DECIMAL128_FOR_EACH_PRECISION[*precision as usize],
-        )),
-        _ => None,
-    }
-}
-
-fn is_integer_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-    )
-}
-
-fn is_floating_point_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Float16 | DataType::Float32 | DataType::Float64
-    )
-}
-
-fn float_precision_rank(data_type: &DataType) -> Option<u8> {
-    match data_type {
-        DataType::Float16 => Some(1),
-        DataType::Float32 => Some(2),
-        DataType::Float64 => Some(3),
-        _ => None,
     }
 }
 
@@ -837,6 +608,11 @@ mod tests {
             ts_ms,
             ts_s,
         );
+        expect_no_comparison_unwrap(
+            ScalarValue::TimestampNanosecond(Some(1_000_000_001), None),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            ts_ns.clone(),
+        );
         expect_comparison_unwrap(
             ScalarValue::TimestampNanosecond(Some(1_000_000_000), None),
             DataType::Timestamp(TimeUnit::Millisecond, None),
@@ -888,37 +664,32 @@ mod tests {
             DataType::Decimal128(18, 2),
             DataType::Int64,
         );
-        expect_comparison_unwrap(
+        expect_no_comparison_unwrap(
             ScalarValue::Int64(Some(123)),
             DataType::Decimal128(18, 0),
             DataType::Int64,
-            ScalarValue::Decimal128(Some(123), 18, 0),
         );
-        expect_comparison_unwrap(
+        expect_no_comparison_unwrap(
             ScalarValue::Decimal128(Some(1230000), 20, 4),
             DataType::Decimal64(10, 2),
             DataType::Decimal128(20, 4),
-            ScalarValue::Decimal64(Some(12300), 10, 2),
         );
-        expect_comparison_unwrap(
+        expect_no_comparison_unwrap(
             ScalarValue::Decimal128(Some(1230000), 12, 4),
             DataType::Decimal128(10, 2),
             DataType::Decimal128(12, 4),
-            ScalarValue::Decimal128(Some(12300), 10, 2),
         );
 
-        expect_comparison_unwrap(
+        expect_no_comparison_unwrap(
             ScalarValue::Int64(Some(16)),
             DataType::Int32,
             DataType::Int64,
-            ScalarValue::Int32(Some(16)),
         );
-        expect_comparison_unwrap_with_op(
+        expect_no_comparison_unwrap_with_op(
             ScalarValue::Int64(Some(16)),
             DataType::Int32,
             DataType::Int64,
             Operator::IsNotDistinctFrom,
-            ScalarValue::Int32(Some(16)),
         );
         expect_no_comparison_unwrap(
             ScalarValue::Int32(Some(16)),
@@ -936,11 +707,10 @@ mod tests {
             DataType::Int32,
             DataType::UInt32,
         );
-        expect_comparison_unwrap(
+        expect_no_comparison_unwrap(
             ScalarValue::Int64(Some(16)),
             DataType::UInt32,
             DataType::Int64,
-            ScalarValue::UInt32(Some(16)),
         );
         expect_no_comparison_unwrap(
             ScalarValue::Int64(Some(16)),
@@ -953,11 +723,10 @@ mod tests {
             DataType::Int32,
             DataType::Decimal128(10, 2),
         );
-        expect_comparison_unwrap(
+        expect_no_comparison_unwrap(
             ScalarValue::Decimal128(Some(12300), 12, 2),
             DataType::Int32,
             DataType::Decimal128(12, 2),
-            ScalarValue::Int32(Some(123)),
         );
         expect_no_comparison_unwrap(
             ScalarValue::Int64(Some(123)),
@@ -976,19 +745,17 @@ mod tests {
             DataType::Float32,
         );
 
-        expect_comparison_unwrap_with_op(
+        expect_no_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("123".to_string())),
             DataType::Int32,
             DataType::Utf8,
             Operator::Eq,
-            ScalarValue::Int32(Some(123)),
         );
-        expect_comparison_unwrap_with_op(
+        expect_no_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("123".to_string())),
             DataType::Int32,
             DataType::Utf8,
             Operator::IsNotDistinctFrom,
-            ScalarValue::Int32(Some(123)),
         );
         expect_no_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("0123".to_string())),
@@ -1011,37 +778,21 @@ mod tests {
     }
 
     #[test]
-    fn test_temporal_precision_downcast_guard() {
-        // Lock precision guard behavior for temporal types not yet unwrap-supported.
-        assert!(is_temporal_precision_downcast(
-            &DataType::Duration(TimeUnit::Nanosecond),
-            &DataType::Duration(TimeUnit::Millisecond)
+    fn test_comparison_unwrap_cast_allowlist() {
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        assert!(is_supported_comparison_unwrap_cast(&ts_ms, &ts_ns));
+        assert!(!is_supported_comparison_unwrap_cast(&ts_ns, &ts_ms));
+
+        let utc = Some("+0:00".into());
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, utc)
         ));
-        assert!(!is_temporal_precision_downcast(
+
+        assert!(!is_supported_comparison_unwrap_cast(
             &DataType::Duration(TimeUnit::Millisecond),
             &DataType::Duration(TimeUnit::Nanosecond)
-        ));
-
-        assert!(is_temporal_precision_downcast(
-            &DataType::Time32(TimeUnit::Millisecond),
-            &DataType::Time32(TimeUnit::Second)
-        ));
-        assert!(!is_temporal_precision_downcast(
-            &DataType::Time32(TimeUnit::Second),
-            &DataType::Time64(TimeUnit::Microsecond)
-        ));
-
-        assert!(is_temporal_precision_downcast(
-            &DataType::Time64(TimeUnit::Nanosecond),
-            &DataType::Time32(TimeUnit::Millisecond)
-        ));
-        assert!(is_temporal_precision_downcast(
-            &DataType::Time64(TimeUnit::Nanosecond),
-            &DataType::Time64(TimeUnit::Microsecond)
-        ));
-        assert!(!is_temporal_precision_downcast(
-            &DataType::Time64(TimeUnit::Microsecond),
-            &DataType::Time64(TimeUnit::Nanosecond)
         ));
     }
 
