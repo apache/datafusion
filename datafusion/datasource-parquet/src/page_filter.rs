@@ -579,7 +579,7 @@ mod tests {
 
     use super::*;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{Expr, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use parquet::arrow::ArrowSchemaConverter;
@@ -591,139 +591,55 @@ mod tests {
 
     #[test]
     fn page_pruning_ignores_unsigned_stats_without_column_order() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
+        let schema = test_schema(DataType::UInt32);
         let parquet_metadata = unsigned_page_index_metadata(Arc::clone(&schema));
 
-        let predicate = logical2physical(&col("c1").eq(lit(0u32)), &schema);
-        let page_filter =
-            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
-
-        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
-        let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
-        let access_plan = page_filter.prune_plan_with_page_index(
-            ParquetAccessPlan::new_all(1),
-            &schema,
-            parquet_metadata.file_metadata().schema_descr(),
-            &parquet_metadata,
-            &file_metrics,
-        );
-
-        assert!(access_plan.should_scan(0));
+        assert_page_pruning(&schema, &parquet_metadata, &col("c1").eq(lit(0u32)), true);
     }
 
     #[test]
     fn page_pruning_uses_unsigned_stats_with_column_order() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
+        let schema = test_schema(DataType::UInt32);
         let parquet_metadata = page_index_metadata(
             Arc::clone(&schema),
             PhysicalType::INT32,
             1i32.to_le_bytes().to_vec(),
             10i32.to_le_bytes().to_vec(),
-            Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)]),
+            Some(column_orders(SortOrder::UNSIGNED)),
         );
 
-        let predicate = logical2physical(&col("c1").gt(lit(15u32)), &schema);
-        let page_filter =
-            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
-
-        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
-        let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
-        let access_plan = page_filter.prune_plan_with_page_index(
-            ParquetAccessPlan::new_all(1),
-            &schema,
-            parquet_metadata.file_metadata().schema_descr(),
-            &parquet_metadata,
-            &file_metrics,
-        );
-
-        assert!(!access_plan.should_scan(0));
+        assert_page_pruning(&schema, &parquet_metadata, &col("c1").gt(lit(15u32)), false);
     }
 
-    #[test]
-    fn page_pruning_ignores_unsigned_stats_with_mismatched_column_order() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
-        let parquet_metadata = page_index_metadata(
-            Arc::clone(&schema),
-            PhysicalType::INT32,
-            (-1i32).to_le_bytes().to_vec(),
-            0i32.to_le_bytes().to_vec(),
-            Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)]),
-        );
-
-        let predicate = logical2physical(&col("c1").eq(lit(0u32)), &schema);
-        let page_filter =
-            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
-
-        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
-        let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
-        let access_plan = page_filter.prune_plan_with_page_index(
-            ParquetAccessPlan::new_all(1),
-            &schema,
-            parquet_metadata.file_metadata().schema_descr(),
-            &parquet_metadata,
-            &file_metrics,
-        );
-
-        assert!(access_plan.should_scan(0));
+    fn test_schema(data_type: DataType) -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("c1", data_type, false)]))
     }
 
-    #[test]
-    fn page_pruning_ignores_string_stats_without_column_order() {
-        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
-        let parquet_metadata = page_index_metadata(
-            Arc::clone(&schema),
-            PhysicalType::BYTE_ARRAY,
-            b"a".to_vec(),
-            b"m".to_vec(),
-            None,
-        );
-
-        let predicate = logical2physical(&col("c1").eq(lit("z")), &schema);
-        let page_filter =
-            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
-
-        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
-        let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
-        let access_plan = page_filter.prune_plan_with_page_index(
-            ParquetAccessPlan::new_all(1),
-            &schema,
-            parquet_metadata.file_metadata().schema_descr(),
-            &parquet_metadata,
-            &file_metrics,
-        );
-
-        assert!(access_plan.should_scan(0));
+    fn column_orders(sort_order: SortOrder) -> Vec<ColumnOrder> {
+        vec![ColumnOrder::TYPE_DEFINED_ORDER(sort_order)]
     }
 
-    #[test]
-    fn page_pruning_uses_string_stats_with_column_order() {
-        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
-        let parquet_metadata = page_index_metadata(
-            Arc::clone(&schema),
-            PhysicalType::BYTE_ARRAY,
-            b"a".to_vec(),
-            b"m".to_vec(),
-            Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)]),
-        );
-
-        let predicate = logical2physical(&col("c1").eq(lit("z")), &schema);
+    fn assert_page_pruning(
+        schema: &SchemaRef,
+        parquet_metadata: &ParquetMetaData,
+        predicate: &Expr,
+        expected_should_scan: bool,
+    ) {
+        let predicate = logical2physical(predicate, schema);
         let page_filter =
-            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(&schema));
+            PagePruningAccessPlanFilter::new(&predicate, Arc::clone(schema));
 
         let metrics = Arc::new(ExecutionPlanMetricsSet::new());
         let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
         let access_plan = page_filter.prune_plan_with_page_index(
             ParquetAccessPlan::new_all(1),
-            &schema,
+            schema,
             parquet_metadata.file_metadata().schema_descr(),
-            &parquet_metadata,
+            parquet_metadata,
             &file_metrics,
         );
 
-        assert!(!access_plan.should_scan(0));
+        assert_eq!(access_plan.should_scan(0), expected_should_scan);
     }
 
     fn unsigned_page_index_metadata(schema: SchemaRef) -> ParquetMetaData {

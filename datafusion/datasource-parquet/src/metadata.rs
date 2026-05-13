@@ -918,7 +918,7 @@ mod tests {
         let schema = test_schema(DataType::UInt32);
         let statistics = parquet_file_statistics(
             &schema,
-            ParquetStatistics::int32(Some(-1), Some(0), None, Some(0), true),
+            ParquetStatistics::int32(Some(-1), Some(0), None, Some(0), false),
             None,
         );
 

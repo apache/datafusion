@@ -774,7 +774,7 @@ mod tests {
     use crate::reader::ParquetFileReader;
 
     use arrow::datatypes::DataType::Decimal128;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_expr::{Expr, cast, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -891,200 +891,35 @@ mod tests {
 
     #[test]
     fn row_group_pruning_uses_unsigned_stats_with_matching_column_order() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
-        let expr = logical2physical(&col("c1").gt(lit(15u32)), &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-
-        let schema_descr =
-            Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap());
-        let rgm = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::int32(
-                Some(1),
-                Some(10),
-                None,
-                Some(0),
-                false,
-            )],
+        assert_single_column_row_group_pruning(
+            DataType::UInt32,
+            &col("c1").gt(lit(15u32)),
+            vec![int32_statistics(1, 10, false)],
+            Some(SortOrder::UNSIGNED),
+            ExpectedPruning::All,
         );
-        let column_orders = vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)];
-
-        let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
-        row_groups.prune_by_statistics_with_column_orders(
-            &schema,
-            &schema_descr,
-            &[rgm],
-            &pruning_predicate,
-            Some(&column_orders),
-            &metrics,
-        );
-        assert_pruned(row_groups, ExpectedPruning::All);
     }
 
     #[test]
     fn row_group_pruning_ignores_unsigned_stats_without_column_order() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
-        let expr = logical2physical(&col("c1").eq(lit(0u32)), &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-
-        let schema_descr =
-            Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap());
-        let rgm = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::int32(
-                Some(-1),
-                Some(0),
-                None,
-                Some(0),
-                true,
-            )],
+        assert_single_column_row_group_pruning(
+            DataType::UInt32,
+            &col("c1").eq(lit(0u32)),
+            vec![int32_statistics(-1, 0, false)],
+            None,
+            ExpectedPruning::None,
         );
-
-        let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
-        row_groups.prune_by_statistics(
-            &schema,
-            &schema_descr,
-            &[rgm],
-            &pruning_predicate,
-            &metrics,
-        );
-        assert_pruned(row_groups, ExpectedPruning::None);
-    }
-
-    #[test]
-    fn row_group_pruning_ignores_string_stats_without_column_order() {
-        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
-        let expr = logical2physical(&col("c1").eq(lit("z")), &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-
-        let schema_descr =
-            Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap());
-        let rgm = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::byte_array(
-                Some(ByteArray::from("a".as_bytes().to_vec())),
-                Some(ByteArray::from("m".as_bytes().to_vec())),
-                None,
-                Some(0),
-                false,
-            )],
-        );
-
-        let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
-        row_groups.prune_by_statistics(
-            &schema,
-            &schema_descr,
-            &[rgm],
-            &pruning_predicate,
-            &metrics,
-        );
-        assert_pruned(row_groups, ExpectedPruning::None);
-    }
-
-    #[test]
-    fn row_group_pruning_uses_string_stats_with_column_order() {
-        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
-        let expr = logical2physical(&col("c1").eq(lit("z")), &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-
-        let schema_descr =
-            Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap());
-        let rgm = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::byte_array(
-                Some(ByteArray::from("a".as_bytes().to_vec())),
-                Some(ByteArray::from("m".as_bytes().to_vec())),
-                None,
-                Some(0),
-                false,
-            )],
-        );
-        let column_orders = vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)];
-
-        let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
-        row_groups.prune_by_statistics_with_column_orders(
-            &schema,
-            &schema_descr,
-            &[rgm],
-            &pruning_predicate,
-            Some(&column_orders),
-            &metrics,
-        );
-        assert_pruned(row_groups, ExpectedPruning::All);
-    }
-
-    #[test]
-    fn row_group_pruning_ignores_unsigned_stats_with_mismatched_column_order() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
-        let expr = logical2physical(&col("c1").eq(lit(0u32)), &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-
-        let schema_descr =
-            Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap());
-        let rgm = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::int32(
-                Some(-1),
-                Some(0),
-                None,
-                Some(0),
-                false,
-            )],
-        );
-        let column_orders = vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)];
-
-        let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
-        row_groups.prune_by_statistics_with_column_orders(
-            &schema,
-            &schema_descr,
-            &[rgm],
-            &pruning_predicate,
-            Some(&column_orders),
-            &metrics,
-        );
-        assert_pruned(row_groups, ExpectedPruning::None);
     }
 
     #[test]
     fn row_group_pruning_ignores_deprecated_unsigned_stats_with_column_order() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, false)]));
-        let expr = logical2physical(&col("c1").eq(lit(0u32)), &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-
-        let schema_descr =
-            Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap());
-        let rgm = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::int32(
-                Some(-1),
-                Some(0),
-                None,
-                Some(0),
-                true,
-            )],
+        assert_single_column_row_group_pruning(
+            DataType::UInt32,
+            &col("c1").eq(lit(0u32)),
+            vec![int32_statistics(-1, 0, true)],
+            Some(SortOrder::UNSIGNED),
+            ExpectedPruning::None,
         );
-        let column_orders = vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)];
-
-        let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
-        row_groups.prune_by_statistics_with_column_orders(
-            &schema,
-            &schema_descr,
-            &[rgm],
-            &pruning_predicate,
-            Some(&column_orders),
-            &metrics,
-        );
-        assert_pruned(row_groups, ExpectedPruning::None);
     }
 
     #[test]
@@ -1093,30 +928,16 @@ mod tests {
             Field::new("c1", DataType::UInt32, false),
             Field::new("c2", DataType::Int32, false),
         ]));
-        let expr = col("c1").eq(lit(0u32)).and(col("c2").gt(lit(15)));
-        let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-
-        let schema_descr =
-            Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap());
-        let rgm = get_row_group_meta_data(
-            &schema_descr,
-            vec![
-                ParquetStatistics::int32(Some(-1), Some(0), None, Some(0), true),
-                ParquetStatistics::int32(Some(1), Some(10), None, Some(0), false),
-            ],
-        );
-
-        let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
-        row_groups.prune_by_statistics(
+        assert_row_group_pruning(
             &schema,
-            &schema_descr,
-            &[rgm],
-            &pruning_predicate,
-            &metrics,
+            &col("c1").eq(lit(0u32)).and(col("c2").gt(lit(15))),
+            vec![
+                int32_statistics(-1, 0, true),
+                int32_statistics(1, 10, false),
+            ],
+            None,
+            ExpectedPruning::All,
         );
-        assert_pruned(row_groups, ExpectedPruning::All);
     }
 
     #[test]
@@ -1789,6 +1610,84 @@ mod tests {
             &metrics,
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
+    }
+
+    fn test_schema(data_type: DataType) -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("c1", data_type, false)]))
+    }
+
+    fn type_defined_column_orders(sort_order: SortOrder) -> Vec<ColumnOrder> {
+        vec![ColumnOrder::TYPE_DEFINED_ORDER(sort_order)]
+    }
+
+    fn int32_statistics(
+        min: i32,
+        max: i32,
+        is_min_max_deprecated: bool,
+    ) -> ParquetStatistics {
+        ParquetStatistics::int32(
+            Some(min),
+            Some(max),
+            None,
+            Some(0),
+            is_min_max_deprecated,
+        )
+    }
+
+    fn assert_single_column_row_group_pruning(
+        data_type: DataType,
+        predicate: &Expr,
+        column_statistics: Vec<ParquetStatistics>,
+        column_order: Option<SortOrder>,
+        expected: ExpectedPruning,
+    ) {
+        let schema = test_schema(data_type);
+        assert_row_group_pruning(
+            &schema,
+            predicate,
+            column_statistics,
+            column_order,
+            expected,
+        );
+    }
+
+    fn assert_row_group_pruning(
+        schema: &SchemaRef,
+        predicate: &Expr,
+        column_statistics: Vec<ParquetStatistics>,
+        column_order: Option<SortOrder>,
+        expected: ExpectedPruning,
+    ) {
+        let expr = logical2physical(predicate, schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::clone(schema)).unwrap();
+        let schema_descr = Arc::new(ArrowSchemaConverter::new().convert(schema).unwrap());
+        let row_group_metadata =
+            vec![get_row_group_meta_data(&schema_descr, column_statistics)];
+        let metrics = parquet_file_metrics();
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
+        let column_orders = column_order.map(type_defined_column_orders);
+
+        if let Some(column_orders) = column_orders.as_deref() {
+            row_groups.prune_by_statistics_with_column_orders(
+                schema,
+                &schema_descr,
+                &row_group_metadata,
+                &pruning_predicate,
+                Some(column_orders),
+                &metrics,
+            );
+        } else {
+            row_groups.prune_by_statistics(
+                schema,
+                &schema_descr,
+                &row_group_metadata,
+                &pruning_predicate,
+                &metrics,
+            );
+        }
+
+        assert_pruned(row_groups, expected);
     }
 
     fn get_row_group_meta_data(

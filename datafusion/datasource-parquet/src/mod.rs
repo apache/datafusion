@@ -89,3 +89,53 @@ pub(crate) fn can_use_min_max_statistics(
 
     actual_order.is_some_and(|actual_order| actual_order == expected_order)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use parquet::arrow::ArrowSchemaConverter;
+
+    #[test]
+    fn min_max_statistics_require_matching_column_order() {
+        let signed_schema = test_schema(DataType::Int32);
+        let unsigned_schema = test_schema(DataType::UInt32);
+        let string_schema = test_schema(DataType::Utf8);
+
+        assert!(can_use_min_max_statistics(&signed_schema, 0, None, false));
+        assert!(!can_use_min_max_statistics(
+            &unsigned_schema,
+            0,
+            None,
+            false
+        ));
+        assert!(can_use_min_max_statistics(
+            &unsigned_schema,
+            0,
+            Some(&column_orders(SortOrder::UNSIGNED)),
+            false
+        ));
+        assert!(!can_use_min_max_statistics(
+            &unsigned_schema,
+            0,
+            Some(&column_orders(SortOrder::SIGNED)),
+            false
+        ));
+        assert!(!can_use_min_max_statistics(
+            &unsigned_schema,
+            0,
+            Some(&column_orders(SortOrder::UNSIGNED)),
+            true
+        ));
+        assert!(!can_use_min_max_statistics(&string_schema, 0, None, false));
+    }
+
+    fn test_schema(data_type: DataType) -> SchemaDescriptor {
+        let schema = Schema::new(vec![Field::new("c1", data_type, false)]);
+        ArrowSchemaConverter::new().convert(&schema).unwrap()
+    }
+
+    fn column_orders(sort_order: SortOrder) -> Vec<ColumnOrder> {
+        vec![ColumnOrder::TYPE_DEFINED_ORDER(sort_order)]
+    }
+}
