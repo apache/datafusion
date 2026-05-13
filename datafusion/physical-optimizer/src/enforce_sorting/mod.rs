@@ -15,25 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! EnforceSorting optimizer rule inspects the physical plan with respect
-//! to local sorting requirements and does the following:
+//! Sort enforcement helpers. The standalone `EnforceSorting` rule that
+//! previously lived here has been retired in favour of `EnsureRequirements`
+//! (which composes distribution and sorting enforcement into a single
+//! idempotent pass). The helpers in this module — `ensure_sorting`,
+//! `parallelize_sorts`, `PlanWithCorrespondingSort`, and the submodules
+//! `replace_with_order_preserving_variants` and `sort_pushdown` — are
+//! used directly by `EnsureRequirements`.
+//!
+//! Sort enforcement inspects the physical plan with respect to local
+//! sorting requirements and does the following:
 //! - Adds a [`SortExec`] when a requirement is not met,
 //! - Removes an already-existing [`SortExec`] if it is possible to prove
 //!   that this sort is unnecessary
 //!
-//! The rule can work on valid *and* invalid physical plans with respect to
-//! sorting requirements, but always produces a valid physical plan in this sense.
+//! The helpers can work on valid *and* invalid physical plans with respect
+//! to sorting requirements, but always produce a valid plan in this sense.
 //!
-//! A non-realistic but easy to follow example for sort removals: Assume that we
-//! somehow get the fragment
+//! A non-realistic but easy to follow example for sort removals: assume the
+//! fragment
 //!
 //! ```text
 //! SortExec: expr=[nullable_col@0 ASC]
 //!   SortExec: expr=[non_nullable_col@1 ASC]
 //! ```
 //!
-//! in the physical plan. The first sort is unnecessary since its result is overwritten
-//! by another [`SortExec`]. Therefore, this rule removes it from the physical plan.
+//! reaches this stage. The first sort is unnecessary since its result is
+//! overwritten by another [`SortExec`], so it is removed.
 
 pub mod replace_with_order_preserving_variants;
 pub mod sort_pushdown;
@@ -71,7 +79,7 @@ use itertools::izip;
 // `parallelize_sorts`, `PlanWithCorrespondingSort`, etc.) remain —
 // `EnsureRequirements` calls into them directly.
 
-/// This context object was originally used within the `EnforceSorting` rule to track the closest
+/// Context object used by sort enforcement to track the closest
 /// [`SortExec`] descendant(s) for every child of a plan. The data attribute
 /// stores whether the plan is a `SortExec` or is connected to a `SortExec`
 /// via its children.
@@ -121,7 +129,7 @@ fn update_sort_ctx_children_data(
     Ok(node_and_ctx)
 }
 
-/// This object is used within the [`EnforceSorting`] rule to track the closest
+/// Tracks the closest
 /// [`CoalescePartitionsExec`] descendant(s) for every child of a plan. The data
 /// attribute stores whether the plan is a `CoalescePartitionsExec` or is
 /// connected to a `CoalescePartitionsExec` via its children.

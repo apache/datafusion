@@ -1637,7 +1637,7 @@ mod tests {
         assert_idempotent(limit);
     }
 
-    /// EnforceDistribution::optimize twice on a HashJoinExec plan must produce
+    /// EnsureRequirements applied twice on a HashJoinExec plan must produce
     /// identical plans. Tests that hash distribution enforcement is stable.
     #[test]
     fn test_enforce_distribution_idempotent_hash_join() {
@@ -1667,10 +1667,10 @@ mod tests {
         let config = ConfigOptions::default();
         let p1 = EnsureRequirements::new()
             .optimize(Arc::clone(&join), &config)
-            .expect("first EnforceDistribution failed");
+            .expect("first EnsureRequirements pass failed");
         let p2 = EnsureRequirements::new()
             .optimize(Arc::clone(&p1), &config)
-            .expect("second EnforceDistribution failed");
+            .expect("second EnsureRequirements pass failed");
 
         let s1 = datafusion_physical_plan::displayable(p1.as_ref())
             .indent(true)
@@ -1681,7 +1681,7 @@ mod tests {
 
         assert_eq!(
             s1, s2,
-            "EnforceDistribution not idempotent for HashJoinExec!\nPass 1:\n{s1}\nPass 2:\n{s2}"
+            "EnsureRequirements not idempotent for HashJoinExec!\nPass 1:\n{s1}\nPass 2:\n{s2}"
         );
     }
 
