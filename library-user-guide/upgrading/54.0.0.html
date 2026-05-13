@@ -975,6 +975,53 @@ allocation-free variant:</p>
 </pre></div>
 </div>
 </section>
+<section id="memorypool-now-requires-static-adds-any-as-a-supertrait">
+<h3><code class="docutils literal notranslate"><span class="pre">MemoryPool</span></code> now requires <code class="docutils literal notranslate"><span class="pre">'static</span></code> (adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait)<a class="headerlink" href="#memorypool-now-requires-static-adds-any-as-a-supertrait" title="Link to this heading">#</a></h3>
+<p>To enable downcasting of <code class="docutils literal notranslate"><span class="pre">dyn</span> <span class="pre">MemoryPool</span></code> to concrete pool types (via
+<code class="docutils literal notranslate"><span class="pre">is::&lt;T&gt;()</span></code> / <code class="docutils literal notranslate"><span class="pre">downcast_ref::&lt;T&gt;()</span></code>), the <code class="docutils literal notranslate"><span class="pre">MemoryPool</span></code> trait now has <code class="docutils literal notranslate"><span class="pre">Any</span></code>
+as a supertrait:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">MemoryPool</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Sync</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">fmt</span><span class="p">::</span><span class="n">Debug</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Display</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+
+<span class="c1">// After</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">MemoryPool</span><span class="p">:</span><span class="w"> </span><span class="nc">Any</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Sync</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">fmt</span><span class="p">::</span><span class="n">Debug</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Display</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+</pre></div>
+</div>
+<p>Because <code class="docutils literal notranslate"><span class="pre">Any</span></code> is only implemented for <code class="docutils literal notranslate"><span class="pre">'static</span></code> types, this implicitly adds a
+<code class="docutils literal notranslate"><span class="pre">'static</span></code> bound to every <code class="docutils literal notranslate"><span class="pre">MemoryPool</span></code> implementor.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who implement a custom <code class="docutils literal notranslate"><span class="pre">MemoryPool</span></code> whose type carries a lifetime
+parameter or borrows state (e.g. <code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">MyPool&lt;'a&gt;</span> <span class="pre">{</span> <span class="pre">inner:</span> <span class="pre">&amp;'a</span> <span class="pre">State</span> <span class="pre">}</span></code>).
+Existing implementations that are already <code class="docutils literal notranslate"><span class="pre">'static</span></code> (the common case) need
+no changes.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Replace borrowed references with owned handles so the pool type becomes
+<code class="docutils literal notranslate"><span class="pre">'static</span></code>. The typical fix is to swap <code class="docutils literal notranslate"><span class="pre">&amp;'a</span> <span class="pre">T</span></code> for <code class="docutils literal notranslate"><span class="pre">Arc&lt;T&gt;</span></code> (or <code class="docutils literal notranslate"><span class="pre">Rc&lt;T&gt;</span></code>, or an
+owned value):</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before — not &#39;static, no longer compiles</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyPool</span><span class="o">&lt;&#39;</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="o">&#39;</span><span class="na">a</span><span class="w"> </span><span class="nc">SomeState</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;&#39;</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryPool</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyPool</span><span class="o">&lt;&#39;</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+
+<span class="c1">// After — owned handle makes MyPool: &#39;static</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyPool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">SomeState</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">MemoryPool</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyPool</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+</pre></div>
+</div>
+<p>If the borrowed state truly cannot be made <code class="docutils literal notranslate"><span class="pre">'static</span></code>, you can wrap the
+borrowed pool in a <code class="docutils literal notranslate"><span class="pre">'static</span></code> adapter that the pool consumer owns — for
+example, store the underlying state in an <code class="docutils literal notranslate"><span class="pre">Arc</span></code> owned by the adapter, or
+move the borrow behind an interior-mutability primitive such as <code class="docutils literal notranslate"><span class="pre">Arc&lt;Mutex&lt;_&gt;&gt;</span></code>
+or <code class="docutils literal notranslate"><span class="pre">Arc&lt;OnceLock&lt;_&gt;&gt;</span></code>.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/21803">PR #21803</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -1046,6 +1093,7 @@ allocation-free variant:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partitionedfile-extensions-is-now-a-type-keyed-map"><code class="docutils literal notranslate"><span class="pre">PartitionedFile::extensions</span></code> is now a type-keyed map</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#arrays-zip-struct-field-names-changed"><code class="docutils literal notranslate"><span class="pre">arrays_zip</span></code> struct field names changed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default"><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#memorypool-now-requires-static-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">MemoryPool</span></code> now requires <code class="docutils literal notranslate"><span class="pre">'static</span></code> (adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait)</a></li>
 </ul>
 </li>
 </ul>
