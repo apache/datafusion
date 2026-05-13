@@ -354,6 +354,7 @@ impl LogicalPlan {
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
+                // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
             }
         }
@@ -1079,12 +1080,12 @@ impl LogicalPlan {
             }) => {
                 self.assert_no_expressions(expr)?;
                 let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery::try_new(
-                    name.clone(),
-                    Arc::new(static_term),
-                    Arc::new(recursive_term),
-                    *is_distinct,
-                )?))
+                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
+                    name: name.clone(),
+                    static_term: Arc::new(static_term),
+                    recursive_term: Arc::new(recursive_term),
+                    is_distinct: *is_distinct,
+                }))
             }
             LogicalPlan::Analyze(a) => {
                 self.assert_no_expressions(expr)?;
@@ -2245,7 +2246,7 @@ impl PartialOrd for EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -2257,112 +2258,6 @@ pub struct RecursiveQuery {
     /// Should the output of the recursive term be deduplicated (`UNION`) or
     /// not (`UNION ALL`).
     pub is_distinct: bool,
-}
-
-impl RecursiveQuery {
-    /// Create a recursive query with an output schema using static term field names
-    /// and nullability widened across both static and recursive terms.
-    pub fn try_new(
-        name: String,
-        static_term: Arc<LogicalPlan>,
-        recursive_term: Arc<LogicalPlan>,
-        is_distinct: bool,
-    ) -> Result<Self> {
-        let schema =
-            recursive_query_schema(static_term.schema(), recursive_term.schema())?;
-        let static_term = align_logical_plan_to_schema(static_term, schema)?;
-        Ok(Self {
-            name,
-            static_term,
-            recursive_term,
-            is_distinct,
-        })
-    }
-}
-
-fn align_logical_plan_to_schema(
-    input: Arc<LogicalPlan>,
-    schema: DFSchemaRef,
-) -> Result<Arc<LogicalPlan>> {
-    if input.schema().as_ref() == schema.as_ref() {
-        return Ok(input);
-    }
-
-    let expr = input
-        .schema()
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(i, _)| Expr::Column(Column::from(input.schema().qualified_field(i))))
-        .collect();
-    Ok(Arc::new(LogicalPlan::Projection(
-        Projection::try_new_with_schema(expr, input, schema)?,
-    )))
-}
-
-fn recursive_query_schema(
-    static_schema: &DFSchema,
-    recursive_schema: &DFSchema,
-) -> Result<DFSchemaRef> {
-    if static_schema.fields().len() != recursive_schema.fields().len() {
-        return plan_err!(
-            "RecursiveQuery static and recursive terms have different number of columns: {} != {}",
-            static_schema.fields().len(),
-            recursive_schema.fields().len()
-        );
-    }
-
-    let fields = static_schema
-        .fields()
-        .iter()
-        .zip(recursive_schema.fields().iter())
-        .enumerate()
-        .map(|(i, (static_field, recursive_field))| {
-            if static_field.data_type() != recursive_field.data_type() {
-                return plan_err!(
-                    "RecursiveQuery column {i} has different types: static term has {} whereas recursive term has {}",
-                    static_field.data_type(),
-                    recursive_field.data_type()
-                );
-            }
-            // Field names and qualifiers always come from the static/anchor term so
-            // that recursive-term column names never leak into the declared CTE schema.
-            let (qualifier, _) = static_schema.qualified_field(i);
-            let field = Field::new(
-                static_field.name(),
-                static_field.data_type().clone(),
-                // Nullability is widened (union-like) across both terms so that a
-                // nullable recursive expression does not force a runtime error when
-                // the anchor is non-nullable (e.g. `SELECT 0 AS level`).
-                static_field.is_nullable() || recursive_field.is_nullable(),
-            )
-            .with_metadata(static_field.metadata().clone());
-            Ok((qualifier.cloned(), Arc::new(field)))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(Arc::new(DFSchema::new_with_metadata(
-        fields,
-        static_schema.metadata().clone(),
-    )?))
-}
-
-impl PartialOrd for RecursiveQuery {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        (
-            &self.name,
-            &self.static_term,
-            &self.recursive_term,
-            self.is_distinct,
-        )
-            .partial_cmp(&(
-                &other.name,
-                &other.static_term,
-                &other.recursive_term,
-                other.is_distinct,
-            ))
-            .filter(|cmp| *cmp != Ordering::Equal || self == other)
-    }
 }
 
 /// Values expression. See
@@ -4974,72 +4869,6 @@ mod tests {
         ]
         "#
         );
-    }
-
-    fn empty_plan_with_fields(fields: Vec<Field>) -> Arc<LogicalPlan> {
-        Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
-            produce_one_row: false,
-            schema: Arc::new(
-                DFSchema::from_unqualified_fields(fields.into(), HashMap::new()).unwrap(),
-            ),
-        }))
-    }
-
-    #[test]
-    fn recursive_query_try_new_aligns_static_term_to_widened_schema() -> Result<()> {
-        let static_term =
-            empty_plan_with_fields(vec![Field::new("a", DataType::Int32, false)]);
-        let recursive_term =
-            empty_plan_with_fields(vec![Field::new("b", DataType::Int32, true)]);
-
-        let query = RecursiveQuery::try_new(
-            "t".to_string(),
-            Arc::clone(&static_term),
-            Arc::clone(&recursive_term),
-            false,
-        )?;
-
-        assert_eq!(query.static_term.schema().field(0).name(), "a");
-        assert!(query.static_term.schema().field(0).is_nullable());
-        assert!(matches!(
-            query.static_term.as_ref(),
-            LogicalPlan::Projection(_)
-        ));
-        assert!(
-            Arc::ptr_eq(&query.recursive_term, &recursive_term),
-            "recursive term should not be wrapped in a schema-only Projection"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn recursive_query_try_new_rejects_mismatched_column_count() {
-        let static_term =
-            empty_plan_with_fields(vec![Field::new("a", DataType::Int32, false)]);
-        let recursive_term = empty_plan_with_fields(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]);
-
-        let err =
-            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)
-                .unwrap_err();
-
-        assert_snapshot!(err.strip_backtrace(), @"Error during planning: RecursiveQuery static and recursive terms have different number of columns: 1 != 2");
-    }
-
-    #[test]
-    fn recursive_query_try_new_rejects_mismatched_types() {
-        let static_term =
-            empty_plan_with_fields(vec![Field::new("a", DataType::Int32, false)]);
-        let recursive_term =
-            empty_plan_with_fields(vec![Field::new("a", DataType::Int64, false)]);
-
-        let err =
-            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)
-                .unwrap_err();
-
-        assert_snapshot!(err.strip_backtrace(), @"Error during planning: RecursiveQuery column 0 has different types: static term has Int32 whereas recursive term has Int64");
     }
 
     #[test]

@@ -81,13 +81,7 @@ pub struct RecursiveQueryExec {
 }
 
 impl RecursiveQueryExec {
-    /// Create a new [`RecursiveQueryExec`] deriving the output schema from the
-    /// physical children.
-    ///
-    /// This constructor is retained for backward compatibility. Planner-created
-    /// recursive CTEs should use [`Self::try_new_with_schema`] with the logical
-    /// recursive CTE schema, which can widen nullability across the static and
-    /// recursive terms.
+    /// Create a new RecursiveQueryExec
     pub fn try_new(
         name: String,
         static_term: Arc<dyn ExecutionPlan>,
@@ -96,73 +90,13 @@ impl RecursiveQueryExec {
     ) -> Result<Self> {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
-        // Preserve the legacy constructor behavior by deriving the output schema
-        // from the physical children.
-        let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        let output_schema = recursive_query_output_schema(
-            &static_term.schema(),
-            &recursive_term.schema(),
-        )?;
+        // Use the same work table for both the WorkTableExec and the recursive term
+        let output_schema =
+            recursive_output_schema(&static_term.schema(), &recursive_term.schema());
         let static_term = project_plan_to_schema(static_term, &output_schema)?;
-        let recursive_term = project_plan_to_schema(recursive_term, &output_schema)?;
-        Self::try_new_with_work_table(
-            name,
-            work_table,
-            static_term,
-            recursive_term,
-            &output_schema,
-            is_distinct,
-        )
-    }
-
-    /// Create a new [`RecursiveQueryExec`] with an explicit output schema.
-    ///
-    /// The supplied `output_schema` is authoritative. Both the static term and
-    /// recursive term are aligned to this schema at plan construction time. Use
-    /// this constructor when the logical recursive CTE schema is known.
-    ///
-    /// Recursive CTE schema contract:
-    ///
-    /// * field names come from the static term;
-    /// * data types must be compatible across static and recursive terms;
-    /// * nullability is widened across both terms;
-    /// * metadata must remain consistent with the logical schema.
-    pub fn try_new_with_schema(
-        name: String,
-        static_term: Arc<dyn ExecutionPlan>,
-        recursive_term: Arc<dyn ExecutionPlan>,
-        output_schema: &SchemaRef,
-        is_distinct: bool,
-    ) -> Result<Self> {
-        // Each recursive query needs its own work table
-        let work_table = Arc::new(WorkTable::new(name.clone()));
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        // `output_schema` has already been widened for nullability at logical
-        // planning time, so `project_plan_to_schema` here only ever widens
-        // non-nullable → nullable (safe cast) or encounters equal-nullability
-        // fields.  It will never be asked to narrow a nullable input to a
-        // non-null expected field for a recursive CTE child.
-        let static_term = project_plan_to_schema(static_term, output_schema)?;
-        let recursive_term = project_plan_to_schema(recursive_term, output_schema)?;
-        Self::try_new_with_work_table(
-            name,
-            work_table,
-            static_term,
-            recursive_term,
-            output_schema,
-            is_distinct,
-        )
-    }
-
-    fn try_new_with_work_table(
-        name: String,
-        work_table: Arc<WorkTable>,
-        static_term: Arc<dyn ExecutionPlan>,
-        recursive_term: Arc<dyn ExecutionPlan>,
-        output_schema: &SchemaRef,
-        is_distinct: bool,
-    ) -> Result<Self> {
-        let cache = Self::compute_properties(Arc::clone(output_schema));
+        let recursive_term = project_plan_to_schema(recursive_term, &output_schema)?;
+        let cache = Self::compute_properties(output_schema);
         Ok(RecursiveQueryExec {
             name,
             static_term,
@@ -248,12 +182,10 @@ impl ExecutionPlan for RecursiveQueryExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let output_schema = self.schema();
-        RecursiveQueryExec::try_new_with_schema(
+        RecursiveQueryExec::try_new(
             self.name.clone(),
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
-            &output_schema,
             self.is_distinct,
         )
         .map(|e| Arc::new(e) as _)
@@ -438,46 +370,28 @@ impl RecursiveQueryStream {
     }
 }
 
-fn recursive_query_output_schema(
+fn recursive_output_schema(
     static_schema: &SchemaRef,
     recursive_schema: &SchemaRef,
-) -> Result<SchemaRef> {
-    if static_schema.fields().len() != recursive_schema.fields().len() {
-        return datafusion_common::plan_err!(
-            "RecursiveQueryExec static and recursive terms have different number of columns: {} != {}",
-            static_schema.fields().len(),
-            recursive_schema.fields().len()
-        );
-    }
-
+) -> SchemaRef {
     let fields = static_schema
         .fields()
         .iter()
-        .zip(recursive_schema.fields().iter())
-        .enumerate()
-        .map(|(i, (static_field, recursive_field))| {
-            if static_field.data_type() != recursive_field.data_type() {
-                return datafusion_common::plan_err!(
-                    "RecursiveQueryExec column {i} has different types: static term has {} whereas recursive term has {}",
-                    static_field.data_type(),
-                    recursive_field.data_type()
-                );
-            }
-            Ok(Arc::new(
-                Field::new(
-                    static_field.name(),
-                    static_field.data_type().clone(),
-                    static_field.is_nullable() || recursive_field.is_nullable(),
-                )
-                .with_metadata(static_field.metadata().clone()),
-            ))
+        .zip(recursive_schema.fields())
+        .map(|(static_field, recursive_field)| {
+            Field::new(
+                static_field.name(),
+                static_field.data_type().clone(),
+                static_field.is_nullable() || recursive_field.is_nullable(),
+            )
+            .with_metadata(static_field.metadata().clone())
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
-    Ok(Arc::new(Schema::new_with_metadata(
+    Arc::new(Schema::new_with_metadata(
         fields,
         static_schema.metadata().clone(),
-    )))
+    ))
 }
 
 fn assign_work_table(
@@ -610,43 +524,9 @@ mod tests {
     use crate::projection::ProjectionExec;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use std::collections::HashMap;
 
     fn empty_exec(fields: Vec<Field>) -> Arc<dyn ExecutionPlan> {
-        empty_exec_with_schema(Arc::new(Schema::new(fields)))
-    }
-
-    fn empty_exec_with_schema(schema: SchemaRef) -> Arc<dyn ExecutionPlan> {
-        Arc::new(EmptyExec::new(schema))
-    }
-
-    fn recursive_exec(
-        static_term: Arc<dyn ExecutionPlan>,
-        recursive_term: Arc<dyn ExecutionPlan>,
-    ) -> Result<RecursiveQueryExec> {
-        RecursiveQueryExec::try_new(
-            "numbers".to_string(),
-            static_term,
-            recursive_term,
-            false,
-        )
-    }
-
-    #[test]
-    fn recursive_query_exec_try_new_keeps_backward_compatible_default() -> Result<()> {
-        let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
-        let recursive_term =
-            empty_exec(vec![Field::new("value", DataType::Int32, false)]);
-
-        let exec = RecursiveQueryExec::try_new(
-            "numbers".to_string(),
-            Arc::clone(&static_term),
-            recursive_term,
-            false,
-        )?;
-
-        assert_eq!(exec.schema(), static_term.schema());
-        Ok(())
+        Arc::new(EmptyExec::new(Arc::new(Schema::new(fields))))
     }
 
     #[test]
@@ -655,7 +535,12 @@ mod tests {
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, false)]);
 
-        let exec = recursive_exec(Arc::clone(&static_term), Arc::clone(&recursive_term))?;
+        let exec = RecursiveQueryExec::try_new(
+            "numbers".to_string(),
+            Arc::clone(&static_term),
+            Arc::clone(&recursive_term),
+            false,
+        )?;
 
         assert_eq!(exec.schema(), static_term.schema());
         let projection = exec
@@ -669,100 +554,21 @@ mod tests {
     }
 
     #[test]
-    fn recursive_query_exec_widens_output_nullability_from_recursive_term() -> Result<()>
-    {
+    fn recursive_query_exec_reconciles_nullability() -> Result<()> {
         let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
 
-        let exec = recursive_exec(Arc::clone(&static_term), Arc::clone(&recursive_term))?;
-
-        let expected_schema = Arc::new(Schema::new(vec![Field::new(
-            "value",
-            DataType::Int32,
-            true,
-        )]));
-        assert_eq!(exec.schema(), expected_schema);
-        assert_eq!(exec.static_term().schema(), expected_schema);
-        assert_eq!(exec.recursive_term().schema(), expected_schema);
-        assert!(exec.schema().field(0).is_nullable());
-        Ok(())
-    }
-
-    #[test]
-    fn recursive_query_exec_with_schema_uses_declared_output_schema() -> Result<()> {
-        let static_term = empty_exec(vec![Field::new("anchor", DataType::Int32, false)]);
-        let recursive_term = empty_exec(vec![Field::new(
-            "anchor + Int32(1)",
-            DataType::Int32,
-            false,
-        )]);
-        let output_schema = Arc::new(Schema::new(vec![Field::new(
-            "declared",
-            DataType::Int32,
-            true,
-        )]));
-
-        let exec = RecursiveQueryExec::try_new_with_schema(
+        let exec = RecursiveQueryExec::try_new(
             "numbers".to_string(),
             static_term,
             recursive_term,
-            &output_schema,
             false,
         )?;
 
-        assert_eq!(exec.schema(), output_schema);
-        assert_eq!(exec.static_term().schema(), output_schema);
-        assert_eq!(exec.recursive_term().schema(), output_schema);
-        Ok(())
-    }
-
-    #[test]
-    fn recursive_query_exec_preserves_static_output_metadata() -> Result<()> {
-        let static_field =
-            Field::new("value", DataType::Int32, false).with_metadata(HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "only".to_string()),
-            ]));
-        let recursive_field =
-            Field::new("value", DataType::Int32, false).with_metadata(HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "only".to_string()),
-            ]));
-        let static_schema = Arc::new(Schema::new_with_metadata(
-            vec![static_field],
-            HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "only".to_string()),
-            ]),
-        ));
-        let recursive_schema = Arc::new(Schema::new_with_metadata(
-            vec![recursive_field],
-            HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "only".to_string()),
-            ]),
-        ));
-
-        let exec = recursive_exec(
-            empty_exec_with_schema(static_schema),
-            empty_exec_with_schema(recursive_schema),
-        )?;
-
-        assert_eq!(
-            exec.schema().field(0).metadata(),
-            &HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "only".to_string()),
-            ])
-        );
-        assert_eq!(
-            exec.schema().metadata(),
-            &HashMap::from([
-                ("shared".to_string(), "same".to_string()),
-                ("static".to_string(), "only".to_string()),
-            ])
-        );
+        assert!(exec.schema().field(0).is_nullable());
+        assert!(exec.static_term().schema().field(0).is_nullable());
+        assert!(exec.recursive_term().schema().field(0).is_nullable());
         Ok(())
     }
 }

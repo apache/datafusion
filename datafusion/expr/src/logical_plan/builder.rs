@@ -192,14 +192,12 @@ impl LogicalPlanBuilder {
         // Ensure that the recursive term has the same field types as the static term
         let coerced_recursive_term =
             coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
-        Ok(Self::from(LogicalPlan::RecursiveQuery(
-            RecursiveQuery::try_new(
-                name,
-                self.plan,
-                Arc::new(coerced_recursive_term),
-                is_distinct,
-            )?,
-        )))
+        Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
+            name,
+            static_term: self.plan,
+            recursive_term: Arc::new(coerced_recursive_term),
+            is_distinct,
+        })))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -2291,7 +2289,6 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::vec;
 
     use super::*;
@@ -2367,56 +2364,6 @@ mod tests {
           TableScan: employee_csv projection=[state, salary]
         ");
 
-        Ok(())
-    }
-
-    #[test]
-    fn recursive_query_schema_widens_nullability_from_recursive_term() -> Result<()> {
-        let static_term =
-            LogicalPlanBuilder::empty(true).project(vec![lit(0i32).alias("n")])?;
-        let recursive_term = LogicalPlanBuilder::empty(true)
-            .project(vec![lit(ScalarValue::Int32(None)).alias("recursive_n")])?
-            .build()?;
-
-        let plan = static_term
-            .to_recursive_query("t".to_string(), recursive_term, false)?
-            .build()?;
-
-        assert_eq!(plan.schema().field(0).name(), "n");
-        assert!(plan.schema().field(0).is_nullable());
-        Ok(())
-    }
-
-    #[test]
-    fn recursive_query_schema_preserves_static_metadata() -> Result<()> {
-        let static_metadata =
-            HashMap::from([("source".to_string(), "static".to_string())]);
-        let recursive_metadata =
-            HashMap::from([("source".to_string(), "recursive".to_string())]);
-        let static_schema = Schema::new_with_metadata(
-            vec![
-                Field::new("n", DataType::Int32, false)
-                    .with_metadata(static_metadata.clone()),
-            ],
-            static_metadata.clone(),
-        );
-        let recursive_schema = Schema::new_with_metadata(
-            vec![
-                Field::new("recursive_n", DataType::Int32, false)
-                    .with_metadata(recursive_metadata),
-            ],
-            HashMap::from([("source".to_string(), "recursive".to_string())]),
-        );
-
-        let static_term = table_scan(Some("static_t"), &static_schema, None)?;
-        let recursive_term =
-            table_scan(Some("recursive_t"), &recursive_schema, None)?.build()?;
-        let plan = static_term
-            .to_recursive_query("t".to_string(), recursive_term, false)?
-            .build()?;
-
-        assert_eq!(plan.schema().field(0).metadata(), &static_metadata);
-        assert_eq!(plan.schema().metadata(), &static_metadata);
         Ok(())
     }
 

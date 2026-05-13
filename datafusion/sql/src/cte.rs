@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     Result, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
@@ -133,10 +132,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // bound to.
 
         // ---------- Step 2: Create a temporary relation ------------------
-        // Step 2.1: Create a temporary relation logical plan that will be used
+        // Step 2.1: Create a table source for the temporary relation
+        let work_table_source = self
+            .context_provider
+            .create_cte_work_table(cte_name, Arc::clone(static_plan.schema().inner()))?;
+
+        // Step 2.2: Create a temporary relation logical plan that will be used
         // as the input to the recursive term
-        let (work_table_source, work_table_plan) =
-            self.cte_work_table_plan(cte_name, Arc::clone(static_plan.schema().inner()))?;
+        let work_table_plan = LogicalPlanBuilder::scan(
+            cte_name.to_string(),
+            Arc::clone(&work_table_source),
+            None,
+        )?
+        .build()?;
 
         let name = cte_name.to_string();
 
@@ -151,8 +159,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // this uses the named_relation we inserted above to resolve the
         // relation. This ensures that the recursive term uses the named relation logical plan
         // and thus the 'continuance' physical plan as its input and source
-        let recursive_plan =
-            self.set_expr_to_plan(*right_expr.clone(), planner_context)?;
+        let recursive_plan = self.set_expr_to_plan(*right_expr, planner_context)?;
 
         // Check if the recursive term references the CTE itself,
         // if not, it is a non-recursive CTE
@@ -169,47 +176,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         // ---------- Step 4: Create the final plan ------------------
-        // Step 4.1: Compile the final plan. The first plan only discovers the
-        // fixed recursive CTE output schema. Recursive CTE nullability is
-        // union-like, so the recursive term can widen the work table schema.
-        // Replan the recursive term with that widened schema so predicates such
-        // as `n IS NOT NULL` are not optimized using the anchor-only schema.
+        // Step 4.1: Compile the final plan
         let distinct = !Self::is_union_all(set_quantifier)?;
-        let initial_recursive_query = LogicalPlanBuilder::from(static_plan.clone())
-            .to_recursive_query(name.clone(), recursive_plan.clone(), distinct)?
-            .build()?;
-        if initial_recursive_query.schema() != static_plan.schema() {
-            let (_, work_table_plan) = self.cte_work_table_plan(
-                cte_name,
-                Arc::clone(initial_recursive_query.schema().inner()),
-            )?;
-            planner_context.insert_cte(cte_name.to_string(), work_table_plan);
-            let recursive_plan = self.set_expr_to_plan(*right_expr, planner_context)?;
-            planner_context.remove_cte(cte_name);
-            LogicalPlanBuilder::from(static_plan)
-                .to_recursive_query(name, recursive_plan, distinct)?
-                .build()
-        } else {
-            planner_context.remove_cte(cte_name);
-            Ok(initial_recursive_query)
-        }
-    }
-
-    fn cte_work_table_plan(
-        &self,
-        cte_name: &str,
-        schema: SchemaRef,
-    ) -> Result<(Arc<dyn TableSource>, LogicalPlan)> {
-        let work_table_source = self
-            .context_provider
-            .create_cte_work_table(cte_name, schema)?;
-        let work_table_plan = LogicalPlanBuilder::scan(
-            cte_name.to_string(),
-            Arc::clone(&work_table_source),
-            None,
-        )?
-        .build()?;
-        Ok((work_table_source, work_table_plan))
+        LogicalPlanBuilder::from(static_plan)
+            .to_recursive_query(name, recursive_plan, distinct)?
+            .build()
     }
 }
 

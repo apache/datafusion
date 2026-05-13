@@ -699,7 +699,7 @@ WITH RECURSIVE region_sales AS (
     SELECT
         s.salesperson_id AS salesperson_id,
         SUM(s.sale_amount) AS amount,
-        0 as level
+        SUM(0) as level
     FROM
         sales s
     GROUP BY
@@ -1299,33 +1299,6 @@ DROP TABLE cte_schema_reread;
 
 statement ok
 DROP TABLE cte_schema_records;
-
-# Recursive CTE nullability is union-like: anchor names are preserved,
-# but nullable recursive output widens the CTE output schema.
-query I
-WITH RECURSIVE t AS (
-  SELECT 0 AS n
-  UNION ALL
-  SELECT CAST(NULL AS INT) AS n FROM t WHERE n IS NOT NULL
-)
-SELECT * FROM t;
-----
-0
-NULL
-
-# Column names in a recursive CTE must come from the anchor/static term,
-# not from the recursive term, even when the recursive term uses a different alias.
-query I
-WITH RECURSIVE t AS (
-  SELECT 0 AS anchor_col
-  UNION ALL
-  SELECT anchor_col + 1 AS recursive_col FROM t WHERE anchor_col < 2
-)
-SELECT anchor_col FROM t;
-----
-0
-1
-2
 
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
