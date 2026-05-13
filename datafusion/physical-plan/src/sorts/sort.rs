@@ -363,7 +363,7 @@ impl ExternalSorter {
             return Ok(());
         }
 
-        self.reserve_memory_for_merge()?;
+        self.reserve_memory_for_merge();
         self.reserve_memory_for_batch_and_maybe_spill(&input)
             .await?;
 
@@ -567,7 +567,7 @@ impl ExternalSorter {
         );
 
         // Reserve headroom for next sort/merge
-        self.reserve_memory_for_merge()?;
+        self.reserve_memory_for_merge();
 
         Ok(())
     }
@@ -757,21 +757,24 @@ impl ExternalSorter {
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
-    /// If this sort may spill, pre-allocates
-    /// `sort_spill_reservation_bytes` of memory to guarantee memory
-    /// left for the in memory sort/merge.
-    fn reserve_memory_for_merge(&mut self) -> Result<()> {
-        // Reserve headroom for next merge sort
+    /// Pre-allocates `sort_spill_reservation_bytes` of merge headroom
+    /// as a best-effort optimization. If the pool is full, the grow is
+    /// silently skipped — the merge phase will grow `merge_reservation`
+    /// lazily via `try_grow_async`. Using a fallible sync grow here is
+    /// intentional: under contention (e.g. 16 partitions all finishing
+    /// their pre-merge spill at once), an async grow would walk and
+    /// cascade with every other partition's walks, all timing out
+    /// against each other's `_self_guard`s.
+    fn reserve_memory_for_merge(&mut self) {
         if self.runtime.disk_manager.tmp_files_enabled() {
-            let size = self.sort_spill_reservation_bytes;
-            if self.merge_reservation.size() != size {
-                self.merge_reservation
-                    .try_resize(size)
-                    .map_err(Self::err_with_oom_context)?;
+            let target = self.sort_spill_reservation_bytes;
+            let current = self.merge_reservation.size();
+            if current > target {
+                self.merge_reservation.shrink(current - target);
+            } else if current < target {
+                let _ = self.merge_reservation.try_grow(target - current);
             }
         }
-
-        Ok(())
     }
 
     /// Reserves memory to be able to accommodate the given batch.
@@ -1370,7 +1373,7 @@ impl ExecutionPlan for SortExec {
                                     if batch.num_rows() == 0 {
                                         continue;
                                     }
-                                    sorter.reserve_memory_for_merge()?;
+                                    sorter.reserve_memory_for_merge();
                                     let size =
                                         get_reserved_bytes_for_record_batch(&batch)?;
 
