@@ -128,8 +128,7 @@ pub struct FFI_RatioMetrics {
 #[derive(Debug, Clone)]
 pub enum FFI_MetricValue {
     OutputRows(u64),
-    /// Nanoseconds.
-    ElapsedCompute(u64),
+    ElapsedComputeNs(u64),
     SpillCount(u64),
     SpilledBytes(u64),
     OutputBytes(u64),
@@ -144,15 +143,12 @@ pub enum FFI_MetricValue {
         name: SString,
         gauge: u64,
     },
-    /// Nanoseconds.
     Time {
         name: SString,
-        time: u64,
+        time_ns: u64,
     },
-    /// Unix nanoseconds (UTC).
-    StartTimestamp(FFI_Option<i64>),
-    /// Unix nanoseconds (UTC).
-    EndTimestamp(FFI_Option<i64>),
+    StartTimestampNsUTC(FFI_Option<i64>),
+    EndTimestampNsUTC(FFI_Option<i64>),
     PruningMetrics {
         name: SString,
         pruning_metrics: FFI_PruningMetrics,
@@ -412,7 +408,7 @@ impl From<&MetricValue> for FFI_MetricValue {
     fn from(v: &MetricValue) -> Self {
         match v {
             MetricValue::OutputRows(c) => Self::OutputRows(c.value() as u64),
-            MetricValue::ElapsedCompute(t) => Self::ElapsedCompute(t.value() as u64),
+            MetricValue::ElapsedCompute(t) => Self::ElapsedComputeNs(t.value() as u64),
             MetricValue::SpillCount(c) => Self::SpillCount(c.value() as u64),
             MetricValue::SpilledBytes(c) => Self::SpilledBytes(c.value() as u64),
             MetricValue::OutputBytes(c) => Self::OutputBytes(c.value() as u64),
@@ -431,10 +427,10 @@ impl From<&MetricValue> for FFI_MetricValue {
             },
             MetricValue::Time { name, time } => Self::Time {
                 name: SString::from(name.as_ref()),
-                time: time.value() as u64,
+                time_ns: time.value() as u64,
             },
-            MetricValue::StartTimestamp(ts) => Self::StartTimestamp(timestamp_to_ffi(ts)),
-            MetricValue::EndTimestamp(ts) => Self::EndTimestamp(timestamp_to_ffi(ts)),
+            MetricValue::StartTimestamp(ts) => Self::StartTimestampNsUTC(timestamp_to_ffi(ts)),
+            MetricValue::EndTimestamp(ts) => Self::EndTimestampNsUTC(timestamp_to_ffi(ts)),
             MetricValue::PruningMetrics {
                 name,
                 pruning_metrics,
@@ -462,7 +458,7 @@ impl From<FFI_MetricValue> for MetricValue {
     fn from(v: FFI_MetricValue) -> Self {
         match v {
             FFI_MetricValue::OutputRows(n) => Self::OutputRows(count_from_value(n)),
-            FFI_MetricValue::ElapsedCompute(n) => {
+            FFI_MetricValue::ElapsedComputeNs(n) => {
                 Self::ElapsedCompute(time_from_nanos(n))
             }
             FFI_MetricValue::SpillCount(n) => Self::SpillCount(count_from_value(n)),
@@ -481,14 +477,14 @@ impl From<FFI_MetricValue> for MetricValue {
                 name: Cow::Owned(name.into()),
                 gauge: gauge_from_value(gauge),
             },
-            FFI_MetricValue::Time { name, time } => Self::Time {
+            FFI_MetricValue::Time { name, time_ns } => Self::Time {
                 name: Cow::Owned(name.into()),
-                time: time_from_nanos(time),
+                time: time_from_nanos(time_ns),
             },
-            FFI_MetricValue::StartTimestamp(nanos) => {
+            FFI_MetricValue::StartTimestampNsUTC(nanos) => {
                 Self::StartTimestamp(timestamp_from_ffi(nanos))
             }
-            FFI_MetricValue::EndTimestamp(nanos) => {
+            FFI_MetricValue::EndTimestampNsUTC(nanos) => {
                 Self::EndTimestamp(timestamp_from_ffi(nanos))
             }
             FFI_MetricValue::PruningMetrics {
