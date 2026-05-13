@@ -400,9 +400,12 @@ fn gauge_from_value(v: u64) -> Gauge {
     g
 }
 
-fn time_from_nanos(v: u64) -> Time {
+fn time_from_nanos(nanos: u64) -> Time {
     let t = Time::new();
-    t.add_duration(std::time::Duration::from_nanos(v));
+    if nanos != 0 {
+        // add_duration always adds at least one
+        t.add_duration(std::time::Duration::from_nanos(nanos));
+    }
     t
 }
 
