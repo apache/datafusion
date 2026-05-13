@@ -225,17 +225,12 @@ struct SharedCoalescer {
 }
 
 impl SharedCoalescer {
-    fn new(
-        schema: SchemaRef,
-        target_batch_size: usize,
-        fetch: Option<usize>,
-        num_senders: usize,
-    ) -> Self {
+    fn new(schema: SchemaRef, target_batch_size: usize, num_senders: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(LimitedBatchCoalescer::new(
                 schema,
                 target_batch_size,
-                fetch,
+                None,
             ))),
             active_senders: Arc::new(AtomicUsize::new(num_senders)),
         }
@@ -397,7 +392,6 @@ impl RepartitionExecState {
         name: &str,
         context: &Arc<TaskContext>,
         spill_manager: SpillManager,
-        fetch: Option<usize>,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
@@ -481,7 +475,6 @@ impl RepartitionExecState {
                 SharedCoalescer::new(
                     input.schema(),
                     context.session_config().batch_size(),
-                    fetch,
                     num_input_partitions,
                 )
             });
@@ -1189,7 +1182,6 @@ impl ExecutionPlan for RepartitionExec {
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
-        let fetch = self.fetch();
 
         let spill_manager = SpillManager::new(
             Arc::clone(&context.runtime_env()),
@@ -1225,7 +1217,6 @@ impl ExecutionPlan for RepartitionExec {
                     &name,
                     &context,
                     spill_manager.clone(),
-                    fetch,
                 )?;
 
                 // now return stream for the specified *output* partition which will
