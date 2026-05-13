@@ -17,33 +17,39 @@
 
 //! [`ParquetMorselizer`] state machines for opening Parquet files
 
+mod early_stop;
+mod encryption;
+mod push_decoder_stream;
+
+use self::early_stop::EarlyStoppingStream;
+#[cfg(feature = "parquet_encryption")]
+use self::encryption::EncryptionContext;
+use self::push_decoder_stream::PushDecoderStreamState;
+use crate::bloom_filter::BloomFilterStatistics;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_filter::build_projection_read_plan;
-use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
+use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
-use arrow::array::{RecordBatch, RecordBatchOptions};
+use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
-use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::mem;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
-use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{SchemaRef, TimeUnit};
+#[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
-use datafusion_common::{
-    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
-};
+use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics, exec_err};
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -51,8 +57,7 @@ use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
-    MetricCategory, PruningMetrics,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
@@ -60,11 +65,8 @@ use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::{
-    FutureExt, Stream, StreamExt, future::BoxFuture, ready, stream::BoxStream,
-};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use log::debug;
-use parquet::DecodeResult;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
@@ -72,7 +74,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
-use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
@@ -1218,109 +1220,6 @@ impl RowGroupsPrunedParquetOpen {
     }
 }
 
-/// State for a stream that decodes a single Parquet file using a push-based decoder.
-///
-/// The [`transition`](Self::transition) method drives the decoder in a loop: it requests
-/// byte ranges from the [`AsyncFileReader`], pushes the fetched data into the
-/// [`ParquetPushDecoder`], and yields projected [`RecordBatch`]es until the file is
-/// fully consumed.
-struct PushDecoderStreamState {
-    decoder: ParquetPushDecoder,
-    reader: Box<dyn AsyncFileReader>,
-    projector: Projector,
-    output_schema: Arc<Schema>,
-    replace_schema: bool,
-    arrow_reader_metrics: ArrowReaderMetrics,
-    predicate_cache_inner_records: Gauge,
-    predicate_cache_records: Gauge,
-    baseline_metrics: BaselineMetrics,
-}
-
-impl PushDecoderStreamState {
-    /// Advances the decoder state machine until the next [`RecordBatch`] is
-    /// produced, the file is fully consumed, or an error occurs.
-    ///
-    /// On each iteration the decoder is polled via [`ParquetPushDecoder::try_decode`]:
-    /// - [`NeedsData`](DecodeResult::NeedsData) – the requested byte ranges are
-    ///   fetched from the [`AsyncFileReader`] and fed back into the decoder.
-    /// - [`Data`](DecodeResult::Data) – a decoded batch is projected and returned.
-    /// - [`Finished`](DecodeResult::Finished) – signals end-of-stream (`None`).
-    ///
-    /// Takes `self` by value (rather than `&mut self`) so the generated future
-    /// owns the state directly. This avoids a Stacked Borrows violation under
-    /// miri where `&mut self` creates a single opaque borrow that conflicts
-    /// with `unfold`'s ownership across yield points.
-    async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
-        loop {
-            match self.decoder.try_decode() {
-                Ok(DecodeResult::NeedsData(ranges)) => {
-                    let data = self
-                        .reader
-                        .get_byte_ranges(ranges.clone())
-                        .await
-                        .map_err(DataFusionError::from);
-                    match data {
-                        Ok(data) => {
-                            if let Err(e) = self.decoder.push_ranges(ranges, data) {
-                                return Some((Err(DataFusionError::from(e)), self));
-                            }
-                        }
-                        Err(e) => return Some((Err(e), self)),
-                    }
-                }
-                Ok(DecodeResult::Data(batch)) => {
-                    let mut timer = self.baseline_metrics.elapsed_compute().timer();
-                    self.copy_arrow_reader_metrics();
-                    let result = self.project_batch(&batch);
-                    timer.stop();
-                    // Release the borrow on baseline_metrics before moving self
-                    drop(timer);
-                    return Some((result, self));
-                }
-                Ok(DecodeResult::Finished) => {
-                    return None;
-                }
-                Err(e) => {
-                    return Some((Err(DataFusionError::from(e)), self));
-                }
-            }
-        }
-    }
-
-    /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
-    /// arrow-rs parquet reader) to the parquet file metrics for DataFusion
-    fn copy_arrow_reader_metrics(&self) {
-        if let Some(v) = self.arrow_reader_metrics.records_read_from_inner() {
-            self.predicate_cache_inner_records.set(v);
-        }
-        if let Some(v) = self.arrow_reader_metrics.records_read_from_cache() {
-            self.predicate_cache_records.set(v);
-        }
-    }
-
-    fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let mut batch = self.projector.project_batch(batch)?;
-        if self.replace_schema {
-            // Ensure the output batch has the expected schema.
-            // This handles things like schema level and field level metadata, which may not be present
-            // in the physical file schema.
-            // It is also possible for nullability to differ; some writers create files with
-            // OPTIONAL fields even when there are no nulls in the data.
-            // In these cases it may make sense for the logical schema to be `NOT NULL`.
-            // RecordBatch::try_new_with_options checks that if the schema is NOT NULL
-            // the array cannot contain nulls, amongst other checks.
-            let (_stream_schema, arrays, num_rows) = batch.into_parts();
-            let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
-            batch = RecordBatch::try_new_with_options(
-                Arc::clone(&self.output_schema),
-                arrays,
-                &options,
-            )?;
-        }
-        Ok(batch)
-    }
-}
-
 type ConstantColumns = HashMap<String, ScalarValue>;
 
 /// Extract constant column values from statistics, keyed by column name in the logical file schema.
@@ -1381,153 +1280,6 @@ fn constant_value_from_stats(
     }
 
     None
-}
-
-/// Wraps an inner RecordBatchStream and a [`FilePruner`]
-///
-/// This can terminate the scan early when some dynamic filters is updated after
-/// the scan starts, so we discover after the scan starts that the file can be
-/// pruned (can't have matching rows).
-struct EarlyStoppingStream<S> {
-    /// Has the stream finished processing? All subsequent polls will return
-    /// None
-    done: bool,
-    file_pruner: FilePruner,
-    files_ranges_pruned_statistics: PruningMetrics,
-    /// The inner stream
-    inner: S,
-}
-
-impl<S> EarlyStoppingStream<S> {
-    pub fn new(
-        stream: S,
-        file_pruner: FilePruner,
-        files_ranges_pruned_statistics: PruningMetrics,
-    ) -> Self {
-        Self {
-            done: false,
-            inner: stream,
-            file_pruner,
-            files_ranges_pruned_statistics,
-        }
-    }
-}
-
-impl<S> EarlyStoppingStream<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    fn check_prune(&mut self, input: Result<RecordBatch>) -> Result<Option<RecordBatch>> {
-        let batch = input?;
-
-        // Since dynamic filters may have been updated, see if we can stop
-        // reading this stream entirely.
-        if self.file_pruner.should_prune()? {
-            self.files_ranges_pruned_statistics.add_pruned(1);
-            // Previously this file range has been counted as matched
-            self.files_ranges_pruned_statistics.subtract_matched(1);
-            self.done = true;
-            Ok(None)
-        } else {
-            // Return the adapted batch
-            Ok(Some(batch))
-        }
-    }
-}
-
-impl<S> Stream for EarlyStoppingStream<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        if self.done {
-            return Poll::Ready(None);
-        }
-        match ready!(self.inner.poll_next_unpin(cx)) {
-            None => {
-                // input done
-                self.done = true;
-                Poll::Ready(None)
-            }
-            Some(input_batch) => {
-                let output = self.check_prune(input_batch);
-                Poll::Ready(output.transpose())
-            }
-        }
-    }
-}
-
-#[derive(Default)]
-struct EncryptionContext {
-    #[cfg(feature = "parquet_encryption")]
-    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
-    #[cfg(feature = "parquet_encryption")]
-    encryption_factory: Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
-}
-
-#[cfg(feature = "parquet_encryption")]
-impl EncryptionContext {
-    fn new(
-        file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
-        encryption_factory: Option<(
-            Arc<dyn EncryptionFactory>,
-            EncryptionFactoryOptions,
-        )>,
-    ) -> Self {
-        Self {
-            file_decryption_properties,
-            encryption_factory,
-        }
-    }
-
-    async fn get_file_decryption_properties(
-        &self,
-        file_location: &object_store::path::Path,
-    ) -> Result<Option<Arc<FileDecryptionProperties>>> {
-        match &self.file_decryption_properties {
-            Some(file_decryption_properties) => {
-                Ok(Some(Arc::clone(file_decryption_properties)))
-            }
-            None => match &self.encryption_factory {
-                Some((encryption_factory, encryption_config)) => Ok(encryption_factory
-                    .get_file_decryption_properties(encryption_config, file_location)
-                    .await?),
-                None => Ok(None),
-            },
-        }
-    }
-}
-
-#[cfg(not(feature = "parquet_encryption"))]
-#[expect(dead_code)]
-impl EncryptionContext {
-    async fn get_file_decryption_properties(
-        &self,
-        _file_location: &object_store::path::Path,
-    ) -> Result<Option<Arc<FileDecryptionProperties>>> {
-        Ok(None)
-    }
-}
-
-impl ParquetMorselizer {
-    #[cfg(feature = "parquet_encryption")]
-    fn get_encryption_context(&self) -> EncryptionContext {
-        EncryptionContext::new(
-            self.file_decryption_properties.clone(),
-            self.encryption_factory.clone(),
-        )
-    }
-
-    #[cfg(not(feature = "parquet_encryption"))]
-    #[expect(dead_code)]
-    fn get_encryption_context(&self) -> EncryptionContext {
-        EncryptionContext::default()
-    }
 }
 
 /// Return the initial [`ParquetAccessPlan`]
