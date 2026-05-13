@@ -1235,3 +1235,28 @@ NULL
 
 query error Arrow error: Invalid argument error: 1.10 is too large to store in a Decimal128 of precision 2. Max is 0.99
 select cast(1.1 as decimal(2, 2)) + 1;
+
+# Regression test for division of two `Decimal128` values with different
+# precision/scale. The combined CASE/WHERE shape triggers interval propagation
+# through the optimizer; previously this hit an internal assertion in
+# `Interval::div` because `numeric / count(*)` gives `Decimal128(38, 10)` /
+# `Decimal128(20, 0)`.
+statement ok
+CREATE TABLE decimal_div_mismatch(c1 BIGINT) AS VALUES (1::bigint), (2::bigint), (10::bigint);
+
+query IR
+SELECT
+  c1,
+  CASE WHEN c1 = 0 THEN 100.0
+       ELSE ROUND((1.0 - (c1::numeric / c1)) * 100, 2)
+  END AS rate
+FROM decimal_div_mismatch
+WHERE (1.0 - (c1::numeric / c1)) * 100 < 95.0
+ORDER BY c1;
+----
+1 0
+2 0
+10 0
+
+statement ok
+DROP TABLE decimal_div_mismatch;

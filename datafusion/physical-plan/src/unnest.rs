@@ -26,6 +26,7 @@ use super::metrics::{
     MetricsSet, RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
     SendableRecordBatchStream, check_if_same_properties,
@@ -382,6 +383,7 @@ impl UnnestStream {
                     debug_assert!(result_batch.num_rows() > 0);
                     Some(Ok(result_batch))
                 }
+                // If the stream is depleted or returned an error, log the finish message:
                 other => {
                     trace!(
                         "Processed {} probe-side input batches containing {} rows and \
@@ -392,6 +394,14 @@ impl UnnestStream {
                         self.metrics.baseline_metrics.output_rows(),
                         self.metrics.baseline_metrics.elapsed_compute(),
                     );
+
+                    // In the non-error case, i.e., input is simply depleted:
+                    if other.is_none() {
+                        // Release the input pipeline's resources.
+                        let input_schema = self.input.schema();
+                        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+                    }
+
                     other
                 }
             });

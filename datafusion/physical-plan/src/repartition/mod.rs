@@ -38,7 +38,7 @@ use crate::projection::{ProjectionExec, all_columns, make_with_child, update_exp
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
-use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
     check_if_same_properties,
@@ -1757,7 +1757,11 @@ impl PerPartitionStream {
                             return Poll::Ready(Some(Err(e)));
                         }
                         Poll::Ready(None) => {
-                            // Spill stream ended, keep draining the memory channel
+                            // Spill stream ended — release its resources before
+                            // we go back to draining the memory channel.
+                            let spill_schema = self.spill_stream.schema();
+                            self.spill_stream =
+                                Box::pin(EmptyRecordBatchStream::new(spill_schema));
                             self.state = StreamState::ReadingMemory;
                         }
                         Poll::Pending => {
