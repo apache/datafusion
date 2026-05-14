@@ -3120,4 +3120,58 @@ mod tests {
             Arc::new(expected_with_else),
         );
     }
+
+    /// Reproduces https://github.com/apache/datafusion/issues/22173
+    ///
+    /// Nested self-referential CASE chains (common in rewrite-style projections)
+    /// should not cause exponential hashing work during physical planning.
+    #[test]
+    fn nested_self_referential_case_hash_stays_bounded() -> Result<()> {
+        use std::hash::Hasher;
+
+        #[derive(Default)]
+        struct CountingHasher {
+            write_calls: usize,
+            bytes_written: usize,
+        }
+
+        impl Hasher for CountingHasher {
+            fn finish(&self) -> u64 {
+                0
+            }
+
+            fn write(&mut self, bytes: &[u8]) {
+                self.write_calls += 1;
+                self.bytes_written += bytes.len();
+            }
+        }
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("kind", DataType::Utf8, true)]));
+
+        let kind = col("kind", &schema)?;
+        let mut label = Arc::clone(&kind);
+
+        for idx in 0..18 {
+            let predicate = Arc::new(BinaryExpr::new(
+                Arc::clone(&kind),
+                Operator::Eq,
+                lit(idx.to_string()),
+            )) as Arc<dyn PhysicalExpr>;
+
+            label = case(None, vec![(predicate, lit("label"))], Some(label))?;
+        }
+
+        let mut hasher = CountingHasher::default();
+        label.hash(&mut hasher);
+
+        assert!(
+            hasher.write_calls < 50_000,
+            "hashing nested CASE expression took {} hasher writes and {} bytes",
+            hasher.write_calls,
+            hasher.bytes_written
+        );
+
+        Ok(())
+    }
 }
