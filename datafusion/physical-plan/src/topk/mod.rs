@@ -1060,7 +1060,7 @@ impl RecordBatchStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float64Array, Int32Array};
+    use arrow::array::{BooleanArray, Float64Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::assert_batches_eq;
@@ -1291,21 +1291,27 @@ mod tests {
             "should have 1 batch before second insert"
         );
 
-        // Insert a second batch with a couple of values that replace
-        // some heap entries (e.g. values 2 and 3 appear again, but won't
-        // displace 1-5; use values smaller than current min-of-max to
-        // force replacements). Actually, heap already has 1..=5. Inserting
-        // values like [1, 2] would just be duplicates that don't replace.
-        // Instead, insert values that do NOT replace, to keep the 5 rows
-        // pointing at the first batch. The point is that we now have 2
-        // batches and the first is huge, so compaction should fire.
-        let array2: ArrayRef = Arc::new(Int32Array::from(vec![200_000, 300_000]));
+        // Insert a second batch whose values displace entries in the heap.
+        // -1 and 0 are smaller than the current top-5 (1..=5), so they
+        // produce 2 replacements. With replacements > 0, `insert_batch`
+        // calls `insert_batch_entry` (briefly making store.len() == 2)
+        // and then `maybe_compact`, which should collapse it back to 1.
+        let array2: ArrayRef = Arc::new(Int32Array::from(vec![-1, 0]));
         let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![array2])?;
+        let replacements_before = topk.metrics.row_replacements.value();
         topk.insert_batch(batch2)?;
 
-        // After inserting a second batch, maybe_compact should have fired
-        // because the large batch dwarfs the compacted estimate.
-        // The store should now contain only 1 batch (the compacted one).
+        // Sanity check: batch2 was actually integrated. Without
+        // replacements, `maybe_compact` is never called and the
+        // store-length assertion below would pass vacuously.
+        assert!(
+            topk.metrics.row_replacements.value() > replacements_before,
+            "batch2 must produce replacements so compaction is exercised"
+        );
+
+        // The compacted-estimate guard is `total_rows <= num_rows * 2`,
+        // i.e. 100_002 <= 10, which is false, so compaction fires and
+        // collapses the two stored batches back into one.
         assert_eq!(
             topk.heap.store.len(),
             1,
@@ -1316,8 +1322,8 @@ mod tests {
         let results: Vec<_> = topk.emit()?.try_collect().await?;
         assert_batches_eq!(
             &[
-                "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "| 4 |", "| 5 |",
-                "+---+",
+                "+----+", "| a  |", "+----+", "| -1 |", "| 0  |", "| 1  |", "| 2  |",
+                "| 3  |", "+----+",
             ],
             &results
         );
@@ -1329,9 +1335,15 @@ mod tests {
     /// compaction must NOT fire even with multiple batches present,
     /// because the savings would be marginal
     /// (guard: `total_rows <= num_rows * 2`).
+    ///
+    /// Uses a bit-packed `BooleanArray` so that future changes to the
+    /// compaction heuristic that reintroduce a per-byte estimate
+    /// (where integer truncation could misbehave on sub-byte types)
+    /// are caught here.
     #[tokio::test]
     async fn test_topk_memory_compaction_skipped_when_marginal() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
 
         let sort_expr = PhysicalSortExpr {
             expr: col("a", schema.as_ref())?,
@@ -1362,13 +1374,19 @@ mod tests {
         // by the heap, so total_rows == num_rows == 10.
         let batch1 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef],
+            vec![
+                Arc::new(BooleanArray::from(vec![false, false, true, true, true]))
+                    as ArrayRef,
+            ],
         )?;
         topk.insert_batch(batch1)?;
 
         let batch2 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![6, 7, 8, 9, 10])) as ArrayRef],
+            vec![
+                Arc::new(BooleanArray::from(vec![false, false, false, true, true]))
+                    as ArrayRef,
+            ],
         )?;
         topk.insert_batch(batch2)?;
 
@@ -1381,12 +1399,24 @@ mod tests {
         );
         assert_eq!(topk.heap.inner.len(), 10, "heap should hold all 10 rows");
 
-        // Output is still correct.
+        // Output is still correct (5 falses then 5 trues ascending).
         let results: Vec<_> = topk.emit()?.try_collect().await?;
         assert_batches_eq!(
             &[
-                "+----+", "| a  |", "+----+", "| 1  |", "| 2  |", "| 3  |", "| 4  |",
-                "| 5  |", "| 6  |", "| 7  |", "| 8  |", "| 9  |", "| 10 |", "+----+",
+                "+-------+",
+                "| a     |",
+                "+-------+",
+                "| false |",
+                "| false |",
+                "| false |",
+                "| false |",
+                "| false |",
+                "| true  |",
+                "| true  |",
+                "| true  |",
+                "| true  |",
+                "| true  |",
+                "+-------+",
             ],
             &results
         );
