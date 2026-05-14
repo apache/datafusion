@@ -57,7 +57,7 @@ impl GroupValues for GroupValuesBytesView {
         self.map.insert_if_new(
             arr,
             // called for each new group
-            |_value| {
+            || {
                 // assign new group index on each insert
                 let group_idx = self.num_groups;
                 self.num_groups += 1;

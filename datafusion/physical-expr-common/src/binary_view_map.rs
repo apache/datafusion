@@ -42,7 +42,7 @@ impl ArrowBytesViewSet {
 
     /// Inserts each value from `values` into the set
     pub fn insert(&mut self, values: &ArrayRef) {
-        fn make_payload_fn(_value: Option<&[u8]>) {}
+        fn make_payload_fn() {}
         fn observe_payload_fn(_payload: ()) {}
         self.0
             .insert_if_new(values, make_payload_fn, observe_payload_fn);
@@ -209,7 +209,7 @@ where
         make_payload_fn: MP,
         observe_payload_fn: OP,
     ) where
-        MP: FnMut(Option<&[u8]>) -> V,
+        MP: FnMut() -> V,
         OP: FnMut(V),
     {
         // Sanity check array type
@@ -248,7 +248,7 @@ where
         mut make_payload_fn: MP,
         mut observe_payload_fn: OP,
     ) where
-        MP: FnMut(Option<&[u8]>) -> V,
+        MP: FnMut() -> V,
         OP: FnMut(V),
         B: ByteViewType,
     {
@@ -279,7 +279,7 @@ where
                 let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
                     payload
                 } else {
-                    let payload = make_payload_fn(None);
+                    let payload = make_payload_fn();
                     let null_index = self.views.len();
                     self.views.push(0);
                     self.nulls.append_null();
@@ -292,6 +292,7 @@ where
 
             // Extract length from the view (first 4 bytes of u128 in little-endian)
             let len = view_u128 as u32;
+            let is_inline = len <= 12;
 
             // Check if value already exists
             let maybe_payload = {
@@ -306,7 +307,7 @@ where
                         }
 
                         // Fast path: inline strings can be compared directly
-                        if len <= 12 {
+                        if is_inline {
                             return header.view == view_u128;
                         }
 
@@ -339,17 +340,20 @@ where
                 payload
             } else {
                 // no existing value, make a new one
-                let value: &[u8] = values.value(i).as_ref();
-                let payload = make_payload_fn(Some(value));
-
-                // Create view pointing to our buffers
-                let new_view = self.append_value(value);
+                let payload = make_payload_fn();
+                let new_view = if is_inline {
+                    self.views.push(view_u128);
+                    self.nulls.append_non_null();
+                    view_u128
+                } else {
+                    let value: &[u8] = values.value(i).as_ref();
+                    self.append_value(value)
+                };
                 let new_header = Entry {
                     view: new_view,
                     hash,
                     payload,
                 };
-
                 self.map
                     .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
                 payload
@@ -726,16 +730,12 @@ mod tests {
             }
 
             // insert the values into the map, recording what we did
-            let mut seen_new_strings = vec![];
             let mut seen_indexes = vec![];
             self.map.insert_if_new(
                 &arr,
-                |s| {
-                    let value = s
-                        .map(|s| String::from_utf8(s.to_vec()).expect("Non utf8 string"));
+                || {
                     let index = next_index;
                     next_index += 1;
-                    seen_new_strings.push(value);
                     TestPayload { index }
                 },
                 |payload| {
@@ -744,7 +744,7 @@ mod tests {
             );
 
             assert_eq!(actual_seen_indexes, seen_indexes);
-            assert_eq!(actual_new_strings, seen_new_strings);
+            assert_eq!(next_index, self.indexes.len());
         }
 
         /// Call `self.map.into_array()` validating that the strings are in the same
