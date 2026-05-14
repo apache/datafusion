@@ -3724,7 +3724,7 @@ impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
 
 /// Tests that a custom [`ExecutionPlan`] with [`PhysicalExpr`] can
 /// dedupe dynamic filters by using the proto converter in its
-/// [`PhysicalExtensionCodec`] implmentation.
+/// [`PhysicalExtensionCodec`] implementation.
 #[test]
 fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
     // Create the plan:
