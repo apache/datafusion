@@ -399,7 +399,7 @@ async fn prune_disabled() {
 // https://github.com/apache/datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on Int8 and Int16 columns are still buggy.
 macro_rules! int_tests {
-    ($bits:expr, $fn_lt:ident, $fn_eq:ident, $fn_scalar_fun_and_eq:ident, $fn_scalar_fun:ident, $fn_complex_expr:ident, $fn_complex_expr_subtract:ident, $fn_eq_in_list:ident, $fn_eq_in_list_2:ident, $fn_eq_in_list_negated:ident) => {
+    ($bits:expr, $fn_lt:ident, $fn_eq:ident, $fn_scalar_fun_and_eq:ident, $fn_scalar_fun:ident, $fn_complex_expr:ident, $fn_complex_expr_subtract:ident, $fn_eq_in_list:ident, $fn_eq_in_list_2:ident, $fn_eq_in_list_negated:ident, $fn_eq_any_literal_array:ident) => {
         #[tokio::test]
         async fn $fn_lt() {
             RowGroupPruningTest::new()
@@ -564,6 +564,25 @@ macro_rules! int_tests {
                 .test_row_group_prune()
                 .await;
         }
+
+        // Regression test for https://github.com/apache/datafusion/issues/22073:
+        // `= ANY([literal])` must still allow Parquet file/row-group pruning,
+        // the same way `IN (literal)` does.
+        #[tokio::test]
+        async fn $fn_eq_any_literal_array() {
+            RowGroupPruningTest::new()
+                .with_scenario(Scenario::Int)
+                .with_query(&format!("SELECT * FROM t where i{} = ANY([100])", $bits))
+                .with_expected_errors(Some(0))
+                .with_matched_by_stats(Some(0))
+                .with_pruned_by_stats(Some(0))
+                .with_pruned_files(Some(1))
+                .with_matched_by_bloom_filter(Some(0))
+                .with_pruned_by_bloom_filter(Some(0))
+                .with_expected_rows(0)
+                .test_row_group_prune()
+                .await;
+        }
     };
 }
 
@@ -578,7 +597,8 @@ int_tests!(
     prune_int32_complex_expr_subtract,
     prune_int32_eq_in_list,
     prune_int32_eq_in_list_2,
-    prune_int32_eq_in_list_negated
+    prune_int32_eq_in_list_negated,
+    prune_int32_eq_any_literal_array
 );
 int_tests!(
     64,
@@ -590,7 +610,8 @@ int_tests!(
     prune_int64_complex_expr_subtract,
     prune_int64_eq_in_list,
     prune_int64_eq_in_list_2,
-    prune_int64_eq_in_list_negated
+    prune_int64_eq_in_list_negated,
+    prune_int64_eq_any_literal_array
 );
 
 // $bits: number of bits of the integer to test (8, 16, 32, 64)
