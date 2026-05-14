@@ -329,10 +329,8 @@ fn limit_satisfied_by_input(
     Ok(num_rows <= fetch)
 }
 
-/// Returns exact row counts only for operators whose cardinality guarantee is
-/// strong enough to remove a limit. In particular, avoid trusting arbitrary
-/// projection statistics because expressions can derive scalar statistics
-/// without changing the number of rows.
+/// Returns exact row counts only from a conservative whitelist of operators
+/// whose row-count guarantees are strong enough to remove a limit.
 fn limit_eliminable_exact_num_rows(
     plan: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<usize>> {
