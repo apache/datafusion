@@ -548,6 +548,17 @@ impl RatioMetrics {
     pub fn total(&self) -> usize {
         self.total.load(Ordering::Relaxed)
     }
+
+    /// Return the strategy used to merge two [`RatioMetrics`] values
+    pub fn merge_strategy(&self) -> &RatioMergeStrategy {
+        &self.merge_strategy
+    }
+
+    /// Whether `Display` for this metric appends the raw `(part/total)` numbers
+    /// alongside the percentage
+    pub fn display_raw_values(&self) -> bool {
+        self.display_raw_values
+    }
 }
 
 impl PartialEq for RatioMetrics {
