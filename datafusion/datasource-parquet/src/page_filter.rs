@@ -160,18 +160,18 @@ impl PagePruningAccessPlanFilter {
         parquet_schema: &SchemaDescriptor,
         parquet_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
-    ) -> ParquetAccessPlan {
+    ) -> (ParquetAccessPlan, usize) {
         // scoped timer updates on drop
         let _timer_guard = file_metrics.page_index_eval_time.timer();
         if self.predicates.is_empty() {
-            return access_plan;
+            return (access_plan, 0);
         }
 
         let page_index_predicates = &self.predicates;
         let groups = parquet_metadata.row_groups();
 
         if groups.is_empty() {
-            return access_plan;
+            return (access_plan, 0);
         }
 
         if parquet_metadata.offset_index().is_none()
@@ -182,7 +182,7 @@ impl PagePruningAccessPlanFilter {
                 parquet_metadata.offset_index().is_some(),
                 parquet_metadata.column_index().is_some()
             );
-            return access_plan;
+            return (access_plan, 0);
         };
 
         // track the total number of rows that should be skipped
@@ -329,10 +329,7 @@ impl PagePruningAccessPlanFilter {
         file_metrics
             .page_index_pages_pruned
             .add_matched(total_pages_select);
-        file_metrics.add_page_index_pages_skipped_by_fully_matched(
-            total_pages_skipped_by_fully_matched,
-        );
-        access_plan
+        (access_plan, total_pages_skipped_by_fully_matched)
     }
 
     /// Returns the number of filters in the [`PagePruningAccessPlanFilter`]

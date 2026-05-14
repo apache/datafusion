@@ -1128,12 +1128,20 @@ impl RowGroupsPrunedParquetOpen {
             && !access_plan.is_empty()
             && let Some(page_pruning_predicate) = page_pruning_predicate
         {
-            access_plan = page_pruning_predicate.prune_plan_with_page_index(
-                access_plan,
-                &prepared.physical_file_schema,
-                reader_metadata.parquet_schema(),
-                file_metadata.as_ref(),
-                &prepared.file_metrics,
+            let (page_pruned_access_plan, pages_skipped_by_fully_matched) =
+                page_pruning_predicate.prune_plan_with_page_index(
+                    access_plan,
+                    &prepared.physical_file_schema,
+                    reader_metadata.parquet_schema(),
+                    file_metadata.as_ref(),
+                    &prepared.file_metrics,
+                );
+            access_plan = page_pruned_access_plan;
+            ParquetFileMetrics::add_page_index_pages_skipped_by_fully_matched(
+                &prepared.metrics,
+                prepared.partition_index,
+                &prepared.file_name,
+                pages_skipped_by_fully_matched,
             );
         }
 
