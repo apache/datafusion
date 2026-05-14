@@ -37,6 +37,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_catalog::empty::EmptyTable;
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::{
     Result, TableReference, ToDFSchema, assert_or_internal_err, context,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
@@ -801,8 +802,25 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Explain(explain) => {
                 let input: LogicalPlan =
                     into_logical_plan!(explain.input, ctx, extension_codec)?;
+                let pb_format = protobuf::ExplainFormat::try_from(explain.format)
+                    .map_err(|_| {
+                        proto_error(format!(
+                            "Received an ExplainNode message with unknown ExplainFormat {}",
+                            explain.format
+                        ))
+                    })?;
+                let explain_format = match pb_format {
+                    protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+                    protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+                    protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+                    protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+                };
+                let explain_option =
+                    datafusion_expr::logical_plan::ExplainOption::default()
+                        .with_verbose(explain.verbose)
+                        .with_format(explain_format);
                 LogicalPlanBuilder::from(input)
-                    .explain(explain.verbose, false)?
+                    .explain_option_format(explain_option)?
                     .build()
             }
             LogicalPlanType::SubqueryAlias(aliased_relation) => {
@@ -1758,6 +1776,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                         protobuf::ExplainNode {
                             input: Some(Box::new(input)),
                             verbose: a.verbose,
+                            format: match &a.explain_format {
+                                ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+                                ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+                                ExplainFormat::PostgresJSON => {
+                                    protobuf::ExplainFormat::Pgjson
+                                }
+                                ExplainFormat::Graphviz => {
+                                    protobuf::ExplainFormat::Graphviz
+                                }
+                            }
+                            .into(),
                         },
                     ))),
                 })

@@ -99,3 +99,7 @@ name = "unhex"
 [[bench]]
 harness = false
 name = "sha2"
+
+[[bench]]
+harness = false
+name = "floor"

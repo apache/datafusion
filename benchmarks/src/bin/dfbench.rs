@@ -17,6 +17,7 @@
 
 //! DataFusion benchmark runner
 use datafusion::error::Result;
+use datafusion_benchmarks::sort_pushdown;
 
 use clap::{Parser, Subcommand};
 
@@ -31,8 +32,7 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use datafusion_benchmarks::{
-    cancellation, clickbench, h2o, hj, imdb, nlj, smj, sort_pushdown, sort_tpch, tpcds,
-    tpch,
+    cancellation, clickbench, dict, h2o, hj, imdb, nlj, smj, sort_tpch, tpcds, tpch,
 };
 
 #[derive(Debug, Parser)]
@@ -46,6 +46,7 @@ struct Cli {
 enum Options {
     Cancellation(cancellation::RunOpt),
     Clickbench(clickbench::RunOpt),
+    Dict(dict::RunOpt),
     H2o(h2o::RunOpt),
     HJ(hj::RunOpt),
     Imdb(imdb::RunOpt),
@@ -66,6 +67,7 @@ pub async fn main() -> Result<()> {
     match cli.command {
         Options::Cancellation(opt) => opt.run().await,
         Options::Clickbench(opt) => opt.run().await,
+        Options::Dict(opt) => opt.run().await,
         Options::H2o(opt) => opt.run().await,
         Options::HJ(opt) => opt.run().await,
         Options::Imdb(opt) => Box::pin(opt.run()).await,

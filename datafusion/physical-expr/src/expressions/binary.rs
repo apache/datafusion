@@ -36,7 +36,9 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
 use datafusion_expr::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
+#[expect(deprecated)]
 use datafusion_expr::statistics::{
     Distribution, combine_bernoullis, combine_gaussians,
     create_bernoulli_from_comparison, new_generic_from_binary_op,
@@ -501,6 +503,7 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         let (left, right) = (children[0], children[1]);
 
@@ -4673,6 +4676,7 @@ mod tests {
 
     /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
@@ -4740,6 +4744,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics_bernoulli() -> Result<()> {
         let schema = &Schema::new(vec![
             Field::new("a", DataType::Int64, false),
@@ -4775,6 +4780,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_propagate_statistics_combination_of_range_holders_arithmetic() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
@@ -4844,6 +4850,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_propagate_statistics_combination_of_range_holders_comparison() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;

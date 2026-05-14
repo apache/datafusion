@@ -215,21 +215,25 @@ from large_nested_arrays_with_repeating_elements;
 ## array_replace_n (aliases: `list_replace_n`)
 
 # array_replace_n scalar function #1
-query ???
+query ??????
 select
   array_replace_n(make_array(1, 2, 3, 4), 2, 3, 2),
   array_replace_n(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0, 2),
-  array_replace_n(make_array(1, 2, 3), 4, 0, 3);
+  array_replace_n(make_array(1, 2, 3), 4, 0, 3),
+  array_replace_n(make_array(1, 4, 4), 4, 0, 0),
+  array_replace_n(make_array(1, 4, 4), 4, 0, -1),
+  array_replace_n(make_array(1, 4, 1, 5), 1, 0, 10);
 ----
-[1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
+[1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3] [1, 4, 4] [1, 4, 4] [0, 4, 0, 5]
 
-query ???
+query ????
 select
   array_replace_n(arrow_cast(make_array(1, 2, 3, 4), 'LargeList(Int64)'), 2, 3, 2),
   array_replace_n(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'LargeList(Int64)'), 4, 0, 2),
-  array_replace_n(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0, 3);
+  array_replace_n(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0, 3),
+  array_replace_n(arrow_cast(make_array(1, 4, 4), 'LargeList(Int64)'), 4, 0, 0);
 ----
-[1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
+[1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3] [1, 4, 4]
 
 query ???
 select
