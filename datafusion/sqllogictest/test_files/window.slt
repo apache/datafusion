@@ -6437,8 +6437,6 @@ FROM (
 # previously left the boundary target incomparable with the ORDER BY
 # column and failed with "Internal error: Uncomparable values".
 ############################################################################
-
-# Original reporter query.
 query I
 SELECT COUNT(*) OVER (
   PARTITION BY 1
