@@ -495,6 +495,8 @@ async fn do_partitioned_topk(
             topk.insert_batch(sub_batch)?;
         }
     }
+    // Release the input pipeline now that accumulation is complete.
+    drop(input);
 
     // ---------- Emit phase ----------
     // Sort partition keys so output is ordered by (partition_keys, order_keys).

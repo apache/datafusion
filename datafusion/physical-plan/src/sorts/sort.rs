@@ -1240,6 +1240,7 @@ impl ExecutionPlan for SortExec {
                                 break;
                             }
                         }
+                        drop(input);
                         topk.emit()
                     })
                     .try_flatten(),
@@ -1264,6 +1265,7 @@ impl ExecutionPlan for SortExec {
                             let batch = batch?;
                             sorter.insert_batch(batch).await?;
                         }
+                        drop(input);
                         sorter.sort().await
                     })
                     .try_flatten(),
