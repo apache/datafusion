@@ -17,72 +17,18 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int64Array, ListArray};
-use arrow::buffer::{NullBuffer, OffsetBuffer};
-use arrow::datatypes::{DataType, Field};
+use arrow::array::{Array, ArrayRef};
+use arrow::datatypes::{DataType, Field, Int64Type};
+use arrow::util::bench_util::create_primitive_list_array_with_seed;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions_nested::min_max::ArrayMax;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 
 const NUM_ROWS: usize = 8192;
 const SEED: u64 = 42;
 const LIST_NULL_DENSITY: f64 = 0.1;
 const ELEMENT_NULL_DENSITY: f64 = 0.1;
-
-fn create_int64_list_array(
-    num_rows: usize,
-    list_size: usize,
-    element_null_density: f64,
-) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let total_values = num_rows * list_size;
-
-    if element_null_density > 0.0 {
-        let values: Vec<Option<i64>> = (0..total_values)
-            .map(|_| {
-                if rng.random::<f64>() < element_null_density {
-                    None
-                } else {
-                    Some(rng.random::<i64>() % 10_000)
-                }
-            })
-            .collect();
-        let values_array = Arc::new(Int64Array::from(values));
-
-        let offsets: Vec<i32> = (0..=num_rows).map(|i| (i * list_size) as i32).collect();
-        let nulls: Vec<bool> = (0..num_rows)
-            .map(|_| rng.random::<f64>() >= LIST_NULL_DENSITY)
-            .collect();
-
-        Arc::new(ListArray::new(
-            Arc::new(Field::new("item", DataType::Int64, true)),
-            OffsetBuffer::new(offsets.into()),
-            values_array,
-            Some(NullBuffer::from(nulls)),
-        ))
-    } else {
-        // No element nulls — values array has no null buffer
-        let values: Vec<i64> = (0..total_values)
-            .map(|_| rng.random::<i64>() % 10_000)
-            .collect();
-        let values_array = Arc::new(Int64Array::from(values));
-
-        let offsets: Vec<i32> = (0..=num_rows).map(|i| (i * list_size) as i32).collect();
-        let nulls: Vec<bool> = (0..num_rows)
-            .map(|_| rng.random::<f64>() >= LIST_NULL_DENSITY)
-            .collect();
-
-        Arc::new(ListArray::new(
-            Arc::new(Field::new("item", DataType::Int64, false)),
-            OffsetBuffer::new(offsets.into()),
-            values_array,
-            Some(NullBuffer::from(nulls)),
-        ))
-    }
-}
 
 fn criterion_benchmark(c: &mut Criterion) {
     let udf = ArrayMax::new();
@@ -91,7 +37,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     for list_size in [10, 100, 1000] {
         for (label, null_density) in [("nulls", ELEMENT_NULL_DENSITY), ("no_nulls", 0.0)]
         {
-            let list_array = create_int64_list_array(NUM_ROWS, list_size, null_density);
+            let list_array: ArrayRef =
+                Arc::new(create_primitive_list_array_with_seed::<i32, Int64Type>(
+                    NUM_ROWS,
+                    LIST_NULL_DENSITY as f32,
+                    null_density as f32,
+                    list_size,
+                    SEED,
+                ));
             let args = vec![ColumnarValue::Array(Arc::clone(&list_array))];
             let arg_fields =
                 vec![Field::new("arg_0", list_array.data_type().clone(), true).into()];

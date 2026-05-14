@@ -16,14 +16,13 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
 use crate::common::proto_error;
 use crate::protobuf_common as protobuf;
 use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
-use arrow::csv::WriterBuilder;
+use arrow::csv::{QuoteStyle, WriterBuilder};
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     TimeUnit, UnionFields, UnionMode, i256,
@@ -40,7 +39,7 @@ use datafusion_common::{
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
-        CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
+        CdcOptions, CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
@@ -297,6 +296,16 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let list_size = list.list_size;
                 DataType::FixedSizeList(Arc::new(list_type), list_size)
             }
+            arrow_type::ArrowTypeEnum::ListView(list) => {
+                let list_type =
+                    list.as_ref().field_type.as_deref().required("field_type")?;
+                DataType::ListView(Arc::new(list_type))
+            }
+            arrow_type::ArrowTypeEnum::LargeListView(list) => {
+                let list_type =
+                    list.as_ref().field_type.as_deref().required("field_type")?;
+                DataType::LargeListView(Arc::new(list_type))
+            }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
                 parse_proto_fields_to_fields(&strct.sub_field_types)?.into(),
             ),
@@ -406,6 +415,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::ListValue(v)
             | Value::FixedSizeListValue(v)
             | Value::LargeListValue(v)
+            | Value::ListViewValue(v)
+            | Value::LargeListViewValue(v)
             | Value::StructValue(v)
             | Value::MapValue(v) => {
                 let protobuf::ScalarNestedValue {
@@ -517,6 +528,12 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     }
                     Value::FixedSizeListValue(_) => {
                         Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
+                    }
+                    Value::ListViewValue(_) => {
+                        Self::ListView(arr.as_list_view::<i32>().to_owned().into())
+                    }
+                    Value::LargeListViewValue(_) => {
+                        Self::LargeListView(arr.as_list_view::<i64>().to_owned().into())
                     }
                     Value::StructValue(_) => {
                         Self::Struct(arr.as_struct().to_owned().into())
@@ -947,6 +964,17 @@ impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
     }
 }
 
+impl From<protobuf::CsvQuoteStyle> for datafusion_common::parsers::CsvQuoteStyle {
+    fn from(value: protobuf::CsvQuoteStyle) -> Self {
+        match value {
+            protobuf::CsvQuoteStyle::Necessary => Self::Necessary,
+            protobuf::CsvQuoteStyle::Always => Self::Always,
+            protobuf::CsvQuoteStyle::NonNumeric => Self::NonNumeric,
+            protobuf::CsvQuoteStyle::Never => Self::Never,
+        }
+    }
+}
+
 impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
     type Error = DataFusionError;
 
@@ -1003,6 +1031,15 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .then(|| proto_opts.null_regex.clone()),
             comment: proto_opts.comment.first().copied(),
             truncated_rows: proto_opts.truncated_rows.first().map(|h| *h != 0),
+            quote_style: proto_opts.quote_style().into(),
+            ignore_leading_whitespace: proto_opts
+                .ignore_leading_whitespace
+                .first()
+                .map(|h| *h != 0),
+            ignore_trailing_whitespace: proto_opts
+                .ignore_trailing_whitespace
+                .first()
+                .map(|h| *h != 0),
         })
     }
 }
@@ -1090,6 +1127,17 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
             }).unwrap_or(None),
+            use_content_defined_chunking: value.content_defined_chunking.map(|cdc| {
+                let defaults = CdcOptions::default();
+                CdcOptions {
+                    // proto3 uses 0 as the wire default for uint64; a zero chunk size is
+                    // invalid, so treat it as "field not set" and fall back to the default.
+                    min_chunk_size: if cdc.min_chunk_size != 0 { cdc.min_chunk_size as usize } else { defaults.min_chunk_size },
+                    max_chunk_size: if cdc.max_chunk_size != 0 { cdc.max_chunk_size as usize } else { defaults.max_chunk_size },
+                    // norm_level = 0 is a valid value (and the default), so pass it through directly.
+                    norm_level: cdc.norm_level,
+                }
+            }),
         })
     }
 }
@@ -1152,7 +1200,7 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
                 column_specific_options.insert(column_name.clone(), options.try_into()?);
             }
         }
-        Ok(TableParquetOptions {
+        let opts = TableParquetOptions {
             global: value
                 .global
                 .as_ref()
@@ -1160,9 +1208,9 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
                 .unwrap()
                 .unwrap(),
             column_specific_options,
-            key_value_metadata: Default::default(),
-            crypto: Default::default(),
-        })
+            ..Default::default()
+        };
+        Ok(opts)
     }
 }
 
@@ -1253,6 +1301,16 @@ pub(crate) fn csv_writer_options_from_proto(
             return Err(proto_error("Error parsing CSV Escape"));
         }
     }
+    let quote_style = match protobuf::CsvQuoteStyle::try_from(writer_options.quote_style)
+    {
+        Ok(protobuf::CsvQuoteStyle::Always) => QuoteStyle::Always,
+        Ok(protobuf::CsvQuoteStyle::NonNumeric) => QuoteStyle::NonNumeric,
+        Ok(protobuf::CsvQuoteStyle::Never) => QuoteStyle::Never,
+        Ok(protobuf::CsvQuoteStyle::Necessary) => QuoteStyle::Necessary,
+        _ => Err(proto_error(
+            "Unknown quote style, must be one of: 'Always', 'NonNumeric', 'Never', 'Necessary'",
+        ))?,
+    };
     Ok(builder
         .with_header(writer_options.has_header)
         .with_date_format(writer_options.date_format.clone())
@@ -1260,5 +1318,92 @@ pub(crate) fn csv_writer_options_from_proto(
         .with_timestamp_format(writer_options.timestamp_format.clone())
         .with_time_format(writer_options.time_format.clone())
         .with_null(writer_options.null_value.clone())
-        .with_double_quote(writer_options.double_quote))
+        .with_double_quote(writer_options.double_quote)
+        .with_quote_style(quote_style)
+        .with_ignore_leading_whitespace(writer_options.ignore_leading_whitespace)
+        .with_ignore_trailing_whitespace(writer_options.ignore_trailing_whitespace))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::config::{CdcOptions, ParquetOptions, TableParquetOptions};
+
+    fn parquet_options_proto_round_trip(opts: ParquetOptions) -> ParquetOptions {
+        let proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        ParquetOptions::try_from(&proto).expect("from_proto")
+    }
+
+    fn table_parquet_options_proto_round_trip(
+        opts: TableParquetOptions,
+    ) -> TableParquetOptions {
+        let proto: crate::protobuf_common::TableParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        TableParquetOptions::try_from(&proto).expect("from_proto")
+    }
+
+    #[test]
+    fn test_parquet_options_cdc_disabled_round_trip() {
+        let opts = ParquetOptions::default();
+        assert!(opts.use_content_defined_chunking.is_none());
+        let recovered = parquet_options_proto_round_trip(opts.clone());
+        assert_eq!(opts, recovered);
+    }
+
+    #[test]
+    fn test_parquet_options_cdc_enabled_round_trip() {
+        let opts = ParquetOptions {
+            use_content_defined_chunking: Some(CdcOptions {
+                min_chunk_size: 128 * 1024,
+                max_chunk_size: 512 * 1024,
+                norm_level: 2,
+            }),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts.clone());
+        let cdc = recovered.use_content_defined_chunking.unwrap();
+        assert_eq!(cdc.min_chunk_size, 128 * 1024);
+        assert_eq!(cdc.max_chunk_size, 512 * 1024);
+        assert_eq!(cdc.norm_level, 2);
+    }
+
+    #[test]
+    fn test_parquet_options_cdc_negative_norm_level_round_trip() {
+        let opts = ParquetOptions {
+            use_content_defined_chunking: Some(CdcOptions {
+                norm_level: -3,
+                ..CdcOptions::default()
+            }),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts);
+        assert_eq!(
+            recovered.use_content_defined_chunking.unwrap().norm_level,
+            -3
+        );
+    }
+
+    #[test]
+    fn test_table_parquet_options_cdc_round_trip() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.use_content_defined_chunking = Some(CdcOptions {
+            min_chunk_size: 64 * 1024,
+            max_chunk_size: 2 * 1024 * 1024,
+            norm_level: -1,
+        });
+
+        let recovered = table_parquet_options_proto_round_trip(opts.clone());
+        let cdc = recovered.global.use_content_defined_chunking.unwrap();
+        assert_eq!(cdc.min_chunk_size, 64 * 1024);
+        assert_eq!(cdc.max_chunk_size, 2 * 1024 * 1024);
+        assert_eq!(cdc.norm_level, -1);
+    }
+
+    #[test]
+    fn test_table_parquet_options_cdc_disabled_round_trip() {
+        let opts = TableParquetOptions::default();
+        assert!(opts.global.use_content_defined_chunking.is_none());
+        let recovered = table_parquet_options_proto_round_trip(opts.clone());
+        assert!(recovered.global.use_content_defined_chunking.is_none());
+    }
 }

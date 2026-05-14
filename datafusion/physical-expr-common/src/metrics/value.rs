@@ -468,6 +468,8 @@ pub struct RatioMetrics {
     part: Arc<AtomicUsize>,
     total: Arc<AtomicUsize>,
     merge_strategy: RatioMergeStrategy,
+    /// Ratios are displayed as `1% (1/100)`; this controls the latter part.
+    display_raw_values: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -485,11 +487,17 @@ impl RatioMetrics {
             part: Arc::new(AtomicUsize::new(0)),
             total: Arc::new(AtomicUsize::new(0)),
             merge_strategy: RatioMergeStrategy::AddPartAddTotal,
+            display_raw_values: true,
         }
     }
 
     pub fn with_merge_strategy(mut self, merge_strategy: RatioMergeStrategy) -> Self {
         self.merge_strategy = merge_strategy;
+        self
+    }
+
+    pub fn with_display_raw_values(mut self, display_raw_values: bool) -> Self {
+        self.display_raw_values = display_raw_values;
         self
     }
 
@@ -544,44 +552,53 @@ impl RatioMetrics {
 
 impl PartialEq for RatioMetrics {
     fn eq(&self, other: &Self) -> bool {
-        self.part() == other.part() && self.total() == other.total()
+        self.part() == other.part()
+            && self.total() == other.total()
+            && self.display_raw_values == other.display_raw_values
     }
-}
-
-/// Format a float number with `digits` most significant numbers.
-///
-/// fmt_significant(12.5) -> "12"
-/// fmt_significant(0.0543) -> "0.054"
-/// fmt_significant(0.000123) -> "0.00012"
-fn fmt_significant(mut x: f64, digits: usize) -> String {
-    if x == 0.0 {
-        return "0".to_string();
-    }
-
-    let exp = x.abs().log10().floor(); // exponent of first significant digit
-    let scale = 10f64.powf(-(exp - (digits as f64 - 1.0)));
-    x = (x * scale).round() / scale; // round to N significant digits
-    format!("{x}")
 }
 
 impl Display for RatioMetrics {
+    /// Format the ratio to a format like '18.26% (220/1150)'
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let part = self.part();
         let total = self.total();
 
+        // Format the ratio first (for example, `6667/10000` -> `66.67%`),
+        // then optionally append the raw values as ` (6.67 K/10.00 K)`.
+        if total == 0 {
+            write!(f, "N/A")?;
+        } else {
+            // Use basis points so we can round with integer math:
+            // e.g. 18.26% has basis point 1826
+            let basis_points = (((part as u128 * 10_000) + (total as u128 / 2))
+                / total as u128) as usize;
+            let whole = basis_points / 100;
+            let fractional = basis_points % 100;
+
+            if fractional == 0 {
+                write!(f, "{whole}%")?;
+            } else if fractional.is_multiple_of(10) {
+                write!(f, "{whole}.{}%", fractional / 10)?;
+            } else {
+                write!(f, "{whole}.{fractional:02}%")?;
+            }
+        }
+
+        if !self.display_raw_values {
+            return Ok(());
+        }
+
         if total == 0 {
             if part == 0 {
-                write!(f, "N/A (0/0)")
+                write!(f, " (0/0)")
             } else {
-                write!(f, "N/A ({}/0)", human_readable_count(part))
+                write!(f, " ({}/0)", human_readable_count(part))
             }
         } else {
-            let percentage = (part as f64 / total as f64) * 100.0;
-
             write!(
                 f,
-                "{}% ({}/{})",
-                fmt_significant(percentage, 2),
+                " ({}/{})",
                 human_readable_count(part),
                 human_readable_count(total)
             )
@@ -865,7 +882,8 @@ impl MetricValue {
                 Self::Ratio {
                     name: name.clone(),
                     ratio_metrics: RatioMetrics::new()
-                        .with_merge_strategy(merge_strategy),
+                        .with_merge_strategy(merge_strategy)
+                        .with_display_raw_values(ratio_metrics.display_raw_values),
                 }
             }
             Self::Custom { name, value } => Self::Custom {
@@ -1232,7 +1250,21 @@ mod tests {
         };
         tiny_ratio_metrics.add_part(1);
         tiny_ratio_metrics.add_total(3000);
-        assert_eq!("0.033% (1/3.00 K)", tiny_ratio.to_string());
+        assert_eq!("0.03% (1/3.00 K)", tiny_ratio.to_string());
+
+        ratio_metrics.set_part(6667);
+        ratio_metrics.set_total(10_000);
+        assert_eq!("66.67% (6.67 K/10.00 K)", ratio.to_string());
+
+        let percentage_only = RatioMetrics::new().with_display_raw_values(false);
+        let ratio = MetricValue::Ratio {
+            name: Cow::Borrowed("percentage_only"),
+            ratio_metrics: percentage_only.clone(),
+        };
+        assert_eq!("N/A", ratio.to_string());
+        percentage_only.set_part(6667);
+        percentage_only.set_total(10_000);
+        assert_eq!("66.67%", ratio.to_string());
     }
 
     #[test]

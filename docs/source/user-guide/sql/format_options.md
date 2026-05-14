@@ -29,7 +29,7 @@ Format-related options can be specified in three ways, in decreasing order of pr
 - `COPY` option tuples
 - Session-level config defaults
 
-For a list of supported session-level config defaults, see [Configuration Settings](../configs). These defaults apply to all operations but have the lowest level of precedence.
+For a list of supported session-level config defaults, see [Configuration Settings](../configs.md). These defaults apply to all operations but have the lowest level of precedence.
 
 If creating an external table, table-specific format options can be specified when the table is created using the `OPTIONS` clause:
 

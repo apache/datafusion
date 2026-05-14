@@ -35,19 +35,24 @@
 //!    - `Inexact`: Keep Sort but use optimized input (enables early termination for TopK)
 //!    - `Unsupported`: No change
 //!
-//! ## Current capabilities (Phase 1)
+//! ## Capabilities
 //!
-//! - Reverse scan optimization: when required sort is the reverse of the data source's
+//! - **Sort elimination**: when a data source's natural ordering satisfies the
+//!   request, return `Exact` and remove the `SortExec` entirely. Preserves
+//!   `fetch` (LIMIT) from the eliminated `SortExec` for early termination.
+//! - **Statistics-based file sorting**: sort files within each partition by
+//!   min/max statistics. When files are non-overlapping but listed in wrong
+//!   order (e.g., alphabetical order ≠ sort key order), this fixes the ordering
+//!   and enables sort elimination. Works for both single-partition and
+//!   multi-partition plans with multi-file groups.
+//! - **Reverse scan optimization**: when required sort is the reverse of the data source's
 //!   natural ordering, enable reverse scanning (reading row groups in reverse order)
-//! - Supports prefix matching: if data has ordering [A DESC, B ASC] and query needs
-//!   [A ASC], reversing gives [A ASC, B DESC] which satisfies the requirement
+//! - **Prefix matching**: if data has ordering [A DESC, B ASC] and query needs
+//!   [A DESC], the existing ordering satisfies the requirement (`Exact`).
+//!   If the query needs [A ASC] (reverse of the prefix), a reverse scan is
+//!   used (`Inexact`, `SortExec` retained)
 //!
-//! TODO Issue: <https://github.com/apache/datafusion/issues/19329>
-//! ## Future enhancements (Phase 2),
-//!
-//! - File reordering based on statistics
-//! - Return `Exact` when files are known to be perfectly sorted
-//! - Complete Sort elimination when ordering is guaranteed
+//! Related issue: <https://github.com/apache/datafusion/issues/17348>
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
@@ -55,7 +60,10 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::buffer::BufferExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::sync::Arc;
 
 /// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources.
@@ -81,10 +89,60 @@ impl PhysicalOptimizerRule for PushdownSort {
             return Ok(plan);
         }
 
+        let buffer_capacity = config.execution.sort_pushdown_buffer_capacity;
+
         // Use transform_down to find and optimize all SortExec nodes (including nested ones)
+        // Also handles SPM → SortExec pattern to insert BufferExec when sort is eliminated
         plan.transform_down(|plan: Arc<dyn ExecutionPlan>| {
-            // Check if this is a SortExec
-            let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() else {
+            // Pattern 1: SPM → SortExec(preserve_partitioning)
+            // When we eliminate the SortExec, SPM loses its memory buffer and reads
+            // directly from I/O-bound sources. Insert a BufferExec to compensate.
+            if let Some(spm) = plan.downcast_ref::<SortPreservingMergeExec>()
+                && let Some(sort_child) = spm.input().downcast_ref::<SortExec>()
+                && sort_child.preserve_partitioning()
+            {
+                let sort_input = Arc::clone(sort_child.input());
+                let required_ordering = sort_child.expr();
+                match sort_input.try_pushdown_sort(required_ordering)? {
+                    SortOrderPushdownResult::Exact { inner } => {
+                        // Preserve fetch (LIMIT) from the eliminated SortExec.
+                        // Use LocalLimitExec (not Global) since input is multi-partition.
+                        let inner = if let Some(fetch) = sort_child.fetch() {
+                            inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
+                                Arc::new(LocalLimitExec::new(inner, fetch))
+                            })
+                        } else {
+                            inner
+                        };
+                        // Insert BufferExec to replace SortExec's buffering role.
+                        // SortExec buffered all data in memory; BufferExec provides
+                        // bounded buffering so SPM doesn't stall on I/O.
+                        let buffered: Arc<dyn ExecutionPlan> =
+                            Arc::new(BufferExec::new(inner, buffer_capacity));
+                        let new_spm =
+                            SortPreservingMergeExec::new(spm.expr().clone(), buffered)
+                                .with_fetch(spm.fetch());
+                        return Ok(Transformed::yes(Arc::new(new_spm)));
+                    }
+                    SortOrderPushdownResult::Inexact { inner } => {
+                        let new_sort = SortExec::new(required_ordering.clone(), inner)
+                            .with_fetch(sort_child.fetch())
+                            .with_preserve_partitioning(true);
+                        let new_spm = SortPreservingMergeExec::new(
+                            spm.expr().clone(),
+                            Arc::new(new_sort),
+                        )
+                        .with_fetch(spm.fetch());
+                        return Ok(Transformed::yes(Arc::new(new_spm)));
+                    }
+                    SortOrderPushdownResult::Unsupported => {
+                        return Ok(Transformed::no(plan));
+                    }
+                }
+            }
+
+            // Pattern 2: Standalone SortExec (no SPM parent)
+            let Some(sort_exec) = plan.downcast_ref::<SortExec>() else {
                 return Ok(Transformed::no(plan));
             };
 
@@ -95,8 +153,20 @@ impl PhysicalOptimizerRule for PushdownSort {
             // Each node type defines its own pushdown behavior via try_pushdown_sort()
             match sort_input.try_pushdown_sort(required_ordering)? {
                 SortOrderPushdownResult::Exact { inner } => {
-                    // Data source guarantees perfect ordering - remove the Sort operator
-                    Ok(Transformed::yes(inner))
+                    // Data source guarantees perfect ordering - remove the Sort operator.
+                    //
+                    // If the SortExec carried a fetch (LIMIT), we must preserve it.
+                    // First try pushing the limit into the source via `with_fetch()`.
+                    // If the source doesn't support `with_fetch`, fall back to
+                    // wrapping with GlobalLimitExec.
+                    if let Some(fetch) = sort_exec.fetch() {
+                        let inner = inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
+                            Arc::new(GlobalLimitExec::new(inner, 0, Some(fetch)))
+                        });
+                        Ok(Transformed::yes(inner))
+                    } else {
+                        Ok(Transformed::yes(inner))
+                    }
                 }
                 SortOrderPushdownResult::Inexact { inner } => {
                     // Data source is optimized for the ordering but not perfectly sorted

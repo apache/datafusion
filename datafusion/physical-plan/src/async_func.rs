@@ -17,7 +17,7 @@
 
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     check_if_same_properties,
@@ -37,7 +37,6 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use futures::Stream;
 use futures::stream::StreamExt;
 use log::trace;
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
@@ -156,10 +155,6 @@ impl DisplayAs for AsyncFuncExec {
 impl ExecutionPlan for AsyncFuncExec {
     fn name(&self) -> &str {
         "async_func"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -295,6 +290,10 @@ impl Stream for CoalesceInputStream {
                 }
                 None => {
                     completed = true;
+                    // Release the input pipeline's resources.
+                    let input_schema = self.input_stream.schema();
+                    self.input_stream =
+                        Box::pin(EmptyRecordBatchStream::new(input_schema));
                     if let Err(err) = self.batch_coalescer.finish() {
                         return Poll::Ready(Some(Err(err)));
                     }
@@ -343,8 +342,7 @@ impl AsyncMapper {
     ) -> Result<()> {
         // recursively look for references to async functions
         physical_expr.apply(|expr| {
-            if let Some(scalar_func_expr) =
-                expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+            if let Some(scalar_func_expr) = expr.downcast_ref::<ScalarFunctionExpr>()
                 && scalar_func_expr.fun().as_async().is_some()
             {
                 let next_name = self.next_column_name();

@@ -34,7 +34,6 @@ use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
-use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -251,10 +250,6 @@ fn get_nth_value_doc() -> &'static Documentation {
 }
 
 impl WindowUDFImpl for NthValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.kind.name()
     }
@@ -313,14 +308,22 @@ impl WindowUDFImpl for NthValue {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
-        let return_type = field_args
-            .input_fields()
-            .first()
-            .map(|f| f.data_type())
-            .cloned()
-            .unwrap_or(DataType::Null);
+        let input_field =
+            field_args
+                .input_fields()
+                .first()
+                .cloned()
+                .unwrap_or_else(|| {
+                    Arc::new(Field::new(field_args.name(), DataType::Null, true))
+                });
 
-        Ok(Field::new(field_args.name(), return_type, true).into())
+        // Clone the input field to preserve metadata, update name and nullability
+        Ok(input_field
+            .as_ref()
+            .clone()
+            .with_name(field_args.name())
+            .with_nullable(true)
+            .into())
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {

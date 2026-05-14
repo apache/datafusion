@@ -17,7 +17,6 @@
 
 //! Defines `BitAnd`, `BitOr`, `BitXor` and `BitXor DISTINCT` aggregate accumulators
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -240,10 +239,6 @@ impl BitwiseOperation {
 }
 
 impl AggregateUDFImpl for BitwiseOperation {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.func_name
     }

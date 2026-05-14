@@ -31,7 +31,7 @@ use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::catalog::{Session, TableFunctionImpl};
+use datafusion::catalog::{Session, TableFunctionArgs, TableFunctionImpl};
 use datafusion::common::{Column, plan_err};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -229,10 +229,6 @@ struct ParquetMetadataTable {
 
 #[async_trait]
 impl TableProvider for ParquetMetadataTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -326,7 +322,8 @@ fn fixed_len_byte_array_to_string(val: Option<&FixedLenByteArray>) -> Option<Str
 pub struct ParquetMetadataFunc {}
 
 impl TableFunctionImpl for ParquetMetadataFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         let filename = match exprs.first() {
             Some(Expr::Literal(ScalarValue::Utf8(Some(s)), _)) => s, // single quote: parquet_metadata('x.parquet')
             Some(Expr::Column(Column { name, .. })) => name, // double quote: parquet_metadata("x.parquet")
@@ -478,10 +475,6 @@ struct MetadataCacheTable {
 
 #[async_trait]
 impl TableProvider for MetadataCacheTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -517,7 +510,8 @@ impl MetadataCacheFunc {
 }
 
 impl TableFunctionImpl for MetadataCacheFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         if !exprs.is_empty() {
             return plan_err!("metadata_cache should have no arguments");
         }
@@ -596,10 +590,6 @@ struct StatisticsCacheTable {
 
 #[async_trait]
 impl TableProvider for StatisticsCacheTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -635,7 +625,8 @@ impl StatisticsCacheFunc {
 }
 
 impl TableFunctionImpl for StatisticsCacheFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         if !exprs.is_empty() {
             return plan_err!("statistics_cache should have no arguments");
         }
@@ -731,10 +722,6 @@ struct ListFilesCacheTable {
 
 #[async_trait]
 impl TableProvider for ListFilesCacheTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -770,7 +757,8 @@ impl ListFilesCacheFunc {
 }
 
 impl TableFunctionImpl for ListFilesCacheFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         if !exprs.is_empty() {
             return plan_err!("list_files_cache should have no arguments");
         }

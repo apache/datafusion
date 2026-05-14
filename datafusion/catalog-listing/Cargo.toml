@@ -48,6 +48,7 @@ log = { workspace = true }
 object_store = { workspace = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 datafusion-datasource-parquet = { workspace = true }
 
 # Note: add additional linter rules in lib.rs.

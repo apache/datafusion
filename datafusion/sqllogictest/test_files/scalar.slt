@@ -1739,6 +1739,13 @@ SELECT 'a' || 42 || 23.3
 ----
 a4223.3
 
+# Concat operator of two binaries uses their binary representation without text at all
+query ?
+select arrow_cast('Café', 'Binary') || arrow_cast('Foobar', 'Binary');
+----
+436166c3a9466f6f626172
+
+
 # test_not_expressions()
 
 query BB

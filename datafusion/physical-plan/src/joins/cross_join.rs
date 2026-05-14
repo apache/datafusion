@@ -18,7 +18,7 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
-use std::{any::Any, sync::Arc, task::Poll};
+use std::{sync::Arc, task::Poll};
 
 use super::utils::{
     BatchSplitter, BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer,
@@ -31,6 +31,7 @@ use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs,
 };
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -269,10 +270,6 @@ impl DisplayAs for CrossJoinExec {
 impl ExecutionPlan for CrossJoinExec {
     fn name(&self) -> &'static str {
         "CrossJoinExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -649,7 +646,12 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         let right_data = match ready!(self.right.poll_next_unpin(cx)) {
             Some(Ok(right_data)) => right_data,
             Some(Err(e)) => return Poll::Ready(Err(e)),
-            None => return Poll::Ready(Ok(StatefulStreamResult::Ready(None))),
+            None => {
+                // Release the right (probe) input pipeline's resources.
+                let right_schema = self.right.schema();
+                self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
+                return Poll::Ready(Ok(StatefulStreamResult::Ready(None)));
+            }
         };
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(right_data.num_rows());

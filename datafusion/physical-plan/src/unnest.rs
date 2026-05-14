@@ -18,14 +18,15 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
+use std::sync::Arc;
 use std::task::{Poll, ready};
-use std::{any::Any, sync::Arc};
 
 use super::metrics::{
-    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
-    RecordOutput,
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    MetricsSet, RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
     SendableRecordBatchStream, check_if_same_properties,
@@ -230,10 +231,6 @@ impl ExecutionPlan for UnnestExec {
         "UnnestExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -302,10 +299,13 @@ struct UnnestMetrics {
 
 impl UnnestMetrics {
     fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
+        let input_batches = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_batches", partition);
 
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+        let input_rows = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_rows", partition);
 
         Self {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
@@ -383,6 +383,7 @@ impl UnnestStream {
                     debug_assert!(result_batch.num_rows() > 0);
                     Some(Ok(result_batch))
                 }
+                // If the stream is depleted or returned an error, log the finish message:
                 other => {
                     trace!(
                         "Processed {} probe-side input batches containing {} rows and \
@@ -393,6 +394,14 @@ impl UnnestStream {
                         self.metrics.baseline_metrics.output_rows(),
                         self.metrics.baseline_metrics.elapsed_compute(),
                     );
+
+                    // In the non-error case, i.e., input is simply depleted:
+                    if other.is_none() {
+                        // Release the input pipeline's resources.
+                        let input_schema = self.input.schema();
+                        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+                    }
+
                     other
                 }
             });

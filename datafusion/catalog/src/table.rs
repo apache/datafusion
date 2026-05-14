@@ -23,8 +23,8 @@ use std::sync::Arc;
 use crate::session::Session;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::Result;
 use datafusion_common::{Constraints, Statistics, not_impl_err};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
 
 use datafusion_expr::dml::InsertOp;
@@ -48,11 +48,7 @@ use datafusion_physical_plan::ExecutionPlan;
 /// [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
 /// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
-pub trait TableProvider: Debug + Sync + Send {
-    /// Returns the table provider as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait TableProvider: Any + Debug + Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
@@ -268,7 +264,6 @@ pub trait TableProvider: Debug + Sync + Send {
     ///
     /// #[async_trait]
     /// impl TableProvider for TestDataSource {
-    /// # fn as_any(&self) -> &dyn Any { todo!() }
     /// # fn schema(&self) -> SchemaRef { todo!() }
     /// # fn table_type(&self) -> TableType { todo!() }
     /// # async fn scan(&self, s: &dyn Session, p: Option<&Vec<usize>>, f: &[Expr], l: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -382,6 +377,26 @@ pub trait TableProvider: Debug + Sync + Send {
     /// representing the number of rows removed.
     async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("TRUNCATE not supported for {} table", self.table_type())
+    }
+}
+
+impl dyn TableProvider {
+    /// Returns `true` if the table provider is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn TableProvider>` via auto-deref.
+    pub fn is<T: TableProvider>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this table provider to a concrete type `T`,
+    /// returning `None` if the provider is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn TableProvider>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: TableProvider>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
     }
 }
 
@@ -507,10 +522,49 @@ pub trait TableProviderFactory: Debug + Sync + Send {
     ) -> Result<Arc<dyn TableProvider>>;
 }
 
+/// Describes arguments provided to the table function call.
+pub struct TableFunctionArgs<'e, 's> {
+    /// Call arguments.
+    exprs: &'e [Expr],
+    /// Session within which the function is called.
+    session: &'s dyn Session,
+}
+
+impl<'e, 's> TableFunctionArgs<'e, 's> {
+    /// Make a new [`TableFunctionArgs`].
+    pub fn new(exprs: &'e [Expr], session: &'s dyn Session) -> Self {
+        Self { exprs, session }
+    }
+
+    /// Get expressions passed as the called function arguments.
+    pub fn exprs(&self) -> &'e [Expr] {
+        self.exprs
+    }
+
+    /// Get a session where the table function is called.
+    pub fn session(&self) -> &'s dyn Session {
+        self.session
+    }
+}
+
 /// A trait for table function implementations
 pub trait TableFunctionImpl: Debug + Sync + Send + Any {
     /// Create a table provider
-    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
+    #[deprecated(
+        since = "53.0.0",
+        note = "Implement `TableFunctionImpl::call_with_args` instead"
+    )]
+    fn call(&self, _exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        internal_err!(
+            "TableFunctionImpl::call is not implemented. Implement TableFunctionImpl::call_with_args instead."
+        )
+    }
+
+    /// Create a table provider
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        #[expect(deprecated)]
+        self.call(args.exprs)
+    }
 }
 
 /// A table that uses a function to generate data
@@ -539,7 +593,20 @@ impl TableFunction {
     }
 
     /// Get the function implementation and generate a table
+    #[deprecated(
+        since = "53.0.0",
+        note = "Use `TableFunction::create_table_provider_with_args` instead"
+    )]
     pub fn create_table_provider(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        #[expect(deprecated)]
         self.fun.call(args)
+    }
+
+    /// Get the function implementation and generate a table
+    pub fn create_table_provider_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> Result<Arc<dyn TableProvider>> {
+        self.fun.call_with_args(args)
     }
 }

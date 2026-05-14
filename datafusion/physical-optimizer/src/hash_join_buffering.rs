@@ -64,14 +64,14 @@ impl PhysicalOptimizerRule for HashJoinBuffering {
         }
 
         plan.transform_down(|plan| {
-            let Some(node) = plan.as_any().downcast_ref::<HashJoinExec>() else {
+            let Some(node) = plan.downcast_ref::<HashJoinExec>() else {
                 return Ok(Transformed::no(plan));
             };
             let plan = Arc::clone(&plan);
             Ok(Transformed::yes(
                 if HashJoinExec::probe_side() == JoinSide::Left {
                     // Do not stack BufferExec nodes together.
-                    if node.left.as_any().downcast_ref::<BufferExec>().is_some() {
+                    if node.left.is::<BufferExec>() {
                         return Ok(Transformed::no(plan));
                     }
                     plan.with_new_children(vec![
@@ -80,7 +80,7 @@ impl PhysicalOptimizerRule for HashJoinBuffering {
                     ])?
                 } else {
                     // Do not stack BufferExec nodes together.
-                    if node.right.as_any().downcast_ref::<BufferExec>().is_some() {
+                    if node.right.is::<BufferExec>() {
                         return Ok(Transformed::no(plan));
                     }
                     plan.with_new_children(vec![

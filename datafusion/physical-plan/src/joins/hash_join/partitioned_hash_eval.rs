@@ -17,7 +17,7 @@
 
 //! Hash computation and hash table lookup expressions for dynamic filtering
 
-use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
+use std::{fmt::Display, hash::Hash, sync::Arc};
 
 use arrow::{
     array::{ArrayRef, UInt64Array},
@@ -154,10 +154,6 @@ impl Display for HashExpr {
 }
 
 impl PhysicalExpr for HashExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         self.on_columns.iter().collect()
     }
@@ -300,10 +296,6 @@ impl Display for HashTableLookupExpr {
 }
 
 impl PhysicalExpr for HashTableLookupExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         self.on_columns.iter().collect()
     }

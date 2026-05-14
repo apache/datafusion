@@ -26,6 +26,7 @@ repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
+publish = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -65,7 +66,7 @@ object_store = { workspace = true }
 # needs to be compiled
 tokio = { workspace = true }
 url = { workspace = true }
-wasm-bindgen-test = "0.3.62"
+wasm-bindgen-test = "0.3.66"
 
 [package.metadata.cargo-machete]
 ignored = ["chrono", "getrandom"]
