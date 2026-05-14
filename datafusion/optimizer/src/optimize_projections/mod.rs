@@ -546,36 +546,36 @@ fn can_remove_unused_unnest_for_exprs(unnest: &Unnest, exprs: &[Expr]) -> Result
         return Ok(false);
     }
 
-    let unnested_input_indices = unnest
-        .list_type_columns
-        .iter()
-        .map(|(idx, _)| *idx)
-        .chain(unnest.struct_type_columns.iter().copied())
-        .collect::<Vec<_>>();
-
     let mut columns = HashSet::new();
     for expr in exprs {
         expr_to_columns(expr, &mut columns)?;
     }
 
-    columns.into_iter().try_fold(true, |can_remove, column| {
-        if !can_remove {
+    for column in columns {
+        let output_index = unnest.schema.index_of_column(&column)?;
+        if is_unnested_input_index(unnest, unnest.dependency_indices[output_index]) {
             return Ok(false);
         }
-        let output_index = unnest.schema.index_of_column(&column)?;
-        Ok(!unnested_input_indices
-            .iter()
-            .any(|idx| unnest.dependency_indices[output_index] == *idx))
-    })
+    }
+
+    Ok(true)
+}
+
+fn is_unnested_input_index(unnest: &Unnest, input_index: usize) -> bool {
+    unnest
+        .list_type_columns
+        .iter()
+        .map(|(idx, _)| *idx)
+        .chain(unnest.struct_type_columns.iter().copied())
+        .any(|idx| idx == input_index)
 }
 
 fn unnest_preserves_at_least_one_row_per_input(unnest: &Unnest) -> bool {
-    unnest.list_type_columns.is_empty()
-        || unnest.list_type_columns.iter().all(|(input_index, _)| {
-            unnest_input_expr(unnest, *input_index)
-                .and_then(literal_non_empty_list)
-                .unwrap_or(false)
-        })
+    unnest.list_type_columns.iter().all(|(input_index, _)| {
+        unnest_input_expr(unnest, *input_index)
+            .and_then(literal_non_empty_list)
+            .unwrap_or(false)
+    })
 }
 
 fn unnest_input_expr(unnest: &Unnest, input_index: usize) -> Option<&Expr> {
@@ -596,22 +596,26 @@ fn literal_non_empty_list(expr: &Expr) -> Option<bool> {
 
     match value {
         ScalarValue::List(array) => {
-            Some(!array.is_empty() && array.is_valid(0) && array.value_length(0) > 0)
+            Some(has_valid_first_value(array.as_ref()) && array.value_length(0) > 0)
         }
         ScalarValue::LargeList(array) => {
-            Some(!array.is_empty() && array.is_valid(0) && array.value_length(0) > 0)
+            Some(has_valid_first_value(array.as_ref()) && array.value_length(0) > 0)
         }
         ScalarValue::FixedSizeList(array) => {
-            Some(!array.is_empty() && array.is_valid(0) && array.value_length() > 0)
+            Some(has_valid_first_value(array.as_ref()) && array.value_length() > 0)
         }
         ScalarValue::ListView(array) => {
-            Some(!array.is_empty() && array.is_valid(0) && array.value_sizes()[0] > 0)
+            Some(has_valid_first_value(array.as_ref()) && array.value_sizes()[0] > 0)
         }
         ScalarValue::LargeListView(array) => {
-            Some(!array.is_empty() && array.is_valid(0) && array.value_sizes()[0] > 0)
+            Some(has_valid_first_value(array.as_ref()) && array.value_sizes()[0] > 0)
         }
         _ => None,
     }
+}
+
+fn has_valid_first_value(array: &impl Array) -> bool {
+    !array.is_empty() && array.is_valid(0)
 }
 
 /// Optimizes uncorrelated subquery plans embedded in expressions of the given
@@ -1109,6 +1113,22 @@ mod tests {
         }};
     }
 
+    fn id_schema() -> Schema {
+        Schema::new(vec![Field::new("id", DataType::UInt32, false)])
+    }
+
+    fn list_literal_expr(values: Vec<Option<i64>>) -> Expr {
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(values)]);
+        Expr::Literal(ScalarValue::List(Arc::new(list)), None)
+    }
+
+    fn id_elem_unnest_plan(values: Vec<Option<i64>>) -> Result<LogicalPlanBuilder> {
+        let schema = id_schema();
+        table_scan(Some("test"), &schema, None)?
+            .project(vec![col("id"), list_literal_expr(values).alias("elem")])?
+            .unnest_column(Column::from_name("elem"))
+    }
+
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct NoOpUserDefined {
         exprs: Vec<Expr>,
@@ -1437,17 +1457,7 @@ mod tests {
 
     #[test]
     fn remove_unused_non_empty_literal_unnest_under_group_by() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
-        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-            Some(1),
-            Some(2),
-        ])]);
-        let plan = table_scan(Some("test"), &schema, None)?
-            .project(vec![
-                col("id"),
-                Expr::Literal(ScalarValue::List(Arc::new(list)), None).alias("elem"),
-            ])?
-            .unnest_column(Column::from_name("elem"))?
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
             .aggregate(vec![col("id")], Vec::<Expr>::new())?
             .build()?;
 
@@ -1462,17 +1472,7 @@ mod tests {
 
     #[test]
     fn remove_unused_unnest_below_projection_under_group_by() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
-        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-            Some(1),
-            Some(2),
-        ])]);
-        let plan = table_scan(Some("test"), &schema, None)?
-            .project(vec![
-                col("id"),
-                Expr::Literal(ScalarValue::List(Arc::new(list)), None).alias("elem"),
-            ])?
-            .unnest_column(Column::from_name("elem"))?
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
             .project(vec![col("id")])?
             .aggregate(vec![col("id")], Vec::<Expr>::new())?
             .build()?;
@@ -1488,17 +1488,7 @@ mod tests {
 
     #[test]
     fn keep_referenced_unnest_under_group_by() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
-        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-            Some(1),
-            Some(2),
-        ])]);
-        let plan = table_scan(Some("test"), &schema, None)?
-            .project(vec![
-                col("id"),
-                Expr::Literal(ScalarValue::List(Arc::new(list)), None).alias("elem"),
-            ])?
-            .unnest_column(Column::from_name("elem"))?
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
             .aggregate(vec![col("elem")], Vec::<Expr>::new())?
             .build()?;
 
@@ -1515,17 +1505,8 @@ mod tests {
 
     #[test]
     fn keep_unused_empty_literal_unnest_under_group_by() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
-        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(Vec::<
-            Option<i64>,
-        >::new(
-        ))]);
-        let plan = table_scan(Some("test"), &schema, None)?
-            .project(vec![
-                col("id"),
-                Expr::Literal(ScalarValue::List(Arc::new(list)), None).alias("elem"),
-            ])?
-            .unnest_column(Column::from_name("elem"))?
+        let empty_list: Vec<Option<i64>> = vec![];
+        let plan = id_elem_unnest_plan(empty_list)?
             .aggregate(vec![col("id")], Vec::<Expr>::new())?
             .build()?;
 
