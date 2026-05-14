@@ -195,6 +195,7 @@ where
     S: StringArrayType<'a>,
     O: BulkNullStringArrayBuilder,
 {
+    let mut from_map: HashMap<char, Option<char>> = HashMap::new();
     let len = string_array.len();
     let nulls = NullBuffer::union_many([
         string_array.nulls(),
@@ -213,8 +214,7 @@ where
             let string = unsafe { string_array.value_unchecked(i) };
             let from = unsafe { from_array.value_unchecked(i) };
             let to = unsafe { to_array.value_unchecked(i) };
-            let table = build_translate_table(from, to);
-            apply_translate_table(&mut builder, string, &table);
+            append_translated_row(&mut builder, string, from, to, &mut from_map);
         }
     } else {
         for i in 0..len {
@@ -222,12 +222,34 @@ where
             let string = unsafe { string_array.value_unchecked(i) };
             let from = unsafe { from_array.value_unchecked(i) };
             let to = unsafe { to_array.value_unchecked(i) };
-            let table = build_translate_table(from, to);
-            apply_translate_table(&mut builder, string, &table);
+            append_translated_row(&mut builder, string, from, to, &mut from_map);
         }
     }
 
     builder.finish(nulls)
+}
+
+#[inline]
+fn append_translated_row<B: BulkNullStringArrayBuilder>(
+    builder: &mut B,
+    string: &str,
+    from: &str,
+    to: &str,
+    from_map: &mut HashMap<char, Option<char>>,
+) {
+    if let Some(ascii_table) = build_ascii_translate_table(from, to) {
+        append_translated_ascii(builder, string, &ascii_table);
+        return;
+    }
+
+    from_map.clear();
+    let mut to_iter = to.chars();
+    for c in from.chars() {
+        let replacement = to_iter.next();
+        from_map.entry(c).or_insert(replacement);
+    }
+
+    builder.append_with(|w| write_translated_chars(w, string, from_map));
 }
 
 #[inline]
