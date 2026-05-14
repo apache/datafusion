@@ -53,6 +53,7 @@ log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true }
+rand = { workspace = true, features = ["small_rng"] }
 tokio = { workspace = true }
 
 [dev-dependencies]

@@ -2021,6 +2021,7 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
+ "rand 0.9.4",
  "tempfile",
  "tokio",
 ]
