@@ -43,8 +43,8 @@ use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
 use parquet::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, RowGroupMetaData,
-    SortingColumn,
+    FileMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder,
+    RowGroupMetaData, SortingColumn,
 };
 use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
@@ -346,7 +346,7 @@ impl<'a> DFParquetMetadata<'a> {
                                 distinct_counts_array: &mut distinct_counts_array,
                             };
                             summarize_column_statistics(
-                                file_metadata.schema_descr(),
+                                file_metadata,
                                 logical_file_schema,
                                 &physical_file_schema,
                                 &mut accumulators,
@@ -499,7 +499,7 @@ impl StatisticsAccumulators<'_> {
 }
 
 fn summarize_column_statistics(
-    parquet_schema: &SchemaDescriptor,
+    file_metadata: &FileMetaData,
     logical_file_schema: &Schema,
     physical_file_schema: &Schema,
     accumulators: &mut StatisticsAccumulators,
@@ -507,46 +507,62 @@ fn summarize_column_statistics(
     stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
 ) -> Result<()> {
-    let max_values = stats_converter.row_group_maxes(row_groups_metadata)?;
-    let min_values = stats_converter.row_group_mins(row_groups_metadata)?;
     let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
-    let is_max_value_exact_stat =
-        stats_converter.row_group_is_max_value_exact(row_groups_metadata)?;
-    let is_min_value_exact_stat =
-        stats_converter.row_group_is_min_value_exact(row_groups_metadata)?;
 
-    if let Some(max_acc) = &mut accumulators.max_accs[logical_schema_index] {
-        max_acc.update_batch(&[Arc::clone(&max_values)])?;
+    if can_use_file_min_max_statistics(
+        file_metadata,
+        stats_converter,
+        row_groups_metadata,
+    ) {
+        let max_values = stats_converter.row_group_maxes(row_groups_metadata)?;
+        let min_values = stats_converter.row_group_mins(row_groups_metadata)?;
+        let is_max_value_exact_stat =
+            stats_converter.row_group_is_max_value_exact(row_groups_metadata)?;
+        let is_min_value_exact_stat =
+            stats_converter.row_group_is_min_value_exact(row_groups_metadata)?;
 
-        // handle the common special case when all row groups have exact statistics
-        let exactness = &is_max_value_exact_stat;
-        if !exactness.is_empty() && exactness.null_count() == 0 && !exactness.has_false()
-        {
-            accumulators.is_max_value_exact[logical_schema_index] = Some(true);
-        } else if !exactness.has_true() {
-            accumulators.is_max_value_exact[logical_schema_index] = Some(false);
-        } else {
-            let val = max_acc.evaluate()?;
-            accumulators.is_max_value_exact[logical_schema_index] =
-                has_any_exact_match(&val, &max_values, exactness);
+        if let Some(max_acc) = &mut accumulators.max_accs[logical_schema_index] {
+            max_acc.update_batch(&[Arc::clone(&max_values)])?;
+
+            // handle the common special case when all row groups have exact statistics
+            let exactness = &is_max_value_exact_stat;
+            if !exactness.is_empty()
+                && exactness.null_count() == 0
+                && !exactness.has_false()
+            {
+                accumulators.is_max_value_exact[logical_schema_index] = Some(true);
+            } else if !exactness.has_true() {
+                accumulators.is_max_value_exact[logical_schema_index] = Some(false);
+            } else {
+                let val = max_acc.evaluate()?;
+                accumulators.is_max_value_exact[logical_schema_index] =
+                    has_any_exact_match(&val, &max_values, exactness);
+            }
         }
-    }
 
-    if let Some(min_acc) = &mut accumulators.min_accs[logical_schema_index] {
-        min_acc.update_batch(&[Arc::clone(&min_values)])?;
+        if let Some(min_acc) = &mut accumulators.min_accs[logical_schema_index] {
+            min_acc.update_batch(&[Arc::clone(&min_values)])?;
 
-        // handle the common special case when all row groups have exact statistics
-        let exactness = &is_min_value_exact_stat;
-        if !exactness.is_empty() && exactness.null_count() == 0 && !exactness.has_false()
-        {
-            accumulators.is_min_value_exact[logical_schema_index] = Some(true);
-        } else if !exactness.has_true() {
-            accumulators.is_min_value_exact[logical_schema_index] = Some(false);
-        } else {
-            let val = min_acc.evaluate()?;
-            accumulators.is_min_value_exact[logical_schema_index] =
-                has_any_exact_match(&val, &min_values, exactness);
+            // handle the common special case when all row groups have exact statistics
+            let exactness = &is_min_value_exact_stat;
+            if !exactness.is_empty()
+                && exactness.null_count() == 0
+                && !exactness.has_false()
+            {
+                accumulators.is_min_value_exact[logical_schema_index] = Some(true);
+            } else if !exactness.has_true() {
+                accumulators.is_min_value_exact[logical_schema_index] = Some(false);
+            } else {
+                let val = min_acc.evaluate()?;
+                accumulators.is_min_value_exact[logical_schema_index] =
+                    has_any_exact_match(&val, &min_values, exactness);
+            }
         }
+    } else {
+        // Accumulators are per file, so disabling min/max for this column only
+        // affects this file's aggregated statistics.
+        accumulators.max_accs[logical_schema_index] = None;
+        accumulators.min_accs[logical_schema_index] = None;
     }
 
     accumulators.null_counts_array[logical_schema_index] = match sum(&null_counts) {
@@ -561,7 +577,7 @@ fn summarize_column_statistics(
     // This is the same logic as parquet_column but we start from arrow schema index
     // instead of looking up by name.
     let parquet_index = parquet_column(
-        parquet_schema,
+        file_metadata.schema_descr(),
         physical_file_schema,
         logical_file_schema.field(logical_schema_index).name(),
     )
@@ -612,6 +628,33 @@ fn summarize_column_statistics(
     );
 
     Ok(())
+}
+
+fn can_use_file_min_max_statistics(
+    file_metadata: &FileMetaData,
+    stats_converter: &StatisticsConverter,
+    row_groups_metadata: &[RowGroupMetaData],
+) -> bool {
+    let Some(parquet_column_index) = stats_converter.parquet_column_index() else {
+        return true;
+    };
+
+    // This is intentionally conservative: one deprecated chunk disables file
+    // min/max statistics for this column. TODO: switch to per-chunk masking if
+    // StatisticsConverter exposes that support.
+    let has_deprecated_min_max = row_groups_metadata.iter().any(|rg| {
+        rg.columns()
+            .get(parquet_column_index)
+            .and_then(|column| column.statistics())
+            .is_some_and(|statistics| statistics.is_min_max_deprecated())
+    });
+
+    crate::can_use_min_max_statistics(
+        file_metadata.schema_descr(),
+        parquet_column_index,
+        file_metadata.column_orders().map(Vec::as_slice),
+        has_deprecated_min_max,
+    )
 }
 
 /// Compute the Arrow in-memory size for a single column
@@ -811,6 +854,17 @@ fn sorting_columns_to_physical_exprs(
 mod tests {
     use super::*;
     use arrow::array::Int32Array;
+    use arrow::datatypes::Field;
+    use datafusion_datasource::PartitionedFile;
+    use datafusion_expr::{Expr, col, lit};
+    use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
+    use datafusion_pruning::FilePruner;
+    use parquet::arrow::ArrowSchemaConverter;
+    use parquet::basic::{ColumnOrder, SortOrder};
+    use parquet::data_type::ByteArray;
+    use parquet::file::metadata::{ColumnChunkMetaData, FileMetaData};
+    use parquet::file::statistics::Statistics as ParquetStatistics;
 
     #[test]
     fn test_has_any_exact_match() {
@@ -857,6 +911,123 @@ mod tests {
             let result = has_any_exact_match(&computed_max, &row_group_maxes, &exactness);
             assert_eq!(result, Some(false));
         }
+    }
+
+    #[test]
+    fn file_pruning_ignores_unsigned_min_max_without_column_order() {
+        let schema = test_schema(DataType::UInt32);
+        let statistics = parquet_file_statistics(
+            &schema,
+            ParquetStatistics::int32(Some(-1), Some(0), None, Some(0), false),
+            None,
+        );
+
+        assert_min_max_absent(&statistics);
+        assert_file_pruning(&schema, statistics, col("c1").eq(lit(0u32)), false);
+    }
+
+    #[test]
+    fn file_pruning_uses_string_min_max_with_column_order() {
+        let schema = test_schema(DataType::Utf8);
+        let statistics = parquet_file_statistics(
+            &schema,
+            ParquetStatistics::byte_array(
+                Some(ByteArray::from("a".as_bytes().to_vec())),
+                Some(ByteArray::from("m".as_bytes().to_vec())),
+                None,
+                Some(0),
+                false,
+            ),
+            Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)]),
+        );
+
+        assert_eq!(
+            statistics.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("a".to_string())))
+        );
+        assert_eq!(
+            statistics.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("m".to_string())))
+        );
+        assert_file_pruning(&schema, statistics, col("c1").eq(lit("z")), true);
+    }
+
+    #[test]
+    fn file_pruning_ignores_deprecated_unsigned_min_max_with_column_order() {
+        let schema = test_schema(DataType::UInt32);
+        let statistics = parquet_file_statistics(
+            &schema,
+            ParquetStatistics::int32(Some(-1), Some(0), None, Some(0), true),
+            Some(vec![ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)]),
+        );
+
+        assert_min_max_absent(&statistics);
+        assert_file_pruning(&schema, statistics, col("c1").eq(lit(0u32)), false);
+    }
+
+    fn test_schema(data_type: DataType) -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("c1", data_type, false)]))
+    }
+
+    fn parquet_file_statistics(
+        schema: &SchemaRef,
+        statistics: ParquetStatistics,
+        column_orders: Option<Vec<ColumnOrder>>,
+    ) -> Statistics {
+        let metadata =
+            metadata_with_column_order(Arc::clone(schema), statistics, column_orders);
+        DFParquetMetadata::statistics_from_parquet_metadata(&metadata, schema).unwrap()
+    }
+
+    fn assert_min_max_absent(statistics: &Statistics) {
+        assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
+        assert_eq!(
+            statistics.column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+    }
+
+    fn assert_file_pruning(
+        schema: &SchemaRef,
+        statistics: Statistics,
+        predicate: Expr,
+        expected_should_prune: bool,
+    ) {
+        let predicate = logical2physical(&predicate, schema);
+        let metrics = ExecutionPlanMetricsSet::new();
+        let predicate_creation_errors =
+            MetricBuilder::new(&metrics).global_counter("predicate_creation_errors");
+        let file = PartitionedFile::new("file.parquet", 10)
+            .with_statistics(Arc::new(statistics));
+        let mut file_pruner =
+            FilePruner::try_new(predicate, schema, &file, predicate_creation_errors)
+                .unwrap();
+
+        assert_eq!(file_pruner.should_prune().unwrap(), expected_should_prune);
+    }
+
+    fn metadata_with_column_order(
+        schema: SchemaRef,
+        statistics: ParquetStatistics,
+        column_orders: Option<Vec<ColumnOrder>>,
+    ) -> ParquetMetaData {
+        let schema_descr =
+            Arc::new(ArrowSchemaConverter::new().convert(&schema).unwrap());
+        let column = ColumnChunkMetaData::builder(schema_descr.column(0))
+            .set_num_values(2)
+            .set_statistics(statistics)
+            .build()
+            .unwrap();
+        let row_group = RowGroupMetaData::builder(Arc::clone(&schema_descr))
+            .set_num_rows(2)
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap();
+        let file_metadata =
+            FileMetaData::new(1, 2, None, None, Arc::clone(&schema_descr), column_orders);
+
+        ParquetMetaData::new(file_metadata, vec![row_group])
     }
 
     mod ndv_tests {
