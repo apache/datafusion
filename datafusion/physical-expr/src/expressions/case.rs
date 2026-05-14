@@ -268,13 +268,30 @@ struct ProjectedCaseBody {
 ///     [WHEN ...]
 ///     [ELSE result]
 /// END
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct CaseExpr {
     /// The case expression body
     body: CaseBody,
     /// Evaluation method to use
     eval_method: EvalMethod,
 }
+
+// eval_method is functionally derived from body, so excluding it from
+// Hash/Eq avoids redundantly hashing the expression tree twice. For
+// nested CASE chains this prevents exponential blowup (see #22173).
+impl Hash for CaseExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.body.hash(state);
+    }
+}
+
+impl PartialEq for CaseExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.body == other.body
+    }
+}
+
+impl Eq for CaseExpr {}
 
 impl std::fmt::Display for CaseExpr {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
@@ -3152,7 +3169,8 @@ mod tests {
         let kind = col("kind", &schema)?;
         let mut label = Arc::clone(&kind);
 
-        for idx in 0..18 {
+        let num_levels = 18;
+        for idx in 0..num_levels {
             let predicate = Arc::new(BinaryExpr::new(
                 Arc::clone(&kind),
                 Operator::Eq,
@@ -3165,6 +3183,7 @@ mod tests {
         let mut hasher = CountingHasher::default();
         label.hash(&mut hasher);
 
+        println!("{num_levels} level CASE did {} hashes", hasher.write_calls);
         assert!(
             hasher.write_calls < 50_000,
             "hashing nested CASE expression took {} hasher writes and {} bytes",
