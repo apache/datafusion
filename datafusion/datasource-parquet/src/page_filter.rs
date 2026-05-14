@@ -199,6 +199,17 @@ impl PagePruningAccessPlanFilter {
         for row_group_index in row_group_indexes {
             // The selection for this particular row group
             let mut overall_selection = None;
+
+            let total_pages_in_group =
+                parquet_metadata.offset_index().map_or(0, |offset_index| {
+                    offset_index[row_group_index]
+                        .first()
+                        .map_or(0, |column| column.page_locations.len())
+                });
+            // stores the indexes of the matched pages
+            let mut matched_pages_in_group: HashSet<usize> =
+                HashSet::from_iter(0..total_pages_in_group);
+
             for predicate in page_index_predicates {
                 let column = predicate
                     .required_columns()
@@ -230,18 +241,24 @@ impl PagePruningAccessPlanFilter {
                     file_metrics,
                 );
 
-                let Some((selection, total_pages, matched_pages)) = selection else {
+                let Some((selection, pages)) = selection else {
                     trace!("No pages pruned in prune_pages_in_one_row_group");
                     continue;
                 };
-                total_pages_select += matched_pages;
-                total_pages_skip += total_pages - matched_pages;
 
                 debug!(
                     "Use filter and page index to create RowSelection {:?} from predicate: {:?}",
                     &selection,
                     predicate.predicate_expr(),
                 );
+
+                let matched_pages_indexes: HashSet<_> = pages
+                    .into_iter()
+                    .enumerate()
+                    .filter(|x| x.1)
+                    .map(|x| x.0)
+                    .collect();
+                matched_pages_in_group.retain(|x| matched_pages_indexes.contains(x));
 
                 overall_selection = update_selection(overall_selection, selection);
 
@@ -277,7 +294,14 @@ impl PagePruningAccessPlanFilter {
                         skipping all {rows_skipped} rows in row group {row_group_index}"
                     );
                 }
+            } else {
+                total_select +=
+                    parquet_metadata.row_group(row_group_index).num_rows() as usize;
             }
+
+            let pages_matched = matched_pages_in_group.len();
+            total_pages_select += pages_matched;
+            total_pages_skip += total_pages_in_group - pages_matched;
         }
 
         file_metrics.page_index_rows_pruned.add_pruned(total_skip);
@@ -309,8 +333,8 @@ fn update_selection(
     }
 }
 
-/// Returns a [`RowSelection`] for the rows in this row group to scan, in addition to the number of
-/// total and matched pages.
+/// Returns a [`RowSelection`] for the rows in this row group to scan, in addition to a vec of
+/// booleans that state if each page was matched (true) or not (false).
 ///
 /// This Row Selection is formed from the page index and the predicate skips row
 /// ranges that can be ruled out based on the predicate.
@@ -323,7 +347,7 @@ fn prune_pages_in_one_row_group(
     converter: StatisticsConverter<'_>,
     parquet_metadata: &ParquetMetaData,
     metrics: &ParquetFileMetrics,
-) -> Option<(RowSelection, usize, usize)> {
+) -> Option<(RowSelection, Vec<bool>)> {
     let pruning_stats =
         PagesPruningStatistics::try_new(row_group_index, converter, parquet_metadata)?;
 
@@ -376,10 +400,7 @@ fn prune_pages_in_one_row_group(
     };
     vec.push(selector);
 
-    let total_pages = values.len();
-    let matched_pages = values.iter().filter(|v| **v).count();
-
-    Some((RowSelection::from(vec), total_pages, matched_pages))
+    Some((RowSelection::from(vec), values))
 }
 
 /// Implement [`PruningStatistics`] for one column's PageIndex (column_index + offset_index)

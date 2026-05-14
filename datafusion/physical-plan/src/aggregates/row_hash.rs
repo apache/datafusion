@@ -29,11 +29,13 @@ use crate::aggregates::group_values::{
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_id_array,
+    max_duplicate_ordinal,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -362,6 +364,7 @@ pub(crate) struct GroupedHashAggregateStream {
     // the execution.
     // ========================================================================
     schema: SchemaRef,
+    input_schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
 
@@ -669,6 +672,7 @@ impl GroupedHashAggregateStream {
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
+            input_schema: agg.input().schema(),
             input,
             mode: agg.mode,
             accumulators,
@@ -842,6 +846,10 @@ impl Stream for GroupedHashAggregateStream {
                                     self.group_values.len()
                                 )));
                             }
+                            // Release the input pipeline's resources.
+                            let input_schema = self.input.schema();
+                            self.input =
+                                Box::pin(EmptyRecordBatchStream::new(input_schema));
                             self.exec_state = ExecutionState::Done;
                         }
                     }
@@ -1160,6 +1168,104 @@ impl GroupedHashAggregateStream {
         Ok(Some(batch))
     }
 
+    /// Registers groups for empty grouping sets when no input rows were seen.
+    ///
+    /// `GROUP BY GROUPING SETS (())` must always produce one row even when there
+    /// are no input rows (standard SQL semantics for a "grand total" group).
+    /// Mixed grouping sets like `GROUPING SETS (a, ())` also produce one row for
+    /// the empty set `()` on empty input.
+    ///
+    /// This method interns the group keys and primes the accumulators so they
+    /// produce their zero-row aggregate values (e.g. `NULL` for `SUM`,
+    /// `0` for `COUNT`).
+    fn init_empty_grouping_sets(&mut self) -> Result<()> {
+        if !self.group_by.has_grouping_set() || !self.group_values.is_empty() {
+            return Ok(());
+        }
+
+        let max_ordinal = max_duplicate_ordinal(self.group_by.groups());
+        let mut ordinals: std::collections::HashMap<&[bool], usize> =
+            std::collections::HashMap::new();
+        let group_schema = self.group_by.group_schema(&self.input_schema)?;
+        let n_expr = self.group_by.expr().len();
+        let mut any_interned = false;
+
+        for group in self.group_by.groups() {
+            let ordinal = {
+                let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                let o = *entry;
+                *entry += 1;
+                o
+            };
+
+            if !group.iter().all(|&is_null| is_null) {
+                continue;
+            }
+
+            // Build the group key: one NULL per group-by expression, then the grouping_id.
+            let mut cols: Vec<ArrayRef> = group_schema
+                .fields()
+                .iter()
+                .take(n_expr)
+                .map(|f| new_null_array(f.data_type(), 1))
+                .collect();
+            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+            let starting_groups = self.group_values.len();
+            self.group_values
+                .intern(&cols, &mut self.current_group_indices)?;
+            let total_groups = self.group_values.len();
+            if total_groups > starting_groups {
+                self.group_ordering.new_groups(
+                    &cols,
+                    &self.current_group_indices,
+                    total_groups,
+                )?;
+            }
+            any_interned = true;
+        }
+
+        if any_interned {
+            // Prime each accumulator for the registered group count with no data.
+            //
+            // We build 1-row null arrays for each aggregate argument and pass them
+            // with an all-false filter.  The filter ensures no row is accumulated
+            // into any group, which keeps every group in its "zero" initial state
+            // (NULL for SUM/AVG/MIN/MAX, 0 for COUNT).
+            //
+            // Using a 1-row batch rather than 0 rows is required to avoid a fast
+            // path in `NullState::accumulate` that treats "0 nulls in a 0-row
+            // array" as "all groups have been seen", which would cause SUM to
+            // return 0 instead of NULL.
+            //
+            // Argument types are inferred directly from the expression metadata so
+            // we never need to construct a full `RecordBatch`.
+            let total_groups = self.group_values.len();
+            let null_args: Vec<Vec<ArrayRef>> = self
+                .aggregate_arguments
+                .iter()
+                .map(|args| {
+                    args.iter()
+                        .map(|expr| {
+                            let dt = expr.data_type(&self.input_schema)?;
+                            Ok(new_null_array(&dt, 1))
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let false_filter = BooleanArray::from(vec![false]);
+            for (acc, args) in self.accumulators.iter_mut().zip(null_args.iter()) {
+                if self.mode.input_mode() == AggregateInputMode::Raw {
+                    acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
+                } else {
+                    acc.merge_batch(args, &[0], Some(&false_filter), total_groups)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Emit all intermediate aggregation states, sort them, and store them on disk.
     /// This process helps in reducing memory pressure by allowing the data to be
     /// read back with streaming merge.
@@ -1254,10 +1360,16 @@ impl GroupedHashAggregateStream {
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
         self.group_ordering.input_done();
+        // Release the original input pipeline's resources now that we're done
+        // reading from it. In the spill branch below, `self.input` is replaced
+        // again with a stream that merges spill files.
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
             // Input has been entirely processed without spilling to disk.
+            self.init_empty_grouping_sets()?;
 
             // Flush any remaining group values.
             let batch = self.emit(EmitTo::All, false)?;

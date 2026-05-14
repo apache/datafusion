@@ -18,6 +18,7 @@
 //! FunctionRegistry trait
 
 use crate::expr_rewriter::FunctionRewrite;
+use crate::higher_order_function::HigherOrderUDF;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use arrow::datatypes::Field;
@@ -40,6 +41,9 @@ pub trait FunctionRegistry {
     /// Returns names of all available scalar user defined functions.
     fn udfs(&self) -> HashSet<String>;
 
+    /// Returns names of all available higher order user defined functions.
+    fn higher_order_function_names(&self) -> HashSet<String>;
+
     /// Returns names of all available aggregate user defined functions.
     fn udafs(&self) -> HashSet<String>;
 
@@ -49,6 +53,10 @@ pub trait FunctionRegistry {
     /// Returns a reference to the user defined scalar function (udf) named
     /// `name`.
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
+
+    /// Returns a reference to the user defined higher order function named
+    /// `name`.
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>>;
 
     /// Returns a reference to the user defined aggregate function (udaf) named
     /// `name`.
@@ -65,6 +73,17 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         not_impl_err!("Registering ScalarUDF")
+    }
+    /// Registers a new [`HigherOrderUDF`], returning any previously registered
+    /// implementation.
+    ///
+    /// Returns an error (the default) if the function can not be registered,
+    /// for example if the registry is read only.
+    fn register_higher_order_function(
+        &mut self,
+        _function: Arc<dyn HigherOrderUDF>,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        not_impl_err!("Registering HigherOrderUDF")
     }
     /// Registers a new [`AggregateUDF`], returning any previously registered
     /// implementation.
@@ -93,6 +112,18 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn deregister_udf(&mut self, _name: &str) -> Result<Option<Arc<ScalarUDF>>> {
         not_impl_err!("Deregistering ScalarUDF")
+    }
+
+    /// Deregisters a [`HigherOrderUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    fn deregister_higher_order_function(
+        &mut self,
+        _name: &str,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        not_impl_err!("Deregistering HigherOrderUDF")
     }
 
     /// Deregisters a [`AggregateUDF`], returning the implementation that was
@@ -166,6 +197,8 @@ pub struct MemoryFunctionRegistry {
     udafs: HashMap<String, Arc<AggregateUDF>>,
     /// Window Functions
     udwfs: HashMap<String, Arc<WindowUDF>>,
+    /// Higher Order Functions
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
 }
 
 impl MemoryFunctionRegistry {
@@ -186,6 +219,13 @@ impl FunctionRegistry for MemoryFunctionRegistry {
             .ok_or_else(|| plan_datafusion_err!("Function {name} not found"))
     }
 
+    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+        self.higher_order_functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("Higher Order Function {name} not found"))
+    }
+
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         self.udafs
             .get(name)
@@ -203,6 +243,14 @@ impl FunctionRegistry for MemoryFunctionRegistry {
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         Ok(self.udfs.insert(udf.name().to_string(), udf))
     }
+    fn register_higher_order_function(
+        &mut self,
+        function: Arc<dyn HigherOrderUDF>,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        Ok(self
+            .higher_order_functions
+            .insert(function.name().into(), function))
+    }
     fn register_udaf(
         &mut self,
         udaf: Arc<AggregateUDF>,
@@ -215,6 +263,10 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
+    }
+
+    fn higher_order_function_names(&self) -> HashSet<String> {
+        self.higher_order_functions.keys().cloned().collect()
     }
 
     fn udafs(&self) -> HashSet<String> {

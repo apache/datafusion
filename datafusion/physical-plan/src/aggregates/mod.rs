@@ -1006,7 +1006,7 @@ impl AggregateExec {
                 .iter()
                 .flat_map(|(_, target_cols)| {
                     target_cols.iter().flat_map(|(expr, _)| {
-                        expr.as_any().downcast_ref::<Column>().map(|c| c.index())
+                        expr.downcast_ref::<Column>().map(|c| c.index())
                     })
                 })
                 .collect(),
@@ -1098,7 +1098,7 @@ impl AggregateExec {
             let mut column_statistics = Statistics::unknown_column(&self.schema());
 
             for (idx, (expr, _)) in self.group_by.expr.iter().enumerate() {
-                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(col) = expr.downcast_ref::<Column>() {
                     let child_col_stats =
                         &child_statistics.column_statistics[col.index()];
                     column_statistics[idx].max_value = child_col_stats.max_value.clone();
@@ -1210,7 +1210,7 @@ impl AggregateExec {
                 if group_mask[j] {
                     continue;
                 }
-                let col = expr.as_any().downcast_ref::<Column>()?;
+                let col = expr.downcast_ref::<Column>()?;
                 let col_stats = &child_statistics.column_statistics[col.index()];
                 let ndv = *col_stats.distinct_count.get_value()?;
                 let null_adjustment = match col_stats.null_count.get_value() {
@@ -1265,7 +1265,7 @@ impl AggregateExec {
 
             // 2. arg should be only 1 column reference
             if let [arg] = aggr_expr.expressions().as_slice()
-                && arg.as_any().is::<Column>()
+                && arg.is::<Column>()
             {
                 all_cols.push(Arc::clone(arg));
                 aggr_dyn_filters.push(PerAccumulatorDynFilter {
@@ -2063,11 +2063,11 @@ fn evaluate_optional(
 /// The integer type is chosen to be the smallest `UInt8 / UInt16 / UInt32 /
 /// UInt64` that can represent both parts.  It matches the type returned by
 /// [`Aggregate::grouping_id_type`].
-fn group_id_array(
+pub(crate) fn group_id_array(
     group: &[bool],
     ordinal: usize,
     max_ordinal: usize,
-    batch: &RecordBatch,
+    num_rows: usize,
 ) -> Result<ArrayRef> {
     let n = group.len();
     if n > 64 {
@@ -2087,7 +2087,6 @@ fn group_id_array(
         (acc << 1) | if is_null { 1 } else { 0 }
     });
     let full_id = semantic_id | ((ordinal as u64) << n);
-    let num_rows = batch.num_rows();
     if total_bits <= 8 {
         Ok(Arc::new(UInt8Array::from(vec![full_id as u8; num_rows])))
     } else if total_bits <= 16 {
@@ -2106,7 +2105,7 @@ fn group_id_array(
 /// ordinal 0, the second gets 1, and so on.  If the same `Vec<bool>` appears
 /// three times the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
-fn max_duplicate_ordinal(groups: &[Vec<bool>]) -> usize {
+pub(crate) fn max_duplicate_ordinal(groups: &[Vec<bool>]) -> usize {
     let mut counts: HashMap<&[bool], usize> = HashMap::new();
     for group in groups {
         *counts.entry(group).or_insert(0) += 1;
@@ -2160,7 +2159,7 @@ pub fn evaluate_group_by(
                     group,
                     current_ordinal,
                     max_ordinal,
-                    batch,
+                    batch.num_rows(),
                 )?);
             }
             Ok(group_values)

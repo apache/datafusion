@@ -17,7 +17,6 @@
 
 //! Physical column reference: [`Column`]
 
-use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -106,11 +105,6 @@ impl std::fmt::Display for Column {
 }
 
 impl PhysicalExpr for Column {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// Get the data type of this expression, given the schema of the input
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         self.bounds_check(input_schema)?;
@@ -130,6 +124,7 @@ impl PhysicalExpr for Column {
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        self.bounds_check(input_schema)?;
         Ok(input_schema.field(self.index).clone().into())
     }
 
@@ -189,7 +184,7 @@ pub fn with_new_schema(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(expr
         .transform_up(|expr| {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            if let Some(col) = expr.downcast_ref::<Column>() {
                 let idx = col.index();
                 let Some(field) = schema.fields().get(idx) else {
                     return plan_err!(

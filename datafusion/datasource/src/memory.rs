@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -90,10 +89,6 @@ impl DataSource for MemorySourceConfig {
             )?
             .with_fetch(self.fetch),
         )))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
@@ -772,10 +767,6 @@ impl MemSink {
 
 #[async_trait]
 impl DataSink for MemSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
@@ -930,10 +921,7 @@ mod tests {
             .try_swapping_with_projection(&projection)
             .unwrap()
             .unwrap();
-        let new_source = swapped
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
-            .unwrap();
+        let new_source = swapped.downcast_ref::<MemorySourceConfig>().unwrap();
 
         assert_eq!(
             new_source.fetch,
@@ -1261,9 +1249,8 @@ mod tests {
         // Starting = batch(100_000), batch(10_000), batch(100), batch(1).
         // It should have split as p1=batch(100_000), p2=[batch(10_000), batch(100), batch(1)]
         let partitioned_datasrc = partitioned_datasrc.unwrap();
-        let Some(mem_src_config) = partitioned_datasrc
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
+        let Some(mem_src_config) =
+            partitioned_datasrc.downcast_ref::<MemorySourceConfig>()
         else {
             unreachable!()
         };
@@ -1460,9 +1447,8 @@ mod tests {
         // Starting = batch(100_000), batch(1), batch(100), batch(10_000).
         // It should have split as p1=batch(100_000), p2=[batch(1), batch(100), batch(10_000)]
         let partitioned_datasrc = partitioned_datasrc.unwrap();
-        let Some(mem_src_config) = partitioned_datasrc
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
+        let Some(mem_src_config) =
+            partitioned_datasrc.downcast_ref::<MemorySourceConfig>()
         else {
             unreachable!()
         };
