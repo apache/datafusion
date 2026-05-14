@@ -294,14 +294,21 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        // mark
-        Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
-            create_physical_expr(expr, input_dfschema, execution_props)?,
-            input_schema,
-            Arc::clone(field),
-            None,
-        ),
+        Expr::Cast(Cast { expr, .. }) => {
+            // The output field is calculated using a combination of the input
+            // and target fields. Use the calculated target field when forming the cast
+            // so that the logical and physical schemas align.
+            let (_, resolved_field) = e.to_field(input_dfschema)?;
+            expressions::cast_with_target_field(
+                create_physical_expr(expr, input_dfschema, execution_props)?,
+                input_schema,
+                Arc::clone(&resolved_field),
+                None,
+            )
+        }
         Expr::TryCast(TryCast { expr, field }) => {
+            // The physical try_cast does not support a target field,
+            // so error if the target field carries metadata that would be dropped.
             if !field.metadata().is_empty() {
                 let (_, src_field) = expr.to_field(input_dfschema)?;
                 return plan_err!(
@@ -658,8 +665,10 @@ mod tests {
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
 
-        assert_eq!(cast.target_field(), &target_field);
-        assert_eq!(physical.return_field(&schema)?, target_field);
+        let (_, logical_field) =
+            cast_expr.to_field(&DFSchema::try_from(schema.clone())?)?;
+        assert_eq!(cast.target_field(), &logical_field);
+        assert_eq!(physical.return_field(&schema)?, logical_field);
         assert!(physical.nullable(&schema)?);
 
         Ok(())

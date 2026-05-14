@@ -365,7 +365,7 @@ pub fn cast_with_target_field(
         let expr_type_disp =
             format_type_and_metadata(expr_type, Some(expr_field.metadata()));
         let cast_type_disp =
-            format_type_and_metadata(expr_type, Some(target_field.metadata()));
+            format_type_and_metadata(cast_type, Some(target_field.metadata()));
         return not_impl_err!(
             "Unsupported CAST from {expr_type_disp} to {cast_type_disp}"
         );

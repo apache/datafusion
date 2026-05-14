@@ -101,7 +101,10 @@ fn cast_output_field(
 
     if force_nullable {
         f = f.with_nullable(true);
+    } else {
+        f = f.with_nullable(source_field.is_nullable() || target_field.is_nullable());
     }
+
     Arc::new(f)
 }
 
