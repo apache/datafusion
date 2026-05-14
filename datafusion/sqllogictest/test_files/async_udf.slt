@@ -100,8 +100,12 @@ physical_plan
 02)--AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=async_abs(x@0))]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
+statement ok
+set datafusion.sql_parser.dialect = databricks;
+
 # Async udf can't be used in lambdas
-query error
+query error DataFusion error: Error during planning: Async functions in lambdas aren't supported, see https://github\.com/apache/datafusion/issues/22091
 select array_transform([1], v -> async_abs(v));
-----
-DataFusion error: Error during planning: Async functions in lambdas aren't supported, see https://github.com/apache/datafusion/issues/22091
+
+statement ok
+set datafusion.sql_parser.dialect = generic;
