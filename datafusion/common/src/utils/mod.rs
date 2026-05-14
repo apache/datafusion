@@ -24,6 +24,7 @@ pub mod proxy;
 pub mod string_utils;
 
 use crate::assert_or_internal_err;
+use crate::datatype::FieldExt;
 use crate::error::{_exec_datafusion_err, _exec_err, _internal_datafusion_err};
 use crate::{Result, ScalarValue};
 use arrow::array::{
@@ -40,13 +41,13 @@ use arrow::compute::kernels::cmp::neq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{
-    ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
+    ArrowNativeType, DataType, Field, FieldRef, Int32Type, Int64Type, SchemaRef,
 };
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, min};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::iter::repeat_n;
 use std::num::NonZero;
 use std::ops::Range;
@@ -425,6 +426,8 @@ pub struct SingleRowListArrayBuilder {
     /// Specify the field name for the resulting array. Defaults to value used in
     /// [`Field::new_list_field`]
     field_name: Option<String>,
+    /// Optional Arrow field metadata to attach to the resulting list's inner field.
+    field_metadata: Option<HashMap<String, String>>,
 }
 
 impl SingleRowListArrayBuilder {
@@ -434,6 +437,7 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable: true,
             field_name: None,
+            field_metadata: None,
         }
     }
 
@@ -449,10 +453,17 @@ impl SingleRowListArrayBuilder {
         self
     }
 
-    /// Copies field name and nullable from the specified field
-    pub fn with_field(self, field: &Field) -> Self {
-        self.with_field_name(Some(field.name().to_owned()))
-            .with_nullable(field.is_nullable())
+    /// Copies field name, nullable, and metadata from the specified field.
+    ///
+    /// Propagating metadata is required for Arrow extension types
+    /// (`ARROW:extension:name` / `ARROW:extension:metadata`) to round-trip
+    /// through SQL list constructors (e.g. `make_array`, `array_agg`).
+    pub fn with_field(mut self, field: &Field) -> Self {
+        self.field_name = Some(field.name().to_owned());
+        self.nullable = field.is_nullable();
+        let metadata = field.metadata();
+        self.field_metadata = (!metadata.is_empty()).then(|| metadata.clone());
+        self
     }
 
     /// Build a single element [`ListArray`]
@@ -524,14 +535,49 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable,
             field_name,
+            field_metadata,
         } = self;
         let data_type = arr.data_type().to_owned();
-        let field = match field_name {
+        let mut field = match field_name {
             Some(name) => Field::new(name, data_type, nullable),
             None => Field::new_list_field(data_type, nullable),
         };
+        if let Some(metadata) = field_metadata {
+            field = field.with_metadata(metadata);
+        }
         (Arc::new(field), arr)
     }
+}
+
+/// Return `inner` renamed to `name` with nullable forced to `true`, preserving
+/// its data type and metadata.
+///
+/// This is the canonical shape for the inner field of a composite SQL output
+/// (the "item" field of a list, a `cN` member of a struct, the `key`/`value`
+/// of a map, …). Preserving metadata is what lets Arrow extension types
+/// (`ARROW:extension:name` / `ARROW:extension:metadata`) round-trip through
+/// SQL list/struct/map constructors.
+///
+/// Takes `inner` by value so the caller controls cloning; combined with
+/// [`FieldExt::renamed`], the field is mutated in place when uniquely owned
+/// and short-circuits entirely when both name and nullability already match.
+/// At most one deep clone is performed.
+///
+/// Differs from [`FieldExt::renamed`] in that this function also forces
+/// nullability (the trait method preserves it).
+pub fn nullable_inner_field_from(inner: FieldRef, name: &str) -> FieldRef {
+    let mut inner = inner.renamed(name);
+    if !inner.is_nullable() {
+        Arc::make_mut(&mut inner).set_nullable(true);
+    }
+    inner
+}
+
+/// Build the canonical inner field of a list-shaped output (`List`/
+/// `LargeList`/`FixedSizeList`/`ListView`) from `inner`. Sugar for
+/// [`nullable_inner_field_from`] with [`Field::LIST_FIELD_DEFAULT_NAME`].
+pub fn nullable_list_item_field_from(inner: FieldRef) -> FieldRef {
+    nullable_inner_field_from(inner, Field::LIST_FIELD_DEFAULT_NAME)
 }
 
 /// Wrap arrays into a single element `ListArray`.

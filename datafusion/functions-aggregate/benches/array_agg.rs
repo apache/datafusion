@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
 };
-use arrow::datatypes::{Field, Int64Type};
+use arrow::datatypes::{Field, FieldRef, Int64Type};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
@@ -41,11 +41,12 @@ pub fn seedable_rng() -> StdRng {
 #[expect(clippy::needless_pass_by_value)]
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
+    let list_item_field: FieldRef = Arc::new(Field::new("v", list_item_data_type, true));
     c.bench_function(name, |b| {
         b.iter(|| {
             #[expect(clippy::unit_arg)]
             black_box(
-                ArrayAggAccumulator::try_new(&list_item_data_type, false)
+                ArrayAggAccumulator::try_new(&list_item_field, false)
                     .unwrap()
                     .merge_batch(std::slice::from_ref(&values))
                     .unwrap(),
