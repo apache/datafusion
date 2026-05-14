@@ -3183,7 +3183,6 @@ mod tests {
         let mut hasher = CountingHasher::default();
         label.hash(&mut hasher);
 
-        println!("{num_levels} level CASE did {} hashes", hasher.write_calls);
         assert!(
             hasher.write_calls < 50_000,
             "hashing nested CASE expression took {} hasher writes and {} bytes",
