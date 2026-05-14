@@ -40,7 +40,24 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 "#,
     syntax_example = r#"current_time()
     (optional) SET datafusion.execution.time_zone = '+00:00';
-    SELECT current_time();"#
+    SELECT current_time();"#,
+    sql_example = r#"```sql
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 06:30:00.123456789 |
++--------------------+
+
+-- The current time is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 15:30:00.123456789 |
++--------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentTimeFunc {

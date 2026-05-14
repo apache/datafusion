@@ -17,11 +17,15 @@
 
 use std::sync::Arc;
 
-use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
+use super::LogicalExtensionCodec;
+use crate::protobuf::{
+    CsvOptions as CsvOptionsProto, CsvQuoteStyle as CsvQuoteStyleProto,
+    JsonOptions as JsonOptionsProto,
+};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     TableReference, exec_datafusion_err, exec_err, not_impl_err,
-    parsers::CompressionTypeVariant,
+    parsers::{CompressionTypeVariant, CsvQuoteStyle},
 };
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
@@ -29,8 +33,6 @@ use datafusion_datasource_csv::file_format::CsvFormatFactory;
 use datafusion_datasource_json::file_format::JsonFormatFactory;
 use datafusion_execution::TaskContext;
 use prost::Message;
-
-use super::LogicalExtensionCodec;
 
 #[derive(Debug)]
 pub struct CsvLogicalExtensionCodec;
@@ -63,6 +65,13 @@ impl CsvOptionsProto {
                     .map_or(vec![], |v| vec![v as u8]),
                 truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
                 compression_level: options.compression_level,
+                quote_style: options.quote_style as i32,
+                ignore_leading_whitespace: options
+                    .ignore_leading_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
+                ignore_trailing_whitespace: options
+                    .ignore_trailing_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
             }
         } else {
             CsvOptionsProto::default()
@@ -154,6 +163,23 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 Some(proto.truncated_rows[0] != 0)
             },
             compression_level: proto.compression_level,
+            quote_style: match CsvQuoteStyleProto::try_from(proto.quote_style) {
+                Ok(CsvQuoteStyleProto::Always) => CsvQuoteStyle::Always,
+                Ok(CsvQuoteStyleProto::NonNumeric) => CsvQuoteStyle::NonNumeric,
+                Ok(CsvQuoteStyleProto::Never) => CsvQuoteStyle::Never,
+                Ok(CsvQuoteStyleProto::Necessary) => CsvQuoteStyle::Necessary,
+                _ => CsvQuoteStyle::Necessary,
+            },
+            ignore_leading_whitespace: if proto.ignore_leading_whitespace.is_empty() {
+                None
+            } else {
+                Some(proto.ignore_leading_whitespace[0] != 0)
+            },
+            ignore_trailing_whitespace: if proto.ignore_trailing_whitespace.is_empty() {
+                None
+            } else {
+                Some(proto.ignore_trailing_whitespace[0] != 0)
+            },
         }
     }
 }
@@ -215,12 +241,11 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         buf: &mut Vec<u8>,
         node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
-        let options =
-            if let Some(csv_factory) = node.as_any().downcast_ref::<CsvFormatFactory>() {
-                csv_factory.options.clone().unwrap_or_default()
-            } else {
-                return exec_err!("{}", "Unsupported FileFormatFactory type".to_string());
-            };
+        let options = if let Some(csv_factory) = node.downcast_ref::<CsvFormatFactory>() {
+            csv_factory.options.clone().unwrap_or_default()
+        } else {
+            return exec_err!("{}", "Unsupported FileFormatFactory type".to_string());
+        };
 
         let proto = CsvOptionsProto::from_factory(&CsvFormatFactory {
             options: Some(options),
@@ -326,8 +351,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         buf: &mut Vec<u8>,
         node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
-        let options = if let Some(json_factory) =
-            node.as_any().downcast_ref::<JsonFormatFactory>()
+        let options = if let Some(json_factory) = node.downcast_ref::<JsonFormatFactory>()
         {
             json_factory.options.clone().unwrap_or_default()
         } else {
@@ -351,13 +375,13 @@ mod parquet {
     use super::*;
 
     use crate::protobuf::{
-        ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
-        ParquetOptions as ParquetOptionsProto,
+        CdcOptions as CdcOptionsProto, ParquetColumnOptions as ParquetColumnOptionsProto,
+        ParquetColumnSpecificOptions, ParquetOptions as ParquetOptionsProto,
         TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
         parquet_options,
     };
     use datafusion_common::config::{
-        ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        CdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     };
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
@@ -425,6 +449,13 @@ mod parquet {
                 }),
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
+                }),
+                content_defined_chunking: global_options.global.use_content_defined_chunking.as_ref().map(|cdc| {
+                    CdcOptionsProto {
+                        min_chunk_size: cdc.min_chunk_size as u64,
+                        max_chunk_size: cdc.max_chunk_size as u64,
+                        norm_level: cdc.norm_level,
+                    }
                 }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
@@ -525,6 +556,17 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
+            use_content_defined_chunking: proto.content_defined_chunking.map(|cdc| {
+                let defaults = CdcOptions::default();
+                CdcOptions {
+                    // proto3 uses 0 as the wire default for uint64; a zero chunk size is
+                    // invalid, so treat it as "field not set" and fall back to the default.
+                    min_chunk_size: if cdc.min_chunk_size != 0 { cdc.min_chunk_size as usize } else { defaults.min_chunk_size },
+                    max_chunk_size: if cdc.max_chunk_size != 0 { cdc.max_chunk_size as usize } else { defaults.max_chunk_size },
+                    // norm_level = 0 is a valid value (and the default), so pass it through directly.
+                    norm_level: cdc.norm_level,
+                }
+            }),
         }
         }
     }
@@ -585,7 +627,7 @@ mod parquet {
                     .iter()
                     .map(|(k, v)| (k.clone(), Some(v.clone())))
                     .collect(),
-                crypto: Default::default(),
+                ..Default::default()
             }
         }
     }
@@ -656,7 +698,7 @@ mod parquet {
             use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
             let options = if let Some(parquet_factory) =
-                node.as_any().downcast_ref::<ParquetFormatFactory>()
+                node.downcast_ref::<ParquetFormatFactory>()
             {
                 parquet_factory.options.clone().unwrap_or_default()
             } else {

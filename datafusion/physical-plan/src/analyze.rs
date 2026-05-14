@@ -17,7 +17,6 @@
 
 //! Defines the ANALYZE operator
 
-use std::any::Any;
 use std::sync::Arc;
 
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
@@ -138,10 +137,6 @@ impl ExecutionPlan for AnalyzeExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -219,6 +214,7 @@ impl ExecutionPlan for AnalyzeExec {
             while let Some(batch) = input_stream.next().await.transpose()? {
                 total_rows += batch.num_rows();
             }
+            drop(input_stream);
 
             let duration = Instant::now() - start;
             create_output_batch(

@@ -389,7 +389,7 @@ mod tests {
         convert_to_sort_reqs, create_test_params, create_test_schema, parse_sort_expr,
     };
     use crate::equivalence::{ProjectionMapping, convert_to_sort_exprs};
-    use crate::expressions::{BinaryExpr, CastColumnExpr, CastExpr, Column, col};
+    use crate::expressions::{BinaryExpr, CastExpr, Column, col};
     use crate::projection::tests::output_schema;
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
@@ -931,33 +931,35 @@ mod tests {
         struct TestCase {
             name: &'static str,
             constants: Vec<Arc<dyn PhysicalExpr>>,
-            equal_conditions: Vec<[Arc<dyn PhysicalExpr>; 2]>,
-            sort_columns: &'static [&'static str],
+            equal_condition: [Arc<dyn PhysicalExpr>; 2],
             should_satisfy_ordering: bool,
         }
 
         let col_a = col("a", schema.as_ref())?;
         let col_b = col("b", schema.as_ref())?;
         let col_c = col("c", schema.as_ref())?;
-        let cast_c = Arc::new(CastExpr::new(col_c, DataType::Date32, None)) as _;
+        let cast_c = Arc::new(CastExpr::new_with_target_field(
+            col_c,
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        )) as _;
+        let required_sort = vec![PhysicalSortExpr::new_default(col("c", &schema)?)];
 
         let cases = vec![
             TestCase {
-                name: "(a, b, c) -> (c)",
+                name: "cast_c = a",
                 // b is constant, so it should be removed from the sort order
                 constants: vec![Arc::clone(&col_b)],
-                equal_conditions: vec![[Arc::clone(&cast_c), Arc::clone(&col_a)]],
-                sort_columns: &["c"],
+                equal_condition: [Arc::clone(&cast_c), Arc::clone(&col_a)],
                 should_satisfy_ordering: true,
             },
             // Same test with above test, where equality order is swapped.
             // Algorithm shouldn't depend on this order.
             TestCase {
-                name: "(a, b, c) -> (c)",
+                name: "a = cast_c",
                 // b is constant, so it should be removed from the sort order
                 constants: vec![col_b],
-                equal_conditions: vec![[Arc::clone(&col_a), Arc::clone(&cast_c)]],
-                sort_columns: &["c"],
+                equal_condition: [Arc::clone(&col_a), Arc::clone(&cast_c)],
                 should_satisfy_ordering: true,
             },
             TestCase {
@@ -965,8 +967,7 @@ mod tests {
                 // b is not constant anymore
                 constants: vec![],
                 // a and c are still compatible, but this is irrelevant since the original ordering is (a, b, c)
-                equal_conditions: vec![[Arc::clone(&cast_c), Arc::clone(&col_a)]],
-                sort_columns: &["c"],
+                equal_condition: [Arc::clone(&cast_c), Arc::clone(&col_a)],
                 should_satisfy_ordering: false,
             },
         ];
@@ -979,9 +980,8 @@ mod tests {
                 // Equal conditions before constants
                 {
                     let mut properties = base_properties.clone();
-                    for [left, right] in case.equal_conditions.clone() {
-                        properties.add_equal_conditions(left, right)?
-                    }
+                    let [left, right] = case.equal_condition.clone();
+                    properties.add_equal_conditions(left, right)?;
                     properties.add_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
                     )?;
@@ -993,64 +993,19 @@ mod tests {
                     properties.add_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
                     )?;
-                    for [left, right] in case.equal_conditions {
-                        properties.add_equal_conditions(left, right)?
-                    }
+                    let [left, right] = case.equal_condition;
+                    properties.add_equal_conditions(left, right)?;
                     properties
                 },
             ] {
-                let sort = case
-                    .sort_columns
-                    .iter()
-                    .map(|&name| col(name, &schema).map(PhysicalSortExpr::new_default))
-                    .collect::<Result<Vec<_>>>()?;
-
                 assert_eq!(
-                    properties.ordering_satisfy(sort)?,
+                    properties.ordering_satisfy(required_sort.clone())?,
                     case.should_satisfy_ordering,
                     "failed test '{}'",
                     case.name
                 );
             }
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_eliminate_redundant_monotonic_sorts_cast_column_expr() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Date32, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
-        ]));
-        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
-        properties.reorder(
-            ["a", "b", "c"]
-                .into_iter()
-                .map(|c| PhysicalSortExpr::new_default(col(c, schema.as_ref()).unwrap())),
-        )?;
-
-        let col_a = col("a", schema.as_ref())?;
-        let col_b = col("b", schema.as_ref())?;
-        let col_c = col("c", schema.as_ref())?;
-
-        let cast_c = Arc::new(CastColumnExpr::new(
-            Arc::clone(&col_c),
-            Arc::new(Field::new(
-                "c",
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-                true,
-            )),
-            Arc::new(Field::new("c", DataType::Date32, true)),
-            None,
-        )) as Arc<dyn PhysicalExpr>;
-
-        properties.add_equal_conditions(cast_c, Arc::clone(&col_a))?;
-        properties.add_constants(std::iter::once(ConstExpr::from(col_b)))?;
-
-        let required = vec![PhysicalSortExpr::new_default(col("c", &schema)?)];
-        assert!(properties.ordering_satisfy(required)?);
 
         Ok(())
     }
@@ -1561,6 +1516,104 @@ mod tests {
                 assert!(!eq_properties.ordering_satisfy(ordering)?, "{err_msg}");
             }
         }
+
+        Ok(())
+    }
+
+    /// Test that orderings propagate through struct-producing projections.
+    ///
+    /// When a projection creates a struct via `named_struct('a', col_a, ...)`,
+    /// the output should preserve the ordering of `col_a` as an ordering on
+    /// `get_field(col("s"), "a")`. This enables sort elimination when the
+    /// framework sorts by a struct field that corresponds to an already-sorted
+    /// input column.
+    #[test]
+    fn test_ordering_propagation_through_named_struct() -> Result<()> {
+        use crate::expressions::Literal;
+        use datafusion_common::ScalarValue;
+        use datafusion_functions::core::{get_field, named_struct};
+
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let col_a = col("a", &input_schema)?;
+        let col_b = col("b", &input_schema)?;
+        let config = Arc::new(ConfigOptions::new());
+
+        // Build: named_struct('a', col_a, 'b', col_b) AS s
+        let named_struct_udf = named_struct();
+        let named_struct_expr = Arc::new(ScalarFunctionExpr::new(
+            "named_struct",
+            named_struct_udf,
+            vec![
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("a".to_string())))),
+                Arc::clone(&col_a),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("b".to_string())))),
+                Arc::clone(&col_b),
+            ],
+            Arc::new(Field::new(
+                "named_struct",
+                DataType::Struct(
+                    vec![
+                        Field::new("a", DataType::Int32, true),
+                        Field::new("b", DataType::Int32, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            )),
+            Arc::clone(&config),
+        )) as Arc<dyn PhysicalExpr>;
+
+        // Projection: named_struct(...) AS s
+        let proj_exprs = vec![(named_struct_expr, "s".to_string())];
+        let projection_mapping = ProjectionMapping::try_new(proj_exprs, &input_schema)?;
+
+        // Input is ordered by [a ASC]
+        let mut input_properties = EquivalenceProperties::new(Arc::clone(&input_schema));
+        let sort_a = PhysicalSortExpr::new(
+            Arc::clone(&col_a),
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        );
+        input_properties.add_orderings([vec![sort_a]]);
+
+        // Project through the named_struct
+        let out_schema = output_schema(&projection_mapping, &input_schema)?;
+        let out_properties = input_properties.project(&projection_mapping, out_schema);
+
+        // Build the sort expression: get_field(col("s"), "a")
+        // This is what the framework would generate for ORDER BY s.a
+        let get_field_udf = get_field();
+        let col_s = Arc::new(Column::new("s", 0)) as Arc<dyn PhysicalExpr>;
+        let get_field_expr = Arc::new(ScalarFunctionExpr::new(
+            "get_field",
+            get_field_udf,
+            vec![
+                Arc::clone(&col_s),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("a".to_string())))),
+            ],
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::clone(&config),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let sort_get_field_a = PhysicalSortExpr::new(
+            get_field_expr,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        );
+
+        // The output should satisfy ordering by get_field(s, "a")
+        assert!(
+            out_properties.ordering_satisfy(vec![sort_get_field_a])?,
+            "Output should be ordered by get_field(s, 'a') since input is ordered by col_a"
+        );
 
         Ok(())
     }

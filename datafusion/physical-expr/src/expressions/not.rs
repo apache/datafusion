@@ -17,7 +17,6 @@
 
 //! Not expression
 
-use std::any::Any;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -29,6 +28,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue, cast::as_boolean_array, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::interval_arithmetic::Interval;
+#[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{self, Bernoulli};
 
 /// Not expression
@@ -70,11 +70,6 @@ impl fmt::Display for NotExpr {
 }
 
 impl PhysicalExpr for NotExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(DataType::Boolean)
     }
@@ -132,6 +127,7 @@ impl PhysicalExpr for NotExpr {
             .map(|result| vec![result]))
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         match children[0] {
             Bernoulli(b) => {
@@ -147,6 +143,7 @@ impl PhysicalExpr for NotExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn propagate_statistics(
         &self,
         parent: &Distribution,
@@ -259,6 +256,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics() -> Result<()> {
         let _schema = &Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;

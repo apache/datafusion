@@ -331,7 +331,7 @@ pub fn filter_record_batch_by_join_type(
                 .unwrap();
 
             // All rows passed the filter — no null-joining needed
-            if kept_corrected.true_count() == kept_corrected.len() {
+            if !kept_corrected.has_false() {
                 return Ok(kept_batch);
             }
 

@@ -174,10 +174,6 @@ impl ExecutionPlan for SortRequiredExec {
         "SortRequiredExec"
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -273,10 +269,6 @@ impl DisplayAs for SinglePartitionMaintainsOrderExec {
 impl ExecutionPlan for SinglePartitionMaintainsOrderExec {
     fn name(&self) -> &'static str {
         "SinglePartitionMaintainsOrderExec"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -3901,7 +3893,6 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     // Verify the plan was transformed to CoalescePartitionsExec
     result
         .plan
-        .as_any()
         .downcast_ref::<CoalescePartitionsExec>()
         .expect("Expected CoalescePartitionsExec");
 
@@ -3985,5 +3976,35 @@ fn maintains_order_preserves_spm_through_union_with_prefer_existing_sort() -> Re
             DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
     ");
 
+    Ok(())
+}
+
+/// Verifies that `adjust_input_keys_ordering` returns `Transformed::no`
+/// for a simple scan plan with no key requirements, avoiding an
+/// unnecessary plan rebuild.
+#[test]
+fn adjust_input_keys_ordering_no_transform_for_scan() -> Result<()> {
+    let plan: Arc<dyn ExecutionPlan> = parquet_exec();
+    let requirements = PlanWithKeyRequirements::new_default(plan);
+    let result = adjust_input_keys_ordering(requirements)?;
+    assert!(
+        !result.transformed,
+        "expected Transformed::no for a scan plan with empty requirements"
+    );
+    Ok(())
+}
+
+/// Verifies that `adjust_input_keys_ordering` applied via `transform_down`
+/// over a filter -> scan tree returns `Transformed::no` when there are no
+/// join/aggregate key requirements.
+#[test]
+fn adjust_input_keys_ordering_no_transform_for_filter_scan() -> Result<()> {
+    let plan: Arc<dyn ExecutionPlan> = filter_exec(parquet_exec());
+    let requirements = PlanWithKeyRequirements::new_default(plan);
+    let result = requirements.transform_down(adjust_input_keys_ordering)?;
+    assert!(
+        !result.transformed,
+        "expected Transformed::no for a filter->scan tree with no key requirements"
+    );
     Ok(())
 }

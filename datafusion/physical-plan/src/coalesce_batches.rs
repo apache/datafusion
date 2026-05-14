@@ -17,7 +17,6 @@
 
 //! [`CoalesceBatchesExec`] combines small batches into larger batches.
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -25,6 +24,7 @@ use std::task::{Context, Poll};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::projection::ProjectionExec;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
     check_if_same_properties,
@@ -168,10 +168,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -348,6 +344,8 @@ impl CoalesceBatchesStream {
                 None => {
                     // Input stream is exhausted, finalize any remaining batches
                     self.completed = true;
+                    self.input =
+                        Box::pin(EmptyRecordBatchStream::new(self.coalescer.schema()));
                     self.coalescer.finish()?;
                 }
                 Some(Ok(batch)) => {
@@ -358,6 +356,9 @@ impl CoalesceBatchesStream {
                         PushBatchStatus::LimitReached => {
                             // limit was reached, so stop early
                             self.completed = true;
+                            self.input = Box::pin(EmptyRecordBatchStream::new(
+                                self.coalescer.schema(),
+                            ));
                             self.coalescer.finish()?;
                         }
                     }

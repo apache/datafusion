@@ -59,7 +59,7 @@ impl arrow_buffer::MemoryReservation for MemoryReservation {
 impl arrow_buffer::MemoryPool for ArrowMemoryPool {
     fn reserve(&self, size: usize) -> Box<dyn arrow_buffer::MemoryReservation> {
         let consumer = self.consumer.clone_with_new_id();
-        let mut reservation = consumer.register(&self.inner);
+        let reservation = consumer.register(&self.inner);
         reservation.grow(size);
 
         Box::new(reservation)

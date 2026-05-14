@@ -109,10 +109,6 @@ impl ExecutionPlan for CustomPlan {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -179,10 +175,6 @@ struct CustomProvider {
 
 #[async_trait]
 impl TableProvider for CustomProvider {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.zero_batch.schema()
     }

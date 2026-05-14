@@ -73,6 +73,10 @@ name = "in_list"
 
 [[bench]]
 harness = false
+name = "in_list_strategy"
+
+[[bench]]
+harness = false
 name = "case_when"
 
 [[bench]]
@@ -86,6 +90,10 @@ name = "binary_op"
 [[bench]]
 harness = false
 name = "simplify"
+
+[[bench]]
+harness = false
+name = "string_concat"
 
 [package.metadata.cargo-machete]
 ignored = ["half"]

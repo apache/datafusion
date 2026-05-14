@@ -17,7 +17,6 @@
 
 //! EmptyRelation produce_one_row=true execution plan
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::coop::cooperative;
@@ -130,10 +129,6 @@ impl ExecutionPlan for PlaceholderRowExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }

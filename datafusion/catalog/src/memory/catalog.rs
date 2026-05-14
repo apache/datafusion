@@ -21,7 +21,6 @@
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider};
 use dashmap::DashMap;
 use datafusion_common::exec_err;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Simple in-memory list of catalogs
@@ -47,10 +46,6 @@ impl Default for MemoryCatalogProviderList {
 }
 
 impl CatalogProviderList for MemoryCatalogProviderList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,
@@ -90,10 +85,6 @@ impl Default for MemoryCatalogProvider {
 }
 
 impl CatalogProvider for MemoryCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.schemas.iter().map(|s| s.key().clone()).collect()
     }

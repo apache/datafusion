@@ -130,7 +130,8 @@ fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
             format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")
         };
 
-    let sql = format!("CREATE EXTERNAL TABLE hits STORED AS PARQUET LOCATION '{path}'");
+    let sql =
+        format!("CREATE EXTERNAL TABLE hits_raw STORED AS PARQUET LOCATION '{path}'");
 
     // ClickBench partitioned dataset was written by an ancient version of pyarrow that
     // that wrote strings with the wrong logical type. To read it correctly, we must
@@ -138,6 +139,17 @@ fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
     rt.block_on(ctx.sql("SET datafusion.execution.parquet.binary_as_string  = true;"))
         .unwrap();
     rt.block_on(ctx.sql(&sql)).unwrap();
+
+    // ClickBench stores EventDate as UInt16 (days since 1970-01-01). Create a view
+    // that exposes it as SQL DATE so that queries comparing it with date literals
+    // (e.g. "EventDate >= '2013-07-01'") work correctly during planning.
+    rt.block_on(ctx.sql(
+        "CREATE VIEW hits AS \
+         SELECT * EXCEPT (\"EventDate\"), \
+                CAST(CAST(\"EventDate\" AS INTEGER) AS DATE) AS \"EventDate\" \
+         FROM hits_raw",
+    ))
+    .unwrap();
 
     let count =
         rt.block_on(async { ctx.table("hits").await.unwrap().count().await.unwrap() });
