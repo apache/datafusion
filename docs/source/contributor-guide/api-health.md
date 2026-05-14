@@ -25,9 +25,10 @@ changes to avoid issues for downstream users.
 
 ## Breaking API Changes
 
+
 ### What is the public API and what is a breaking API change?
 
-In general, an item is part of the public API if it appears on the [docs.rs page].
+In general, an item is part of the public Rust API if it appears on the [docs.rs page].
 
 Breaking public API changes are those that _require_ users to change their code
 for it to compile and execute, and are listed as "Major Changes" in the [SemVer
@@ -43,6 +44,18 @@ Examples of non-breaking changes include:
 - Marking a function as deprecated (`#[deprecated]`)
 - Adding a new function to a `trait` with a default implementation
 
+### What is the public SQL API and what is a breaking API change?
+
+DataFusion is used extensively as a SQL engine by downstream applications with
+real users, and changes to the SQL semantics (the results returned for a given
+query) are a form of breaking change. Even if no Rust API signature changes,
+altering the result of an existing SQL construct can silently break downstream
+users whose applications, dashboards, or tests depend on the previous behavior.
+
+We therefore apply the same caution to SQL semantics changes as we do to
+breaking Rust API changes: the benefit of the change must be weighed against
+the cost of breaking downstream users.
+
 ### When to make breaking API changes?
 
 When possible, we prefer to avoid making breaking API changes. One common way to
@@ -54,15 +67,18 @@ change with the cost (impact on downstream users). It is often frustrating for
 downstream users to change their applications, and it is even more so if they
 do not gain improved capabilities.
 
-Examples of good reasons for making a breaking API change include:
+Examples of good reasons for making a breaking API or SQL change include:
 
 - The change allows new use cases that were not possible before
 - The change significantly enables improved performance
+- The previous behavior is clearly wrong (e.g. it produces incorrect results)
 
-Examples of potentially weak reasons for making breaking API changes include:
+Examples of potentially weak reasons for making breaking API or SQL changes include:
 
 - The change is an internal refactor to make DataFusion more consistent
 - The change is to remove an API that is not widely used but has not been marked as deprecated
+- The change makes DataFusion slightly more compatible with another database
+  (for example, PostgreSQL or DuckDB)
 
 ### What to do when making breaking API changes?
 
@@ -70,6 +86,13 @@ When making breaking public API changes, please:
 
 1. Add the `api-change` label to the PR so we can highlight the changes in the release notes.
 2. Consider adding documentation to the version-specific [Upgrade Guide] if the required changes are non-trivial.
+
+For breaking SQL changes, please:
+
+1. Clearly describe the previous and new behavior in the PR description,
+   including a table of example queries and their results where appropriate.
+   Not only will this make it easier to review, it will make it easier for downstream
+   users to discover impacted semantics.
 
 [docs.rs page]: https://docs.rs/datafusion/latest/datafusion/index.html
 [semver compatibility section of the cargo book]: https://doc.rust-lang.org/cargo/reference/semver.html#change-categories
