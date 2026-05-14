@@ -308,14 +308,22 @@ impl WindowUDFImpl for NthValue {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
-        let return_type = field_args
-            .input_fields()
-            .first()
-            .map(|f| f.data_type())
-            .cloned()
-            .unwrap_or(DataType::Null);
+        let input_field =
+            field_args
+                .input_fields()
+                .first()
+                .cloned()
+                .unwrap_or_else(|| {
+                    Arc::new(Field::new(field_args.name(), DataType::Null, true))
+                });
 
-        Ok(Field::new(field_args.name(), return_type, true).into())
+        // Clone the input field to preserve metadata, update name and nullability
+        Ok(input_field
+            .as_ref()
+            .clone()
+            .with_name(field_args.name())
+            .with_nullable(true)
+            .into())
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {

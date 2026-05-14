@@ -434,6 +434,7 @@ impl Unparser<'_> {
                     name: Ident::with_quote('"', &flatten_alias_name),
                     columns: vec![],
                     explicit: true,
+                    at: None,
                 }));
 
                 if !select.already_projected() {
@@ -1208,6 +1209,7 @@ impl Unparser<'_> {
                             name: Ident::with_quote('"', &alias),
                             columns: vec![],
                             explicit: true,
+                            at: None,
                         }));
                     }
                     relation.flatten(flatten_relation);
@@ -1902,6 +1904,7 @@ impl Unparser<'_> {
             name: self.new_ident_quoted_if_needs(alias),
             columns,
             explicit: true,
+            at: None,
         }
     }
 

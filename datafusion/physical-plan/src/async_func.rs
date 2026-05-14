@@ -17,7 +17,7 @@
 
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     check_if_same_properties,
@@ -290,6 +290,10 @@ impl Stream for CoalesceInputStream {
                 }
                 None => {
                     completed = true;
+                    // Release the input pipeline's resources.
+                    let input_schema = self.input_stream.schema();
+                    self.input_stream =
+                        Box::pin(EmptyRecordBatchStream::new(input_schema));
                     if let Err(err) = self.batch_coalescer.finish() {
                         return Poll::Ready(Some(Err(err)));
                     }

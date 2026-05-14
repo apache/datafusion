@@ -289,16 +289,17 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
         builder.vectorized_append(input, rows).unwrap();
 
         b.iter(|| {
-            // Rebuild the buffer because `vectorized_equal_to` mutates it.
-            let mut equal_to_results_builder =
-                BooleanBufferBuilder::new(equal_to_results.len());
-            for result in equal_to_results.iter().copied() {
-                equal_to_results_builder.append(result);
+            // Rebuild the buffer each iteration as `vectorized_equal_to` mutates
+            // it, and without a fresh buffer all iterations after the first one
+            // would not be meaningful.
+            let mut equal_to_buffer = BooleanBufferBuilder::new(equal_to_results.len());
+            for &v in &equal_to_results {
+                equal_to_buffer.append(v);
             }
-            builder.vectorized_equal_to(rows, input, rows, &mut equal_to_results_builder);
+            builder.vectorized_equal_to(rows, input, rows, &mut equal_to_buffer);
 
             // Make sure that the compiler does not optimize away the call
-            black_box(equal_to_results_builder);
+            black_box(equal_to_buffer);
         });
     });
 }
