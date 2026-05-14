@@ -165,10 +165,11 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = string_array.len();
     let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(len, 0);
     let mut buffer = String::new();
-    let nulls = NullBuffer::union(
-        NullBuffer::union(string_array.nulls(), from_array.nulls()).as_ref(),
+    let nulls = NullBuffer::union_many([
+        string_array.nulls(),
+        from_array.nulls(),
         to_array.nulls(),
-    );
+    ]);
 
     // Hoist the nulls.is_some() check out of the loop. LLVM does not always
     // unswitch this loop on its own (the Utf8View body is large enough to
@@ -212,10 +213,11 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = string_array.len();
     let mut builder = GenericStringArrayBuilder::<T>::with_capacity(len, 0);
     let mut buffer = String::new();
-    let nulls = NullBuffer::union(
-        NullBuffer::union(string_array.nulls(), from_array.nulls()).as_ref(),
+    let nulls = NullBuffer::union_many([
+        string_array.nulls(),
+        from_array.nulls(),
         to_array.nulls(),
-    );
+    ]);
 
     // Hoist the nulls.is_some() check out of the loop. LLVM unswitches this
     // automatically today, but kept explicit so the no-nulls fast path is not

@@ -39,6 +39,7 @@ use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadySt
 use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
 use crate::joins::utils::{JoinKeyComparator, get_final_indices_from_shared_bitmap};
+use crate::stream::EmptyRecordBatchStream;
 
 pub(super) enum PiecewiseMergeJoinStreamState {
     WaitBufferedSide,
@@ -212,6 +213,9 @@ impl ClassicPWMJStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         match ready!(self.streamed.poll_next_unpin(cx)) {
             None => {
+                // Release the streamed input pipeline's resources.
+                let streamed_schema = self.streamed.schema();
+                self.streamed = Box::pin(EmptyRecordBatchStream::new(streamed_schema));
                 if self
                     .buffered_side
                     .try_as_ready_mut()?

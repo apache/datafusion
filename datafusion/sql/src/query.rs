@@ -171,6 +171,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // Apply to all fields
                     columns: vec![],
                     explicit: true,
+                    at: None,
                 },
             ),
             PipeOperator::Union {
