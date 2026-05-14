@@ -104,4 +104,4 @@ physical_plan
 query error
 select array_transform([1], v -> async_abs(v));
 ----
-DataFusion error: Error during planning: Async functions in lambdas aren't supported
+DataFusion error: Error during planning: Async functions in lambdas aren't supported, see https://github.com/apache/datafusion/issues/22091

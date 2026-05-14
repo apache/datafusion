@@ -224,8 +224,9 @@ fn check_async_udf(body: &Arc<dyn PhysicalExpr>) -> Result<()> {
             .downcast_ref::<ScalarFunctionExpr>()
             .is_some_and(|udf| udf.fun().as_async().is_some()))
     })? {
-        // https://github.com/apache/datafusion/issues/22091
-        return plan_err!("Async functions in lambdas aren't supported");
+        return plan_err!(
+            "Async functions in lambdas aren't supported, see https://github.com/apache/datafusion/issues/22091"
+        );
     }
 
     Ok(())
