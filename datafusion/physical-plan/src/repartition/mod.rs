@@ -90,41 +90,49 @@ use distributor_channels::{
 /// # Batch Flow with Spilling
 ///
 /// ```text
-/// Input Stream ──▶ Partition Logic ──▶ try_grow()
-///                                            │
-///                            ┌───────────────┴────────────────┐
-///                            │                                │
-///                            ▼                                ▼
-///                   try_grow() succeeds            try_grow() fails
-///                   (Memory Available)              (Memory Pressure)
-///                            │                                │
-///                            ▼                                ▼
-///                  RepartitionBatch::Memory         spill_writer.push_batch()
-///                  (batch held in memory)           (batch written to disk)
-///                            │                                │
-///                            │                                ▼
-///                            │                      RepartitionBatch::Spilled
-///                            │                      (marker - no batch data)
-///                            │                                │
-///                            └────────┬───────────────────────┘
-///                                     │
-///                                     ▼
-///                              Send to channel
-///                                     │
-///                                     ▼
-///                            Output Stream (poll)
-///                                     │
-///                      ┌──────────────┴─────────────┐
-///                      │                            │
-///                      ▼                            ▼
-///         RepartitionBatch::Memory      RepartitionBatch::Spilled
-///         Return batch immediately       Poll spill_stream (blocks)
-///                      │                            │
-///                      └────────┬───────────────────┘
-///                               │
-///                               ▼
-///                          Return batch
-///                    (FIFO order preserved)
+///                      Input Stream   ◀──────┐
+///                           │                │
+///                           ▼                │
+///                    Partition Logic         │
+///                           │           `batch_size` not
+///                           ▼            reached yet
+///                    Coalesce Batch          │
+///           ┌───────────────┴────────────────┘
+///           ▼
+/// `batch_size` reached
+///           │
+///           └───────────────┐
+///                           ▼
+///                        try_grow()
+///           ┌───────────────┴────────────────┐
+///           ▼                                ▼
+/// try_grow() succeeds              try_grow() fails
+/// (Memory Available)               (Memory Pressure)
+///           │                                │
+///           ▼                                ▼
+/// RepartitionBatch::Memory         spill_writer.push_batch()
+/// (batch held in memory)           (batch written to disk)
+///           │                                │
+///           │                                ▼
+///           │                      RepartitionBatch::Spilled
+///           │                      (marker - no batch data)
+///           └──────────────┬─────────────────┘
+///                          │
+///                          ▼
+///                   Send to channel
+///                          │
+///                          ▼
+///                 Output Stream (poll)
+///                          │
+///           ┌──────────────┴────────────────┐
+///           ▼                               ▼
+/// RepartitionBatch::Memory      RepartitionBatch::Spilled
+/// Return batch immediately       Poll spill_stream (blocks)
+///           └─────────────┬─────────────────┘
+///                         │
+///                         ▼
+///                    Return batch
+///               (FIFO order preserved)
 /// ```
 ///
 /// See [`RepartitionExec`] for overall architecture and [`StreamState`] for
@@ -923,6 +931,34 @@ impl BatchPartitioner {
 /// If more than one stream is being repartitioned, the output will be some
 /// arbitrary interleaving (and thus unordered) unless
 /// [`Self::with_preserve_order`] specifies otherwise.
+///
+/// # Batch coalescing
+///
+/// Repartitioning one [`RecordBatch`] implies creating multiple smaller batches, potentially
+/// as many as the number of output partitions. [`RepartitionExec`] makes sure that the returned
+/// batches adhere to the configured `datafusion.execution.batch_size` for efficient operations,
+/// and for that, it will automatically coalesce batches right after repartitioning.
+///
+/// For this, one shared [`LimitedBatchCoalescer`] per output partition is used:
+///
+/// ```text
+///                         ┌───┐                           ┌───┐
+///                      ┌─▶│   │────────▶.───────────.     │   │     ┌──────────────────┐
+///                      │  └───┘ ┌───┐  ( Coalescer 0 )──▶ ├───┤ ───▶│     Output 0     │
+///                      │┌──────▶│   │──▶`───────────'     │   │     └──────────────────┘
+///                      ││       └───┘                     └───┘
+/// ┌──────────────────┐ ││                                           ┌──────────────────┐
+/// │BatchPartitioner 0│─┘│                                           │     Output 1     │
+/// └──────────────────┘  │                                           └──────────────────┘
+///                       │
+/// ┌──────────────────┐  │                ...                        ┌──────────────────┐
+/// │BatchPartitioner 1│──┘                                           │     Output 2     │
+/// └──────────────────┘                                              └──────────────────┘
+///
+///                                                                   ┌──────────────────┐
+///                                                                   │     Output 3     │
+///                                                                   └──────────────────┘
+/// ```
 ///
 /// # Spilling Architecture
 ///
