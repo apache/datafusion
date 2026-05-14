@@ -839,6 +839,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 Ok(SelectExpr::Expression(expr))
             }
+            SelectItem::ExprWithAliases { .. } => {
+                not_impl_err!("SELECT item with multiple aliases is not supported")
+            }
             SelectItem::Wildcard(options) => {
                 Self::check_wildcard_options(&options)?;
                 if empty_from {
@@ -886,11 +889,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             opt_rename,
             opt_replace: _opt_replace,
             opt_ilike: _opt_ilike,
+            opt_alias,
             wildcard_token: _wildcard_token,
         } = options;
 
         if opt_rename.is_some() {
             not_impl_err!("wildcard * with RENAME not supported ")
+        } else if opt_alias.is_some() {
+            not_impl_err!("wildcard * with AS alias not supported")
         } else {
             Ok(())
         }

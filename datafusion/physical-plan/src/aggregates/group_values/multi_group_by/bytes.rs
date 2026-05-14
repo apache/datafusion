@@ -20,15 +20,14 @@ use crate::aggregates::group_values::multi_group_by::{
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{
-    Array, ArrayRef, AsArray, BufferBuilder, GenericBinaryArray, GenericByteArray,
-    GenericStringArray, OffsetSizeTrait, types::GenericStringType,
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, BufferBuilder, GenericBinaryArray,
+    GenericByteArray, GenericStringArray, OffsetSizeTrait, types::GenericStringType,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{Result, exec_datafusion_err};
 use datafusion_physical_expr_common::binary_map::{INITIAL_BUFFER_CAPACITY, OutputType};
-use itertools::izip;
 use std::mem::size_of;
 use std::sync::Arc;
 use std::vec;
@@ -106,25 +105,22 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) where
         B: ByteArrayType,
     {
         let array = array.as_bytes::<B>();
 
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
-
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to, don't need to check
-            if !*equal_to_result {
+        for (idx, (&lhs_row, &rhs_row)) in
+            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+        {
+            if !equal_to_results.get_bit(idx) {
                 continue;
             }
 
-            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+            if !self.do_equal_to_inner(lhs_row, array, rhs_row) {
+                equal_to_results.set_bit(idx, false);
+            }
         }
     }
 
@@ -275,7 +271,7 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
         // Sanity array type
         match self.output_type {
@@ -433,11 +429,21 @@ mod tests {
     use std::sync::Arc;
 
     use crate::aggregates::group_values::multi_group_by::bytes::ByteGroupValueBuilder;
-    use arrow::array::{ArrayRef, NullBufferBuilder, StringArray};
+    use arrow::array::{ArrayRef, BooleanBufferBuilder, NullBufferBuilder, StringArray};
     use datafusion_common::DataFusionError;
     use datafusion_physical_expr::binary_map::OutputType;
 
     use super::GroupColumn;
+
+    fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
+        let mut buf = BooleanBufferBuilder::new(n);
+        buf.append_n(n, true);
+        buf
+    }
+
+    fn to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
+        (0..buf.len()).map(|i| buf.get_bit(i)).collect()
+    }
 
     #[test]
     fn test_byte_group_value_builder_overflow() {
@@ -516,16 +522,18 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &ByteGroupValueBuilder<i32>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            let iter = lhs_rows.iter().zip(rhs_rows.iter());
-            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
-            }
-        };
+        let equal_to =
+            |builder: &ByteGroupValueBuilder<i32>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                let iter = lhs_rows.iter().zip(rhs_rows.iter());
+                for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                    equal_to_results
+                        .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                }
+            };
 
         test_byte_equal_to_internal(append, equal_to);
     }
@@ -540,18 +548,19 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &ByteGroupValueBuilder<i32>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            builder.vectorized_equal_to(
-                lhs_rows,
-                input_array,
-                rhs_rows,
-                equal_to_results,
-            );
-        };
+        let equal_to =
+            |builder: &ByteGroupValueBuilder<i32>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                builder.vectorized_equal_to(
+                    lhs_rows,
+                    input_array,
+                    rhs_rows,
+                    equal_to_results,
+                );
+            };
 
         test_byte_equal_to_internal(append, equal_to);
     }
@@ -575,19 +584,20 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        let mut equal_to_results = make_true_buffer(all_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
 
         // All not nulls input array
         let all_not_nulls_input_array = Arc::new(StringArray::from(vec![
@@ -601,19 +611,20 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        let mut equal_to_results = make_true_buffer(all_not_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
     }
 
     fn test_byte_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
@@ -624,7 +635,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut BooleanBufferBuilder,
         ),
     {
         // Will cover such cases:
@@ -658,10 +669,10 @@ mod tests {
         ])
         .into_parts();
 
-        // explicitly build a boolean buffer where one of the null values also happens to match
+        // explicitly build a null buffer where one of the null values also happens to match
         let mut nulls = NullBufferBuilder::new(6);
         nulls.append_non_null();
-        nulls.append_null(); // this sets Some("bar") to null above
+        nulls.append_null();
         nulls.append_null();
         nulls.append_null();
         nulls.append_non_null();
@@ -670,7 +681,7 @@ mod tests {
             Arc::new(StringArray::new(offsets, buffer, nulls.finish())) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5],
@@ -678,12 +689,13 @@ mod tests {
             &[0, 1, 2, 3, 4, 5],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(!equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(!equal_to_results[3]);
-        assert!(!equal_to_results[4]);
-        assert!(equal_to_results[5]);
+        assert!(!results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(!results[3]);
+        assert!(!results[4]);
+        assert!(results[5]);
     }
 }

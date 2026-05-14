@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Statistics and constraint propagation library
+//! Statistics and constraint propagation library.
+//!
+//! All items exported from this module are **deprecated**;
+//! see <https://github.com/apache/datafusion/pull/22071> for details.
 
 pub mod stats_solver;
