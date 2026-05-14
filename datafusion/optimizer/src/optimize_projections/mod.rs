@@ -1487,6 +1487,33 @@ mod tests {
     }
 
     #[test]
+    fn keep_referenced_unnest_under_group_by() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+            Some(1),
+            Some(2),
+        ])]);
+        let plan = table_scan(Some("test"), &schema, None)?
+            .project(vec![
+                col("id"),
+                Expr::Literal(ScalarValue::List(Arc::new(list)), None).alias("elem"),
+            ])?
+            .unnest_column(Column::from_name("elem"))?
+            .aggregate(vec![col("elem")], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[elem]], aggr=[[]]
+          Unnest: lists[elem|depth=1] structs[]
+            Projection: List([1, 2]) AS elem
+              TableScan: test projection=[]
+        "
+        )
+    }
+
+    #[test]
     fn keep_unused_empty_literal_unnest_under_group_by() -> Result<()> {
         let schema = Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
         let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(Vec::<

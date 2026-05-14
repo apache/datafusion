@@ -1380,6 +1380,36 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# DISTINCT is implemented as a duplicate-insensitive aggregate before projection
+# pruning, so the same unused non-empty literal UNNEST can be removed.
+query I
+SELECT DISTINCT id
+FROM (
+    SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+    FROM unused_unnest_pruning
+)
+ORDER BY id;
+----
+1
+2
+3
+
+query TT
+EXPLAIN SELECT DISTINCT id
+FROM (
+    SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+    FROM unused_unnest_pruning
+);
+----
+logical_plan
+01)Aggregate: groupBy=[[unused_unnest_pruning.id]], aggr=[[]]
+02)--TableScan: unused_unnest_pruning projection=[id]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Counterexample: removing UNNEST here would change cardinality.
 query I rowsort
 SELECT id
