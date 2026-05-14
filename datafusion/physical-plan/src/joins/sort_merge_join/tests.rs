@@ -4726,12 +4726,12 @@ async fn spill_filtered_boundary_loses_outer_rows() -> Result<()> {
 }
 
 /// Verifies that `peak_mem_used` reflects spill read-back memory during
-/// output materialization.
+/// output materialization (multi-source path).
 ///
 /// When spilled buffered batches are read back from disk to produce join
-/// output, the deserialized data temporarily exists in memory. This test
-/// verifies that the read-back is tracked via grow/shrink so the pool
-/// accurately reflects the transient spike.
+/// output, a scoped `MemoryReservation` (via `new_empty()`) tracks the
+/// transient memory. Its `Drop` guarantees the pool is balanced on every
+/// exit path — normal return or early `?` error.
 #[tokio::test]
 async fn spill_read_back_memory_accounting() -> Result<()> {
     use arrow::array::Array;
@@ -4842,8 +4842,8 @@ async fn spill_read_back_memory_accounting() -> Result<()> {
 /// Verifies spill read-back memory tracking for the single-source path.
 ///
 /// When only ONE buffered batch exists for a key group and it's spilled,
-/// `fetch_right_columns_by_idxs` reads it back. This test verifies the
-/// grow/shrink around that single-batch read.
+/// `fetch_right_columns_by_idxs` reads it back. A scoped `MemoryReservation`
+/// (via `new_empty()`) tracks the transient memory and releases it on drop.
 #[tokio::test]
 async fn spill_read_back_single_source() -> Result<()> {
     use arrow::array::Array;

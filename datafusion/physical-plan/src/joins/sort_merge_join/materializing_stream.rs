@@ -1556,32 +1556,23 @@ impl MaterializingSortMergeJoinStream {
                 as_uint64_array(&compute::concat(&refs)?)?.clone()
             };
 
-            let spill_read_mem = match &self.buffered_data.batches[first_batch_idx].batch
-            {
-                BufferedBatchState::Spilled(_) => {
-                    self.buffered_data.batches[first_batch_idx].size_estimation
-                }
-                _ => 0,
-            };
-
-            if spill_read_mem > 0 {
-                self.reservation.grow(spill_read_mem);
+            let spill_reservation = self.reservation.new_empty();
+            if matches!(
+                &self.buffered_data.batches[first_batch_idx].batch,
+                BufferedBatchState::Spilled(_)
+            ) {
+                spill_reservation
+                    .grow(self.buffered_data.batches[first_batch_idx].size_estimation);
                 self.join_metrics
                     .peak_mem_used()
-                    .set_max(self.reservation.size());
+                    .set_max(self.reservation.size() + spill_reservation.size());
             }
 
-            let result = fetch_right_columns_by_idxs(
+            return fetch_right_columns_by_idxs(
                 &self.buffered_data,
                 first_batch_idx,
                 &combined_right_indices,
             );
-
-            if spill_read_mem > 0 {
-                self.reservation.shrink(spill_read_mem);
-            }
-
-            return result;
         }
 
         // Multiple source batches: map each buffered_batch_idx to a
@@ -1610,12 +1601,11 @@ impl MaterializingSortMergeJoinStream {
         }
 
         let num_right_cols = self.buffered_schema.fields().len();
-        let mut right_columns = Vec::with_capacity(num_right_cols);
 
         // Read each source batch once (spilled batches require disk I/O).
         // Track memory for each spilled batch at the point of deserialization
         // so the pool reflects actual usage as it grows.
-        let mut spill_read_mem: usize = 0;
+        let spill_reservation = self.reservation.new_empty();
         let mut source_data: Vec<Option<RecordBatch>> =
             Vec::with_capacity(source_batches.len());
         for &idx in &source_batches {
@@ -1625,12 +1615,10 @@ impl MaterializingSortMergeJoinStream {
                     source_data.push(Some(batch.clone()));
                 }
                 BufferedBatchState::Spilled(spill_file) => {
-                    let batch_mem = bb.size_estimation;
-                    self.reservation.grow(batch_mem);
+                    spill_reservation.grow(bb.size_estimation);
                     self.join_metrics
                         .peak_mem_used()
-                        .set_max(self.reservation.size());
-                    spill_read_mem += batch_mem;
+                        .set_max(self.reservation.size() + spill_reservation.size());
 
                     let file = BufReader::new(File::open(spill_file.path())?);
                     let reader = StreamReader::try_new(file, None)?;
@@ -1639,6 +1627,7 @@ impl MaterializingSortMergeJoinStream {
             }
         }
 
+        let mut right_columns = Vec::with_capacity(num_right_cols);
         for col_idx in 0..num_right_cols {
             let dtype = self.buffered_schema.field(col_idx).data_type();
             let null_array = new_null_array(dtype, 1);
@@ -1657,12 +1646,7 @@ impl MaterializingSortMergeJoinStream {
                     }
                 }
             }
-
             right_columns.push(interleave(&source_arrays, &interleave_indices)?);
-        }
-
-        if spill_read_mem > 0 {
-            self.reservation.shrink(spill_read_mem);
         }
 
         Ok(right_columns)
