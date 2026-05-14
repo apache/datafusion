@@ -153,6 +153,7 @@ impl CastExpr {
     }
 
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        let output_nullability = self.nullable(input_schema)?;
         if is_default_target_field(&self.target_field) {
             self.expr.return_field(input_schema).map(|field| {
                 let cast_type = self.cast_type();
@@ -163,10 +164,15 @@ impl CastExpr {
                 out_field.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
                 out_field.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
 
-                Arc::new(out_field)
+                Arc::new(out_field.with_nullable(output_nullability))
             })
         } else {
-            Ok(Arc::clone(&self.target_field))
+            Ok(Arc::new(
+                self.target_field
+                    .as_ref()
+                    .clone()
+                    .with_nullable(output_nullability),
+            ))
         }
     }
 
@@ -238,14 +244,8 @@ impl PhysicalExpr for CastExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        // A cast is nullable if **either** the child is nullable or the
-        // target field allows nulls.  This conservative rule prevents
-        // optimizers from assuming a non-null result when a null input could
-        // still propagate.  `return_field()` continues to expose the exact
-        // target metadata separately.
-        let child_nullable = self.expr.nullable(input_schema)?;
-        let target_nullable = self.resolved_target_field(input_schema)?.is_nullable();
-        Ok(child_nullable || target_nullable)
+        // Casts do not change the nullability of the input
+        self.expr.nullable(input_schema)
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -962,12 +962,12 @@ mod tests {
             let field = expr.return_field(&schema)?;
             assert_eq!(field.name(), "cast_target");
             assert_eq!(field.data_type(), &Int64);
-            assert_eq!(field.is_nullable(), target_nullable);
+            assert_eq!(field.is_nullable(), child_nullable);
             assert_eq!(
                 field.metadata().get("target_meta").map(String::as_str),
                 Some("1")
             );
-            assert_eq!(expr.nullable(&schema)?, child_nullable || target_nullable);
+            assert_eq!(expr.nullable(&schema)?, child_nullable);
         }
 
         Ok(())

@@ -669,7 +669,9 @@ mod tests {
             cast_expr.to_field(&DFSchema::try_from(schema.clone())?)?;
         assert_eq!(cast.target_field(), &logical_field);
         assert_eq!(physical.return_field(&schema)?, logical_field);
-        assert!(physical.nullable(&schema)?);
+
+        // Like other casts, nullability from the input is preserved
+        assert!(!physical.nullable(&schema)?);
 
         Ok(())
     }
@@ -686,6 +688,8 @@ mod tests {
         assert_eq!(cast.cast_type(), &DataType::Int64);
         assert_eq!(returned_field.name(), "a");
         assert_eq!(returned_field.data_type(), &DataType::Int64);
+
+        // Ensure a cast to a DataType preserves the nullability of the input
         assert!(!physical.nullable(&schema)?);
 
         Ok(())
@@ -707,9 +711,17 @@ mod tests {
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
 
-        assert_eq!(cast.target_field(), &target_field);
-        assert_eq!(physical.return_field(&schema)?, target_field);
-        assert!(physical.nullable(&schema)?);
+        let (_, logical_field) =
+            cast_expr.to_field(&DFSchema::try_from(schema.clone())?)?;
+
+        // Like other casts, nullability of the input is preserved
+        assert!(!logical_field.is_nullable());
+
+        assert_eq!(cast.target_field(), &logical_field);
+        assert_eq!(physical.return_field(&schema)?, logical_field);
+
+        // Like other casts, nullability of the input is preserved
+        assert!(!physical.nullable(&schema)?);
 
         Ok(())
     }
