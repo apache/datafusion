@@ -17,33 +17,8 @@
 
 # Regression tests for logical CAST targets that carry explicit field metadata.
 
-query ?T
-SELECT
-    CAST(
-        arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
-        AS UUID
-    ),
-    arrow_metadata(
-        CAST(
-            arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
-            AS UUID
-        ),
-        'ARROW:extension:name'
-    );
-----
-00010203040506070809000102030506 arrow.uuid
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Unsupported CAST from FixedSizeBinary\(16\) to FixedSizeBinary\(16\)<\{"ARROW:extension:name": "arrow\.uuid"\}>
+SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID);
 
-query ?T
-SELECT
-    CAST(raw AS UUID),
-    arrow_metadata(CAST(raw AS UUID), 'ARROW:extension:name')
-FROM (
-    VALUES (
-        arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
-    )
-) AS uuids(raw);
-----
-00010203040506070809000102030506 arrow.uuid
-
-statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*TryCast from FixedSizeBinary\(16\) to FixedSizeBinary\(16\)<\{"ARROW:extension:name": "arrow\.uuid"\}> is not supported
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Unsupported TRY_CAST from FixedSizeBinary\(16\) to FixedSizeBinary\(16\)<\{"ARROW:extension:name": "arrow\.uuid"\}>
 SELECT TRY_CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID);

@@ -305,7 +305,7 @@ pub fn create_physical_expr(
             if !field.metadata().is_empty() {
                 let (_, src_field) = expr.to_field(input_dfschema)?;
                 return plan_err!(
-                    "TryCast from {} to {} is not supported",
+                    "Unsupported TRY_CAST from {} to {}",
                     format_type_and_metadata(
                         src_field.data_type(),
                         Some(src_field.metadata()),
