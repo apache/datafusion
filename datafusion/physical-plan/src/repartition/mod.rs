@@ -737,22 +737,25 @@ impl BatchPartitioner {
             return Ok(vec![]);
         }
 
-        let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
-        let reordered_batch = {
+        let batches = {
             let _timer = timer.timer();
+            let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
             let columns = take_arrays(batch.columns(), &indices_array, None)?;
 
             let mut options = RecordBatchOptions::new();
             options = options.with_row_count(Some(indices_array.len()));
-            RecordBatch::try_new_with_options(batch.schema(), columns, &options).unwrap()
+            let reordered_batch =
+                RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
+
+            partition_ranges
+                .into_iter()
+                .map(|(partition, start, len)| {
+                    Ok((partition, reordered_batch.slice(start, len)))
+                })
+                .collect()
         };
 
-        Ok(partition_ranges
-            .into_iter()
-            .map(|(partition, start, len)| {
-                Ok((partition, reordered_batch.slice(start, len)))
-            })
-            .collect())
+        Ok(batches)
     }
 }
 
