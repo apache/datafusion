@@ -753,42 +753,11 @@ fn parse_escape_char(s: &str) -> Result<Option<char>> {
 }
 
 pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
-    match op {
-        "And" => Ok(Operator::And),
-        "Or" => Ok(Operator::Or),
-        "Eq" => Ok(Operator::Eq),
-        "NotEq" => Ok(Operator::NotEq),
-        "LtEq" => Ok(Operator::LtEq),
-        "Lt" => Ok(Operator::Lt),
-        "Gt" => Ok(Operator::Gt),
-        "GtEq" => Ok(Operator::GtEq),
-        "Plus" => Ok(Operator::Plus),
-        "Minus" => Ok(Operator::Minus),
-        "Multiply" => Ok(Operator::Multiply),
-        "Divide" => Ok(Operator::Divide),
-        "Modulo" => Ok(Operator::Modulo),
-        "IsDistinctFrom" => Ok(Operator::IsDistinctFrom),
-        "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
-        "BitwiseAnd" => Ok(Operator::BitwiseAnd),
-        "BitwiseOr" => Ok(Operator::BitwiseOr),
-        "BitwiseXor" => Ok(Operator::BitwiseXor),
-        "BitwiseShiftLeft" => Ok(Operator::BitwiseShiftLeft),
-        "BitwiseShiftRight" => Ok(Operator::BitwiseShiftRight),
-        "RegexIMatch" => Ok(Operator::RegexIMatch),
-        "RegexMatch" => Ok(Operator::RegexMatch),
-        "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
-        "RegexNotMatch" => Ok(Operator::RegexNotMatch),
-        "LikeMatch" => Ok(Operator::LikeMatch),
-        "ILikeMatch" => Ok(Operator::ILikeMatch),
-        "NotLikeMatch" => Ok(Operator::NotLikeMatch),
-        "NotILikeMatch" => Ok(Operator::NotILikeMatch),
-        "StringConcat" => Ok(Operator::StringConcat),
-        "AtArrow" => Ok(Operator::AtArrow),
-        "ArrowAt" => Ok(Operator::ArrowAt),
-        other => Err(proto_error(format!(
-            "Unsupported binary operator '{other:?}'"
-        ))),
-    }
+    // The proto-string <-> `Operator` mapping is canonically owned by
+    // `datafusion-expr-common` so `datafusion-proto` (logical plans) and
+    // `PhysicalExpr` decoders (e.g. `BinaryExpr`) share one source of truth.
+    Operator::from_proto_name(op)
+        .ok_or_else(|| proto_error(format!("Unsupported binary operator '{op:?}'")))
 }
 
 fn parse_optional_expr(

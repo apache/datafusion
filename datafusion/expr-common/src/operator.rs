@@ -390,6 +390,50 @@ impl Operator {
             | Operator::StringConcat => false,
         }
     }
+
+    /// Parse an `Operator` from the string name `datafusion-proto` uses on the
+    /// wire (the `Debug` name of the variant, e.g. `"Eq"`).
+    ///
+    /// Returns `None` for names with no binary-operator counterpart. This is
+    /// the canonical proto-string mapping, shared by `datafusion-proto`
+    /// (logical plans) and `PhysicalExpr` decoders such as `BinaryExpr`, so the
+    /// mapping is not duplicated across crates.
+    pub fn from_proto_name(name: &str) -> Option<Operator> {
+        Some(match name {
+            "And" => Operator::And,
+            "Or" => Operator::Or,
+            "Eq" => Operator::Eq,
+            "NotEq" => Operator::NotEq,
+            "LtEq" => Operator::LtEq,
+            "Lt" => Operator::Lt,
+            "Gt" => Operator::Gt,
+            "GtEq" => Operator::GtEq,
+            "Plus" => Operator::Plus,
+            "Minus" => Operator::Minus,
+            "Multiply" => Operator::Multiply,
+            "Divide" => Operator::Divide,
+            "Modulo" => Operator::Modulo,
+            "IsDistinctFrom" => Operator::IsDistinctFrom,
+            "IsNotDistinctFrom" => Operator::IsNotDistinctFrom,
+            "BitwiseAnd" => Operator::BitwiseAnd,
+            "BitwiseOr" => Operator::BitwiseOr,
+            "BitwiseXor" => Operator::BitwiseXor,
+            "BitwiseShiftLeft" => Operator::BitwiseShiftLeft,
+            "BitwiseShiftRight" => Operator::BitwiseShiftRight,
+            "RegexIMatch" => Operator::RegexIMatch,
+            "RegexMatch" => Operator::RegexMatch,
+            "RegexNotIMatch" => Operator::RegexNotIMatch,
+            "RegexNotMatch" => Operator::RegexNotMatch,
+            "LikeMatch" => Operator::LikeMatch,
+            "ILikeMatch" => Operator::ILikeMatch,
+            "NotLikeMatch" => Operator::NotLikeMatch,
+            "NotILikeMatch" => Operator::NotILikeMatch,
+            "StringConcat" => Operator::StringConcat,
+            "AtArrow" => Operator::AtArrow,
+            "ArrowAt" => Operator::ArrowAt,
+            _ => return None,
+        })
+    }
 }
 
 impl fmt::Display for Operator {

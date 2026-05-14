@@ -58,7 +58,6 @@ use super::{
     PhysicalProtoConverterExtension,
 };
 use crate::convert::TryFromProto;
-use crate::logical_plan::{self};
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::{convert_required, convert_required_proto, protobuf};
 use datafusion_physical_expr::expressions::{
@@ -263,8 +262,7 @@ pub fn parse_physical_expr_with_converter(
 
     // Decoder context handed to per-expression `try_from_proto` constructors.
     // This is the new shape the codebase is migrating toward (see #21835);
-    // for now only `Column` is migrated and the rest of the variants are still
-    // matched inline.
+    // the remaining `ExprType` variants stay matched inline until they migrate.
     let decoder = ConverterDecoder {
         ctx,
         proto_converter,
@@ -277,54 +275,12 @@ pub fn parse_physical_expr_with_converter(
 
     let pexpr: Arc<dyn PhysicalExpr> = match expr_type {
         // Migrated expressions take the whole `PhysicalExprNode` and unwrap
-        // their own `ExprType` variant (see #21835); this match only routes.
+        // their own `ExprType` variant — see #21835. This match only routes
+        // to the right constructor.
         ExprType::Column(_) => Column::try_from_proto(proto, &decode_ctx)?,
         ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
-        ExprType::BinaryExpr(binary_expr) => {
-            let op = logical_plan::from_proto::from_proto_binary_op(&binary_expr.op)?;
-            if !binary_expr.operands.is_empty() {
-                // New linearized format: reduce the flat operands list back into
-                // a nested binary expression tree.
-                let operands: Vec<Arc<dyn PhysicalExpr>> = binary_expr
-                    .operands
-                    .iter()
-                    .map(|e| proto_converter.proto_to_physical_expr(e, input_schema, ctx))
-                    .collect::<Result<Vec<_>>>()?;
-
-                if operands.len() < 2 {
-                    return Err(proto_error(
-                        "A binary expression must always have at least 2 operands",
-                    ));
-                }
-
-                operands
-                    .into_iter()
-                    .reduce(|left, right| Arc::new(BinaryExpr::new(left, op, right)))
-                    .expect(
-                        "Binary expression could not be reduced to a single expression.",
-                    )
-            } else {
-                // Legacy format with l/r fields
-                Arc::new(BinaryExpr::new(
-                    parse_required_physical_expr(
-                        binary_expr.l.as_deref(),
-                        ctx,
-                        "left",
-                        input_schema,
-                        proto_converter,
-                    )?,
-                    op,
-                    parse_required_physical_expr(
-                        binary_expr.r.as_deref(),
-                        ctx,
-                        "right",
-                        input_schema,
-                        proto_converter,
-                    )?,
-                ))
-            }
-        }
+        ExprType::BinaryExpr(_) => BinaryExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::AggregateExpr(_) => {
             return not_impl_err!(
                 "Cannot convert aggregate expr node to physical expression"

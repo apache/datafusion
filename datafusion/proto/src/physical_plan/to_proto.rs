@@ -36,8 +36,8 @@ use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, DynamicFilterPhysicalExpr, InListExpr, IsNotNullExpr,
-    IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    CaseExpr, CastExpr, DynamicFilterPhysicalExpr, InListExpr, IsNotNullExpr, IsNullExpr,
+    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -252,7 +252,7 @@ pub fn serialize_physical_expr(
 }
 
 /// Concrete [`PhysicalExprEncode`] driver used to back
-/// [`PhysicalExprEncodeCtx`] when expressions invoke `PhysicalExpr::try_to_proto`.
+/// [`PhysicalExprEncodeCtx`] when expressions invoke `PhysicalExpr::to_proto`.
 ///
 /// Wraps the existing extension codec + converter pair so individual
 /// expressions can recurse into children without depending on
@@ -334,46 +334,6 @@ pub fn serialize_physical_expr_with_converter(
                 protobuf::UnknownColumn {
                     name: expr.name().to_string(),
                 },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
-        // Linearize a nested binary expression tree of the same operator
-        // into a flat vector of operands to avoid deep recursion in proto.
-        let op = expr.op();
-        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![expr.right()];
-        let mut current_expr: &BinaryExpr = expr;
-        loop {
-            match current_expr.left().downcast_ref::<BinaryExpr>() {
-                Some(bin) if bin.op() == op => {
-                    operand_refs.push(bin.right());
-                    current_expr = bin;
-                }
-                _ => {
-                    operand_refs.push(current_expr.left());
-                    break;
-                }
-            }
-        }
-
-        // Reverse so operands are ordered from left innermost to right outermost
-        operand_refs.reverse();
-
-        let operands = operand_refs
-            .iter()
-            .map(|e| proto_converter.physical_expr_to_proto(e, codec))
-            .collect::<Result<Vec<_>>>()?;
-
-        let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
-            l: None,
-            r: None,
-            op: format!("{:?}", op),
-            operands,
-        });
-
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::BinaryExpr(
-                binary_expr,
             )),
         })
     } else if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
