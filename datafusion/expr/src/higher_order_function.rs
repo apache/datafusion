@@ -489,12 +489,12 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// assert_eq!(
     ///     coerce_to,
-    ///     vec![
+    ///     Some(vec![
     ///         // return the same type for the array being reduced
     ///         DataType::new_list(DataType::Float32, true),
     ///         // coerce the initial value to the output of the merge lambda
     ///         DataType::Float32,
-    ///     ]
+    ///     ])
     /// );
     ///
     /// ```

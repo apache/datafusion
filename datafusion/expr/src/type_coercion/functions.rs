@@ -158,9 +158,9 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
 /// argument must be coerced to match `signature`.
 /// For lambda arguments, returns a clone of the associated data
 ///
-/// Note this does not invokes [HigherOrderUDF::coerce_values_for_lambdas]
-/// if requested by the function signature. If that's required, use
-/// [value_fields_with_higher_order_udf_and_lambdas] instead
+/// Note this does not invokes [HigherOrderUDF::coerce_values_for_lambdas].
+/// If that's required, use [value_fields_with_higher_order_udf_and_lambdas]
+/// instead
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
@@ -235,8 +235,8 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
 
 /// Performs type coercion for higher order function arguments,
 /// including those defined by [HigherOrderUDF::coerce_values_for_lambdas],
-/// if defined by the signature. Note that compared to
-/// [value_fields_with_higher_order_udf], this function requires
+/// if it returns `Some(...)` instead of the default `None`. Note that
+/// compared to [value_fields_with_higher_order_udf], this function requires
 /// the [ValueOrLambda::Lambda] variant to contain the output field of the lambda.
 ///
 /// For value arguments, returns the field to which each
