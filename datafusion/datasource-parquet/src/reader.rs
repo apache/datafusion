@@ -361,3 +361,76 @@ impl FileMetadata for CachedParquetMetaData {
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }
+
+/// A clone-friendly wrapper around a [`Box<dyn AsyncFileReader>`].
+///
+/// `AsyncFileReader::get_bytes` takes `&mut self`, which means a raw
+/// `Box<dyn AsyncFileReader>` cannot be shared between consumers.
+/// `SharedAsyncFileReader` wraps an inner reader in
+/// `Arc<tokio::sync::Mutex<...>>` and reimplements [`AsyncFileReader`] by
+/// delegating each call through the mutex. Cloning the wrapper bumps the
+/// `Arc` refcount — both consumers see the same underlying reader (and its
+/// warm state, e.g. byte caches inside a custom reader).
+///
+/// The Mutex serializes concurrent calls, but the opener uses the reader
+/// sequentially (footer load → page index load → hook I/O → decode), so
+/// contention is not an issue in practice.
+#[derive(Clone)]
+pub struct SharedAsyncFileReader {
+    inner: Arc<tokio::sync::Mutex<Box<dyn AsyncFileReader>>>,
+}
+
+impl SharedAsyncFileReader {
+    /// Wrap a raw reader.
+    pub fn new(reader: Box<dyn AsyncFileReader>) -> Self {
+        Self {
+            inner: Arc::new(tokio::sync::Mutex::new(reader)),
+        }
+    }
+}
+
+impl Debug for SharedAsyncFileReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedAsyncFileReader")
+            .finish_non_exhaustive()
+    }
+}
+
+impl AsyncFileReader for SharedAsyncFileReader {
+    fn get_bytes(
+        &mut self,
+        range: Range<u64>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        let arc = Arc::clone(&self.inner);
+        async move {
+            let mut guard = arc.lock().await;
+            guard.get_bytes(range).await
+        }
+        .boxed()
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
+        let arc = Arc::clone(&self.inner);
+        async move {
+            let mut guard = arc.lock().await;
+            guard.get_byte_ranges(ranges).await
+        }
+        .boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        let arc = Arc::clone(&self.inner);
+        let options = options.cloned();
+        async move {
+            let mut guard = arc.lock().await;
+            guard.get_metadata(options.as_ref()).await
+        }
+        .boxed()
+    }
+}

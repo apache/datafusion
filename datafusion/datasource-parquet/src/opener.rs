@@ -17,7 +17,13 @@
 
 //! [`ParquetMorselizer`] state machines for opening Parquet files
 
+use crate::access_plan_optimizer::{
+    PostMetadataAccessPlanHook, PostMetadataContext, PostMetadataHookInstance,
+    PostMetadataHookStep, PreBuildStreamAccessPlanHook, PreBuildStreamContext,
+    PreBuildStreamHookInstance, PreBuildStreamHookStep,
+};
 use crate::page_filter::PagePruningAccessPlanFilter;
+use crate::reader::SharedAsyncFileReader;
 use crate::row_filter::build_projection_read_plan;
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
@@ -136,6 +142,10 @@ pub(super) struct ParquetMorselizer {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Hooks invoked after the built-in post-metadata pruning passes.
+    pub post_metadata_hooks: Vec<Arc<dyn PostMetadataAccessPlanHook>>,
+    /// Hooks invoked after all built-in pruning passes.
+    pub pre_build_stream_hooks: Vec<Arc<dyn PreBuildStreamAccessPlanHook>>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -220,14 +230,22 @@ enum ParquetOpenState {
     LoadPageIndex(BoxFuture<'static, Result<FiltersPreparedParquetOpen>>),
     /// Pruning Row Groups
     PruneWithStatistics(Box<FiltersPreparedParquetOpen>),
+    /// Driving a user-supplied post-metadata hook on the CPU pool.
+    RunPostMetadataHooksCpu(Box<PostMetadataHookProgress>),
+    /// Awaiting an I/O step yielded by a post-metadata hook.
+    RunPostMetadataHooksIo(BoxFuture<'static, Result<PostMetadataHookProgress>>),
     /// Loading bloom filters required for row-group pruning
     LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
     /// Pruning with preloaded Bloom Filters
     PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
-    /// Builds the final reader stream
-    ///
-    /// TODO: split state as this currently does both I/O and CPU work.
-    BuildStream(Box<RowGroupsPrunedParquetOpen>),
+    /// CPU-only step: apply built-in limit and page-index pruning.
+    FinalizeAccessPlan(Box<RowGroupsPrunedParquetOpen>),
+    /// Driving a user-supplied pre-build-stream hook on the CPU pool.
+    RunPreBuildStreamHooksCpu(Box<PreBuildStreamHookProgress>),
+    /// Awaiting an I/O step yielded by a pre-build-stream hook.
+    RunPreBuildStreamHooksIo(BoxFuture<'static, Result<PreBuildStreamHookProgress>>),
+    /// Builds the final reader stream.
+    BuildStream(Box<FinalizedAccessPlanState>),
     /// Terminal state: the final opened stream is ready to return.
     Ready(BoxStream<'static, Result<RecordBatch>>),
     /// Terminal state: reading complete
@@ -245,8 +263,13 @@ impl fmt::Debug for ParquetOpenState {
             ParquetOpenState::PrepareFilters(_) => "PrepareFilters",
             ParquetOpenState::LoadPageIndex(_) => "LoadPageIndex",
             ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
+            ParquetOpenState::RunPostMetadataHooksCpu(_) => "RunPostMetadataHooksCpu",
+            ParquetOpenState::RunPostMetadataHooksIo(_) => "RunPostMetadataHooksIo",
             ParquetOpenState::LoadBloomFilters(_) => "LoadBloomFilters",
             ParquetOpenState::PruneWithBloomFilters(_) => "PruneWithBloomFilters",
+            ParquetOpenState::FinalizeAccessPlan(_) => "FinalizeAccessPlan",
+            ParquetOpenState::RunPreBuildStreamHooksCpu(_) => "RunPreBuildStreamHooksCpu",
+            ParquetOpenState::RunPreBuildStreamHooksIo(_) => "RunPreBuildStreamHooksIo",
             ParquetOpenState::BuildStream(_) => "BuildStream",
             ParquetOpenState::Ready(_) => "Ready",
             ParquetOpenState::Done => "Done",
@@ -267,7 +290,7 @@ struct PreparedParquetOpen {
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
-    async_file_reader: Box<dyn AsyncFileReader>,
+    async_file_reader: SharedAsyncFileReader,
     batch_size: usize,
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
@@ -287,6 +310,8 @@ struct PreparedParquetOpen {
     max_predicate_cache_size: Option<usize>,
     reverse_row_groups: bool,
     preserve_order: bool,
+    post_metadata_hooks: Vec<Arc<dyn PostMetadataAccessPlanHook>>,
+    pre_build_stream_hooks: Vec<Arc<dyn PreBuildStreamAccessPlanHook>>,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
@@ -327,6 +352,35 @@ struct BloomFiltersLoadedParquetOpen {
     ///
     /// indexed by parquet row-group index
     row_group_bloom_filters: Vec<BloomFilterStatistics>,
+}
+
+/// State of [`ParquetOpenState`]
+///
+/// Final access plan after built-in limit + page-index pruning. The
+/// pre-build-stream hooks see this state.
+struct FinalizedAccessPlanState {
+    prepared: FiltersPreparedParquetOpen,
+    access_plan: ParquetAccessPlan,
+}
+
+/// In-flight state while driving a [`PostMetadataAccessPlanHook`].
+///
+/// One hook instance + the queue of remaining hooks to run after it
+/// completes + the carrier (the rest of the opener state, threaded
+/// through the iteration to be reassembled at the end).
+struct PostMetadataHookProgress {
+    ctx: Box<PostMetadataContext>,
+    instance: Box<dyn PostMetadataHookInstance>,
+    remaining: Vec<Arc<dyn PostMetadataAccessPlanHook>>,
+    carrier: Box<FiltersPreparedParquetOpen>,
+}
+
+/// In-flight state while driving a [`PreBuildStreamAccessPlanHook`].
+struct PreBuildStreamHookProgress {
+    ctx: Box<PreBuildStreamContext>,
+    instance: Box<dyn PreBuildStreamHookInstance>,
+    remaining: Vec<Arc<dyn PreBuildStreamAccessPlanHook>>,
+    carrier: Box<FiltersPreparedParquetOpen>,
 }
 
 impl ParquetOpenState {
@@ -386,16 +440,31 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let prepared_row_groups = prepared.prune_row_groups()?;
-                Ok(ParquetOpenState::LoadBloomFilters(
-                    prepared_row_groups.load_bloom_filters().boxed(),
-                ))
+                Self::after_post_metadata(prepared_row_groups)
+            }
+            ParquetOpenState::RunPostMetadataHooksCpu(progress) => {
+                Self::drive_post_metadata_step(*progress)
+            }
+            ParquetOpenState::RunPostMetadataHooksIo(future) => {
+                Ok(ParquetOpenState::RunPostMetadataHooksIo(future))
             }
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
             }
-            ParquetOpenState::PruneWithBloomFilters(loaded) => Ok(
-                ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
-            ),
+            ParquetOpenState::PruneWithBloomFilters(loaded) => {
+                let pruned = loaded.prune_bloom_filters();
+                Ok(ParquetOpenState::FinalizeAccessPlan(Box::new(pruned)))
+            }
+            ParquetOpenState::FinalizeAccessPlan(prepared) => {
+                let finalized = prepared.finalize_access_plan();
+                Self::after_finalize(finalized)
+            }
+            ParquetOpenState::RunPreBuildStreamHooksCpu(progress) => {
+                Self::drive_pre_build_stream_step(*progress)
+            }
+            ParquetOpenState::RunPreBuildStreamHooksIo(future) => {
+                Ok(ParquetOpenState::RunPreBuildStreamHooksIo(future))
+            }
             ParquetOpenState::BuildStream(prepared) => {
                 Ok(ParquetOpenState::Ready(prepared.build_stream()?))
             }
@@ -405,6 +474,218 @@ impl ParquetOpenState {
             }
         }
     }
+
+    /// After built-in post-metadata pruning: if any post-metadata hooks
+    /// are registered, begin driving the first one. Otherwise transition
+    /// straight to bloom-filter loading.
+    fn after_post_metadata(
+        pruned: RowGroupsPrunedParquetOpen,
+    ) -> Result<ParquetOpenState> {
+        if pruned
+            .prepared
+            .loaded
+            .prepared
+            .post_metadata_hooks
+            .is_empty()
+        {
+            return Ok(ParquetOpenState::LoadBloomFilters(
+                pruned.load_bloom_filters().boxed(),
+            ));
+        }
+        let RowGroupsPrunedParquetOpen {
+            prepared: carrier,
+            row_groups,
+        } = pruned;
+        let mut remaining = carrier.loaded.prepared.post_metadata_hooks.clone();
+        let first = remaining.remove(0);
+        let ctx = build_post_metadata_context(&carrier, row_groups.build());
+        let instance = first.begin();
+        Ok(ParquetOpenState::RunPostMetadataHooksCpu(Box::new(
+            PostMetadataHookProgress {
+                ctx,
+                instance,
+                remaining,
+                carrier: Box::new(carrier),
+            },
+        )))
+    }
+
+    /// Drive one CPU step of the current post-metadata hook.
+    fn drive_post_metadata_step(
+        progress: PostMetadataHookProgress,
+    ) -> Result<ParquetOpenState> {
+        let PostMetadataHookProgress {
+            ctx,
+            instance,
+            mut remaining,
+            carrier,
+        } = progress;
+        match instance.step(ctx)? {
+            PostMetadataHookStep::Yield(future) => {
+                let resume = async move {
+                    let (ctx, instance) = future.await?;
+                    Ok(PostMetadataHookProgress {
+                        ctx,
+                        instance,
+                        remaining,
+                        carrier,
+                    })
+                }
+                .boxed();
+                Ok(ParquetOpenState::RunPostMetadataHooksIo(resume))
+            }
+            PostMetadataHookStep::Done(ctx) => {
+                if let Some(next) = (!remaining.is_empty()).then(|| remaining.remove(0)) {
+                    let instance = next.begin();
+                    Ok(ParquetOpenState::RunPostMetadataHooksCpu(Box::new(
+                        PostMetadataHookProgress {
+                            ctx,
+                            instance,
+                            remaining,
+                            carrier,
+                        },
+                    )))
+                } else {
+                    // All post-metadata hooks complete. Reassemble and
+                    // advance to bloom-filter loading.
+                    let row_groups = RowGroupAccessPlanFilter::new(ctx.plan);
+                    let pruned = RowGroupsPrunedParquetOpen {
+                        prepared: *carrier,
+                        row_groups,
+                    };
+                    Ok(ParquetOpenState::LoadBloomFilters(
+                        pruned.load_bloom_filters().boxed(),
+                    ))
+                }
+            }
+        }
+    }
+
+    /// After built-in limit + page-index pruning: if any
+    /// pre-build-stream hooks are registered, begin driving the first
+    /// one. Otherwise transition straight to BuildStream.
+    fn after_finalize(finalized: FinalizedAccessPlanState) -> Result<ParquetOpenState> {
+        if finalized
+            .prepared
+            .loaded
+            .prepared
+            .pre_build_stream_hooks
+            .is_empty()
+        {
+            return Ok(ParquetOpenState::BuildStream(Box::new(finalized)));
+        }
+        let FinalizedAccessPlanState {
+            prepared: carrier,
+            access_plan,
+        } = finalized;
+        let mut remaining = carrier.loaded.prepared.pre_build_stream_hooks.clone();
+        let first = remaining.remove(0);
+        let ctx = build_pre_build_stream_context(&carrier, access_plan);
+        let instance = first.begin();
+        Ok(ParquetOpenState::RunPreBuildStreamHooksCpu(Box::new(
+            PreBuildStreamHookProgress {
+                ctx,
+                instance,
+                remaining,
+                carrier: Box::new(carrier),
+            },
+        )))
+    }
+
+    /// Drive one CPU step of the current pre-build-stream hook.
+    fn drive_pre_build_stream_step(
+        progress: PreBuildStreamHookProgress,
+    ) -> Result<ParquetOpenState> {
+        let PreBuildStreamHookProgress {
+            ctx,
+            instance,
+            mut remaining,
+            carrier,
+        } = progress;
+        match instance.step(ctx)? {
+            PreBuildStreamHookStep::Yield(future) => {
+                let resume = async move {
+                    let (ctx, instance) = future.await?;
+                    Ok(PreBuildStreamHookProgress {
+                        ctx,
+                        instance,
+                        remaining,
+                        carrier,
+                    })
+                }
+                .boxed();
+                Ok(ParquetOpenState::RunPreBuildStreamHooksIo(resume))
+            }
+            PreBuildStreamHookStep::Done(ctx) => {
+                if let Some(next) = (!remaining.is_empty()).then(|| remaining.remove(0)) {
+                    let instance = next.begin();
+                    Ok(ParquetOpenState::RunPreBuildStreamHooksCpu(Box::new(
+                        PreBuildStreamHookProgress {
+                            ctx,
+                            instance,
+                            remaining,
+                            carrier,
+                        },
+                    )))
+                } else {
+                    let finalized = FinalizedAccessPlanState {
+                        prepared: *carrier,
+                        access_plan: ctx.plan,
+                    };
+                    Ok(ParquetOpenState::BuildStream(Box::new(finalized)))
+                }
+            }
+        }
+    }
+}
+
+fn build_post_metadata_context(
+    state: &FiltersPreparedParquetOpen,
+    plan: ParquetAccessPlan,
+) -> Box<PostMetadataContext> {
+    let inner = &state.loaded.prepared;
+    Box::new(PostMetadataContext {
+        plan,
+        partition_index: inner.partition_index,
+        partitioned_file: inner.partitioned_file.clone(),
+        file_range: inner.file_range.clone(),
+        physical_file_schema: Arc::clone(&inner.physical_file_schema),
+        file_metadata: Arc::clone(state.loaded.reader_metadata.metadata()),
+        predicate: inner.predicate.clone(),
+        pruning_predicate: state.pruning_predicate.clone(),
+        page_pruning_predicate: state.page_pruning_predicate.clone(),
+        limit: inner.limit,
+        preserve_order: inner.preserve_order,
+        file_metrics: inner.file_metrics.clone(),
+        async_file_reader: inner.async_file_reader.clone(),
+        parquet_file_reader_factory: Arc::clone(&inner.parquet_file_reader_factory),
+        metadata_size_hint: inner.metadata_size_hint,
+        metrics: inner.metrics.clone(),
+    })
+}
+
+fn build_pre_build_stream_context(
+    state: &FiltersPreparedParquetOpen,
+    plan: ParquetAccessPlan,
+) -> Box<PreBuildStreamContext> {
+    let inner = &state.loaded.prepared;
+    Box::new(PreBuildStreamContext {
+        plan,
+        partition_index: inner.partition_index,
+        partitioned_file: inner.partitioned_file.clone(),
+        file_range: inner.file_range.clone(),
+        physical_file_schema: Arc::clone(&inner.physical_file_schema),
+        file_metadata: Arc::clone(state.loaded.reader_metadata.metadata()),
+        predicate: inner.predicate.clone(),
+        pruning_predicate: state.pruning_predicate.clone(),
+        limit: inner.limit,
+        preserve_order: inner.preserve_order,
+        file_metrics: inner.file_metrics.clone(),
+        async_file_reader: inner.async_file_reader.clone(),
+        parquet_file_reader_factory: Arc::clone(&inner.parquet_file_reader_factory),
+        metadata_size_hint: inner.metadata_size_hint,
+        metrics: inner.metrics.clone(),
+    })
 }
 
 /// Implements the Morsel API
@@ -515,6 +796,20 @@ impl MorselPlanner for ParquetMorselPlanner {
                     )))
                 })))
             }
+            ParquetOpenState::RunPostMetadataHooksIo(future) => {
+                Ok(Some(Self::schedule_io(async move {
+                    Ok(ParquetOpenState::RunPostMetadataHooksCpu(Box::new(
+                        future.await?,
+                    )))
+                })))
+            }
+            ParquetOpenState::RunPreBuildStreamHooksIo(future) => {
+                Ok(Some(Self::schedule_io(async move {
+                    Ok(ParquetOpenState::RunPreBuildStreamHooksCpu(Box::new(
+                        future.await?,
+                    )))
+                })))
+            }
             ParquetOpenState::Ready(stream) => {
                 let morsels: Vec<Box<dyn Morsel>> =
                     vec![Box::new(ParquetStreamMorsel::new(stream))];
@@ -546,13 +841,13 @@ impl ParquetMorselizer {
             .metadata_size_hint
             .or(self.metadata_size_hint);
 
-        let async_file_reader: Box<dyn AsyncFileReader> =
-            self.parquet_file_reader_factory.create_reader(
+        let async_file_reader =
+            SharedAsyncFileReader::new(self.parquet_file_reader_factory.create_reader(
                 self.partition_index,
                 partitioned_file.clone(),
                 metadata_size_hint,
                 &self.metrics,
-            )?;
+            )?);
 
         // Calculate the output schema from the original projection (before literal replacement)
         // so we get correct field names from column references
@@ -656,6 +951,8 @@ impl ParquetMorselizer {
             max_predicate_cache_size: self.max_predicate_cache_size,
             reverse_row_groups: self.reverse_row_groups,
             preserve_order: self.preserve_order,
+            post_metadata_hooks: self.post_metadata_hooks.clone(),
+            pre_build_stream_hooks: self.pre_build_stream_hooks.clone(),
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
         })
@@ -962,12 +1259,14 @@ impl RowGroupsPrunedParquetOpen {
             let reader_metadata = self.prepared.loaded.reader_metadata.clone();
             let replacement_reader = {
                 let prepared = &self.prepared.loaded.prepared;
-                prepared.parquet_file_reader_factory.create_reader(
-                    prepared.partition_index,
-                    prepared.partitioned_file.clone(),
-                    prepared.metadata_size_hint,
-                    &prepared.metrics,
-                )?
+                SharedAsyncFileReader::new(
+                    prepared.parquet_file_reader_factory.create_reader(
+                        prepared.partition_index,
+                        prepared.partitioned_file.clone(),
+                        prepared.metadata_size_hint,
+                        &prepared.metrics,
+                    )?,
+                )
             };
 
             let prepared = &mut self.prepared.loaded.prepared;
@@ -1055,16 +1354,57 @@ impl BloomFiltersLoadedParquetOpen {
 }
 
 impl RowGroupsPrunedParquetOpen {
-    /// Build the final parquet stream once all pruning work is complete.
-    fn build_stream(self) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+    /// Run the built-in limit + page-index pruning passes and extract a
+    /// finalized [`ParquetAccessPlan`]. CPU-only.
+    fn finalize_access_plan(self) -> FinalizedAccessPlanState {
         let RowGroupsPrunedParquetOpen {
             prepared,
             mut row_groups,
         } = self;
+        let file_metadata = Arc::clone(prepared.loaded.reader_metadata.metadata());
+        let rg_metadata = file_metadata.row_groups();
+        let inner = &prepared.loaded.prepared;
+
+        // Prune by limit if limit is set and limit order is not sensitive
+        if let (Some(limit), false) = (inner.limit, inner.preserve_order) {
+            row_groups.prune_by_limit(limit, rg_metadata, &inner.file_metrics);
+        }
+
+        // Page index pruning: if all data on individual pages can
+        // be ruled using page metadata, rows from other columns
+        // with that range can be skipped as well.
+        let mut access_plan = row_groups.build();
+        if inner.enable_page_index
+            && !access_plan.is_empty()
+            && let Some(page_pruning_predicate) = prepared.page_pruning_predicate.as_ref()
+        {
+            access_plan = page_pruning_predicate.prune_plan_with_page_index(
+                access_plan,
+                &inner.physical_file_schema,
+                prepared.loaded.reader_metadata.parquet_schema(),
+                file_metadata.as_ref(),
+                &inner.file_metrics,
+            );
+        }
+
+        FinalizedAccessPlanState {
+            prepared,
+            access_plan,
+        }
+    }
+}
+
+impl FinalizedAccessPlanState {
+    /// Build the final parquet stream from the finalized access plan.
+    fn build_stream(self) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+        let FinalizedAccessPlanState {
+            prepared,
+            access_plan,
+        } = self;
         let FiltersPreparedParquetOpen {
             loaded,
             pruning_predicate: _,
-            page_pruning_predicate,
+            page_pruning_predicate: _,
         } = prepared;
         let MetadataLoadedParquetOpen {
             prepared,
@@ -1100,28 +1440,6 @@ impl RowGroupsPrunedParquetOpen {
         } else {
             None
         };
-
-        // Prune by limit if limit is set and limit order is not sensitive
-        if let (Some(limit), false) = (prepared.limit, prepared.preserve_order) {
-            row_groups.prune_by_limit(limit, rg_metadata, &prepared.file_metrics);
-        }
-
-        // Page index pruning: if all data on individual pages can
-        // be ruled using page metadata, rows from other columns
-        // with that range can be skipped as well.
-        let mut access_plan = row_groups.build();
-        if prepared.enable_page_index
-            && !access_plan.is_empty()
-            && let Some(page_pruning_predicate) = page_pruning_predicate
-        {
-            access_plan = page_pruning_predicate.prune_plan_with_page_index(
-                access_plan,
-                &prepared.physical_file_schema,
-                reader_metadata.parquet_schema(),
-                file_metadata.as_ref(),
-                &prepared.file_metrics,
-            );
-        }
 
         // Prepare the access plan (extract row groups and row selection)
         let mut prepared_plan = access_plan.prepare(rg_metadata)?;
@@ -1226,7 +1544,7 @@ impl RowGroupsPrunedParquetOpen {
 /// fully consumed.
 struct PushDecoderStreamState {
     decoder: ParquetPushDecoder,
-    reader: Box<dyn AsyncFileReader>,
+    reader: SharedAsyncFileReader,
     projector: Projector,
     output_schema: Arc<Schema>,
     replace_schema: bool,
@@ -1670,6 +1988,8 @@ mod test {
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
         preserve_order: bool,
+        post_metadata_hooks: Vec<Arc<dyn PostMetadataAccessPlanHook>>,
+        pre_build_stream_hooks: Vec<Arc<dyn PreBuildStreamAccessPlanHook>>,
     }
 
     impl ParquetMorselizerBuilder {
@@ -1696,6 +2016,8 @@ mod test {
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
                 preserve_order: false,
+                post_metadata_hooks: Vec::new(),
+                pre_build_stream_hooks: Vec::new(),
             }
         }
 
@@ -1810,7 +2132,26 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                post_metadata_hooks: self.post_metadata_hooks.clone(),
+                pre_build_stream_hooks: self.pre_build_stream_hooks.clone(),
             }
+        }
+
+        fn with_post_metadata_access_plan_hook(
+            mut self,
+            hook: Arc<dyn PostMetadataAccessPlanHook>,
+        ) -> Self {
+            self.post_metadata_hooks.push(hook);
+            self
+        }
+
+        #[expect(dead_code)]
+        fn with_pre_build_stream_access_plan_hook(
+            mut self,
+            hook: Arc<dyn PreBuildStreamAccessPlanHook>,
+        ) -> Self {
+            self.pre_build_stream_hooks.push(hook);
+            self
         }
     }
 
@@ -2712,6 +3053,123 @@ mod test {
         assert_eq!(
             rows_without_page_index, 100,
             "without page index all rows are returned"
+        );
+    }
+
+    /// Verifies that a user-registered multi-step
+    /// [`PostMetadataAccessPlanHook`] is driven correctly through both
+    /// CPU and I/O steps, and that the access plan it produces is
+    /// honored downstream.
+    ///
+    /// The hook simulates an "external index" pattern:
+    /// 1. CPU step: inspect ctx, yield a future.
+    /// 2. I/O step: load a "mask" via `ctx.async_file_reader` (this just
+    ///    fetches a tiny byte range so we exercise the shared-reader path).
+    /// 3. CPU step: apply the mask, marking row group 0 as `Skip`.
+    #[tokio::test]
+    async fn test_post_metadata_hook_multi_step() {
+        use crate::access_plan_optimizer::{
+            PostMetadataAccessPlanHook, PostMetadataContext, PostMetadataHookInstance,
+            PostMetadataHookStep,
+        };
+        use futures::FutureExt;
+        use parquet::arrow::async_reader::AsyncFileReader;
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        // 100 rows in 2 row groups of 50 each.
+        let values: Vec<i32> = (0..100).collect();
+        let batch = record_batch!((
+            "a",
+            Int32,
+            values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
+        ))
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(50))
+            .build();
+        let schema = batch.schema();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "two_row_groups.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file =
+            PartitionedFile::new("two_row_groups.parquet".to_string(), data_size as u64);
+
+        #[derive(Debug)]
+        struct ExternalIndexHook;
+
+        impl PostMetadataAccessPlanHook for ExternalIndexHook {
+            fn begin(&self) -> Box<dyn PostMetadataHookInstance> {
+                Box::new(HookStart)
+            }
+        }
+
+        // Step 1: inspect ctx, yield to I/O.
+        #[derive(Debug)]
+        struct HookStart;
+        impl PostMetadataHookInstance for HookStart {
+            fn step(
+                self: Box<Self>,
+                ctx: Box<PostMetadataContext>,
+            ) -> Result<PostMetadataHookStep> {
+                let mut reader = ctx.async_file_reader.clone();
+                Ok(PostMetadataHookStep::Yield(
+                    async move {
+                        // Real I/O against the parquet file (warm reader)
+                        // — fetch the first few bytes just to prove the
+                        // shared-reader plumbing works end-to-end.
+                        let _ = reader
+                            .get_bytes(0..4)
+                            .await
+                            .map_err(DataFusionError::from)?;
+                        let next: Box<dyn PostMetadataHookInstance> =
+                            Box::new(HookLoaded);
+                        Ok((ctx, next))
+                    }
+                    .boxed(),
+                ))
+            }
+        }
+
+        // Step 2 (after I/O): CPU work — narrow the plan.
+        #[derive(Debug)]
+        struct HookLoaded;
+        impl PostMetadataHookInstance for HookLoaded {
+            fn step(
+                self: Box<Self>,
+                mut ctx: Box<PostMetadataContext>,
+            ) -> Result<PostMetadataHookStep> {
+                if !ctx.plan.is_empty() {
+                    ctx.plan.skip(0);
+                }
+                Ok(PostMetadataHookStep::Done(ctx))
+            }
+        }
+
+        let baseline = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .build();
+        let with_hook = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_post_metadata_access_plan_hook(Arc::new(ExternalIndexHook))
+            .build();
+
+        let (_, baseline_rows) =
+            count_batches_and_rows(open_file(&baseline, file.clone()).await.unwrap())
+                .await;
+        let (_, hooked_rows) =
+            count_batches_and_rows(open_file(&with_hook, file).await.unwrap()).await;
+
+        assert_eq!(baseline_rows, 100, "baseline reads all rows");
+        assert_eq!(
+            hooked_rows, 50,
+            "hook should skip the first row group (50 rows)"
         );
     }
 }
