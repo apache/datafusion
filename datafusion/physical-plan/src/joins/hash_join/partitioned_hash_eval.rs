@@ -474,8 +474,7 @@ impl PhysicalExpr for MultiMapLookupExpr {
         if self.maps.is_empty() || num_rows == 0 {
             // Empty `maps` would not be constructed by the dynamic-filter
             // builder — guard anyway: an empty OR is `false` for every row.
-            let buffer = BooleanBufferBuilder::new(num_rows);
-            let mut buffer = buffer;
+            let mut buffer = BooleanBufferBuilder::new(num_rows);
             buffer.append_n(num_rows, false);
             return Ok(ColumnarValue::Array(Arc::new(BooleanArray::new(
                 buffer.finish(),

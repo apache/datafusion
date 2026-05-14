@@ -732,8 +732,15 @@ impl SharedBuildAccumulator {
     }
 
     /// Build the dynamic filter for `PartitionMode::Partitioned`. Emits
-    /// `global_minmax AND ([merged_in_list AND] multi_hash_lookup)` —
-    /// independent of how the build side was repartitioned.
+    /// one of:
+    ///
+    /// ```text
+    /// global_minmax AND merged_in_list
+    /// global_minmax AND multi_hash_lookup
+    /// ```
+    ///
+    /// independent of how the build side was repartitioned. The two
+    /// membership shapes are alternatives, not combined — see below.
     ///
     /// * `global_minmax` — envelope of every partition's per-column min/max.
     ///   Cheap short-circuit and the only piece visible to scan-level
@@ -783,8 +790,10 @@ impl SharedBuildAccumulator {
                     .collect();
                 if maps.is_empty() {
                     // Defensive: every reported (non-empty) partition is
-                    // supposed to carry a Map. Falling through to None means
-                    // we degrade to bounds-only filtering.
+                    // supposed to carry a Map. If none do, we have no
+                    // membership predicate to AND with the bounds, so the
+                    // final filter is `global_minmax` alone — or
+                    // `lit(true)` if global bounds were also unavailable.
                     None
                 } else {
                     Some(Arc::new(MultiMapLookupExpr::new(
@@ -974,5 +983,50 @@ mod tests {
         let cb = global.get_column_bounds(0).unwrap();
         assert_eq!(cb.min, ScalarValue::Int32(Some(3)));
         assert_eq!(cb.max, ScalarValue::Int32(Some(20)));
+    }
+
+    /// When one partition's bounds for a column cannot be ordered against
+    /// another's (different ScalarValue variants → `partial_cmp` returns
+    /// `None`), that column is dropped from the global envelope while
+    /// orderable columns continue to widen normally.
+    #[test]
+    fn compute_global_bounds_drops_incomparable_column() {
+        let p1 = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Int32(Some(5)), ScalarValue::Int32(Some(10))),
+            ColumnBounds::new(ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))),
+        ]);
+        let p2 = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(20))),
+            // Column 1 has a different ScalarValue variant from p1's
+            // column 1; partial_cmp returns None and the column must
+            // drop out of the global envelope.
+            ColumnBounds::new(
+                ScalarValue::Utf8(Some("a".to_string())),
+                ScalarValue::Utf8(Some("z".to_string())),
+            ),
+        ]);
+        let global = compute_global_bounds(&[&p1, &p2]).unwrap();
+        // Only the orderable column survives.
+        assert_eq!(global.column_bounds.len(), 1);
+        let cb = global.get_column_bounds(0).unwrap();
+        assert_eq!(cb.min, ScalarValue::Int32(Some(3)));
+        assert_eq!(cb.max, ScalarValue::Int32(Some(20)));
+    }
+
+    /// If the only column is incomparable across partitions, the global
+    /// envelope has no surviving column and the function returns `None`
+    /// — there are no bounds to filter on, and the caller must fall
+    /// back to a membership-only filter.
+    #[test]
+    fn compute_global_bounds_none_when_all_columns_incomparable() {
+        let p1 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(5)),
+            ScalarValue::Int32(Some(10)),
+        )]);
+        let p2 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Utf8(Some("a".to_string())),
+            ScalarValue::Utf8(Some("z".to_string())),
+        )]);
+        assert!(compute_global_bounds(&[&p1, &p2]).is_none());
     }
 }

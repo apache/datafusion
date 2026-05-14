@@ -1309,10 +1309,15 @@ config_namespace! {
         /// very large IN lists that might not provide much benefit over hash table lookups.
         ///
         /// This uses the deduplicated row count once the build side has been evaluated.
-        /// In `Partitioned` hash-join mode the same threshold also gates the
-        /// cross-partition merged InList: per-partition InList arrays are
-        /// concatenated and deduplicated, and the merged `IN (SET)` only fires
-        /// when the union has at most this many distinct values.
+        ///
+        /// Applies in both `CollectLeft` and `Partitioned` hash-join modes:
+        /// - `CollectLeft`: the single build-side InList is offered only when
+        ///   its distinct count is at most this threshold.
+        /// - `Partitioned`: the same threshold gates both per-partition
+        ///   InList eligibility and the cross-partition merged InList —
+        ///   per-partition InList arrays are concatenated and deduplicated,
+        ///   and the merged `IN (SET)` only fires when the union has at
+        ///   most this many distinct values.
         ///
         /// The default is 20 distinct values, tuned so the resulting `IN (SET)`
         /// stays small enough to participate in parquet stats / bloom-filter
