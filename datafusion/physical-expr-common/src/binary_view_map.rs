@@ -349,7 +349,13 @@ where
                     let payload = make_payload_fn(Some(value));
                     // For inline strings, the stored view is identical to the input view:
                     // make_view(value, 0, 0) produces the same u128 as view_u128.
-                    let new_view = self.append_inline_view(view_u128);
+                    //
+                    // SAFETY: the enclosing `if len <= 12` branch establishes
+                    // that view_u128 is a valid inline ByteView. Its low 32
+                    // bits encode `len` (<= 12) and the next 12 bytes are the
+                    // value bytes the source array produced for this row, so
+                    // every required invariant of `append_inline_view` holds.
+                    let new_view = unsafe { self.append_inline_view(view_u128) };
                     (new_view, payload)
                 } else {
                     let value: &[u8] = values.value(i).as_ref();
@@ -404,11 +410,20 @@ where
     }
 
     /// Append an already-computed inline view (len <= 12) directly, bypassing
-    /// buffer allocation. The caller guarantees that `view` is a valid inline
-    /// ByteView (length field in the low 32 bits is <= 12).
+    /// buffer allocation.
     ///
     /// Returns the view that was stored (identical to the argument).
-    fn append_inline_view(&mut self, view: u128) -> u128 {
+    ///
+    /// # Safety
+    ///
+    /// `view` must be a valid inline `ByteView`: the length field in the low
+    /// 32 bits must be <= 12, and the remaining 12 bytes must hold the
+    /// value's bytes (zero-padded if shorter). Calling with a non-inline view
+    /// would store a value that downstream `views` consumers interpret as
+    /// `[buffer_index, offset]` into the `completed`/`in_progress` buffers,
+    /// which is unsound for any view that didn't originate from a real
+    /// allocation in those buffers.
+    unsafe fn append_inline_view(&mut self, view: u128) -> u128 {
         self.views.push(view);
         self.nulls.append_non_null();
         view
