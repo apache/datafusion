@@ -25,6 +25,7 @@ use crate::ParquetFileReaderFactory;
 use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
+use crate::sampling::ParquetSampling;
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -294,7 +295,16 @@ pub struct ParquetSource {
     /// so we still need to sort them after reading, so the reverse scan is inexact.
     /// Used to optimize ORDER BY ... DESC on sorted data.
     reverse_row_groups: bool,
+    /// Optional sampling config. The fractions are deferred — the actual
+    /// "which row groups" / "which rows" decision is made inside the
+    /// opener once the parquet metadata is available.
+    pub(crate) sampling: ParquetSampling,
 }
+
+// `ParquetSampling` lives in `crate::sampling` so the helpers that
+// consume it (`apply_row_group_sampling`, `apply_row_fraction_sampling`)
+// can be defined alongside the struct as methods rather than free
+// functions in `opener.rs`.
 
 impl ParquetSource {
     /// Create a new ParquetSource to read the data specified in the file scan
@@ -319,7 +329,51 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            sampling: ParquetSampling::default(),
         }
+    }
+
+    /// Sample only this fraction of row groups in each scanned file.
+    ///
+    /// `fraction` is in `(0.0, 1.0]`. The actual *which* row groups are
+    /// chosen is deferred until the opener has loaded the parquet footer
+    /// (so we can sample by real row-group index). Selection is
+    /// deterministic per `(file_name, row_group_count, fraction)`.
+    ///
+    /// All collected values from a sampled scan should be treated as
+    /// `Precision::Inexact` since the sample is not the full data.
+    pub fn with_row_group_sampling(mut self, fraction: f64) -> Self {
+        self.sampling.row_group_fraction = Some(fraction);
+        self
+    }
+
+    /// Sample only this fraction of rows in each scanned row group, via
+    /// a `RowSelection` of K contiguous windows spread across the row
+    /// group.
+    ///
+    /// Pages aren't aligned across columns in parquet, so true "page
+    /// sampling" doesn't have a coherent table-level meaning. This
+    /// row-range form gives the same IO savings (the parquet reader
+    /// uses the page index to read only the data pages covering the
+    /// selected rows) but remains aligned across columns.
+    ///
+    /// Selection is deterministic-but-random per
+    /// `(file_name, row_group_index, fraction, cluster_size)`.
+    pub fn with_row_fraction(mut self, fraction: f64) -> Self {
+        self.sampling.row_fraction = Some(fraction);
+        self
+    }
+
+    /// Override the per-row-group cluster size used by
+    /// [`Self::with_row_fraction`]. See [`ParquetSampling::row_cluster_size`].
+    pub fn with_row_cluster_size(mut self, rows: usize) -> Self {
+        self.sampling.row_cluster_size = rows;
+        self
+    }
+
+    /// Returns the current sampling config (mostly for introspection).
+    pub fn sampling(&self) -> &ParquetSampling {
+        &self.sampling
     }
 
     /// Set the `TableParquetOptions` for this ParquetSource.
@@ -581,6 +635,7 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
+            sampling: self.sampling.clone(),
         }))
     }
 
@@ -632,6 +687,18 @@ impl FileSource for ParquetSource {
                 // Add reverse_scan info if enabled
                 if self.reverse_row_groups {
                     write!(f, ", reverse_row_groups=true")?;
+                }
+
+                // Surface the sampling config when set so that EXPLAIN
+                // reflects a TABLESAMPLE pushdown.
+                if let Some(target) = self.sampling.system_target_remaining {
+                    write!(f, ", sample_system_target_remaining={target:.4}")?;
+                }
+                if let Some(rgf) = self.sampling.row_group_fraction {
+                    write!(f, ", sample_row_group_fraction={rgf:.4}")?;
+                }
+                if let Some(rf) = self.sampling.row_fraction {
+                    write!(f, ", sample_row_fraction={rf:.4}")?;
                 }
 
                 // Try to build the pruning predicates.
@@ -847,6 +914,110 @@ impl FileSource for ParquetSource {
 
         Ok(tnr)
     }
+
+    /// Absorb a `TABLESAMPLE`-shaped sample request into the parquet
+    /// scan: drop files, row groups, and rows in proportion to the
+    /// requested fraction, with no `SampleExec` left in the plan.
+    ///
+    /// `SYSTEM` sampling is the only supported method. The sampling
+    /// strategy (a hierarchical block-level reduction across files,
+    /// row groups, and rows) is described in the [`TABLESAMPLE clause`]
+    /// section of the SQL reference; it is intentionally not part of
+    /// the public sampling API and may evolve.
+    ///
+    /// [`TABLESAMPLE clause`]: https://datafusion.apache.org/user-guide/sql/select.html#tablesample-clause
+    fn try_push_sample(
+        &self,
+        spec: &datafusion_physical_plan::sample_pushdown::SampleSpec,
+        num_files: usize,
+    ) -> datafusion_common::Result<datafusion_datasource::file::FileSourceSampleResult>
+    {
+        use datafusion_datasource::file::FileSourceSampleResult;
+        use datafusion_physical_plan::sample_pushdown::SampleMethod;
+
+        // Implementation detail (not promised by the public API): the
+        // file axis uses ~p^(1/3) so the cube-root product across
+        // file × row-group × row stays at p; the opener handles the
+        // remaining row-group × row split adaptively based on the
+        // actual row-group count it sees per file.
+
+        match spec.method {
+            SampleMethod::System => {
+                let p = spec.fraction.clamp(0.0, 1.0);
+                if p >= 1.0 {
+                    // Trivial: no sampling needed.
+                    return Ok(FileSourceSampleResult::Absorbed {
+                        new_source: Arc::new(self.clone()),
+                        keep_files: None,
+                    });
+                }
+
+                let (keep_files, remaining_p) = if num_files <= 1 {
+                    (None, p)
+                } else {
+                    let q_file = p.cbrt();
+                    let target = ((num_files as f64) * q_file).ceil().max(1.0) as usize;
+                    let target = target.min(num_files);
+                    let actual_keep = (target as f64) / (num_files as f64);
+                    let remaining = (p / actual_keep).clamp(0.0, 1.0);
+                    let keep = if target == num_files {
+                        None
+                    } else {
+                        Some(seeded_file_subset(num_files, target, spec.seed))
+                    };
+                    (keep, remaining)
+                };
+
+                // Hand off the residual fraction to the opener — it
+                // splits row-group × row adaptively once it knows how
+                // many row groups each file actually has.
+                let mut sampling = self.sampling.clone();
+                sampling.system_target_remaining = Some(remaining_p);
+                // Plumb the user's REPEATABLE seed through to the
+                // opener so the row-group and row-fraction samplers
+                // can produce results that depend only on the seed,
+                // not on the file path. Without this the seed only
+                // governed the file-axis selection.
+                sampling.seed = spec.seed;
+                // Clear any explicit per-axis fractions so the opener's
+                // SYSTEM-mode adaptive split is the source of truth.
+                sampling.row_group_fraction = None;
+                sampling.row_fraction = None;
+                let new_source = ParquetSource {
+                    sampling,
+                    ..self.clone()
+                };
+
+                Ok(FileSourceSampleResult::Absorbed {
+                    new_source: Arc::new(new_source),
+                    keep_files,
+                })
+            }
+        }
+    }
+}
+
+/// Deterministic-random subset of `[0, num_files)` of size `target`.
+/// `seed` (when set) is mixed in so the user's `REPEATABLE(seed)`
+/// produces a reproducible selection across runs.
+fn seeded_file_subset(num_files: usize, target: usize, seed: Option<u64>) -> Vec<usize> {
+    use rand::SeedableRng;
+    use rand::seq::SliceRandom;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "parquet-sample-files".hash(&mut hasher);
+    num_files.hash(&mut hasher);
+    target.hash(&mut hasher);
+    seed.unwrap_or(0xC0FFEE_F11ECAFE).hash(&mut hasher);
+    let rng_seed = hasher.finish();
+
+    let mut rng = rand::rngs::SmallRng::seed_from_u64(rng_seed);
+    let mut indices: Vec<usize> = (0..num_files).collect();
+    indices.shuffle(&mut rng);
+    indices.truncate(target);
+    indices.sort_unstable();
+    indices
 }
 
 #[cfg(test)]
@@ -946,5 +1117,147 @@ mod tests {
 
         assert!(source.reverse_row_groups());
         assert!(source.filter().is_some());
+    }
+
+    /// Helper: invoke `try_push_sample` on a fresh `ParquetSource` and
+    /// return the absorbed source plus `keep_files`. Panics if the
+    /// source returns `Unsupported` (it never should for SYSTEM).
+    fn push_system_sample(
+        num_files: usize,
+        fraction: f64,
+        seed: Option<u64>,
+    ) -> (Arc<ParquetSource>, Option<Vec<usize>>) {
+        use datafusion_datasource::file::FileSourceSampleResult;
+        use datafusion_physical_plan::sample_pushdown::{SampleMethod, SampleSpec};
+
+        let source = ParquetSource::new(Arc::new(Schema::empty()));
+        let spec = SampleSpec {
+            method: SampleMethod::System,
+            fraction,
+            seed,
+        };
+        match source.try_push_sample(&spec, num_files).unwrap() {
+            FileSourceSampleResult::Absorbed {
+                new_source,
+                keep_files,
+            } => {
+                // Downcast back to ParquetSource for assertions.
+                let arc_any: Arc<dyn std::any::Any + Send + Sync> = new_source;
+                let parquet = arc_any
+                    .downcast::<ParquetSource>()
+                    .expect("absorbed source should be a ParquetSource");
+                (parquet, keep_files)
+            }
+            FileSourceSampleResult::Unsupported { reason } => {
+                panic!("SYSTEM should always be supported; got Unsupported: {reason}")
+            }
+        }
+    }
+
+    #[test]
+    fn try_push_sample_system_full_is_noop() {
+        let (source, keep) = push_system_sample(4, 1.0, None);
+        // Fraction >= 1.0: nothing to drop, sampling config stays default.
+        assert!(keep.is_none(), "no files should be dropped at fraction=1.0");
+        assert!(source.sampling().system_target_remaining.is_none());
+        assert!(source.sampling().row_group_fraction.is_none());
+        assert!(source.sampling().row_fraction.is_none());
+    }
+
+    /// With one file the file axis can't reduce, so the *entire*
+    /// requested fraction must flow through to the opener as
+    /// `system_target_remaining`. Otherwise the cube-root math would
+    /// undershoot — `SYSTEM(10)` over a single file would only keep
+    /// `cbrt(0.1) ≈ 46%` of the rows.
+    #[test]
+    fn try_push_sample_system_single_file_passes_full_fraction() {
+        let (source, keep) = push_system_sample(1, 0.1, Some(42));
+        assert!(keep.is_none(), "single-file scans should never drop files");
+        let target = source
+            .sampling()
+            .system_target_remaining
+            .expect("system_target_remaining must be set");
+        assert!(
+            (target - 0.1).abs() < 1e-12,
+            "single-file remaining must equal p, got {target}"
+        );
+        // The legacy explicit fractions must NOT be set — they would
+        // confuse the opener's adaptive split.
+        assert!(source.sampling().row_group_fraction.is_none());
+        assert!(source.sampling().row_fraction.is_none());
+    }
+
+    /// With multiple files we drop ~cbrt(p) of them and pass the
+    /// residual `p × num_files / target_files` to the opener so the
+    /// expected output stays at `p × N_total`.
+    #[test]
+    fn try_push_sample_system_multi_file_residual_compensates_rounding() {
+        // 8 files, p=0.125 → q_file=cbrt(0.125)=0.5 → keep ⌈8 × 0.5⌉ = 4.
+        // remaining = 0.125 × 8 / 4 = 0.25 = p^(2/3).
+        let (source, keep) = push_system_sample(8, 0.125, Some(7));
+        let kept = keep.expect("multi-file scan should produce keep_files");
+        assert_eq!(kept.len(), 4, "expected 4 files kept, got {kept:?}");
+        let target = source
+            .sampling()
+            .system_target_remaining
+            .expect("system_target_remaining must be set");
+        let expected = 0.125_f64 * 8.0 / 4.0;
+        assert!(
+            (target - expected).abs() < 1e-12,
+            "remaining must compensate for rounding: expected {expected}, got {target}"
+        );
+    }
+
+    #[test]
+    fn try_push_sample_system_drops_files_for_multi_file_scan() {
+        // 8 files, p=0.125 → q=cbrt(0.125)=0.5 → keep ⌈8 * 0.5⌉ = 4 files.
+        let (_, keep) = push_system_sample(8, 0.125, Some(42));
+        let kept = keep.expect("multi-file scan should produce keep_files");
+        assert_eq!(kept.len(), 4, "expected 4 files kept, got {kept:?}");
+        for w in kept.windows(2) {
+            assert!(w[0] < w[1], "kept indices must be strictly sorted");
+        }
+        assert!(kept.iter().all(|&i| i < 8), "indices must be < num_files");
+    }
+
+    #[test]
+    fn try_push_sample_system_keeps_at_least_one_file() {
+        // 100 files, p=1e-9 → q ≈ 0.001, target = ⌈100 * 0.001⌉ = 1.
+        let (_, keep) = push_system_sample(100, 1e-9, None);
+        let kept = keep.expect("multi-file scan should produce keep_files");
+        assert_eq!(kept.len(), 1, "must always keep at least one file");
+    }
+
+    #[test]
+    fn try_push_sample_system_repeatable_seed_is_deterministic() {
+        let (_, a) = push_system_sample(16, 0.3, Some(99));
+        let (_, b) = push_system_sample(16, 0.3, Some(99));
+        assert_eq!(
+            a, b,
+            "REPEATABLE seed must produce identical file selection"
+        );
+
+        let (_, c) = push_system_sample(16, 0.3, Some(100));
+        assert_ne!(a, c, "different seeds should produce different selections");
+    }
+
+    #[test]
+    fn try_push_sample_system_target_clamped_to_num_files() {
+        // p=0.99 → q=cbrt(0.99)≈0.9967 → ⌈4 * 0.9967⌉ = 4 (= num_files).
+        // When target == num_files we still set system_target_remaining
+        // (the opener still needs to sample within files), but
+        // keep_files is None so the caller skips the file_groups
+        // rebuild.
+        let (source, keep) = push_system_sample(4, 0.99, None);
+        assert!(
+            keep.is_none(),
+            "target == num_files must short-circuit to None"
+        );
+        let target = source
+            .sampling()
+            .system_target_remaining
+            .expect("system_target_remaining must be set");
+        // 0.99 × 4 / 4 = 0.99
+        assert!((target - 0.99).abs() < 1e-12);
     }
 }

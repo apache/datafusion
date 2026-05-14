@@ -22,6 +22,7 @@ use crate::filter_pushdown::{
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+use crate::sample_pushdown::{SamplePushdownResult, SampleSpec};
 use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 
@@ -788,6 +789,36 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         _preserve_order: bool,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
+    }
+
+    /// Try to push a TABLESAMPLE-shaped sample request through this
+    /// node. Used by the `SamplePushdown` physical optimizer rule to
+    /// turn a `SampleExec(child)` into `child'` with sampling
+    /// configured on (or absorbed by) the source.
+    ///
+    /// Per-node responsibilities:
+    /// * Source-like nodes that can natively sample (e.g.
+    ///   `DataSourceExec(ParquetSource)`) return
+    ///   [`SamplePushdownResult::Absorbed`] with a new node configured
+    ///   to produce the requested sample.
+    /// * Row-preserving nodes (filter, projection, coalesce,
+    ///   repartition, non-fetch sort) that commute with row-level
+    ///   sampling return [`SamplePushdownResult::Passthrough`]; the
+    ///   rule recurses into the child and rebuilds this node.
+    /// * All other nodes return [`SamplePushdownResult::Unsupported`].
+    ///
+    /// The default implementation returns `Unsupported` so adding new
+    /// node types stays a compile-time-safe opt-in.
+    fn try_push_sample(
+        self: Arc<Self>,
+        _spec: &SampleSpec,
+    ) -> Result<SamplePushdownResult> {
+        Ok(SamplePushdownResult::Unsupported {
+            reason: format!(
+                "{}: sample pushdown is not implemented for this node",
+                self.name(),
+            ),
+        })
     }
 }
 

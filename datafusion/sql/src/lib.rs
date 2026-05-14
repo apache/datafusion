@@ -49,6 +49,7 @@ pub mod planner;
 mod query;
 mod relation;
 pub mod resolve;
+pub mod sample;
 mod select;
 mod set_expr;
 mod stack;

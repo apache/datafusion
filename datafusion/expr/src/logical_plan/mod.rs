@@ -23,6 +23,7 @@ mod extension;
 pub(crate) mod invariants;
 pub use invariants::{InvariantLevel, assert_expected_schema, check_subquery_expr};
 mod plan;
+pub mod sample;
 mod statement;
 pub mod tree_node;
 
@@ -56,3 +57,4 @@ pub use datafusion_common::format::ExplainFormat;
 pub use display::display_schema;
 
 pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
+pub use sample::{Sample, SampleMethod, sample_plan};

@@ -39,6 +39,7 @@ use crate::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
+use crate::sample_pushdown::SamplePushdown;
 use crate::window_topn::WindowTopN;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -225,6 +226,13 @@ impl PhysicalOptimizer {
             Arc::new(ProjectionPushdown::new()),
             // PushdownSort: Detect sorts that can be pushed down to data sources.
             Arc::new(PushdownSort::new()),
+            // SamplePushdown: Push TABLESAMPLE into the source. Must run
+            // after FilterPushdown / ProjectionPushdown so that scan nodes
+            // are in their final shape, and after PushdownSort so a
+            // fetched SortExec — which blocks sample passthrough — has
+            // already absorbed its limit. Errors at planning time if
+            // pushdown is blocked.
+            Arc::new(SamplePushdown),
             Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.

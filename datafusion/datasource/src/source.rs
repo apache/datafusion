@@ -37,8 +37,9 @@ use datafusion_physical_plan::{
 };
 use itertools::Itertools;
 
-use crate::file::FileSource;
-use crate::file_scan_config::FileScanConfig;
+use crate::file::{FileSource, FileSourceSampleResult};
+use crate::file_groups::FileGroup;
+use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, Result, Statistics};
@@ -562,6 +563,61 @@ impl ExecutionPlan for DataSourceExec {
         let mut new_exec = Arc::unwrap_or_clone(self);
         new_exec.execution_state = Arc::new(OnceLock::new());
         Ok(Arc::new(new_exec))
+    }
+
+    fn try_push_sample(
+        self: Arc<Self>,
+        spec: &datafusion_physical_plan::sample_pushdown::SampleSpec,
+    ) -> Result<datafusion_physical_plan::sample_pushdown::SamplePushdownResult> {
+        use datafusion_physical_plan::sample_pushdown::SamplePushdownResult;
+
+        // Only file-scan sources have a place to plug sampling in.
+        let Some(file_cfg) = self.data_source.downcast_ref::<FileScanConfig>() else {
+            return Ok(SamplePushdownResult::Unsupported {
+                reason: "DataSourceExec: non-file source has no native sampling support"
+                    .to_string(),
+            });
+        };
+
+        let num_files: usize = file_cfg.file_groups.iter().map(|g| g.len()).sum();
+        match file_cfg.file_source.try_push_sample(spec, num_files)? {
+            FileSourceSampleResult::Unsupported { reason } => {
+                Ok(SamplePushdownResult::Unsupported { reason })
+            }
+            FileSourceSampleResult::Absorbed {
+                new_source,
+                keep_files,
+            } => {
+                let mut builder =
+                    FileScanConfigBuilder::from(file_cfg.clone()).with_source(new_source);
+                if let Some(keep) = keep_files {
+                    let kept: std::collections::HashSet<usize> =
+                        keep.into_iter().collect();
+                    let mut new_groups: Vec<FileGroup> = Vec::new();
+                    let mut idx = 0usize;
+                    for group in &file_cfg.file_groups {
+                        let kept_files: Vec<_> = group
+                            .iter()
+                            .filter(|_| {
+                                let here = idx;
+                                idx += 1;
+                                kept.contains(&here)
+                            })
+                            .cloned()
+                            .collect();
+                        if !kept_files.is_empty() {
+                            new_groups.push(FileGroup::new(kept_files));
+                        }
+                    }
+                    builder = builder.with_file_groups(new_groups);
+                }
+                let new_cfg = builder.build();
+                let new_exec = Self::new(Arc::new(new_cfg));
+                Ok(SamplePushdownResult::Absorbed {
+                    inner: Arc::new(new_exec) as Arc<dyn ExecutionPlan>,
+                })
+            }
+        }
     }
 }
 

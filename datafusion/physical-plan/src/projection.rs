@@ -506,6 +506,15 @@ impl ExecutionPlan for ProjectionExec {
                     .ok()
             })
     }
+
+    fn try_push_sample(
+        self: Arc<Self>,
+        _spec: &crate::sample_pushdown::SampleSpec,
+    ) -> Result<crate::sample_pushdown::SamplePushdownResult> {
+        // Column projection commutes with row sampling — selecting
+        // which columns survive is independent of which rows do.
+        Ok(crate::sample_pushdown::SamplePushdownResult::Passthrough)
+    }
 }
 
 impl ProjectionStream {

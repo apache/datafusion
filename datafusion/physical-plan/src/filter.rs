@@ -788,6 +788,17 @@ impl ExecutionPlan for FilterExec {
                     .ok()
             })
     }
+
+    fn try_push_sample(
+        self: Arc<Self>,
+        _spec: &crate::sample_pushdown::SampleSpec,
+    ) -> Result<crate::sample_pushdown::SamplePushdownResult> {
+        // `sample(filter(x))` ≡ `filter(sample(x))` distributionally
+        // (sampling and filtering commute), and pushing the sample
+        // below the filter is also strictly better for IO — rows are
+        // dropped before the predicate sees them.
+        Ok(crate::sample_pushdown::SamplePushdownResult::Passthrough)
+    }
 }
 
 impl EmbeddedProjection for FilterExec {

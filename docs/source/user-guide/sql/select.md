@@ -30,7 +30,7 @@ DataFusion supports the following syntax for queries:
 
 [ [WITH](#with-clause) with_query [, ...] ] <br/>
 [SELECT](#select-clause) [ ALL | DISTINCT ] select_expr [, ...] <br/>
-[ [FROM](#from-clause) from_item [, ...] ] <br/>
+[ [FROM](#from-clause) from_item [ [TABLESAMPLE](#tablesample-clause) ... ] [, ...] ] <br/>
 [ [JOIN](#join-clause) join_item [, ...] ] <br/>
 [ [WHERE](#where-clause) condition ] <br/>
 [ [GROUP BY](#group-by-clause) grouping_element [, ...] ] <br/>
@@ -75,6 +75,126 @@ Example:
 ```sql
 SELECT t.a FROM table AS t
 ```
+
+## TABLESAMPLE clause
+
+`TABLESAMPLE` returns a random subset of rows from a table. It's
+useful for ad-hoc data exploration ("give me roughly 1% of this
+table"), bounded `EXPLAIN ANALYZE` runs against representative data,
+and any analytics workload where an approximate answer is acceptable
+in exchange for reading less data.
+
+```sql
+SELECT * FROM table TABLESAMPLE SYSTEM (10);             -- ~10% of the table
+SELECT * FROM table TABLESAMPLE SYSTEM (5) REPEATABLE (42);  -- deterministic
+```
+
+The percentage is in the range `(0, 100]`. `REPEATABLE(seed)` makes
+the sample deterministic — the same seed against the same data always
+returns the same rows.
+
+### What `SYSTEM` means
+
+`SYSTEM` is **block-level** sampling: instead of evaluating a
+per-row coin flip, the scan keeps or drops whole blocks of rows
+chosen at random. This is the same behaviour PostgreSQL documents
+for `TABLESAMPLE SYSTEM` and what Hive calls `BLOCK` sampling
+(DataFusion accepts `BLOCK` as an alias for `SYSTEM`).
+
+The trade-off vs. row-level sampling (`BERNOULLI`):
+
+- **`SYSTEM`** is fast — the scan can skip blocks entirely, so it
+  reads less I/O proportional to the requested fraction. Rows
+  inside each kept block are correlated, so it's statistically
+  lossier than per-row sampling.
+- **`BERNOULLI`** evaluates `random() < p` per row, so every row is
+  read but only some are kept. Statistically tighter, but no I/O
+  saving.
+
+DataFusion only ships `SYSTEM` out of the box. To add `BERNOULLI` or
+other forms, register a [`RelationPlanner`] extension; see the
+[extending SQL] guide and the [`relation_planner` example].
+
+[`relationplanner`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.RelationPlanner.html
+[extending sql]: ../../library-user-guide/extending-sql.md
+[`relation_planner` example]: https://github.com/apache/datafusion/tree/main/datafusion-examples/examples/relation_planner
+
+### How `SYSTEM` is implemented for Parquet
+
+For a `ParquetSource`, `TABLESAMPLE SYSTEM(p%)` is pushed all the way
+into the scan rather than evaluated as a post-scan filter. The plan
+contains no `SampleExec` — instead, `ParquetSource` itself drops
+files, row groups, and row-clusters in proportion to `p`.
+
+The selection uses an **adaptive cube-root hybrid** that splits the
+budget across three independent levels — file, row-group, and row
+— and collapses the split when an axis can't reduce:
+
+1. **File level** (in the `SamplePushdown` rule, where the file count
+   is known): with `n_files ≥ 2`, keep `⌈n_files * cbrt(p)⌉` files
+   chosen by a seeded shuffle. With `n_files = 1`, the file axis
+   can't reduce, so the full budget flows to the opener.
+2. **Row-group level** (in the parquet opener, after the footer is
+   loaded so the row-group count is known): with multiple row groups
+   in a file, the residual fraction is split as `sqrt(remaining)` at
+   the row-group and row axes. With a single row group, the row-group
+   axis is skipped and the full residual is applied at the row level.
+3. **Row level** — within each kept row group, the kept fraction is
+   materialised as a small number of contiguous `RowSelection`
+   windows so the parquet reader can use the page index to skip data
+   pages entirely.
+
+The product across all axes is always `p`, so the expected result
+size is `p × N` rows regardless of how many files or row groups
+the scan happens to have. Spreading the reduction across all three
+axes means the I/O win at small fractions does not concentrate at
+a single granularity: dropping 90% of files (1/0.1 ≈ 10× fewer files)
+produces a coarser sample than dropping 90% across all axes evenly.
+Small inputs degenerate gracefully — a single-file scan still hits
+the requested `p`; a single-file / single-row-group scan reduces to
+pure row-level sampling.
+
+`REPEATABLE(seed)` mixes the seed into every random draw, so all
+levels produce the same selection across runs. The selection also
+depends on the execution `partition_index` of each file (a stable
+per-file id assigned by the scan, independent of the on-disk path),
+the row-group index within the file, and the cluster size, so
+different files don't accidentally see correlated samples and the
+sample is reproducible across environments.
+
+The sampling is visible in `EXPLAIN`:
+
+```text
+DataSourceExec: file_groups={...}, projection=[...],
+  file_type=parquet,
+  sample_system_target_remaining=0.5000
+```
+
+`sample_system_target_remaining` is the residual fraction handed off
+to the opener after the file axis has been applied. The opener then
+splits adaptively across the row-group / row axes based on what it
+sees in each file's footer — that decision isn't visible in the plan
+text since it varies per file at scan time.
+
+There is no `SampleExec` in the physical plan — the `SamplePushdown`
+optimizer rule absorbed the sample into the source. If pushdown is
+not possible (for example, against a non-Parquet source that does
+not implement `try_push_sample`), the rule errors at planning time
+with `TABLESAMPLE is not supported for this source`.
+
+### Limitations
+
+The built-in planner accepts only `TABLESAMPLE SYSTEM(p%)` with an
+optional `REPEATABLE(seed)`. The following forms error at planning
+time:
+
+- `TABLESAMPLE BERNOULLI(...)` — register a custom `RelationPlanner`.
+- `TABLESAMPLE (N ROWS)` — use `LIMIT N` instead, or a custom planner.
+- `TABLESAMPLE BUCKET m OUT OF n` — Hive bucket sampling is not
+  supported.
+- `TABLESAMPLE ... OFFSET ...` — ClickHouse-style offset sampling is
+  not supported.
+- Fractions outside `(0, 100]`.
 
 ## WHERE clause
 

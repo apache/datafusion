@@ -36,6 +36,8 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
+#[cfg(feature = "sql")]
+use datafusion_expr::planner::RelationPlanner;
 use datafusion_expr::registry::ExtensionTypeRegistrationRef;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use std::collections::HashMap;
@@ -80,6 +82,19 @@ impl SessionStateDefaults {
         Self::register_default_schema(config, table_factories, runtime, &default_catalog);
 
         default_catalog
+    }
+
+    /// Returns the list of default [`RelationPlanner`]s installed by
+    /// [`Self::default_relation_planners`]. Currently this is just the
+    /// built-in `TableSampleSystemPlanner`, which lifts
+    /// `TABLESAMPLE SYSTEM(p%) [REPEATABLE(n)]` into the core `Sample`
+    /// extension node so the `SamplePushdown` rule can absorb it into
+    /// the scan. Other `TABLESAMPLE` flavors are rejected at planning
+    /// time — register a `RelationPlanner` ahead of this one to add
+    /// custom semantics.
+    #[cfg(feature = "sql")]
+    pub fn default_relation_planners() -> Vec<Arc<dyn RelationPlanner>> {
+        vec![Arc::new(datafusion_sql::sample::TableSampleSystemPlanner)]
     }
 
     /// returns the list of default [`ExprPlanner`]s

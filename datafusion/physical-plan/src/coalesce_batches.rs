@@ -289,6 +289,14 @@ impl ExecutionPlan for CoalesceBatchesExec {
             ) as Arc<dyn ExecutionPlan>)
         })
     }
+
+    fn try_push_sample(
+        self: Arc<Self>,
+        _spec: &crate::sample_pushdown::SampleSpec,
+    ) -> Result<crate::sample_pushdown::SamplePushdownResult> {
+        // Coalescing batches is row-preserving and commutes with sampling.
+        Ok(crate::sample_pushdown::SamplePushdownResult::Passthrough)
+    }
 }
 
 /// Stream for [`CoalesceBatchesExec`]. See [`CoalesceBatchesExec`] for more details.
