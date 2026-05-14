@@ -23,27 +23,22 @@ use std::hint::black_box;
 fn criterion_benchmark(c: &mut Criterion) {
     // Construct large arrays for benchmarking
 
-    let array_len = 100000000;
+    let array_len = 100_000;
 
     let array = (0..array_len).map(|_| lit(2_i64)).collect::<Vec<_>>();
     let list_array = make_array(vec![make_array(array); 3]);
     let from_array = make_array(vec![lit(2_i64); 3]);
     let to_array = make_array(vec![lit(-2_i64); 3]);
 
-    let expected_array = list_array.clone();
-
     // Benchmark array functions
 
     c.bench_function("array_replace", |b| {
         b.iter(|| {
-            assert_eq!(
-                array_replace_all(
-                    list_array.clone(),
-                    from_array.clone(),
-                    to_array.clone()
-                ),
-                *black_box(&expected_array)
-            )
+            black_box(array_replace_all(
+                list_array.clone(),
+                from_array.clone(),
+                to_array.clone(),
+            ))
         })
     });
 }
