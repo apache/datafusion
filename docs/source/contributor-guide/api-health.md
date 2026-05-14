@@ -25,8 +25,7 @@ changes to avoid issues for downstream users.
 
 ## Breaking API Changes
 
-
-### What is the public API and what is a breaking API change?
+### What is the public Rust API and what is a breaking API change?
 
 In general, an item is part of the public Rust API if it appears on the [docs.rs page].
 
@@ -44,11 +43,11 @@ Examples of non-breaking changes include:
 - Marking a function as deprecated (`#[deprecated]`)
 - Adding a new function to a `trait` with a default implementation
 
-### What is the public SQL API and what is a breaking API change?
+### What is the public SQL API and what is a breaking SQL change?
 
 DataFusion is used extensively as a SQL engine by downstream applications with
 real users, and changes to the SQL semantics (the results returned for a given
-query) are a form of breaking change. Even if no Rust API signature changes,
+query) are a form of breaking change. Even if no Rust API signatures change,
 altering the result of an existing SQL construct can silently break downstream
 users whose applications, dashboards, or tests depend on the previous behavior.
 
