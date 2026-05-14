@@ -46,6 +46,9 @@ impl From<&Partitioning> for FFI_Partitioning {
                 Self::Hash(exprs, *size)
             }
             Partitioning::UnknownPartitioning(size) => Self::UnknownPartitioning(*size),
+            Partitioning::Custom(custom) => {
+                Self::UnknownPartitioning(custom.partition_count())
+            }
         }
     }
 }

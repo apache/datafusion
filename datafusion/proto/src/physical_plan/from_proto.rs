@@ -48,7 +48,9 @@ use datafusion_physical_plan::expressions::{
 };
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion_physical_plan::{
+    PartitionRange, Partitioning, PhysicalExpr, RangeBound, RangePartitioning, WindowExpr,
+};
 use datafusion_proto_common::common::proto_error;
 use object_store::ObjectMeta;
 use object_store::path::Path;
@@ -556,6 +558,7 @@ pub fn parse_physical_expr_with_converter(
                         expression_id,
                         generation: dynamic_filter.generation,
                         expr: inner_expr,
+                        partitioned_exprs: None,
                         is_complete: dynamic_filter.is_complete,
                     },
                 ));
@@ -632,6 +635,15 @@ pub fn parse_protobuf_partitioning(
                     proto_converter,
                 )
             }
+            Some(protobuf::partitioning::PartitionMethod::Range(range)) => {
+                parse_protobuf_range_partitioning(
+                    range,
+                    ctx,
+                    input_schema,
+                    proto_converter,
+                )
+                .map(Some)
+            }
             Some(protobuf::partitioning::PartitionMethod::Unknown(partition_count)) => {
                 Ok(Some(Partitioning::UnknownPartitioning(
                     *partition_count as usize,
@@ -640,6 +652,48 @@ pub fn parse_protobuf_partitioning(
             None => Ok(None),
         },
         None => Ok(None),
+    }
+}
+
+fn parse_protobuf_range_partitioning(
+    range: &protobuf::PhysicalRangePartitioning,
+    ctx: &PhysicalPlanDecodeContext<'_>,
+    input_schema: &Schema,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<Partitioning> {
+    let exprs =
+        parse_physical_exprs(&range.range_expr, ctx, input_schema, proto_converter)?;
+    let ranges = range
+        .ranges
+        .iter()
+        .map(parse_partition_range)
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Partitioning::range(RangePartitioning::try_new(
+        exprs, ranges,
+    )?))
+}
+
+fn parse_partition_range(
+    range: &protobuf::PhysicalPartitionRange,
+) -> Result<PartitionRange> {
+    Ok(PartitionRange::new(
+        range.lower.as_ref().map(parse_range_bound).transpose()?,
+        range.upper.as_ref().map(parse_range_bound).transpose()?,
+    ))
+}
+
+fn parse_range_bound(bound: &protobuf::PhysicalRangeBound) -> Result<RangeBound> {
+    let values = bound
+        .values
+        .iter()
+        .map(TryInto::try_into)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if bound.inclusive {
+        Ok(RangeBound::inclusive(values))
+    } else {
+        Ok(RangeBound::exclusive(values))
     }
 }
 

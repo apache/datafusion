@@ -696,8 +696,26 @@ fn reorder_current_join_keys(
                 result => result,
             }
         }
+        (Some(left), _) if left.as_range().is_some() => {
+            let left_range = left.as_range().expect("checked above");
+            match try_reorder(join_keys, left_range.exprs(), left_equivalence_properties)
+            {
+                (join_keys, None) => reorder_current_join_keys(
+                    join_keys,
+                    None,
+                    right_partition,
+                    left_equivalence_properties,
+                    right_equivalence_properties,
+                ),
+                result => result,
+            }
+        }
         (_, Some(Partitioning::Hash(right_exprs, _))) => {
             try_reorder(join_keys, right_exprs, right_equivalence_properties)
+        }
+        (_, Some(right)) if right.as_range().is_some() => {
+            let right_range = right.as_range().expect("checked above");
+            try_reorder(join_keys, right_range.exprs(), right_equivalence_properties)
         }
         _ => (join_keys, None),
     }

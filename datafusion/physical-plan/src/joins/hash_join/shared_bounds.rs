@@ -25,7 +25,7 @@ use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::HASH_JOIN_SEED;
+use crate::joins::hash_join::exec::{DynamicFilterRoutingMode, HASH_JOIN_SEED};
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
@@ -253,6 +253,8 @@ pub(crate) struct SharedBuildAccumulator {
     /// Random state for partitioning (RepartitionExec's hash function with 0,0,0,0 seeds)
     /// Used for PartitionedHashLookupPhysicalExpr
     repartition_random_state: SeededRandomState,
+    /// How partitioned build-side filters should be routed on the probe side.
+    routing_mode: DynamicFilterRoutingMode,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
 }
@@ -358,6 +360,7 @@ impl SharedBuildAccumulator {
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
+        routing_mode: DynamicFilterRoutingMode,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -403,6 +406,7 @@ impl SharedBuildAccumulator {
             dynamic_filter,
             on_right,
             repartition_random_state,
+            routing_mode,
             probe_schema: right_child.schema(),
         }
     }
@@ -593,104 +597,172 @@ impl SharedBuildAccumulator {
                     );
                 }
             },
-            FinalizeInput::Partitioned(partitions) => {
-                let num_partitions = partitions.len();
-                let routing_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    self.repartition_random_state.clone(),
-                    "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let modulo_expr = Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let mut real_branches = Vec::new();
-                let mut empty_partition_ids = Vec::new();
-                let mut has_canceled_unknown = false;
-
-                for (partition_id, partition) in partitions.iter().enumerate() {
-                    match partition {
-                        PartitionStatus::Reported(partition)
-                            if matches!(partition.pushdown, PushdownStrategy::Empty) =>
-                        {
-                            empty_partition_ids.push(partition_id);
-                        }
-                        PartitionStatus::Reported(partition) => {
-                            let membership_expr = create_membership_predicate(
-                                &self.on_right,
-                                partition.pushdown.clone(),
-                                &HASH_JOIN_SEED,
-                                self.probe_schema.as_ref(),
-                            )?;
-                            let bounds_expr = create_bounds_predicate(
-                                &self.on_right,
-                                &partition.bounds,
-                            );
-                            let then_expr = combine_membership_and_bounds(
-                                membership_expr,
-                                bounds_expr,
-                            )
-                            .unwrap_or_else(|| lit(true));
-                            real_branches.push((
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                then_expr,
-                            ));
-                        }
-                        PartitionStatus::CanceledUnknown => {
-                            has_canceled_unknown = true;
-                        }
-                        PartitionStatus::Pending => {
-                            return datafusion_common::internal_err!(
-                                "attempted to finalize dynamic filter with pending partition"
-                            );
-                        }
-                    }
+            FinalizeInput::Partitioned(partitions) => match self.routing_mode {
+                DynamicFilterRoutingMode::CaseHash => {
+                    self.update_case_hash_filter(&partitions)?
                 }
-
-                let filter_expr = if has_canceled_unknown {
-                    let mut when_then_branches = empty_partition_ids
-                        .into_iter()
-                        .map(|partition_id| {
-                            (
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                lit(false),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    when_then_branches.extend(real_branches);
-
-                    if when_then_branches.is_empty() {
-                        lit(true)
-                    } else {
-                        Arc::new(CaseExpr::try_new(
-                            Some(modulo_expr),
-                            when_then_branches,
-                            Some(lit(true)),
-                        )?) as Arc<dyn PhysicalExpr>
-                    }
-                } else if real_branches.is_empty() {
-                    lit(false)
-                } else if real_branches.len() == 1
-                    && empty_partition_ids.len() + 1 == num_partitions
-                {
-                    Arc::clone(&real_branches[0].1)
-                } else {
-                    Arc::new(CaseExpr::try_new(
-                        Some(modulo_expr),
-                        real_branches,
-                        Some(lit(false)),
-                    )?) as Arc<dyn PhysicalExpr>
-                };
-
-                self.dynamic_filter.update(filter_expr)?;
-            }
+                DynamicFilterRoutingMode::PartitionIndex => {
+                    self.update_partition_index_filter(&partitions)?
+                }
+                DynamicFilterRoutingMode::Global => {
+                    self.update_global_partitioned_filter(&partitions)?
+                }
+            },
         }
 
         Ok(())
     }
+
+    fn update_case_hash_filter(&self, partitions: &[PartitionStatus]) -> Result<()> {
+        let num_partitions = partitions.len();
+        let routing_hash_expr = Arc::new(HashExpr::new(
+            self.on_right.clone(),
+            self.repartition_random_state.clone(),
+            "hash_repartition".to_string(),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let modulo_expr = Arc::new(BinaryExpr::new(
+            routing_hash_expr,
+            Operator::Modulo,
+            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let mut real_branches = Vec::new();
+        let mut empty_partition_ids = Vec::new();
+        let mut has_canceled_unknown = false;
+
+        for (partition_id, partition) in partitions.iter().enumerate() {
+            match partition {
+                PartitionStatus::Reported(partition)
+                    if matches!(partition.pushdown, PushdownStrategy::Empty) =>
+                {
+                    empty_partition_ids.push(partition_id);
+                }
+                PartitionStatus::Reported(partition) => {
+                    let then_expr = self
+                        .build_reported_partition_filter(partition)?
+                        .unwrap_or_else(|| lit(true));
+                    real_branches.push((
+                        lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                        then_expr,
+                    ));
+                }
+                PartitionStatus::CanceledUnknown => {
+                    has_canceled_unknown = true;
+                }
+                PartitionStatus::Pending => {
+                    return datafusion_common::internal_err!(
+                        "attempted to finalize dynamic filter with pending partition"
+                    );
+                }
+            }
+        }
+
+        let filter_expr = if has_canceled_unknown {
+            let mut when_then_branches = empty_partition_ids
+                .into_iter()
+                .map(|partition_id| {
+                    (
+                        lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                        lit(false),
+                    )
+                })
+                .collect::<Vec<_>>();
+            when_then_branches.extend(real_branches);
+
+            if when_then_branches.is_empty() {
+                lit(true)
+            } else {
+                Arc::new(CaseExpr::try_new(
+                    Some(modulo_expr),
+                    when_then_branches,
+                    Some(lit(true)),
+                )?) as Arc<dyn PhysicalExpr>
+            }
+        } else if real_branches.is_empty() {
+            lit(false)
+        } else if real_branches.len() == 1
+            && empty_partition_ids.len() + 1 == num_partitions
+        {
+            Arc::clone(&real_branches[0].1)
+        } else {
+            Arc::new(CaseExpr::try_new(
+                Some(modulo_expr),
+                real_branches,
+                Some(lit(false)),
+            )?) as Arc<dyn PhysicalExpr>
+        };
+
+        self.dynamic_filter.update(filter_expr)
+    }
+
+    fn update_partition_index_filter(
+        &self,
+        partitions: &[PartitionStatus],
+    ) -> Result<()> {
+        let partition_filters = self.partition_filters(partitions)?;
+        let global_filter = combine_filters_with_or(partition_filters.iter().flatten())
+            .unwrap_or_else(|| lit(false));
+
+        self.dynamic_filter
+            .update_partitioned(global_filter, partition_filters)
+    }
+
+    fn update_global_partitioned_filter(
+        &self,
+        partitions: &[PartitionStatus],
+    ) -> Result<()> {
+        let partition_filters = self.partition_filters(partitions)?;
+        let global_filter = combine_filters_with_or(partition_filters.iter().flatten())
+            .unwrap_or_else(|| lit(false));
+
+        self.dynamic_filter.update(global_filter)
+    }
+
+    fn partition_filters(
+        &self,
+        partitions: &[PartitionStatus],
+    ) -> Result<Vec<Option<Arc<dyn PhysicalExpr>>>> {
+        partitions
+            .iter()
+            .map(|partition| match partition {
+                PartitionStatus::Reported(partition)
+                    if matches!(partition.pushdown, PushdownStrategy::Empty) =>
+                {
+                    Ok(None)
+                }
+                PartitionStatus::Reported(partition) => {
+                    self.build_reported_partition_filter(partition)
+                }
+                PartitionStatus::CanceledUnknown => Ok(Some(lit(true))),
+                PartitionStatus::Pending => datafusion_common::internal_err!(
+                    "attempted to finalize dynamic filter with pending partition"
+                ),
+            })
+            .collect()
+    }
+
+    fn build_reported_partition_filter(
+        &self,
+        partition: &PartitionData,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let membership_expr = create_membership_predicate(
+            &self.on_right,
+            partition.pushdown.clone(),
+            &HASH_JOIN_SEED,
+            self.probe_schema.as_ref(),
+        )?;
+        let bounds_expr = create_bounds_predicate(&self.on_right, &partition.bounds);
+        Ok(combine_membership_and_bounds(membership_expr, bounds_expr))
+    }
+}
+
+fn combine_filters_with_or<'a>(
+    filters: impl Iterator<Item = &'a Arc<dyn PhysicalExpr>>,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    filters.cloned().reduce(|left, right| {
+        Arc::new(BinaryExpr::new(left, Operator::Or, right)) as Arc<dyn PhysicalExpr>
+    })
 }
 
 impl fmt::Debug for SharedBuildAccumulator {
@@ -722,6 +794,7 @@ mod tests {
             dynamic_filter,
             on_right: vec![],
             repartition_random_state: SeededRandomState::with_seed(1),
+            routing_mode: DynamicFilterRoutingMode::CaseHash,
             probe_schema,
         }
     }

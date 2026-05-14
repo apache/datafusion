@@ -85,7 +85,8 @@ use datafusion::physical_plan::windows::{
     create_udwf_window_expr,
 };
 use datafusion::physical_plan::{
-    ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics, displayable,
+    ExecutionPlan, InputOrderMode, PartitionRange, Partitioning, PhysicalExpr,
+    RangeBound, RangePartitioning, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -118,7 +119,10 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
+use datafusion_proto::physical_plan::from_proto::parse_protobuf_partitioning;
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_partitioning, serialize_physical_expr_with_converter,
+};
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
@@ -1796,6 +1800,41 @@ fn roundtrip_repartition_preserve_order() -> Result<()> {
     assert!(repartition.preserve_order());
 
     roundtrip_test(Arc::new(repartition))
+}
+
+#[test]
+fn roundtrip_range_partitioning() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let range_partitioning = Partitioning::range(RangePartitioning::try_new(
+        vec![col("a", &schema)?],
+        vec![
+            PartitionRange::new(
+                None,
+                Some(RangeBound::exclusive(vec![ScalarValue::Int64(Some(10))])),
+            ),
+            PartitionRange::new(
+                Some(RangeBound::inclusive(vec![ScalarValue::Int64(Some(10))])),
+                None,
+            ),
+        ],
+    )?);
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+
+    let proto = serialize_partitioning(&range_partitioning, &codec, &proto_converter)?;
+    let decoded = parse_protobuf_partitioning(
+        Some(&proto),
+        &decode_ctx,
+        &schema,
+        &proto_converter,
+    )?
+    .expect("partitioning");
+
+    assert_eq!(decoded, range_partitioning);
+    Ok(())
 }
 
 #[test]

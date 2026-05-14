@@ -43,7 +43,10 @@ use crate::source::OpenArgs;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
+use datafusion_physical_expr::{
+    EquivalenceProperties, PartitionRange, Partitioning, RangeBound, RangePartitioning,
+    projection::ProjectionMapping, split_conjunction,
+};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -202,14 +205,20 @@ pub struct FileScanConfig {
     /// would be incorrect if there are filters being applied, thus this should be accessed
     /// via [`FileScanConfig::statistics`].
     pub(crate) statistics: Statistics,
-    /// When true, file_groups are organized by partition column values
-    /// and output_partitioning will return Hash partitioning on partition columns.
-    /// This allows the optimizer to skip hash repartitioning for aggregates and joins
-    /// on partition columns.
+    /// When true, file_groups are organized by partition column values.
+    /// When each file group has a single partition-value tuple,
+    /// output_partitioning will return range partitioning on partition columns.
+    /// This allows the optimizer to skip repartitioning for aggregates and joins
+    /// on partition columns without advertising hash partitioning.
     ///
     /// If the number of file partitions > target_partitions, the file partitions will be grouped
     /// in a round-robin fashion such that number of file partitions = target_partitions.
     pub partitioned_by_file_group: bool,
+    /// Optional physical partitioning metadata for [`Self::file_groups`].
+    ///
+    /// The partition count must match `file_groups.len()`. Expressions are in
+    /// terms of the full table schema before scan projection.
+    pub file_group_partitioning: Option<Partitioning>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -280,6 +289,7 @@ pub struct FileScanConfigBuilder {
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     partitioned_by_file_group: bool,
+    file_group_partitioning: Option<Partitioning>,
 }
 
 impl FileScanConfigBuilder {
@@ -306,6 +316,7 @@ impl FileScanConfigBuilder {
             batch_size: None,
             expr_adapter_factory: None,
             partitioned_by_file_group: false,
+            file_group_partitioning: None,
         }
     }
 
@@ -496,13 +507,22 @@ impl FileScanConfigBuilder {
 
     /// Set whether file groups are organized by partition column values.
     ///
-    /// When set to true, the output partitioning will be declared as Hash partitioning
-    /// on the partition columns.
+    /// When set to true, output partitioning will be derived from file
+    /// partition values when each file group has a single partition-value tuple.
     pub fn with_partitioned_by_file_group(
         mut self,
         partitioned_by_file_group: bool,
     ) -> Self {
         self.partitioned_by_file_group = partitioned_by_file_group;
+        self
+    }
+
+    /// Declare the physical partitioning represented by the file groups.
+    ///
+    /// The partition count must match the number of file groups. Expressions
+    /// are in terms of the full table schema before scan projection.
+    pub fn with_file_group_partitioning(mut self, partitioning: Partitioning) -> Self {
+        self.file_group_partitioning = Some(partitioning);
         self
     }
 
@@ -527,6 +547,7 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             partitioned_by_file_group,
+            file_group_partitioning,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -552,6 +573,7 @@ impl FileScanConfigBuilder {
             expr_adapter_factory: expr_adapter,
             statistics,
             partitioned_by_file_group,
+            file_group_partitioning,
         }
     }
 }
@@ -571,6 +593,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
             partitioned_by_file_group: config.partitioned_by_file_group,
+            file_group_partitioning: config.file_group_partitioning,
         }
     }
 }
@@ -687,8 +710,8 @@ impl DataSource for FileScanConfig {
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // When files are grouped by partition values, we cannot allow byte-range
         // splitting. It would mix rows from different partition values across
-        // file groups, breaking the Hash partitioning.
-        if self.partitioned_by_file_group {
+        // file groups, breaking the advertised partitioning.
+        if self.partitioned_by_file_group || self.file_group_partitioning.is_some() {
             return Ok(None);
         }
 
@@ -704,9 +727,15 @@ impl DataSource for FileScanConfig {
 
     /// Returns the output partitioning for this file scan.
     ///
-    /// When `partitioned_by_file_group` is true, this returns `Partitioning::Hash` on
-    /// the Hive partition columns, allowing the optimizer to skip hash repartitioning
-    /// for aggregates and joins on those columns.
+    /// If [`Self::file_group_partitioning`] is set and has the same partition
+    /// count as [`Self::file_groups`], that declared partitioning is projected
+    /// to the scan output and returned.
+    ///
+    /// When `partitioned_by_file_group` is true, this returns range
+    /// partitioning on the Hive partition columns when each file group has one
+    /// partition value tuple. This truthfully describes file groups that are
+    /// partitioned by partition-column values and allows the optimizer to skip hash
+    /// repartitioning for aggregates and joins on those columns.
     ///
     /// Tradeoffs
     /// - Benefit: Eliminates `RepartitionExec` and `SortExec` for queries with
@@ -719,6 +748,23 @@ impl DataSource for FileScanConfig {
     /// - Idea: Could allow byte-range splitting within partition-aware groups,
     ///   preserving I/O parallelism while maintaining partition semantics.
     fn output_partitioning(&self) -> Partitioning {
+        if let Some(partitioning) = &self.file_group_partitioning {
+            if partitioning.partition_count() == self.file_groups.len() {
+                match self.project_file_group_partitioning(partitioning) {
+                    Ok(partitioning) => return partitioning,
+                    Err(e) => {
+                        debug!("Could not project file group partitioning: {e}");
+                    }
+                }
+            } else {
+                debug!(
+                    "Ignoring file group partitioning with {} partitions for {} file groups",
+                    partitioning.partition_count(),
+                    self.file_groups.len()
+                );
+            }
+        }
+
         if self.partitioned_by_file_group {
             let partition_cols = self.table_partition_cols();
             if !partition_cols.is_empty() {
@@ -747,7 +793,15 @@ impl DataSource for FileScanConfig {
                 }
 
                 if exprs.len() == partition_cols.len() {
-                    return Partitioning::Hash(exprs, self.file_groups.len());
+                    match self.file_group_range_partitioning(exprs) {
+                        Ok(Some(partitioning)) => return partitioning,
+                        Ok(None) => {}
+                        Err(e) => {
+                            debug!(
+                                "Could not build range partitioning from file groups: {e}"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -1091,6 +1145,53 @@ impl FileScanConfig {
             Some(proj) => Ok(Arc::new(proj.project_schema(schema)?)),
             None => Ok(Arc::clone(schema)),
         }
+    }
+
+    fn project_file_group_partitioning(
+        &self,
+        partitioning: &Partitioning,
+    ) -> Result<Partitioning> {
+        let Some(projection) = self.file_source.projection() else {
+            return Ok(partitioning.clone());
+        };
+
+        let schema = self.file_source.table_schema().table_schema();
+        let mapping: ProjectionMapping = projection.projection_mapping(schema)?;
+        let eq_properties = EquivalenceProperties::new(Arc::clone(schema));
+        Ok(partitioning.project(&mapping, &eq_properties))
+    }
+
+    fn file_group_range_partitioning(
+        &self,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Option<Partitioning>> {
+        let mut ranges = Vec::with_capacity(self.file_groups.len());
+        for file_group in &self.file_groups {
+            let Some(first_file) = file_group.files().first() else {
+                return Ok(None);
+            };
+            let partition_values = &first_file.partition_values;
+            if partition_values.len() != exprs.len() {
+                return Ok(None);
+            }
+
+            let all_files_match = file_group
+                .files()
+                .iter()
+                .all(|file| file.partition_values == *partition_values);
+            if !all_files_match {
+                return Ok(None);
+            }
+
+            ranges.push(PartitionRange::new(
+                Some(RangeBound::inclusive(partition_values.clone())),
+                Some(RangeBound::inclusive(partition_values.clone())),
+            ));
+        }
+
+        RangePartitioning::try_new(exprs, ranges)
+            .map(Partitioning::range)
+            .map(Some)
     }
 
     fn add_filter_equivalence_info(
@@ -2443,6 +2544,84 @@ mod tests {
     }
 
     #[test]
+    fn test_output_partitioning_declared_file_group_range() -> Result<()> {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Utf8, false),
+            Field::new("key", DataType::Int64, false),
+        ]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+        let partitioning = Partitioning::range(RangePartitioning::try_new(
+            vec![Arc::new(Column::new("key", 1))],
+            vec![
+                PartitionRange::new(
+                    None,
+                    Some(RangeBound::exclusive(vec![ScalarValue::Int64(Some(100))])),
+                ),
+                PartitionRange::new(
+                    Some(RangeBound::inclusive(vec![ScalarValue::Int64(Some(100))])),
+                    None,
+                ),
+            ],
+        )?);
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            file_source,
+        )
+        .with_projection_indices(Some(vec![1]))
+        .unwrap()
+        .with_file_groups(vec![
+            FileGroup::new(vec![PartitionedFile::new("f1.parquet", 1024)]),
+            FileGroup::new(vec![PartitionedFile::new("f2.parquet", 1024)]),
+        ])
+        .with_file_group_partitioning(partitioning)
+        .build();
+
+        let partitioning = config.output_partitioning();
+        let range = partitioning
+            .as_range()
+            .expect("Expected range partitioning");
+        assert_eq!(range.partition_count(), 2);
+        assert_eq!(range.exprs().len(), 1);
+        let column = range.exprs()[0].downcast_ref::<Column>().unwrap();
+        assert_eq!(column.name(), "key");
+        assert_eq!(column.index(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_output_partitioning_declared_file_group_range_mismatch() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+        let partitioning = Partitioning::range(RangePartitioning::try_new(
+            vec![Arc::new(Column::new("key", 0))],
+            vec![PartitionRange::unbounded()],
+        )?);
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            file_source,
+        )
+        .with_file_groups(vec![
+            FileGroup::new(vec![PartitionedFile::new("f1.parquet", 1024)]),
+            FileGroup::new(vec![PartitionedFile::new("f2.parquet", 1024)]),
+        ])
+        .with_file_group_partitioning(partitioning)
+        .build();
+
+        assert!(matches!(
+            config.output_partitioning(),
+            Partitioning::UnknownPartitioning(2)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
     fn test_output_partitioning_with_partition_columns() {
         let file_schema = aggr_test_schema();
 
@@ -2461,20 +2640,36 @@ mod tests {
         );
         config.partitioned_by_file_group = true;
         config.file_groups = vec![
-            FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
-            FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
-            FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
+            FileGroup::new(vec![
+                PartitionedFile::new("f1.parquet".to_string(), 1024)
+                    .with_partition_values(vec![wrap_partition_value_in_dict(
+                        ScalarValue::from("2024-01-01"),
+                    )]),
+            ]),
+            FileGroup::new(vec![
+                PartitionedFile::new("f2.parquet".to_string(), 1024)
+                    .with_partition_values(vec![wrap_partition_value_in_dict(
+                        ScalarValue::from("2024-01-02"),
+                    )]),
+            ]),
+            FileGroup::new(vec![
+                PartitionedFile::new("f3.parquet".to_string(), 1024)
+                    .with_partition_values(vec![wrap_partition_value_in_dict(
+                        ScalarValue::from("2024-01-03"),
+                    )]),
+            ]),
         ];
 
         let partitioning = config.output_partitioning();
-        match partitioning {
-            Partitioning::Hash(exprs, num_partitions) => {
-                assert_eq!(num_partitions, 3);
-                assert_eq!(exprs.len(), 1);
-                assert_eq!(exprs[0].downcast_ref::<Column>().unwrap().name(), "date");
-            }
-            _ => panic!("Expected Hash partitioning"),
-        }
+        let range = partitioning
+            .as_range()
+            .expect("Expected range partitioning");
+        assert_eq!(range.partition_count(), 3);
+        assert_eq!(range.exprs().len(), 1);
+        assert_eq!(
+            range.exprs()[0].downcast_ref::<Column>().unwrap().name(),
+            "date"
+        );
 
         // Test multiple partition columns
         let multiple_partition_cols = vec![
@@ -2490,23 +2685,34 @@ mod tests {
         );
         config.partitioned_by_file_group = true;
         config.file_groups = vec![
-            FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
-            FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
+            FileGroup::new(vec![
+                PartitionedFile::new("f1.parquet".to_string(), 1024)
+                    .with_partition_values(vec![
+                        wrap_partition_value_in_dict(ScalarValue::from("2024")),
+                        wrap_partition_value_in_dict(ScalarValue::from("01")),
+                    ]),
+            ]),
+            FileGroup::new(vec![
+                PartitionedFile::new("f2.parquet".to_string(), 1024)
+                    .with_partition_values(vec![
+                        wrap_partition_value_in_dict(ScalarValue::from("2024")),
+                        wrap_partition_value_in_dict(ScalarValue::from("02")),
+                    ]),
+            ]),
         ];
 
         let partitioning = config.output_partitioning();
-        match partitioning {
-            Partitioning::Hash(exprs, num_partitions) => {
-                assert_eq!(num_partitions, 2);
-                assert_eq!(exprs.len(), 2);
-                let col_names: Vec<_> = exprs
-                    .iter()
-                    .map(|e| e.downcast_ref::<Column>().unwrap().name())
-                    .collect();
-                assert_eq!(col_names, vec!["year", "month"]);
-            }
-            _ => panic!("Expected Hash partitioning"),
-        }
+        let range = partitioning
+            .as_range()
+            .expect("Expected range partitioning");
+        assert_eq!(range.partition_count(), 2);
+        assert_eq!(range.exprs().len(), 2);
+        let col_names: Vec<_> = range
+            .exprs()
+            .iter()
+            .map(|e| e.downcast_ref::<Column>().unwrap().name())
+            .collect();
+        assert_eq!(col_names, vec!["year", "month"]);
     }
 
     #[test]

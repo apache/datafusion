@@ -55,7 +55,7 @@ use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    PartitioningCompatibility, PlanProperties, SendableRecordBatchStream, Statistics,
     common::can_project,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
@@ -764,9 +764,23 @@ pub struct HashJoinExec {
 struct HashJoinExecDynamicFilter {
     /// Dynamic filter that we'll update with the results of the build side once that is done.
     filter: Arc<DynamicFilterPhysicalExpr>,
+    /// How partitioned build-side filters should be routed on the probe side.
+    routing_mode: DynamicFilterRoutingMode,
     /// Build accumulator to collect build-side information (hash maps and/or bounds) from each partition.
     /// It is lazily initialized during execution to make sure we use the actual execution time partition counts.
     build_accumulator: OnceLock<Arc<SharedBuildAccumulator>>,
+}
+
+/// Routing strategy for partitioned dynamic filters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DynamicFilterRoutingMode {
+    /// Route by hash-case expression, used when rows are hash repartitioned.
+    CaseHash,
+    /// Route by partition index. Used when both sides satisfy the join's
+    /// distribution without repartitioning and share the same partition map.
+    PartitionIndex,
+    /// Use one global filter that safely covers all build partitions.
+    Global,
 }
 
 impl fmt::Debug for HashJoinExec {
@@ -842,23 +856,32 @@ impl HashJoinExec {
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
         let (_, probe_preserved) = self.join_type.on_lr_is_preserved();
-        if !probe_preserved || !config.optimizer.enable_join_dynamic_filter_pushdown {
-            return false;
+        probe_preserved && config.optimizer.enable_join_dynamic_filter_pushdown
+    }
+
+    fn dynamic_filter_routing_mode(&self) -> DynamicFilterRoutingMode {
+        if self.mode != PartitionMode::Partitioned {
+            return DynamicFilterRoutingMode::Global;
         }
 
-        // `preserve_file_partitions` can report Hash partitioning for Hive-style
-        // file groups, but those partitions are not actually hash-distributed.
-        // Partitioned dynamic filters rely on hash routing, so disable them in
-        // this mode to avoid incorrect results. Follow-up work: enable dynamic
-        // filtering for preserve_file_partitioned scans (issue #20195).
-        // https://github.com/apache/datafusion/issues/20195
-        if config.optimizer.preserve_file_partitions > 0
-            && self.mode == PartitionMode::Partitioned
-        {
-            return false;
-        }
+        let left_partitioning = self.left.output_partitioning();
+        let right_partitioning = self.right.output_partitioning();
+        let compatibility = left_partitioning.compatibility(right_partitioning);
 
-        true
+        if matches!(
+            (left_partitioning, right_partitioning),
+            (Partitioning::Hash(_, _), Partitioning::Hash(_, _))
+        ) {
+            if compatibility == PartitioningCompatibility::SamePartitionMap {
+                DynamicFilterRoutingMode::CaseHash
+            } else {
+                DynamicFilterRoutingMode::Global
+            }
+        } else if compatibility == PartitioningCompatibility::SamePartitionMap {
+            DynamicFilterRoutingMode::PartitionIndex
+        } else {
+            DynamicFilterRoutingMode::Global
+        }
     }
 
     /// left (build) side which gets hashed
@@ -1336,6 +1359,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            df.routing_mode,
                         ))
                     })))
                 })
@@ -1676,6 +1700,7 @@ impl ExecutionPlan for HashJoinExec {
                     .builder()
                     .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
                         filter: dynamic_filter,
+                        routing_mode: self.dynamic_filter_routing_mode(),
                         build_accumulator: OnceLock::new(),
                     }))
                     .build_exec()?;
@@ -2375,8 +2400,10 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?;
+        let routing_mode = join.dynamic_filter_routing_mode();
         join.dynamic_filter = Some(HashJoinExecDynamicFilter {
             filter: Arc::clone(&dynamic_filter),
+            routing_mode,
             build_accumulator: OnceLock::new(),
         });
 
