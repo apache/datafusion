@@ -31,6 +31,7 @@ use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
@@ -73,14 +74,31 @@ pub trait ExprSchemable {
 /// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
 fn cast_output_field(
     source_field: &FieldRef,
-    target_type: &DataType,
+    target_field: &FieldRef,
     force_nullable: bool,
 ) -> Arc<Field> {
     let mut f = source_field
         .as_ref()
         .clone()
-        .with_data_type(target_type.clone())
+        .with_data_type(target_field.data_type().clone())
         .with_metadata(source_field.metadata().clone());
+
+    // Extension type information is never propagated from the source field
+    // through a cast because there is no guarantee the output data type
+    // is a valid storage type for the extension.
+    f.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
+    f.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
+
+    // Metadata from target field overrides metadata from the source field.
+    // In most cases the target field will not have any metadata (created from
+    // a DataType), in which case this does nothing. Where the target field
+    // represents an extension type or includes other type-like metadata,
+    // this allows an optimizer rule or planner to insert the appropriate
+    // behaviour.
+    for (k, v) in target_field.metadata() {
+        f.metadata_mut().insert(k.clone(), v.clone());
+    }
+
     if force_nullable {
         f = f.with_nullable(true);
     }
@@ -594,21 +612,16 @@ impl ExprSchemable for Expr {
 
                 func.return_field_from_args(args)
             }
-            // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), false)
-                })
-            }
+            Expr::Cast(Cast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, false)),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
-            Expr::TryCast(TryCast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), true)
-                })
-            }
+            Expr::TryCast(TryCast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, true)),
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
@@ -1044,6 +1057,7 @@ mod tests {
             .with_metadata(meta.clone());
 
         // col, alias, and cast should be metadata-preserving
+        // mark
         assert_eq!(meta, expr.metadata(&schema).unwrap());
         assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
         assert_eq!(

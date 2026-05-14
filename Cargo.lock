@@ -2335,6 +2335,7 @@ name = "datafusion-physical-expr"
 version = "53.1.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "criterion",
  "datafusion-common",
  "datafusion-expr",

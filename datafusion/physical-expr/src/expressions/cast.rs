@@ -24,8 +24,10 @@ use crate::physical_expr::PhysicalExpr;
 use arrow::compute::{CastOptions, can_cast_types};
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
+use datafusion_common::metadata::format_type_and_metadata;
 use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
@@ -157,14 +159,9 @@ impl CastExpr {
                 let mut out_field =
                     field.as_ref().clone().with_data_type(cast_type.clone());
 
-                // If we modify the storage type we can't ensure that the metadata
-                // is valid on the target type (e.g., a cast from UUID with extension
-                // metadata to Utf8 should not result in extension metadata
-                // on a Utf8 type, which would be invalid and may be rejected by
-                // consumers).
-                if field.data_type() != cast_type {
-                    out_field = out_field.with_metadata(Default::default());
-                }
+                // Extension type information is never propagated from the source field
+                out_field.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
+                out_field.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
 
                 Arc::new(out_field)
             })
@@ -340,13 +337,20 @@ pub fn cast_with_target_field(
     target_field: FieldRef,
     cast_options: Option<CastOptions<'static>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let expr_type = expr.data_type(input_schema)?;
+    let expr_field = expr.return_field(input_schema)?;
+    let expr_type = expr_field.data_type();
     let cast_type = target_field.data_type();
-    if expr_type == *cast_type && is_default_target_field(&target_field) {
+    if expr_type == cast_type && is_default_target_field(&target_field) {
         return Ok(Arc::clone(&expr));
     }
 
-    let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
+    let can_build_cast = if target_field.extension_type_name().is_some() {
+        // Disallow casts to an extension type because we do not yet have a
+        // mechanism to ensure the target type will be valid. We allow a cast
+        // from an extension type (which casts the storage and discards the
+        // extension information) for backward compatibility.
+        false
+    } else if requires_nested_struct_cast(expr_type, cast_type) {
         // Allow casts involving structs (including nested inside Lists, Dictionaries,
         // etc.) that pass name-based compatibility validation. This validation is
         // applied at planning time (now) to fail fast, rather than deferring errors
@@ -358,7 +362,13 @@ pub fn cast_with_target_field(
     };
 
     if !can_build_cast {
-        return not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}");
+        let expr_type_disp =
+            format_type_and_metadata(expr_type, Some(expr_field.metadata()));
+        let cast_type_disp =
+            format_type_and_metadata(expr_type, Some(target_field.metadata()));
+        return not_impl_err!(
+            "Unsupported CAST from {expr_type_disp} to {cast_type_disp}"
+        );
     }
 
     Ok(Arc::new(CastExpr::new_with_target_field(
