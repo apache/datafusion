@@ -17,6 +17,7 @@
 
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
+use datafusion::config::Dialect;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_nested::map::map;
 use datafusion::logical_expr::{
@@ -2008,7 +2009,7 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
 }
 
 pub(crate) async fn higher_order_function_ctx() -> Result<SessionContext> {
-    let mut ctx = create_context().await?;
+    let mut ctx = create_context_with_dialect(Some(Dialect::Databricks)).await?;
 
     ctx.register_higher_order_function(Arc::new(ArrayTransform::new()))
         .unwrap();
@@ -2608,8 +2609,18 @@ async fn roundtrip_all_types(sql: &str) -> Result<()> {
 }
 
 async fn create_context() -> Result<SessionContext> {
+    create_context_with_dialect(None).await
+}
+
+async fn create_context_with_dialect(dialect: Option<Dialect>) -> Result<SessionContext> {
+    let mut session_config = SessionConfig::default();
+
+    if let Some(dialect) = dialect {
+        session_config.options_mut().sql_parser.dialect = dialect;
+    }
+
     let mut state = SessionStateBuilder::new()
-        .with_config(SessionConfig::default())
+        .with_config(session_config)
         .with_runtime_env(Arc::new(RuntimeEnv::default()))
         .with_default_features()
         .with_serializer_registry(Arc::new(MockSerializerRegistry))
