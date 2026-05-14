@@ -102,6 +102,8 @@ fn min_max_generic_scalar(
 ) -> ScalarValue {
     if lhs.is_null() {
         let mut rhs_copy = rhs.clone();
+        // When the new value won we want to compact it to
+        // avoid storing the entire input
         rhs_copy.compact();
         rhs_copy
     } else if rhs.is_null() {
@@ -109,6 +111,8 @@ fn min_max_generic_scalar(
     } else {
         match lhs.partial_cmp(rhs) {
             Some(order) if order == ordering => {
+                // When the new value won we want to compact it to
+                // avoid storing the entire input
                 let mut rhs_copy = rhs.clone();
                 rhs_copy.compact();
                 rhs_copy
