@@ -22,6 +22,9 @@ use std::sync::Arc;
 
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use crate::access_plan_optimizer::{
+    PostMetadataAccessPlanHook, PreBuildStreamAccessPlanHook,
+};
 use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
@@ -294,6 +297,11 @@ pub struct ParquetSource {
     /// so we still need to sort them after reading, so the reverse scan is inexact.
     /// Used to optimize ORDER BY ... DESC on sorted data.
     reverse_row_groups: bool,
+    /// Hooks invoked after the built-in post-metadata pruning passes.
+    pub(crate) post_metadata_hooks: Vec<Arc<dyn PostMetadataAccessPlanHook>>,
+    /// Hooks invoked after all built-in pruning passes, just before
+    /// the reader stream is constructed.
+    pub(crate) pre_build_stream_hooks: Vec<Arc<dyn PreBuildStreamAccessPlanHook>>,
 }
 
 impl ParquetSource {
@@ -319,7 +327,48 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            post_metadata_hooks: Vec::new(),
+            pre_build_stream_hooks: Vec::new(),
         }
+    }
+
+    /// Register a hook invoked after the built-in post-metadata pruning
+    /// passes (file-range + row-group statistics). The hook may do
+    /// multiple CPU and I/O steps; see [`PostMetadataAccessPlanHook`].
+    ///
+    /// Multiple hooks can be registered; they run sequentially in
+    /// registration order.
+    pub fn with_post_metadata_access_plan_hook(
+        mut self,
+        hook: Arc<dyn PostMetadataAccessPlanHook>,
+    ) -> Self {
+        self.post_metadata_hooks.push(hook);
+        self
+    }
+
+    /// Register a hook invoked after all built-in pruning passes, just
+    /// before the reader stream is constructed. See
+    /// [`PreBuildStreamAccessPlanHook`].
+    pub fn with_pre_build_stream_access_plan_hook(
+        mut self,
+        hook: Arc<dyn PreBuildStreamAccessPlanHook>,
+    ) -> Self {
+        self.pre_build_stream_hooks.push(hook);
+        self
+    }
+
+    /// All post-metadata access-plan hooks registered on this source.
+    pub fn post_metadata_access_plan_hooks(
+        &self,
+    ) -> &[Arc<dyn PostMetadataAccessPlanHook>] {
+        &self.post_metadata_hooks
+    }
+
+    /// All pre-build-stream access-plan hooks registered on this source.
+    pub fn pre_build_stream_access_plan_hooks(
+        &self,
+    ) -> &[Arc<dyn PreBuildStreamAccessPlanHook>] {
+        &self.pre_build_stream_hooks
     }
 
     /// Set the `TableParquetOptions` for this ParquetSource.
@@ -581,6 +630,8 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
+            post_metadata_hooks: self.post_metadata_hooks.clone(),
+            pre_build_stream_hooks: self.pre_build_stream_hooks.clone(),
         }))
     }
 

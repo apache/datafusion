@@ -25,6 +25,7 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod access_plan;
+pub mod access_plan_optimizer;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
@@ -39,6 +40,11 @@ mod supported_predicates;
 mod writer;
 
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
+pub use access_plan_optimizer::{
+    PostMetadataAccessPlanHook, PostMetadataContext, PostMetadataHookInstance,
+    PostMetadataHookStep, PreBuildStreamAccessPlanHook, PreBuildStreamContext,
+    PreBuildStreamHookInstance, PreBuildStreamHookStep,
+};
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
