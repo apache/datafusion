@@ -98,6 +98,7 @@ pub(crate) enum CheckColumnsMustReferenceAggregatePurpose {
     Having,
     Qualify,
     OrderBy,
+    DistinctOn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +120,9 @@ impl CheckColumnsSatisfyExprsPurpose {
             }
             Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::OrderBy) => {
                 "Column in ORDER BY must be in GROUP BY or an aggregate function"
+            }
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::DistinctOn) => {
+                "Column in DISTINCT ON must be in GROUP BY or an aggregate function"
             }
         }
     }
