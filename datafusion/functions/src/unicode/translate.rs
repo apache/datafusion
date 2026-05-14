@@ -276,8 +276,7 @@ fn build_translate_table(from: &str, to: &str) -> TranslateTable {
     if let Some(ascii) = build_ascii_translate_table(from, to) {
         return TranslateTable::Byte(ascii);
     }
-    let mut from_map: HashMap<char, Option<char>> =
-        HashMap::with_capacity(from.len());
+    let mut from_map: HashMap<char, Option<char>> = HashMap::with_capacity(from.len());
     let mut to_iter = to.chars();
     for c in from.chars() {
         let replacement = to_iter.next();

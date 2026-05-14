@@ -73,8 +73,11 @@ fn create_args_array_from_to_non_ascii<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
 ) -> Vec<ColumnarValue> {
-    let string_array =
-        Arc::new(create_non_ascii_string_array::<O>(size, str_len, 0xA110_AAAA));
+    let string_array = Arc::new(create_non_ascii_string_array::<O>(
+        size,
+        str_len,
+        0xA110_AAAA,
+    ));
     let from_array = Arc::new(create_non_ascii_string_array::<O>(size, 3, 0xA110_BBBB));
     let to_array = Arc::new(create_non_ascii_string_array::<O>(size, 2, 0xA110_CCCC));
 
