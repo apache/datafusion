@@ -356,9 +356,9 @@ pub fn cast_with_target_field(
         // applied at planning time (now) to fail fast, rather than deferring errors
         // to execution time. The name-based casting logic will be executed at runtime
         // via ColumnarValue::cast_to.
-        can_cast_named_struct_types(&expr_type, cast_type)
+        can_cast_named_struct_types(expr_type, cast_type)
     } else {
-        can_cast_types(&expr_type, cast_type)
+        can_cast_types(expr_type, cast_type)
     };
 
     if !can_build_cast {
