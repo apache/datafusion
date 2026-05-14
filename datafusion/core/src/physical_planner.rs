@@ -3262,6 +3262,21 @@ mod tests {
         Ok(displayable(physical_plan.as_ref()).indent(true).to_string())
     }
 
+    async fn aggregate_explain_for(
+        schema: Schema,
+        aggr_expr: Vec<Expr>,
+    ) -> Result<String> {
+        let logical_plan = scan_empty(None, &schema, None)?
+            .aggregate(Vec::<Expr>::new(), aggr_expr)?
+            .build()?;
+
+        aggregate_explain(&logical_plan).await
+    }
+
+    fn int64_field(name: &str, nullable: bool) -> Field {
+        Field::new(name, DataType::Int64, nullable)
+    }
+
     #[test]
     fn test_create_window_expr_unwraps_alias_with_metadata() -> Result<()> {
         use std::collections::HashMap;
@@ -4112,21 +4127,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_aggregate_explain_shows_quoted_user_alias() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "column1",
-            DataType::Int64,
-            false,
-        )]));
-
-        let logical_plan = scan_empty(None, schema.as_ref(), None)?
-            .aggregate(
-                Vec::<Expr>::new(),
-                vec![sum(col("column1")).alias("total rows")],
-            )?
-            .build()?;
-
         assert_contains!(
-            aggregate_explain(&logical_plan).await?,
+            aggregate_explain_for(
+                Schema::new(vec![int64_field("column1", false)]),
+                vec![sum(col("column1")).alias("total rows")],
+            )
+            .await?,
             "AggregateExec: mode=Single, gby=[], aggr=[sum(?table?.column1) as total rows]"
         );
 
@@ -4135,21 +4141,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_aggregate_explain_shows_aliased_filter_expression() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("column1", DataType::Int64, false),
-            Field::new("column2", DataType::Int64, false),
-        ]));
-
         let expr = sum(col("column1"))
             .filter(col("column2").lt_eq(lit(0_i64)))
             .build()?
             .alias("agg");
-        let logical_plan = scan_empty(None, schema.as_ref(), None)?
-            .aggregate(Vec::<Expr>::new(), vec![expr])?
-            .build()?;
 
         assert_contains!(
-            aggregate_explain(&logical_plan).await?,
+            aggregate_explain_for(
+                Schema::new(vec![
+                    int64_field("column1", false),
+                    int64_field("column2", false),
+                ]),
+                vec![expr],
+            )
+            .await?,
             "AggregateExec: mode=Single, gby=[], aggr=[sum(?table?.column1) FILTER (WHERE ?table?.column2 <= Int64(0)) as agg]"
         );
 
@@ -4158,23 +4163,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_aggregate_explain_shows_aliased_respect_nulls() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("column1", DataType::Int64, true),
-            Field::new("column2", DataType::Int64, false),
-        ]));
-
         let expr = datafusion_functions_aggregate::first_last::first_value_udaf()
             .call(vec![col("column1")])
             .order_by(vec![col("column2").sort(true, true)])
             .null_treatment(NullTreatment::RespectNulls)
             .build()?
             .alias("agg");
-        let logical_plan = scan_empty(None, schema.as_ref(), None)?
-            .aggregate(Vec::<Expr>::new(), vec![expr])?
-            .build()?;
 
         assert_contains!(
-            aggregate_explain(&logical_plan).await?,
+            aggregate_explain_for(
+                Schema::new(vec![
+                    int64_field("column1", true),
+                    int64_field("column2", false),
+                ]),
+                vec![expr],
+            )
+            .await?,
             "AggregateExec: mode=Single, gby=[], aggr=[first_value(?table?.column1) RESPECT NULLS ORDER BY [?table?.column2 ASC NULLS FIRST] as agg]"
         );
 
@@ -4213,25 +4217,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_aggregate_explain_shows_aliased_custom_human_display() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "column1",
-            DataType::Int64,
-            false,
-        )]));
-
-        let logical_plan = scan_empty(None, schema.as_ref(), None)?
-            .aggregate(
-                Vec::<Expr>::new(),
+        assert_contains!(
+            aggregate_explain_for(
+                Schema::new(vec![int64_field("column1", false)]),
                 vec![
                     AggregateUDF::from(CustomHumanDisplayUdaf::new())
                         .call(vec![col("column1")])
                         .alias("agg"),
                 ],
-            )?
-            .build()?;
-
-        assert_contains!(
-            aggregate_explain(&logical_plan).await?,
+            )
+            .await?,
             "AggregateExec: mode=Single, gby=[], aggr=[custom_display(?table?.column1) as agg]"
         );
 

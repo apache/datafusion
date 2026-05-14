@@ -48,7 +48,7 @@ use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{JoinType, Operator, Volatility, create_udf};
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
@@ -2174,38 +2174,12 @@ async fn test_round_trip_human_display() -> Result<()> {
 
 #[test]
 fn test_round_trip_aliased_reverse_human_display() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
-    let agg_expr =
-        AggregateExprBuilder::new(first_value_udaf(), vec![col("b", &schema)?])
-            .order_by(vec![PhysicalSortExpr {
-                expr: col("b", &schema)?,
-                options: SortOptions::new(false, false),
-            }])
-            .schema(Arc::clone(&schema))
-            .alias("agg")
-            .human_display("first_value(b) ORDER BY [b ASC NULLS LAST]")
-            .human_display_alias("agg")
-            .build()
-            .map(Arc::new)?;
-
-    let plan = Arc::new(AggregateExec::try_new(
-        AggregateMode::Single,
-        PhysicalGroupBy::new(vec![], vec![], vec![], false),
-        vec![agg_expr],
-        vec![None],
-        Arc::new(EmptyExec::new(Arc::clone(&schema))),
-        schema,
-    )?);
-
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
-    let roundtrip_plan = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
-    let aggregate = roundtrip_plan
-        .as_ref()
-        .downcast_ref::<AggregateExec>()
-        .expect("expected AggregateExec after roundtrip");
-    let reversed = aggregate.aggr_expr()[0]
+    let aggregate_expr = roundtrip_first_value_aggregate(
+        "agg",
+        "first_value(b) ORDER BY [b ASC NULLS LAST]",
+        Some("agg"),
+    )?;
+    let reversed = aggregate_expr
         .reverse_expr()
         .expect("expected reverse expr");
 
@@ -2221,38 +2195,11 @@ fn test_round_trip_aliased_reverse_human_display() -> Result<()> {
 
 #[test]
 fn test_round_trip_human_display_alias_with_colon() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
-    let agg_expr =
-        AggregateExprBuilder::new(first_value_udaf(), vec![col("b", &schema)?])
-            .order_by(vec![PhysicalSortExpr {
-                expr: col("b", &schema)?,
-                options: SortOptions::new(false, false),
-            }])
-            .schema(Arc::clone(&schema))
-            .alias("agg:one")
-            .human_display("first_value(b) ORDER BY [b ASC NULLS LAST]")
-            .human_display_alias("agg:one")
-            .build()
-            .map(Arc::new)?;
-
-    let plan = Arc::new(AggregateExec::try_new(
-        AggregateMode::Single,
-        PhysicalGroupBy::new(vec![], vec![], vec![], false),
-        vec![agg_expr],
-        vec![None],
-        Arc::new(EmptyExec::new(Arc::clone(&schema))),
-        schema,
-    )?);
-
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
-    let roundtrip_plan = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
-    let aggregate = roundtrip_plan
-        .as_ref()
-        .downcast_ref::<AggregateExec>()
-        .expect("expected AggregateExec after roundtrip");
-    let aggregate_expr = &aggregate.aggr_expr()[0];
+    let aggregate_expr = roundtrip_first_value_aggregate(
+        "agg:one",
+        "first_value(b) ORDER BY [b ASC NULLS LAST]",
+        Some("agg:one"),
+    )?;
 
     assert_eq!(aggregate_expr.name(), "agg:one");
     assert_eq!(aggregate_expr.human_display_alias(), Some("agg:one"));
@@ -2266,18 +2213,38 @@ fn test_round_trip_human_display_alias_with_colon() -> Result<()> {
 
 #[test]
 fn test_round_trip_non_aliased_human_display_ending_like_alias() -> Result<()> {
+    let aggregate_expr =
+        roundtrip_first_value_aggregate("agg", "first_value(b) as agg", None)?;
+
+    assert_eq!(aggregate_expr.name(), "agg");
+    assert_eq!(
+        aggregate_expr.human_display(),
+        Some("first_value(b) as agg")
+    );
+    assert_eq!(aggregate_expr.human_display_alias(), None);
+
+    Ok(())
+}
+
+fn roundtrip_first_value_aggregate(
+    alias: &str,
+    human_display: &str,
+    human_display_alias: Option<&str>,
+) -> Result<Arc<AggregateFunctionExpr>> {
     let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
-    let agg_expr =
+    let mut builder =
         AggregateExprBuilder::new(first_value_udaf(), vec![col("b", &schema)?])
             .order_by(vec![PhysicalSortExpr {
                 expr: col("b", &schema)?,
                 options: SortOptions::new(false, false),
             }])
             .schema(Arc::clone(&schema))
-            .alias("agg")
-            .human_display("first_value(b) as agg")
-            .build()
-            .map(Arc::new)?;
+            .alias(alias)
+            .human_display(human_display);
+    if let Some(human_display_alias) = human_display_alias {
+        builder = builder.human_display_alias(human_display_alias);
+    }
+    let agg_expr = builder.build().map(Arc::new)?;
 
     let plan = Arc::new(AggregateExec::try_new(
         AggregateMode::Single,
@@ -2296,16 +2263,8 @@ fn test_round_trip_non_aliased_human_display_ending_like_alias() -> Result<()> {
         .as_ref()
         .downcast_ref::<AggregateExec>()
         .expect("expected AggregateExec after roundtrip");
-    let aggregate_expr = &aggregate.aggr_expr()[0];
 
-    assert_eq!(aggregate_expr.name(), "agg");
-    assert_eq!(
-        aggregate_expr.human_display(),
-        Some("first_value(b) as agg")
-    );
-    assert_eq!(aggregate_expr.human_display_alias(), None);
-
-    Ok(())
+    Ok(Arc::clone(&aggregate.aggr_expr()[0]))
 }
 
 // Bug 2 of https://github.com/apache/datafusion/issues/16772

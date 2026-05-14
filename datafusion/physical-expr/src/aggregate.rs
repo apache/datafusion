@@ -1135,15 +1135,27 @@ mod tests {
     use datafusion_common::metadata::FieldMetadata;
     use datafusion_expr::{col, test::function_stub::sum};
 
-    #[test]
-    fn lowered_aggregate_builder_unwraps_alias_with_metadata() -> Result<()> {
+    fn aggregate_test_schema() -> Result<(Schema, DFSchema)> {
         let schema = Schema::new(vec![Field::new("column1", DataType::Int64, true)]);
         let logical_schema = DFSchema::try_from(schema.clone())?;
-        let metadata = FieldMetadata::from(HashMap::from([(
+        Ok((schema, logical_schema))
+    }
+
+    fn test_metadata() -> FieldMetadata {
+        FieldMetadata::from(HashMap::from([(
             "some_key".to_string(),
             "some_value".to_string(),
-        )]));
-        let expr = sum(col("column1")).alias_with_metadata("agg", Some(metadata));
+        )]))
+    }
+
+    fn aggregate_alias_with_metadata() -> Expr {
+        sum(col("column1")).alias_with_metadata("agg", Some(test_metadata()))
+    }
+
+    #[test]
+    fn lowered_aggregate_builder_unwraps_alias_with_metadata() -> Result<()> {
+        let (schema, logical_schema) = aggregate_test_schema()?;
+        let expr = aggregate_alias_with_metadata();
 
         let lowered = LoweredAggregateBuilder::new(
             &expr,
@@ -1165,13 +1177,8 @@ mod tests {
 
     #[test]
     fn lowered_aggregate_builder_display_override_skips_alias_metadata() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("column1", DataType::Int64, true)]);
-        let logical_schema = DFSchema::try_from(schema.clone())?;
-        let metadata = FieldMetadata::from(HashMap::from([(
-            "some_key".to_string(),
-            "some_value".to_string(),
-        )]));
-        let expr = sum(col("column1")).alias_with_metadata("agg", Some(metadata));
+        let (schema, logical_schema) = aggregate_test_schema()?;
+        let expr = aggregate_alias_with_metadata();
 
         let lowered = LoweredAggregateBuilder::new(
             &expr,
