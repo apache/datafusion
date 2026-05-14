@@ -1348,8 +1348,8 @@ SELECT * FROM (
         (3, arrow_cast(NULL, 'List(Int64)'))
 ) AS t(id, arr);
 
-# Reproducer for the optimization gap: the unused `elem` output is duplicate-insensitive
-# below this GROUP BY, but the current plan still keeps Unnest/UnnestExec.
+# The unused `elem` output only duplicates rows below this GROUP BY, so it can
+# be pruned without changing the grouped ids.
 query I
 SELECT id
 FROM (
@@ -1372,9 +1372,13 @@ FROM (
 GROUP BY id;
 ----
 logical_plan
-<slt:ignore>Unnest:<slt:ignore>
+01)Aggregate: groupBy=[[unused_unnest_pruning.id]], aggr=[[]]
+02)--TableScan: unused_unnest_pruning projection=[id]
 physical_plan
-<slt:ignore>UnnestExec<slt:ignore>
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Counterexample: removing UNNEST here would change cardinality.
 query I rowsort
@@ -1416,6 +1420,19 @@ FROM (
 );
 ----
 2
+
+# Empty and NULL input lists can remove rows before grouping, so this UNNEST
+# must not be pruned even though `elem` is not projected above the GROUP BY.
+query I
+SELECT id
+FROM (
+    SELECT id, UNNEST(arr) AS elem
+    FROM unused_unnest_pruning
+)
+GROUP BY id
+ORDER BY id;
+----
+1
 
 statement ok
 DROP TABLE unused_unnest_pruning;
