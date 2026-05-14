@@ -225,7 +225,7 @@ fn test_update_matching_exprs() -> Result<()> {
         .iter()
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
-    for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
+    for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs) {
         assert!(
             update_expr(&expr, &child_exprs, true)?
                 .unwrap()
@@ -366,7 +366,7 @@ fn test_update_projected_exprs() -> Result<()> {
         .iter()
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
-    for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
+    for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs) {
         assert!(
             update_expr(&expr, &proj_exprs, false)?
                 .unwrap()
@@ -579,8 +579,7 @@ fn test_streaming_table_after_projection() -> Result<()> {
                 options: SortOptions::default(),
             }]
             .into(),
-        ]
-        .into_iter(),
+        ],
         true,
         None,
     )?;

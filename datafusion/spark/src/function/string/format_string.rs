@@ -592,15 +592,15 @@ impl TryFrom<char> for TimeFormat {
 impl ConversionType {
     pub fn validate(&self, arg_type: &DataType) -> Result<()> {
         match self {
-            ConversionType::BooleanLower | ConversionType::BooleanUpper => {
-                if *arg_type != DataType::Boolean {
-                    return exec_err!(
-                        "Invalid argument type for boolean conversion: {:?}",
-                        arg_type
-                    );
-                }
+            ConversionType::BooleanLower | ConversionType::BooleanUpper
+                if *arg_type != DataType::Boolean =>
+            {
+                return exec_err!(
+                    "Invalid argument type for boolean conversion: {:?}",
+                    arg_type
+                );
             }
-            ConversionType::CharLower | ConversionType::CharUpper => {
+            ConversionType::CharLower | ConversionType::CharUpper
                 if !matches!(
                     arg_type,
                     DataType::Int8
@@ -611,23 +611,23 @@ impl ConversionType {
                         | DataType::UInt32
                         | DataType::Int64
                         | DataType::UInt64
-                ) {
-                    return exec_err!(
-                        "Invalid argument type for char conversion: {:?}",
-                        arg_type
-                    );
-                }
+                ) =>
+            {
+                return exec_err!(
+                    "Invalid argument type for char conversion: {:?}",
+                    arg_type
+                );
             }
             ConversionType::DecInt
             | ConversionType::OctInt
             | ConversionType::HexIntLower
-            | ConversionType::HexIntUpper => {
-                if !arg_type.is_integer() {
-                    return exec_err!(
-                        "Invalid argument type for integer conversion: {:?}",
-                        arg_type
-                    );
-                }
+            | ConversionType::HexIntUpper
+                if !arg_type.is_integer() =>
+            {
+                return exec_err!(
+                    "Invalid argument type for integer conversion: {:?}",
+                    arg_type
+                );
             }
             ConversionType::SciFloatLower
             | ConversionType::SciFloatUpper
@@ -635,21 +635,21 @@ impl ConversionType {
             | ConversionType::CompactFloatLower
             | ConversionType::CompactFloatUpper
             | ConversionType::HexFloatLower
-            | ConversionType::HexFloatUpper => {
-                if !arg_type.is_numeric() {
-                    return exec_err!(
-                        "Invalid argument type for float conversion: {:?}",
-                        arg_type
-                    );
-                }
+            | ConversionType::HexFloatUpper
+                if !arg_type.is_numeric() =>
+            {
+                return exec_err!(
+                    "Invalid argument type for float conversion: {:?}",
+                    arg_type
+                );
             }
-            ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                if !arg_type.is_temporal() {
-                    return exec_err!(
-                        "Invalid argument type for time conversion: {:?}",
-                        arg_type
-                    );
-                }
+            ConversionType::TimeLower(_) | ConversionType::TimeUpper(_)
+                if !arg_type.is_temporal() =>
+            {
+                return exec_err!(
+                    "Invalid argument type for time conversion: {:?}",
+                    arg_type
+                );
             }
             _ => {}
         }

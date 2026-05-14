@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, BooleanBufferBuilder};
 use arrow::datatypes::{Int32Type, StringViewType};
 use arrow::util::bench_util::{
     create_primitive_array, create_string_view_array_with_len,
@@ -289,13 +289,16 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
         builder.vectorized_append(input, rows).unwrap();
 
         b.iter(|| {
-            // Cloning is a must as `vectorized_equal_to` will modify the input vec
-            // and without cloning all benchmarks after the first one won't be meaningful
-            let mut equal_to_results = equal_to_results.clone();
-            builder.vectorized_equal_to(rows, input, rows, &mut equal_to_results);
+            // Rebuild the buffer because `vectorized_equal_to` mutates it.
+            let mut equal_to_results_builder =
+                BooleanBufferBuilder::new(equal_to_results.len());
+            for result in equal_to_results.iter().copied() {
+                equal_to_results_builder.append(result);
+            }
+            builder.vectorized_equal_to(rows, input, rows, &mut equal_to_results_builder);
 
             // Make sure that the compiler does not optimize away the call
-            black_box(equal_to_results);
+            black_box(equal_to_results_builder);
         });
     });
 }
