@@ -28,6 +28,7 @@ use std::task::{Context, Poll};
 
 use super::utils::create_schema;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::stream::EmptyRecordBatchStream;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
@@ -1083,6 +1084,10 @@ impl BoundedWindowAggStream {
                 let _timer = elapsed_compute.timer();
 
                 self.finished = true;
+                // Release the input pipeline's resources before computing the
+                // final aggregates.
+                let input_schema = self.input.schema();
+                self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                 for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;
                 }

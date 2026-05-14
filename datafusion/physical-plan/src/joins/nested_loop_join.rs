@@ -1611,6 +1611,12 @@ impl NestedLoopJoinStream {
             }
         }
 
+        // If the left stream is fully exhausted, release its resources so the
+        // upstream pipeline can be torn down before we move on to probing.
+        if self.left_exhausted {
+            active.left_stream = None;
+        }
+
         if active.pending_batches.is_empty() {
             // No data at all — go directly to Done
             self.left_exhausted = true;

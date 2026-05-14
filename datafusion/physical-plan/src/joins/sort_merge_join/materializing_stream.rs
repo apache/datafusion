@@ -41,6 +41,7 @@ use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator};
 use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
@@ -935,6 +936,10 @@ impl MaterializingSortMergeJoinStream {
                         return Poll::Pending;
                     }
                     Poll::Ready(None) => {
+                        // Release the streamed input pipeline's resources.
+                        let streamed_schema = self.streamed.schema();
+                        self.streamed =
+                            Box::pin(EmptyRecordBatchStream::new(streamed_schema));
                         self.streamed_state = StreamedState::Exhausted;
                     }
                     Poll::Ready(Some(batch)) => {
@@ -1063,6 +1068,10 @@ impl MaterializingSortMergeJoinStream {
                         return Poll::Pending;
                     }
                     Poll::Ready(None) => {
+                        // Release the buffered input pipeline's resources.
+                        let buffered_schema = self.buffered.schema();
+                        self.buffered =
+                            Box::pin(EmptyRecordBatchStream::new(buffered_schema));
                         self.buffered_state = BufferedState::Exhausted;
                         return Poll::Ready(None);
                     }
@@ -1106,6 +1115,11 @@ impl MaterializingSortMergeJoinStream {
                                 return Poll::Pending;
                             }
                             Poll::Ready(None) => {
+                                // Release the buffered input pipeline's resources.
+                                let buffered_schema = self.buffered.schema();
+                                self.buffered = Box::pin(EmptyRecordBatchStream::new(
+                                    buffered_schema,
+                                ));
                                 self.buffered_state = BufferedState::Ready;
                             }
                             Poll::Ready(Some(batch)) => {

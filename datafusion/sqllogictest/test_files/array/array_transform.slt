@@ -411,13 +411,13 @@ SELECT array_transform([1, 2], (e, i, j) -> i);
 query error DataFusion error: Error during planning: lambda parameters names must be unique, got \(v, v\)
 SELECT array_transform([1], (v, v) -> v*2);
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,12\)\.\.Location\(1,13\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,17\)\.\.Location\(1,18\)\) \}\), syntax: Arrow \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(LambdaFunctionParameter \{ name: Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,12\)\.\.Location\(1,13\)\) \}, data_type: None \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,17\)\.\.Location\(1,18\)\) \}\), syntax: Arrow \}\)
 SELECT abs(v -> v);
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,8\)\.\.Location\(1,9\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,13\)\.\.Location\(1,14\)\) \}\), syntax: Arrow \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(LambdaFunctionParameter \{ name: Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,8\)\.\.Location\(1,9\)\) \}, data_type: None \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,13\)\.\.Location\(1,14\)\) \}\), syntax: Arrow \}\)
 SELECT v -> v;
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,34\)\.\.Location\(1,35\)\) \}\), body: BinaryOp \{ left: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,39\)\.\.Location\(1,40\)\) \}\), op: Plus, right: Value\(ValueWithSpan \{ value: Number\("1", false\), span: Span\(Location\(1,41\)\.\.Location\(1,42\)\) \}\) \}, syntax: Arrow \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(LambdaFunctionParameter \{ name: Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,34\)\.\.Location\(1,35\)\) \}, data_type: None \}\), body: BinaryOp \{ left: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,39\)\.\.Location\(1,40\)\) \}\), op: Plus, right: Value\(ValueWithSpan \{ value: Number\("1", false\), span: Span\(Location\(1,41\)\.\.Location\(1,42\)\) \}\) \}, syntax: Arrow \}\)
 SELECT array_transform([1], v -> v -> v+1);
 
 query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 30"\)

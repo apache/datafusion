@@ -317,7 +317,8 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char.map(|c| SingleQuotedString(c.to_string())),
+                escape_char: escape_char
+                    .map(|c| SingleQuotedString(c.to_string()).into()),
                 any: false,
             }),
             Expr::Like(Like {
@@ -333,7 +334,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 } else {
@@ -342,7 +343,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 }
@@ -598,7 +599,10 @@ impl Unparser<'_> {
                     params: ast::OneOrManyWithParens::Many(
                         params
                             .iter()
-                            .map(|param| self.new_ident_quoted_if_needs(param.clone()))
+                            .map(|param| ast::LambdaFunctionParameter {
+                                name: self.new_ident_quoted_if_needs(param.clone()),
+                                data_type: None,
+                            })
                             .collect(),
                     ),
                     body: Box::new(self.expr_to_sql_inner(body)?),
