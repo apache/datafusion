@@ -36,6 +36,7 @@ use arrow::array::{
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
 use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{
@@ -1128,6 +1129,7 @@ pub fn remove_list_null_values(array: &ArrayRef) -> Result<ArrayRef> {
     }
 }
 
+/// Create a new list array where all the nulls point to empty lists
 fn truncate_list_nulls<O: OffsetSizeTrait>(
     list: &GenericListArray<O>,
 ) -> Result<GenericListArray<O>> {
@@ -1141,8 +1143,8 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             &Int64Array::new_scalar(0)
         };
 
-        let empty = arrow::compute::kernels::cmp::eq(&lengths, zero)?;
-        let valid_or_empty = empty.values() | nulls.inner();
+        let (mut valid_or_empty, _nulls) = eq(&lengths, zero)?.into_parts();
+        valid_or_empty |= nulls.inner();
         let valid_or_empty = BooleanArray::from(valid_or_empty);
 
         if valid_or_empty.has_false() {
