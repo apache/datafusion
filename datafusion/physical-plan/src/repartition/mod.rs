@@ -69,6 +69,7 @@ use crate::filter_pushdown::{
 };
 use crate::joins::SeededRandomState;
 use crate::sort_pushdown::SortOrderPushdownResult;
+use crossbeam_queue::SegQueue;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::Stream;
@@ -220,10 +221,11 @@ impl OutputChannel {
 /// into it. The last task to call [`Self::finalize`] is the one that
 /// finalizes the coalescer and ships the residual batch.
 ///
-/// Cheap to [`Clone`]: both fields are [`Arc`]s.
+/// Cheap to [`Clone`]: all fields are [`Arc`]s.
 #[derive(Clone)]
 struct SharedCoalescer {
     inner: Arc<Mutex<LimitedBatchCoalescer>>,
+    pending: Arc<SegQueue<RecordBatch>>,
     active_senders: Arc<AtomicUsize>,
 }
 
@@ -235,16 +237,29 @@ impl SharedCoalescer {
                 target_batch_size,
                 None,
             ))),
+            pending: Arc::new(SegQueue::new()),
             active_senders: Arc::new(AtomicUsize::new(num_senders)),
         }
     }
 
     /// Push `batch` into the coalescer and drain any newly completed
-    /// batches. The mutex is held only briefly.
+    /// batches.
+    ///
+    /// If the shared coalescer is contended, `batch` is stashed in the lock-free
+    /// staging queue and `Ok(vec![])` is returned immediately. The next
+    /// caller that acquires the mutex drains the queue before doing its
+    /// own work; [`Self::finalize`] guarantees a final drain.
     fn push_and_drain(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
-        let mut acc = Vec::new();
-        let mut c = self.inner.lock();
+        let Some(mut c) = self.inner.try_lock() else {
+            // Contended: stash and return without blocking.
+            self.pending.push(batch);
+            return Ok(vec![]);
+        };
+        while let Some(stashed) = self.pending.pop() {
+            c.push_batch(stashed)?;
+        }
         c.push_batch(batch)?;
+        let mut acc = Vec::new();
         while let Some(b) = c.next_completed_batch() {
             acc.push(b);
         }
@@ -252,16 +267,22 @@ impl SharedCoalescer {
     }
 
     /// Decrement the active-senders counter. If this caller was the last
-    /// sender, finalize the coalescer and return its residual batches; if
-    /// other senders are still active, return `Ok(None)`.
+    /// sender, drain any stashed batches, finalize the coalescer and
+    /// return its residual batches; otherwise return an empty vec.
     fn finalize(&self) -> Result<Vec<RecordBatch>> {
         let was_last = self.active_senders.fetch_sub(1, Ordering::AcqRel) == 1;
         if !was_last {
             return Ok(vec![]);
         }
-        let mut acc = Vec::new();
+        // Last sender: no further `push_and_drain` calls will start, so
+        // the staging queue won't grow. Block on the lock — uncontended
+        // by construction at this point — and drain everything.
         let mut c = self.inner.lock();
+        while let Some(stashed) = self.pending.pop() {
+            c.push_batch(stashed)?;
+        }
         c.finish()?;
+        let mut acc = Vec::new();
         while let Some(b) = c.next_completed_batch() {
             acc.push(b);
         }
