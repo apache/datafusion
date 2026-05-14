@@ -53,8 +53,8 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, assert_or_internal_err, internal_datafusion_err,
-    internal_err,
+    ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -77,6 +77,7 @@ use log::trace;
 use parking_lot::Mutex;
 
 mod distributor_channels;
+use crate::repartition::distributor_channels::SendError;
 use distributor_channels::{
     DistributionReceiver, DistributionSender, channels, partition_aware_channels,
 };
@@ -163,29 +164,20 @@ struct OutputChannel {
     reservation: SharedMemoryReservation,
     spill_writer: SpillPoolWriter,
     shared_coalescer: Option<SharedCoalescer>,
-    /// Time in nanos for sending resulting batches to channels.
-    ///
-    /// One metric per output partition.
-    send_time: metrics::Time,
 }
 
 impl OutputChannel {
-    async fn coalesce_and_send(&mut self, batch: RecordBatch) -> Result<()> {
-        let to_send = match &self.shared_coalescer {
-            Some(shared) => shared.push_and_drain(batch)?,
-            None => vec![batch],
-        };
-        for batch in to_send {
-            self.send(batch).await;
+    fn coalesce(&mut self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
+        match &self.shared_coalescer {
+            Some(shared) => Ok(shared.push_and_drain(batch)?),
+            None => Ok(vec![batch]),
         }
-        Ok(())
     }
 
     /// Send a single batch through the channel for `partition`, applying
     /// the memory reservation / spill-writer fallback. Removes the channel
     /// from `self.inner` if the receiver has hung up.
-    async fn send(&mut self, batch: RecordBatch) {
-        let _timer = self.send_time.timer();
+    async fn send(&mut self, batch: RecordBatch) -> Result<(), SendError<MaybeBatch>> {
         let size = batch.get_array_memory_size();
 
         // Decide the payload outside of any await: never hold a MutexGuard
@@ -200,18 +192,21 @@ impl OutputChannel {
             }
         };
 
-        let send_err = self.sender.send(Some(payload)).await.is_err();
-        if send_err && is_memory_batch {
+        let result = self.sender.send(Some(payload)).await;
+        if result.is_err() && is_memory_batch {
             self.reservation.shrink(size);
         }
+        result
     }
 
-    async fn finalize(&mut self) -> Result<()> {
-        let Some(shared) = self.shared_coalescer.clone() else {
+    async fn finalize(mut self) -> Result<()> {
+        let Some(shared) = self.shared_coalescer.take() else {
             return Ok(());
         };
         for batch in shared.finalize()? {
-            self.send(batch).await;
+            // If this errored, it means that nobody is listening on the other side, which is fine
+            // and can happen in certain cases, like when a LIMIT drops the stream that listens.
+            let _ = self.send(batch).await;
         }
         Ok(())
     }
@@ -317,7 +312,7 @@ struct PartitionChannels {
 struct ConsumingInputStreamsState {
     /// Channels for sending batches from input partitions to output partitions.
     /// Key is the partition number.
-    channels: Vec<Option<PartitionChannels>>,
+    channels: HashMap<usize, PartitionChannels>,
 
     /// Helper that ensures that background jobs are killed once they are no longer needed.
     abort_helper: Arc<Vec<SpawnedTask<()>>>,
@@ -448,7 +443,7 @@ impl RepartitionExecState {
             (txs, rxs)
         };
 
-        let mut partition_channels_list = Vec::with_capacity(txs.len());
+        let mut channels = HashMap::with_capacity(txs.len());
         for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
             let reservation = Arc::new(
                 MemoryConsumer::new(format!("{name}[{partition}]"))
@@ -487,14 +482,17 @@ impl RepartitionExecState {
                 )
             });
 
-            partition_channels_list.push(PartitionChannels {
-                tx,
-                rx,
-                reservation,
-                spill_readers,
-                spill_writers,
-                shared_coalescer,
-            });
+            channels.insert(
+                partition,
+                PartitionChannels {
+                    tx,
+                    rx,
+                    reservation,
+                    spill_readers,
+                    spill_writers,
+                    shared_coalescer,
+                },
+            );
         }
 
         // launch one async task per *input* partition
@@ -502,26 +500,30 @@ impl RepartitionExecState {
         for (i, (stream, metrics)) in
             std::mem::take(streams_and_metrics).into_iter().enumerate()
         {
-            let txs: Vec<_> = partition_channels_list
+            let txs: HashMap<_, _> = channels
                 .iter()
-                .enumerate()
-                .map(|(partition, partition_channels)| {
+                .map(|(partition, channels)| {
                     // In preserve_order mode: each input gets its own spill writer (index i)
                     // In non-preserve-order mode: all inputs share spill writer 0 via clone
                     let spill_writer_idx = if preserve_order { i } else { 0 };
-                    OutputChannel {
-                        sender: partition_channels.tx[i].clone(),
-                        reservation: Arc::clone(&partition_channels.reservation),
-                        spill_writer: partition_channels.spill_writers[spill_writer_idx]
-                            .clone(),
-                        shared_coalescer: partition_channels.shared_coalescer.clone(),
-                        send_time: metrics.send_time[partition].clone(),
-                    }
+                    (
+                        *partition,
+                        OutputChannel {
+                            sender: channels.tx[i].clone(),
+                            reservation: Arc::clone(&channels.reservation),
+                            spill_writer: channels.spill_writers[spill_writer_idx]
+                                .clone(),
+                            shared_coalescer: channels.shared_coalescer.clone(),
+                        },
+                    )
                 })
                 .collect();
 
             // Extract senders for wait_for_task before moving txs
-            let senders: Vec<_> = txs.iter().map(|ch| ch.sender.clone()).collect();
+            let senders: HashMap<_, _> = txs
+                .iter()
+                .map(|(partition, channel)| (*partition, channel.sender.clone()))
+                .collect();
 
             let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
                 stream,
@@ -540,7 +542,7 @@ impl RepartitionExecState {
             spawned_tasks.push(wait_for_task);
         }
         *self = Self::ConsumingInputStreams(ConsumingInputStreamsState {
-            channels: partition_channels_list.into_iter().map(Some).collect(),
+            channels,
             abort_helper: Arc::new(spawned_tasks),
         });
         match self {
@@ -1262,8 +1264,9 @@ impl ExecutionPlan for RepartitionExec {
                     reservation,
                     spill_readers,
                     ..
-                } = state.channels[partition]
-                    .take()
+                } = state
+                    .channels
+                    .remove(&partition)
                     .expect("partition not used yet");
 
                 (
@@ -1585,7 +1588,7 @@ impl RepartitionExec {
     /// `output_channels` holds the output sending channels for each output partition
     async fn pull_from_input(
         mut stream: SendableRecordBatchStream,
-        mut output_channels: Vec<OutputChannel>,
+        mut output_channels: HashMap<usize, OutputChannel>,
         partitioning: Partitioning,
         metrics: RepartitionMetrics,
         input_partition: usize,
@@ -1633,7 +1636,20 @@ impl RepartitionExec {
 
             for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
-                output_channels[partition].coalesce_and_send(batch).await?;
+
+                let timer = metrics.send_time[partition].timer();
+                // if there is still a receiver, send to it
+                if let Some(output_channel) = output_channels.get_mut(&partition) {
+                    for batch in output_channel.coalesce(batch)? {
+                        if output_channel.send(batch).await.is_err() {
+                            // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                            // Only shrink memory if it was a memory batch
+                            output_channels.remove(&partition);
+                            break;
+                        }
+                    }
+                }
+                timer.done();
             }
 
             // If the input stream is endless, we may spin forever and
@@ -1664,7 +1680,7 @@ impl RepartitionExec {
         // have a channel to, decrement the active-senders counter; whoever
         // sees the count drop to zero is the last input task and must
         // finalize the shared coalescer and ship its residual.
-        for mut output_channel in output_channels {
+        for (_, output_channel) in output_channels.drain() {
             output_channel.finalize().await?;
         }
 
@@ -1680,7 +1696,7 @@ impl RepartitionExec {
     /// channels.
     async fn wait_for_task(
         input_task: SpawnedTask<Result<()>>,
-        txs: Vec<DistributionSender<MaybeBatch>>,
+        txs: HashMap<usize, DistributionSender<MaybeBatch>>,
     ) {
         // wait for completion, and propagate error
         // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
@@ -1690,7 +1706,7 @@ impl RepartitionExec {
             Err(e) => {
                 let e = Arc::new(e);
 
-                for tx in txs {
+                for (_, tx) in txs {
                     let err = Err(DataFusionError::Context(
                         "Join Error".to_string(),
                         Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
@@ -1703,7 +1719,7 @@ impl RepartitionExec {
                 // send the same Arc'd error to all output partitions
                 let e = Arc::new(e);
 
-                for tx in txs {
+                for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
                     let err = Err(DataFusionError::from(&e));
                     tx.send(Some(err)).await.ok();
@@ -1712,7 +1728,7 @@ impl RepartitionExec {
             // Input task completed successfully
             Ok(Ok(())) => {
                 // notify each output partition that this input partition has no more data
-                for tx in txs {
+                for (_partition, tx) in txs {
                     tx.send(None).await.ok();
                 }
             }
