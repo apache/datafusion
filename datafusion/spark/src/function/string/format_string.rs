@@ -891,6 +891,23 @@ fn unsigned_to_char(value: u64) -> Result<char> {
     codepoint_to_char(codepoint)
 }
 
+/// Convert a non-null integer scalar to a [`char`] for the `%c` conversion.
+fn integer_scalar_to_char(value: &ScalarValue) -> Result<char> {
+    match value {
+        ScalarValue::Int8(Some(value)) => signed_to_char(*value as i64),
+        ScalarValue::Int16(Some(value)) => signed_to_char(*value as i64),
+        ScalarValue::Int32(Some(value)) => signed_to_char(*value as i64),
+        ScalarValue::Int64(Some(value)) => signed_to_char(*value),
+        ScalarValue::UInt8(Some(value)) => unsigned_to_char(*value as u64),
+        ScalarValue::UInt16(Some(value)) => unsigned_to_char(*value as u64),
+        ScalarValue::UInt32(Some(value)) => unsigned_to_char(*value as u64),
+        ScalarValue::UInt64(Some(value)) => unsigned_to_char(*value),
+        _ => datafusion_common::internal_err!(
+            "integer_scalar_to_char expects a non-null integer scalar, got {value:?}"
+        ),
+    }
+}
+
 impl ConversionSpecifier {
     /// Validates that the grouping separator flag is not used with scientific
     /// notation conversions, matching Java/Spark behavior which throws
@@ -923,7 +940,7 @@ impl ConversionSpecifier {
 
                 _ => self.format_boolean(string, value),
             },
-            ScalarValue::Int8(value) => match (self.conversion_type, value) {
+            scalar @ ScalarValue::Int8(value) => match (self.conversion_type, value) {
                 (ConversionType::DecInt, Some(value)) => {
                     self.format_signed(string, *value as i64)
                 }
@@ -933,8 +950,8 @@ impl ConversionSpecifier {
                     | ConversionType::OctInt,
                     Some(value),
                 ) => self.format_unsigned(string, (*value as u8) as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, signed_to_char(*value as i64)?)
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(_)) => {
+                    self.format_char(string, integer_scalar_to_char(scalar)?)
                 }
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
@@ -948,12 +965,12 @@ impl ConversionSpecifier {
                     )
                 }
             },
-            ScalarValue::Int16(value) => match (self.conversion_type, value) {
+            scalar @ ScalarValue::Int16(value) => match (self.conversion_type, value) {
                 (ConversionType::DecInt, Some(value)) => {
                     self.format_signed(string, *value as i64)
                 }
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, signed_to_char(*value as i64)?)
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(_)) => {
+                    self.format_char(string, integer_scalar_to_char(scalar)?)
                 }
                 (
                     ConversionType::HexIntLower
@@ -973,7 +990,7 @@ impl ConversionSpecifier {
                     )
                 }
             },
-            ScalarValue::Int32(value) => match (self.conversion_type, value) {
+            scalar @ ScalarValue::Int32(value) => match (self.conversion_type, value) {
                 (ConversionType::DecInt, Some(value)) => {
                     self.format_signed(string, *value as i64)
                 }
@@ -983,8 +1000,8 @@ impl ConversionSpecifier {
                     | ConversionType::OctInt,
                     Some(value),
                 ) => self.format_unsigned(string, (*value as u32) as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, signed_to_char(*value as i64)?)
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(_)) => {
+                    self.format_char(string, integer_scalar_to_char(scalar)?)
                 }
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
@@ -998,7 +1015,7 @@ impl ConversionSpecifier {
                     )
                 }
             },
-            ScalarValue::Int64(value) => match (self.conversion_type, value) {
+            scalar @ ScalarValue::Int64(value) => match (self.conversion_type, value) {
                 (ConversionType::DecInt, Some(value)) => {
                     self.format_signed(string, *value)
                 }
@@ -1008,8 +1025,8 @@ impl ConversionSpecifier {
                     | ConversionType::OctInt,
                     Some(value),
                 ) => self.format_unsigned(string, *value as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, signed_to_char(*value)?)
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(_)) => {
+                    self.format_char(string, integer_scalar_to_char(scalar)?)
                 }
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
@@ -1023,7 +1040,7 @@ impl ConversionSpecifier {
                     )
                 }
             },
-            ScalarValue::UInt8(value) => match (self.conversion_type, value) {
+            scalar @ ScalarValue::UInt8(value) => match (self.conversion_type, value) {
                 (
                     ConversionType::DecInt
                     | ConversionType::HexIntLower
@@ -1031,8 +1048,8 @@ impl ConversionSpecifier {
                     | ConversionType::OctInt,
                     Some(value),
                 ) => self.format_unsigned(string, *value as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, unsigned_to_char(*value as u64)?)
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(_)) => {
+                    self.format_char(string, integer_scalar_to_char(scalar)?)
                 }
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
@@ -1046,7 +1063,7 @@ impl ConversionSpecifier {
                     )
                 }
             },
-            ScalarValue::UInt16(value) => match (self.conversion_type, value) {
+            scalar @ ScalarValue::UInt16(value) => match (self.conversion_type, value) {
                 (
                     ConversionType::DecInt
                     | ConversionType::HexIntLower
@@ -1054,8 +1071,8 @@ impl ConversionSpecifier {
                     | ConversionType::OctInt,
                     Some(value),
                 ) => self.format_unsigned(string, *value as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, unsigned_to_char(*value as u64)?)
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(_)) => {
+                    self.format_char(string, integer_scalar_to_char(scalar)?)
                 }
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
@@ -1069,7 +1086,7 @@ impl ConversionSpecifier {
                     )
                 }
             },
-            ScalarValue::UInt32(value) => match (self.conversion_type, value) {
+            scalar @ ScalarValue::UInt32(value) => match (self.conversion_type, value) {
                 (
                     ConversionType::DecInt
                     | ConversionType::HexIntLower
@@ -1077,8 +1094,8 @@ impl ConversionSpecifier {
                     | ConversionType::OctInt,
                     Some(value),
                 ) => self.format_unsigned(string, *value as u64),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, unsigned_to_char(*value as u64)?)
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(_)) => {
+                    self.format_char(string, integer_scalar_to_char(scalar)?)
                 }
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
@@ -1092,7 +1109,7 @@ impl ConversionSpecifier {
                     )
                 }
             },
-            ScalarValue::UInt64(value) => match (self.conversion_type, value) {
+            scalar @ ScalarValue::UInt64(value) => match (self.conversion_type, value) {
                 (
                     ConversionType::DecInt
                     | ConversionType::HexIntLower
@@ -1100,8 +1117,8 @@ impl ConversionSpecifier {
                     | ConversionType::OctInt,
                     Some(value),
                 ) => self.format_unsigned(string, *value),
-                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
-                    self.format_char(string, unsigned_to_char(*value)?)
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(_)) => {
+                    self.format_char(string, integer_scalar_to_char(scalar)?)
                 }
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
