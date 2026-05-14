@@ -24,9 +24,13 @@ use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
-use arrow::array::{RecordBatch, RecordBatchOptions};
+use arrow::array::{Array, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, Column, DynamicFilterPhysicalExpr, lit,
+};
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
@@ -50,6 +54,7 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
     MetricCategory, PruningMetrics,
@@ -67,6 +72,7 @@ use log::debug;
 use parquet::DecodeResult;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, RowSelectionPolicy,
 };
@@ -136,6 +142,10 @@ pub(super) struct ParquetMorselizer {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Optional sort order used to reorder row groups by their min/max statistics.
+    /// When set, row groups are reordered before reading so that row groups likely
+    /// to contain optimal values (for TopK queries) are read first.
+    pub sort_order_for_reorder: Option<LexOrdering>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -286,6 +296,7 @@ struct PreparedParquetOpen {
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
     reverse_row_groups: bool,
+    sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -655,6 +666,7 @@ impl ParquetMorselizer {
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
             reverse_row_groups: self.reverse_row_groups,
+            sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
@@ -821,6 +833,37 @@ impl MetadataLoadedParquetOpen {
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
+
+        // Initialize TopK threshold from RG statistics BEFORE building
+        // PruningPredicate. Uses GtEq/LtEq to include boundary values.
+        // Only for sort pushdown + no WHERE (pure DynamicFilter predicate).
+        // Uses df.fetch() as limit so stats init skips when K spans multiple
+        // RGs (no single RG has >= K rows), letting cumulative prune handle it.
+        if prepared.sort_order_for_reorder.is_some()
+            && let Some(pred) = &prepared.predicate
+            && let Some(df) = find_dynamic_filter(pred)
+            && df.sort_options().is_some_and(|opts| !opts.is_empty())
+            && let Some(fetch) = df.fetch()
+        {
+            // Only when predicate is pure DynamicFilter (no WHERE)
+            let any_ref: &dyn std::any::Any = pred.as_ref();
+            if any_ref
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .is_some()
+            {
+                let file_metadata = reader_metadata.metadata();
+                let rg_metadata = file_metadata.row_groups();
+                if let Err(e) = try_init_topk_threshold(
+                    pred,
+                    fetch,
+                    rg_metadata,
+                    &physical_file_schema,
+                    reader_metadata.parquet_schema(),
+                ) {
+                    debug!("Skipping TopK threshold init: {e}");
+                }
+            }
+        }
 
         // Build predicates for this specific file
         let pruning_predicate = build_pruning_predicates(
@@ -1123,13 +1166,157 @@ impl RowGroupsPrunedParquetOpen {
             );
         }
 
-        // Prepare the access plan (extract row groups and row selection)
-        let mut prepared_plan = access_plan.prepare(rg_metadata)?;
+        // Row group ordering optimization (two composable steps):
+        //
+        // 1. reorder_by_statistics: sort RGs by min values (ASC) to align
+        //    with the file's declared output ordering. This fixes out-of-order
+        //    RGs (e.g., from append-heavy workloads) without changing direction.
+        //    Skipped gracefully when statistics are unavailable.
+        //
+        // 2. reverse: flip the order for DESC queries. Applied AFTER reorder
+        //    so the reversed order is correct whether or not reorder changed
+        //    anything. Also handles row_selection remapping.
+        //
+        // For sorted data: reorder is a no-op, reverse gives perfect DESC.
+        // For unsorted data: reorder fixes the order, reverse flips for DESC.
+        // Build reorder optimizer from sort_order_for_reorder (Inexact path)
+        // or from DynamicFilterPhysicalExpr sort_options (any TopK query).
+        // Fuzz test uses tiebreaker columns so reorder is safe for all TopK.
+        let reorder_optimizer: Option<
+            Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+        > = if let Some(sort_order) = &prepared.sort_order_for_reorder {
+            Some(
+                Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                    sort_order.clone(),
+                ))
+                    as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+            )
+        } else if let Some(predicate) = &prepared.predicate
+            && let Some(df) = find_dynamic_filter(predicate)
+            && let Some(sort_options) = df.sort_options()
+            && !sort_options.is_empty()
+        {
+            // Build a sort order from DynamicFilter for non-sort-pushdown TopK.
+            // Quick bail: check if the sort column exists in file schema.
+            // For GROUP BY + ORDER BY, the sort column is an aggregate output
+            // (not in parquet) — skip to avoid wasted StatisticsConverter work.
+            let children = df.children();
+            if !children.is_empty() {
+                let col = find_column_in_expr(children[0]);
+                if let Some(ref c) = col
+                    && prepared
+                        .physical_file_schema
+                        .field_with_name(c.name())
+                        .is_ok()
+                {
+                    let sort_expr =
+                        datafusion_physical_expr_common::sort_expr::PhysicalSortExpr {
+                            expr: Arc::clone(children[0]),
+                            options: arrow::compute::SortOptions {
+                                descending: false,
+                                nulls_first: sort_options[0].nulls_first,
+                            },
+                        };
+                    LexOrdering::new(vec![sort_expr]).map(|order| {
+                        Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                            order,
+                        ))
+                            as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
-        // Potentially reverse the access plan for performance.
-        // See `ParquetSource::try_pushdown_sort` for the rationale.
-        if prepared.reverse_row_groups {
-            prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
+        // Reverse for DESC queries. Only when reorder is active (the sort
+        // column exists in parquet stats). Without reorder, reversing RGs
+        // randomly changes I/O patterns with no benefit.
+        let is_descending = prepared.reverse_row_groups
+            || (reorder_optimizer.is_some()
+                && prepared
+                    .predicate
+                    .as_ref()
+                    .and_then(find_dynamic_filter)
+                    .and_then(|df| df.sort_options().map(|opts| opts[0].descending))
+                    .unwrap_or(false));
+        let reverse_optimizer: Option<
+            Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
+        > = if is_descending {
+            Some(Box::new(crate::access_plan_optimizer::ReverseRowGroups))
+        } else {
+            None
+        };
+
+        // Prepare the access plan and apply optimizers in order:
+        // 1. reorder (fix out-of-order RGs to match declared ordering)
+        // 2. reverse (flip for DESC queries)
+        let mut prepared_plan = access_plan.prepare(rg_metadata)?;
+        if let Some(opt) = &reorder_optimizer {
+            prepared_plan = opt.optimize(
+                prepared_plan,
+                file_metadata.as_ref(),
+                &prepared.physical_file_schema,
+            )?;
+        }
+        if let Some(opt) = &reverse_optimizer {
+            prepared_plan = opt.optimize(
+                prepared_plan,
+                file_metadata.as_ref(),
+                &prepared.physical_file_schema,
+            )?;
+        }
+
+        // TopK cumulative pruning: after reorder + reverse, the RGs are in
+        // optimal order. Accumulate rows from the front until >= K, prune rest.
+        //
+        // Only safe when predicate is DynamicFilter-only (no WHERE clause).
+        // With WHERE, raw num_rows overestimates qualifying rows — cumulative
+        // prune may keep too few RGs, returning fewer than K results.
+        //
+        // Additionally requires either sort pushdown (guaranteed non-overlapping)
+        // or verified non-overlap from statistics.
+        let is_pure_dynamic_filter = prepared.predicate.as_ref().is_some_and(|p| {
+            let any_ref: &dyn std::any::Any = p.as_ref();
+            any_ref
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .is_some()
+        });
+        let has_sort_pushdown = prepared.sort_order_for_reorder.is_some();
+        if is_pure_dynamic_filter
+            && let Some(predicate) = &prepared.predicate
+            && let Some(df) = find_dynamic_filter(predicate)
+            && let Some(fetch) = df.fetch()
+            && (has_sort_pushdown
+                || rgs_are_non_overlapping(
+                    &prepared_plan,
+                    file_metadata.as_ref(),
+                    &prepared.physical_file_schema,
+                    &df,
+                ))
+        {
+            let rg_indexes = prepared_plan.row_group_indexes();
+            let mut cumulative = 0usize;
+            let mut keep_count = 0;
+            for &idx in rg_indexes {
+                cumulative += file_metadata.row_group(idx).num_rows() as usize;
+                keep_count += 1;
+                if cumulative >= fetch {
+                    break;
+                }
+            }
+            if keep_count < rg_indexes.len() {
+                let pruned = rg_indexes.len() - keep_count;
+                debug!(
+                    "TopK cumulative prune: keeping {keep_count} of {} RGs ({cumulative} rows >= fetch={fetch}), pruning {pruned}",
+                    rg_indexes.len()
+                );
+                prepared_plan = prepared_plan.truncate_row_groups(keep_count);
+            }
         }
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
@@ -1216,6 +1403,260 @@ impl RowGroupsPrunedParquetOpen {
             Ok(stream.boxed())
         }
     }
+}
+
+/// Find a [`DynamicFilterPhysicalExpr`] in the predicate tree.
+///
+/// Returns the first `DynamicFilterPhysicalExpr` found (as an `Arc`) by
+/// checking the predicate itself and recursively walking its children.
+/// Check if row groups in the prepared plan are non-overlapping on the
+/// sort column. Adjacent RGs must satisfy `max(i) <= min(i+1)`.
+/// Initialize TopK dynamic filter threshold from row group statistics.
+///
+/// For DESC: `threshold = max(min)` across RGs with `num_rows >= fetch`.
+/// For ASC: `threshold = min(max)` across qualifying RGs.
+/// Uses GtEq/LtEq to include boundary values.
+fn try_init_topk_threshold(
+    predicate: &Arc<dyn PhysicalExpr>,
+    fetch: usize,
+    rg_metadata: &[parquet::file::metadata::RowGroupMetaData],
+    arrow_schema: &Schema,
+    parquet_schema: &parquet::schema::types::SchemaDescriptor,
+) -> Result<()> {
+    let dynamic_filter = match find_dynamic_filter(predicate) {
+        Some(df) => df,
+        None => return Ok(()),
+    };
+
+    if dynamic_filter.snapshot_generation() > 1 {
+        return Ok(()); // Already initialized
+    }
+
+    let sort_options = match dynamic_filter.sort_options() {
+        Some(opts) if !opts.is_empty() => opts,
+        _ => return Ok(()),
+    };
+
+    let is_descending = sort_options[0].descending;
+    let nulls_first = sort_options[0].nulls_first;
+
+    let column = match find_column_in_expr(dynamic_filter.children()[0]) {
+        Some(col) => col,
+        None => return Ok(()),
+    };
+
+    let col_name = column.name();
+    let converter = StatisticsConverter::try_new(col_name, arrow_schema, parquet_schema)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let threshold = if is_descending {
+        let mins = converter
+            .row_group_mins(rg_metadata.iter())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        compute_best_threshold(&mins, rg_metadata, fetch, true)?
+    } else {
+        let maxes = converter
+            .row_group_maxes(rg_metadata.iter())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        compute_best_threshold(&maxes, rg_metadata, fetch, false)?
+    };
+
+    let threshold = match threshold {
+        Some(t) => t,
+        None => return Ok(()), // No RG with >= fetch rows
+    };
+
+    // Cast threshold to column type
+    let col_expr: Arc<dyn PhysicalExpr> = Arc::clone(dynamic_filter.children()[0]);
+    let col_data_type = col_expr.data_type(arrow_schema)?;
+    let threshold_casted = threshold.cast_to(&col_data_type)?;
+
+    // GtEq/LtEq: boundary value IS a valid top-K value
+    let op = if is_descending {
+        Operator::GtEq
+    } else {
+        Operator::LtEq
+    };
+
+    let comparison: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::clone(&col_expr),
+        op,
+        lit(threshold_casted),
+    ));
+
+    let filter_expr: Arc<dyn PhysicalExpr> = if nulls_first {
+        use datafusion_physical_expr::expressions::is_null;
+        let null_check = is_null(Arc::clone(&col_expr))?;
+        Arc::new(BinaryExpr::new(null_check, Operator::Or, comparison))
+    } else {
+        comparison
+    };
+
+    debug!(
+        "TopK stats init: {col_name} {op} (fetch={fetch})",
+        op = if is_descending { ">=" } else { "<=" }
+    );
+
+    dynamic_filter.update(filter_expr)?;
+    Ok(())
+}
+
+/// Find the best threshold from RG statistics.
+/// `want_max=true`: max of values (for DESC min). `want_max=false`: min of values (for ASC max).
+fn compute_best_threshold(
+    stats: &arrow::array::ArrayRef,
+    rg_metadata: &[parquet::file::metadata::RowGroupMetaData],
+    fetch: usize,
+    want_max: bool,
+) -> Result<Option<ScalarValue>> {
+    let mut best: Option<ScalarValue> = None;
+    for (i, rg) in rg_metadata.iter().enumerate() {
+        if (rg.num_rows() as usize) < fetch {
+            continue;
+        }
+        if i >= stats.len() || stats.is_null(i) {
+            continue;
+        }
+        let value = ScalarValue::try_from_array(stats.as_ref(), i)?;
+        if value.is_null() {
+            continue;
+        }
+        best = Some(match best {
+            None => value,
+            Some(current) => {
+                if want_max {
+                    if value > current { value } else { current }
+                } else {
+                    if value < current { value } else { current }
+                }
+            }
+        });
+    }
+    Ok(best)
+}
+
+fn rgs_are_non_overlapping(
+    plan: &crate::access_plan::PreparedAccessPlan,
+    file_metadata: &parquet::file::metadata::ParquetMetaData,
+    arrow_schema: &Schema,
+    dynamic_filter: &DynamicFilterPhysicalExpr,
+) -> bool {
+    let sort_options = match dynamic_filter.sort_options() {
+        Some(opts) if !opts.is_empty() => opts,
+        _ => return false,
+    };
+    let children = dynamic_filter.children();
+    if children.is_empty() {
+        return false;
+    }
+    let column = match find_column_in_expr(children[0]) {
+        Some(col) => col,
+        None => return false,
+    };
+    let converter = match StatisticsConverter::try_new(
+        column.name(),
+        arrow_schema,
+        file_metadata.file_metadata().schema_descr(),
+    ) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let rg_indexes = plan.row_group_indexes();
+    if rg_indexes.len() <= 1 {
+        return true; // 0 or 1 RG is trivially non-overlapping
+    }
+
+    // Get min/max for the reordered RGs.
+    // After reorder (min ASC) + possible reverse (DESC), check adjacent pairs.
+    // For ASC order: max[i] <= min[i+1]
+    // For DESC order (reversed): min[i] >= max[i+1] (equivalently max[i+1] <= min[i])
+    let is_descending = sort_options[0].descending;
+    let rg_metadata: Vec<_> = rg_indexes
+        .iter()
+        .map(|&idx| file_metadata.row_group(idx))
+        .collect();
+    let mins = match converter.row_group_mins(rg_metadata.iter().copied()) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let maxes = match converter.row_group_maxes(rg_metadata.iter().copied()) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+
+    for i in 0..rg_indexes.len() - 1 {
+        if i >= mins.len() || i + 1 >= mins.len() {
+            return false;
+        }
+        if mins.is_null(i)
+            || mins.is_null(i + 1)
+            || maxes.is_null(i)
+            || maxes.is_null(i + 1)
+        {
+            return false;
+        }
+        let (prev_max, next_min) = if is_descending {
+            // Reversed order: RG[i] has higher values than RG[i+1]
+            // Check: min[i] >= max[i+1]
+            match (
+                ScalarValue::try_from_array(mins.as_ref(), i),
+                ScalarValue::try_from_array(maxes.as_ref(), i + 1),
+            ) {
+                (Ok(min_i), Ok(max_next)) => (max_next, min_i),
+                _ => return false,
+            }
+        } else {
+            // ASC order: max[i] <= min[i+1]
+            match (
+                ScalarValue::try_from_array(maxes.as_ref(), i),
+                ScalarValue::try_from_array(mins.as_ref(), i + 1),
+            ) {
+                (Ok(max_i), Ok(min_next)) => (max_i, min_next),
+                _ => return false,
+            }
+        };
+        if prev_max > next_min {
+            return false; // overlap detected
+        }
+    }
+    true
+}
+
+fn find_dynamic_filter(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Option<Arc<DynamicFilterPhysicalExpr>> {
+    // Try to downcast this expression directly.
+    // PhysicalExpr: Any + Send + Sync, so trait upcasting allows the coercion.
+    let cloned = Arc::clone(expr);
+    let any_arc: Arc<dyn std::any::Any + Send + Sync> = cloned;
+    if let Ok(df) = Arc::downcast::<DynamicFilterPhysicalExpr>(any_arc) {
+        return Some(df);
+    }
+
+    // Recursively check children
+    for child in expr.children() {
+        if let Some(df) = find_dynamic_filter(child) {
+            return Some(df);
+        }
+    }
+
+    None
+}
+
+/// Find a [`Column`] expression by unwrapping wrappers like `CastExpr`.
+fn find_column_in_expr(expr: &Arc<dyn PhysicalExpr>) -> Option<Column> {
+    // Direct Column
+    let any_ref: &dyn std::any::Any = expr.as_ref();
+    if let Some(col) = any_ref.downcast_ref::<Column>() {
+        return Some(col.clone());
+    }
+    // Unwrap single-child wrappers (e.g. CastExpr)
+    let children = expr.children();
+    if children.len() == 1 {
+        return find_column_in_expr(children[0]);
+    }
+    None
 }
 
 /// State for a stream that decodes a single Parquet file using a push-based decoder.
@@ -1628,16 +2069,19 @@ mod test {
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema};
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{Operator, col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
-        expressions::{Column, DynamicFilterPhysicalExpr, Literal},
+        expressions::{
+            BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, lit as physical_lit,
+        },
         planner::logical2physical,
         projection::ProjectionExprs,
     };
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::StreamExt;
     use futures::stream::BoxStream;
@@ -1669,6 +2113,7 @@ mod test {
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
+        sort_order_for_reorder: Option<LexOrdering>,
         preserve_order: bool,
     }
 
@@ -1695,6 +2140,7 @@ mod test {
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
+                sort_order_for_reorder: None,
                 preserve_order: false,
             }
         }
@@ -1810,6 +2256,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                sort_order_for_reorder: self.sort_order_for_reorder,
             }
         }
     }
@@ -2712,6 +3159,56 @@ mod test {
         assert_eq!(
             rows_without_page_index, 100,
             "without page index all rows are returned"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Tests for find_dynamic_filter
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_find_dynamic_filter_direct_match() {
+        let col_expr = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+        let dynamic_filter: Arc<dyn PhysicalExpr> = Arc::new(
+            DynamicFilterPhysicalExpr::new(vec![col_expr], physical_lit(true)),
+        );
+
+        let result = find_dynamic_filter(&dynamic_filter);
+        assert!(
+            result.is_some(),
+            "should find direct DynamicFilterPhysicalExpr"
+        );
+    }
+
+    #[test]
+    fn test_find_dynamic_filter_nested_in_conjunction() {
+        let col_expr = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+        let dynamic_filter: Arc<dyn PhysicalExpr> = Arc::new(
+            DynamicFilterPhysicalExpr::new(vec![col_expr], physical_lit(true)),
+        );
+        // Wrap it: (id > 0) AND dynamic_filter
+        let left: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("id", 0)),
+            Operator::Gt,
+            physical_lit(0i64),
+        ));
+        let conjunction: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(left, Operator::And, dynamic_filter));
+
+        let result = find_dynamic_filter(&conjunction);
+        assert!(
+            result.is_some(),
+            "should find DynamicFilterPhysicalExpr nested in AND"
+        );
+    }
+
+    #[test]
+    fn test_find_dynamic_filter_none_when_absent() {
+        let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+        let result = find_dynamic_filter(&col_expr);
+        assert!(
+            result.is_none(),
+            "plain Column has no DynamicFilterPhysicalExpr"
         );
     }
 }

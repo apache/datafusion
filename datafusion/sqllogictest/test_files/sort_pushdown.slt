@@ -2271,6 +2271,589 @@ DROP TABLE tg_src_high;
 statement ok
 DROP TABLE tg_buffer;
 
+# ===========================================================
+# Test H: Row group reorder by statistics for TopK queries.
+# When a file has multiple row groups with overlapping or
+# out-of-order statistics, sort pushdown returns Inexact and
+# `reorder_by_statistics` reorders row groups within the file
+# so TopK finds optimal values first.
+# ===========================================================
+
+# Create a table with 30 rows and write to parquet with small row groups
+# so we get multiple row groups per file. Rows are inserted in a mixed
+# order so row groups span overlapping ranges (forcing Inexact path).
+statement ok
+CREATE TABLE th_mixed(id INT, value INT) AS VALUES
+  (15, 150), (5, 50),  (25, 250),
+  (10, 100), (20, 200), (1, 10),
+  (30, 300), (3, 30),  (18, 180);
+
+# Write with row_group_size=3 → 3 rows per RG, 3 RGs total
+# RG statistics (unsorted order): RG0(5-25), RG1(1-20), RG2(3-30)
+# Note: files are overlapping → Inexact path → TopK retained
+query I
+COPY (SELECT * FROM th_mixed)
+TO 'test_files/scratch/sort_pushdown/th_reorder/data.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '3');
+----
+9
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE th_reorder(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/th_reorder/data.parquet';
+
+# Test H.1: ASC ORDER BY with LIMIT — Inexact path (file has no declared ordering)
+# Plan: SortExec(TopK) preserved. RG reorder happens inside DataSourceExec
+# (not visible in EXPLAIN, but verified by unit tests in access_plan.rs).
+query TT
+EXPLAIN SELECT * FROM th_reorder ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: th_reorder.id ASC NULLS LAST, fetch=3
+02)--TableScan: th_reorder projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/th_reorder/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Results must be correct regardless of RG reorder.
+query II
+SELECT * FROM th_reorder ORDER BY id ASC LIMIT 3;
+----
+1 10
+3 30
+5 50
+
+# Test H.2: DESC ORDER BY with LIMIT — reorder + reverse compose
+query TT
+EXPLAIN SELECT * FROM th_reorder ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: th_reorder.id DESC NULLS FIRST, fetch=3
+02)--TableScan: th_reorder projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/th_reorder/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+query II
+SELECT * FROM th_reorder ORDER BY id DESC LIMIT 3;
+----
+30 300
+25 250
+20 200
+
+# Test H.3: Full sort (no LIMIT) — output must still be correctly sorted
+query II
+SELECT * FROM th_reorder ORDER BY id ASC;
+----
+1 10
+3 30
+5 50
+10 100
+15 150
+18 180
+20 200
+25 250
+30 300
+
+# Test H.4: ORDER BY expression (not a simple column) — reorder should
+# gracefully skip, results still correct
+query II
+SELECT id, value FROM th_reorder ORDER BY id + 1 ASC LIMIT 3;
+----
+1 10
+3 30
+5 50
+
+# Cleanup Test H
+statement ok
+DROP TABLE th_mixed;
+
+statement ok
+DROP TABLE th_reorder;
+
+# ===========================================================
+# Test I: WITH ORDER + DESC LIMIT — stats init + cumulative prune
+# Tests the full optimization chain on sorted non-overlapping data:
+# file reorder → RG reorder → reverse → stats init → cumulative prune
+# ===========================================================
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# Create sorted data with multiple small row groups
+statement ok
+CREATE TABLE ti_data(id INT, value INT) AS VALUES
+(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),
+(7,70),(8,80),(9,90),(10,100),(11,110),(12,120);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+query I
+COPY (SELECT * FROM ti_data ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/ti_sorted/data.parquet';
+----
+12
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE ti_sorted(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/ti_sorted/data.parquet'
+WITH ORDER (id ASC);
+
+# Test I.1: DESC LIMIT with sort pushdown — EXPLAIN shows reverse_row_groups=true
+query TT
+EXPLAIN SELECT * FROM ti_sorted ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: ti_sorted.id DESC NULLS FIRST, fetch=3
+02)--TableScan: ti_sorted projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/ti_sorted/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+# Test I.2: DESC LIMIT results — should return largest values
+query II
+SELECT * FROM ti_sorted ORDER BY id DESC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Test I.3: ASC LIMIT (same direction as file order) — sort elimination, no TopK
+query TT
+EXPLAIN SELECT * FROM ti_sorted ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: ti_sorted.id ASC NULLS LAST, fetch=3
+02)--TableScan: ti_sorted projection=[id, value]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/ti_sorted/data.parquet]]}, projection=[id, value], limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+query II
+SELECT * FROM ti_sorted ORDER BY id ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+# Test I.4: DESC LIMIT with WHERE — cumulative prune works, stats init skipped
+query II
+SELECT * FROM ti_sorted WHERE value > 50 ORDER BY id DESC LIMIT 2;
+----
+12 120
+11 110
+
+# Test I.5: Larger LIMIT spanning multiple RGs (4 RGs of 3 rows each)
+query II
+SELECT * FROM ti_sorted ORDER BY id DESC LIMIT 8;
+----
+12 120
+11 110
+10 100
+9 90
+8 80
+7 70
+6 60
+5 50
+
+# Test I.6: LIMIT larger than total rows — returns all rows
+query II
+SELECT * FROM ti_sorted ORDER BY id DESC LIMIT 100;
+----
+12 120
+11 110
+10 100
+9 90
+8 80
+7 70
+6 60
+5 50
+4 40
+3 30
+2 20
+1 10
+
+# Cleanup Test I
+statement ok
+DROP TABLE ti_data;
+
+statement ok
+DROP TABLE ti_sorted;
+
+# ===========================================================
+# Test J: Non-overlapping RGs without WITH ORDER —
+# RG reorder + cumulative prune via DynamicFilter sort_options
+# ===========================================================
+
+# Create data written in scrambled order but with non-overlapping RGs
+statement ok
+CREATE TABLE tj_high(id INT, value INT) AS VALUES (10,100),(11,110),(12,120);
+
+statement ok
+CREATE TABLE tj_mid(id INT, value INT) AS VALUES (4,40),(5,50),(6,60);
+
+statement ok
+CREATE TABLE tj_low(id INT, value INT) AS VALUES (1,10),(2,20),(3,30);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+# Write in scrambled order: high, low, mid → RGs are non-overlapping but not sorted
+query I
+COPY (
+  SELECT * FROM tj_high
+  UNION ALL SELECT * FROM tj_low
+  UNION ALL SELECT * FROM tj_mid
+)
+TO 'test_files/scratch/sort_pushdown/tj_scrambled/data.parquet';
+----
+9
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+# No WITH ORDER — tests non-sort-pushdown TopK path
+statement ok
+CREATE EXTERNAL TABLE tj_scrambled(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tj_scrambled/data.parquet';
+
+# Test J.1: DESC LIMIT — RG reorder + reverse from DynamicFilter
+# EXPLAIN shows DynamicFilter but NO reverse_row_groups (not sort pushdown)
+query TT
+EXPLAIN SELECT * FROM tj_scrambled ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: tj_scrambled.id DESC NULLS FIRST, fetch=3
+02)--TableScan: tj_scrambled projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tj_scrambled/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Test J.2: Results must be correct
+query II
+SELECT * FROM tj_scrambled ORDER BY id DESC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Test J.3: ASC LIMIT
+query II
+SELECT * FROM tj_scrambled ORDER BY id ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+# Test J.4: DESC with WHERE
+query II
+SELECT * FROM tj_scrambled WHERE value >= 50 ORDER BY id DESC LIMIT 2;
+----
+12 120
+11 110
+
+# Test J.5: Full sort without LIMIT (no TopK, no reorder)
+query II
+SELECT * FROM tj_scrambled ORDER BY id ASC;
+----
+1 10
+2 20
+3 30
+4 40
+5 50
+6 60
+10 100
+11 110
+12 120
+
+# Cleanup Test J
+statement ok
+DROP TABLE tj_high;
+
+statement ok
+DROP TABLE tj_mid;
+
+statement ok
+DROP TABLE tj_low;
+
+statement ok
+DROP TABLE tj_scrambled;
+
+# ===========================================================
+# Test K: Overlapping RGs without WITH ORDER —
+# cumulative prune must NOT trigger (overlapping = unsafe)
+# ===========================================================
+
+# Create data with overlapping ranges
+statement ok
+CREATE TABLE tk_data(id INT, value INT) AS VALUES
+(1,10),(5,50),(9,90),
+(3,30),(7,70),(11,110),
+(2,20),(6,60),(10,100);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+query I
+COPY (SELECT * FROM tk_data)
+TO 'test_files/scratch/sort_pushdown/tk_overlap/data.parquet';
+----
+9
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE tk_overlap(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tk_overlap/data.parquet';
+
+# Test K.1: DESC LIMIT on overlapping RGs — results must be correct
+# (cumulative prune should not trigger due to overlap)
+query II
+SELECT * FROM tk_overlap ORDER BY id DESC LIMIT 3;
+----
+11 110
+10 100
+9 90
+
+# Test K.2: ASC LIMIT on overlapping RGs
+query II
+SELECT * FROM tk_overlap ORDER BY id ASC LIMIT 3;
+----
+1 10
+2 20
+3 30
+
+# Test K.3: Full sort (verify all data present)
+query II
+SELECT * FROM tk_overlap ORDER BY id ASC;
+----
+1 10
+2 20
+3 30
+5 50
+6 60
+7 70
+9 90
+10 100
+11 110
+
+# Cleanup Test K
+statement ok
+DROP TABLE tk_data;
+
+statement ok
+DROP TABLE tk_overlap;
+
+# ===========================================================
+# Test L: Multi-key ORDER BY — uses first key for RG reorder
+# ===========================================================
+
+statement ok
+CREATE TABLE tl_data(id INT, name VARCHAR, value INT) AS VALUES
+(10, 'a', 100), (11, 'b', 110), (12, 'c', 120),
+(4, 'd', 40), (5, 'e', 50), (6, 'f', 60),
+(1, 'g', 10), (2, 'h', 20), (3, 'i', 30);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+query I
+COPY (SELECT * FROM tl_data)
+TO 'test_files/scratch/sort_pushdown/tl_multikey/data.parquet';
+----
+9
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE tl_multikey(id INT, name VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tl_multikey/data.parquet';
+
+# Test L.1: Multi-key DESC — first key determines RG reorder
+query IIT
+SELECT id, value, name FROM tl_multikey ORDER BY id DESC, name ASC LIMIT 3;
+----
+12 120 c
+11 110 b
+10 100 a
+
+# Test L.2: Multi-key ASC
+query IIT
+SELECT id, value, name FROM tl_multikey ORDER BY id ASC, name DESC LIMIT 3;
+----
+1 10 g
+2 20 h
+3 30 i
+
+# Test L.3: Multi-key with 3 sort columns
+query IIT
+SELECT id, value, name FROM tl_multikey ORDER BY id DESC, value DESC, name ASC LIMIT 5;
+----
+12 120 c
+11 110 b
+10 100 a
+6 60 f
+5 50 e
+
+# Test L.4: WITH ORDER + multi-key DESC LIMIT
+statement ok
+CREATE EXTERNAL TABLE tl_sorted(id INT, name VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tl_multikey/data.parquet'
+WITH ORDER (id ASC);
+
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# Multi-key with sort pushdown — first key triggers reverse
+query TT
+EXPLAIN SELECT id, value FROM tl_sorted ORDER BY id DESC, value ASC LIMIT 3;
+----
+logical_plan
+01)Sort: tl_sorted.id DESC NULLS FIRST, tl_sorted.value ASC NULLS LAST, fetch=3
+02)--TableScan: tl_sorted projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC, value@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tl_multikey/data.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+query II
+SELECT id, value FROM tl_sorted ORDER BY id DESC, value ASC LIMIT 3;
+----
+12 120
+11 110
+10 100
+
+# Cleanup Test L
+statement ok
+DROP TABLE tl_data;
+
+statement ok
+DROP TABLE tl_multikey;
+
+statement ok
+DROP TABLE tl_sorted;
+
+# ===========================================================
+# Test M: Multi-key Inexact sort pushdown (WITH ORDER multi-key)
+# File declared WITH ORDER (id ASC, value ASC), query ORDER BY
+# id DESC, value DESC → reversed matches → Inexact path.
+# ===========================================================
+
+statement ok
+CREATE TABLE tm_data(id INT, value INT) AS VALUES
+(1, 10), (1, 20), (1, 30),
+(2, 40), (2, 50), (2, 60),
+(3, 70), (3, 80), (3, 90),
+(4, 100), (4, 110), (4, 120);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 3;
+
+# Write sorted by (id ASC, value ASC)
+query I
+COPY (SELECT * FROM tm_data ORDER BY id ASC, value ASC)
+TO 'test_files/scratch/sort_pushdown/tm_multikey_sorted/data.parquet';
+----
+12
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE tm_sorted(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tm_multikey_sorted/data.parquet'
+WITH ORDER (id ASC, value ASC);
+
+# Test M.1: Multi-key DESC that fully matches reversed ordering
+# ORDER BY id DESC, value DESC matches reversed (id ASC, value ASC) → Inexact
+query TT
+EXPLAIN SELECT * FROM tm_sorted ORDER BY id DESC, value DESC LIMIT 3;
+----
+logical_plan
+01)Sort: tm_sorted.id DESC NULLS FIRST, tm_sorted.value DESC NULLS FIRST, fetch=3
+02)--TableScan: tm_sorted projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC, value@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tm_multikey_sorted/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+# Test M.2: Results must be correct (largest id first, then largest value)
+query II
+SELECT * FROM tm_sorted ORDER BY id DESC, value DESC LIMIT 3;
+----
+4 120
+4 110
+4 100
+
+# Test M.3: Larger limit spanning multiple RGs
+query II
+SELECT * FROM tm_sorted ORDER BY id DESC, value DESC LIMIT 6;
+----
+4 120
+4 110
+4 100
+3 90
+3 80
+3 70
+
+# Test M.4: Multi-key ASC (same direction as file = Exact, sort elimination)
+query II
+SELECT * FROM tm_sorted ORDER BY id ASC, value ASC LIMIT 3;
+----
+1 10
+1 20
+1 30
+
+# Test M.5: Partial match — first key reversed, second key SAME direction
+# ORDER BY id DESC, value ASC does NOT match reversed (id DESC, value DESC)
+# → NOT Inexact path (second key mismatch)
+query II
+SELECT * FROM tm_sorted ORDER BY id DESC, value ASC LIMIT 3;
+----
+4 100
+4 110
+4 120
+
+# Test M.6: All rows, verify full data integrity
+query II
+SELECT * FROM tm_sorted ORDER BY id DESC, value DESC;
+----
+4 120
+4 110
+4 100
+3 90
+3 80
+3 70
+2 60
+2 50
+2 40
+1 30
+1 20
+1 10
+
+# Cleanup Test M
+statement ok
+DROP TABLE tm_data;
+
+statement ok
+DROP TABLE tm_sorted;
+
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok
 SET datafusion.execution.target_partitions = 4;

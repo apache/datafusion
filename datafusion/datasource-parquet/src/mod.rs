@@ -25,6 +25,7 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod access_plan;
+pub(crate) mod access_plan_optimizer;
 pub mod file_format;
 pub mod metadata;
 mod metrics;

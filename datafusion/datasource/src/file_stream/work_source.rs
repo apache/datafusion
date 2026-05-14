@@ -85,8 +85,18 @@ impl SharedWorkSource {
     }
 
     /// Create a shared work source for the unopened files in `config`.
+    ///
+    /// Files are reordered by the file source (e.g. by statistics for TopK)
+    /// before being placed in the shared queue.
     pub(crate) fn from_config(config: &FileScanConfig) -> Self {
-        Self::new(config.file_groups.iter().flat_map(FileGroup::iter).cloned())
+        let files: Vec<_> = config
+            .file_groups
+            .iter()
+            .flat_map(FileGroup::iter)
+            .cloned()
+            .collect();
+        let files = config.file_source.reorder_files(files);
+        Self::new(files)
     }
 
     /// Pop the next file from the shared work queue.
