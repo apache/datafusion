@@ -58,3 +58,7 @@ rand = { workspace = true }
 [[bench]]
 harness = false
 name = "compare_nested"
+
+[[bench]]
+harness = false
+name = "binary_view_map_insert"
