@@ -259,6 +259,7 @@ impl WindowFrame {
                 // it is unchanged. Note that this follows PostgreSQL behavior.
                 order_by.push(lit(1u64).sort(true, false));
             }
+            WindowFrameUnits::Range if self.free_range() => {}
             WindowFrameUnits::Range if order_by.len() != 1 => {
                 return plan_err!("RANGE requires exactly one ORDER BY column");
             }
