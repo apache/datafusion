@@ -3590,9 +3590,7 @@ fn roundtrip_filter_with_none_projection() -> Result<()> {
     Ok(())
 }
 
-/// A custom ExecutionPlan that stores `Vec<Arc<dyn PhysicalExpr>>` fields,
-/// simulating a custom scan node (like NumpangFileSource) that has dynamic
-/// filters pushed down during optimization.
+/// A custom [`ExecutionPlan`] which stores [`PhysicalExpr`]s.
 struct CustomExecWithExprs {
     exprs: Vec<Arc<dyn PhysicalExpr>>,
     child: Arc<dyn ExecutionPlan>,
@@ -3669,8 +3667,7 @@ impl ExecutionPlan for CustomExecWithExprs {
     }
 }
 
-/// A PhysicalExtensionCodec that uses proto_converter to serialize/deserialize
-/// the PhysicalExpr fields stored in CustomExecWithExprs.
+/// A [`PhysicalExtensionCodec`] for [`CustomExecWithExprs`].
 #[derive(Debug)]
 struct CustomExecWithExprsCodec {}
 
@@ -3725,30 +3722,25 @@ impl PhysicalExtensionCodec for CustomExecWithExprsCodec {
     }
 }
 
-/// Tests that a custom ExecutionPlan node storing PhysicalExpr fields can
-/// use the proto_converter parameter to serialize/deserialize those expressions
-/// with deduplication support. When the same DynamicFilterPhysicalExpr is shared
-/// between the custom node and another part of the plan (e.g., a FilterExec),
-/// the inner_id should be preserved after roundtrip (proving dedup works).
+/// Tests that a custom [`ExecutionPlan`] with [`PhysicalExpr`] can
+/// dedupe dynamic filters by using the proto converter in its
+/// [`PhysicalExtensionCodec`] implmentation.
 #[test]
 fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
-
-    // Create a dynamic filter expression that will be shared between the
-    // FilterExec predicate and the CustomExecWithExprs's exprs.
-    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
-        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
-        lit(true),
-    ));
-    let dynamic_filter_expr: Arc<dyn PhysicalExpr> = dynamic_filter;
-
     // Create the plan:
     //
     //   FilterExec(dynamic_filter)
     //     -> CustomExecWithExprs(exprs: [dynamic_filter])
     //         -> EmptyExec
     //
-    // The same Arc is stored in both, so dedupe should preserve identity.
+    // The same dynamic filter expression is saved in both the FilterExec and CustomExecWithExprs.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>],
+        lit(true),
+    ));
+    let dynamic_filter_expr: Arc<dyn PhysicalExpr> = dynamic_filter;
+
     let empty = Arc::new(EmptyExec::new(Arc::clone(&schema)));
     let custom_exec = Arc::new(CustomExecWithExprs::new(
         vec![Arc::clone(&dynamic_filter_expr)],
@@ -3782,10 +3774,7 @@ fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
     let deser_filter = deserialized
         .downcast_ref::<FilterExec>()
         .expect("Top-level should be FilterExec");
-    let deser_filter_df = deser_filter
-        .predicate()
-        .downcast_ref::<DynamicFilterPhysicalExpr>()
-        .expect("FilterExec predicate should be DynamicFilterPhysicalExpr");
+    let deser_filter_df = deser_filter.predicate();
 
     // Extract the deserialized custom node's dynamic filter
     let deser_custom = deser_filter
@@ -3793,19 +3782,13 @@ fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
         .downcast_ref::<CustomExecWithExprs>()
         .expect("FilterExec child should be CustomExecWithExprs");
     assert_eq!(deser_custom.exprs.len(), 1, "Should have one expression");
-    let deser_custom_df = deser_custom.exprs[0]
-        .downcast_ref::<DynamicFilterPhysicalExpr>()
-        .expect("Custom node expr should be DynamicFilterPhysicalExpr");
+    let [deser_custom_df] = deser_custom.exprs.as_slice() else {
+        return internal_err!("Custom node should have one expression");
+    };
 
-    // After roundtrip with deduplication, both references should share the same
-    // inner state (same expression_id), proving that proto_converter was used correctly
-    // within the custom codec and deduplication was preserved across the plan boundary.
-    assert_eq!(
-        deser_filter_df.expression_id(),
-        deser_custom_df.expression_id(),
-        "FilterExec's dynamic filter and CustomExecWithExprs's dynamic filter \
-         should share the same inner state after roundtrip with deduplication"
-    );
-
+    // Pass the un-remapped filter first so the helper's `with_new_children`
+    // rewrite can reconstruct the remapped form on the other side.
+    assert_dynamic_filters_equal(deser_custom_df, deser_filter_df);
+    assert_dynamic_filter_update_is_visible(deser_custom_df, deser_filter_df)?;
     Ok(())
 }
