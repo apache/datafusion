@@ -314,6 +314,11 @@ mod tests {
         Ok(ctx)
     }
 
+    // Recursively walks a expression tree depth-first, collecting in visit order:
+    // - `params`: the parameter struct of each Lambda encountered
+    // - `lambda_refs`: every field reference whose root is a LambdaParameterReference,
+    //   recorded as (steps_out, field_index) so tests can assert which enclosing
+    //   lambda each reference resolves to and which parameter within it.
     fn collect_lambda_ref(
         expr: &Expression,
         params: &mut Vec<Struct>,
