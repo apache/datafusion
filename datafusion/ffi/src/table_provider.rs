@@ -192,7 +192,7 @@ unsafe extern "C" fn statistics_fn_wrapper(
     let serialized: Option<SVec<u8>> = provider
         .inner()
         .statistics()
-        .map(|s| serialize_statistics(&s).into_iter().collect());
+        .map(|s| SVec::from(&*serialize_statistics(&s)));
     serialized.into()
 }
 
