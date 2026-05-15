@@ -24,8 +24,20 @@ use std::fmt::Formatter;
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::display::{
-    DisplayAs, DisplayFormatType, GraphvizBuilder, PlanType, StringifiedPlan,
+    GraphvizBuilder, PlanType, StringifiedPlan,
 };
+
+#[deprecated(
+    since = "54.0.0",
+    note = "please use datafusion_common::display::DisplayAs"
+)]
+pub use datafusion_common::display::DisplayAs;
+
+#[deprecated(
+    since = "54.0.0",
+    note = "please use datafusion_common::display::DisplayFormatType"
+)]
+pub use datafusion_common::display::DisplayFormatType;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 

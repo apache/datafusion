@@ -145,11 +145,13 @@ pub trait DisplayAs {
     /// Should not include a newline
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 }
+
 impl DisplayAs for &dyn DisplayAs {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         (*self).fmt_as(t, f)
     }
 }
+
 impl<T: DisplayAs + ?Sized> DisplayAs for Arc<T> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         self.as_ref().fmt_as(t, f)
