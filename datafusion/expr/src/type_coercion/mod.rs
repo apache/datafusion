@@ -75,3 +75,20 @@ pub fn is_datetime(dt: &DataType) -> bool {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
     )
 }
+
+pub fn is_binary(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Binary
+            | DataType::LargeBinary
+            | DataType::FixedSizeBinary(_)
+            | DataType::BinaryView
+    )
+}
+
+pub fn is_string(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}

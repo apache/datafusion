@@ -16,23 +16,22 @@
 // under the License.
 
 use arrow::array::Array;
-use std::sync::Arc;
-
 use arrow::datatypes::DataType;
 
+use crate::binaries::{
+    ConcatBinaryBuilder, ConcatBinaryViewBuilder, ConcatLargeBinaryBuilder,
+};
 use crate::string::concat;
-use crate::string::concat::simplify_concat;
+use crate::string::concat::{coerce_arg_types, deduce_return_type, simplify_concat};
 use crate::string::concat_ws;
 use crate::strings::{
-    ColumnarValueRef, ConcatLargeStringBuilder, ConcatStringBuilder,
+    ColumnarValueRef, ConcatBuilder, ConcatLargeStringBuilder, ConcatStringBuilder,
     ConcatStringViewBuilder,
-};
-use datafusion_common::cast::{
-    as_large_string_array, as_string_array, as_string_view_array,
 };
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::type_coercion::is_binary;
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -76,12 +75,11 @@ impl Default for ConcatWsFunc {
 
 impl ConcatWsFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::variadic(
-                vec![Utf8View, Utf8, LargeUtf8],
-                Volatility::Immutable,
-            ),
+            // Use `Signature::UserDefined` to allow different argument types.
+            // `Variadic` requires every argument to be coerced to the same string type,
+            // so the UDF cannot distinguish between binary and string inputs.
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -95,18 +93,21 @@ impl ScalarUDFImpl for ConcatWsFunc {
         &self.signature
     }
 
-    /// Match the return type to the input types to avoid unnecessary casts. On
-    /// mixed inputs, prefer Utf8View; prefer LargeUtf8 over Utf8 to avoid
-    /// potential overflow on LargeUtf8 input.
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        if arg_types.contains(&Utf8View) {
-            Ok(Utf8View)
-        } else if arg_types.contains(&LargeUtf8) {
-            Ok(LargeUtf8)
+    /// Coerce all arguments to the widest type within the binary / string family
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() < 2 {
+            plan_err!(
+                "concat_ws expects at least 2 arguments, got {}",
+                arg_types.len()
+            )
         } else {
-            Ok(Utf8)
+            coerce_arg_types(arg_types)
         }
+    }
+
+    /// Match the return type to the input types. Delegates to `concat` implementation.
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(deduce_return_type(arg_types))
     }
 
     /// Concatenates all but the first argument, with separators. The first
@@ -123,14 +124,18 @@ impl ScalarUDFImpl for ConcatWsFunc {
             );
         }
 
-        let return_datatype = if args.iter().any(|c| c.data_type() == DataType::Utf8View)
-        {
-            DataType::Utf8View
-        } else if args.iter().any(|c| c.data_type() == DataType::LargeUtf8) {
-            DataType::LargeUtf8
-        } else {
-            DataType::Utf8
-        };
+        let arg_types: Vec<DataType> = args.iter().map(|c| c.data_type()).collect();
+        let return_datatype = deduce_return_type(&arg_types);
+
+        let with_binary = arg_types.iter().any(is_binary);
+        let with_string = arg_types.iter().any(|t| {
+            matches!(t, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8)
+        });
+        if with_binary && with_string {
+            return plan_err!(
+                "concat_ws does not support mixed string and binary inputs"
+            );
+        }
 
         let array_len = args.iter().find_map(|x| match x {
             ColumnarValue::Array(array) => Some(array.len()),
@@ -142,47 +147,101 @@ impl ScalarUDFImpl for ConcatWsFunc {
             let ColumnarValue::Scalar(scalar) = &args[0] else {
                 unreachable!()
             };
-            let sep = match scalar.try_as_str() {
-                Some(Some(s)) => s,
-                Some(None) => {
-                    // null literal string
-                    return match return_datatype {
-                        DataType::Utf8View => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)))
-                        }
-                        DataType::LargeUtf8 => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)))
-                        }
-                        _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-                    };
-                }
-                None => return internal_err!("Expected string literal, got {scalar:?}"),
-            };
 
-            let mut values = Vec::with_capacity(args.len() - 1);
-            for arg in &args[1..] {
-                let ColumnarValue::Scalar(scalar) = arg else {
-                    unreachable!()
+            return if with_binary {
+                // Binary scalar path
+                let sep_bytes: &[u8] = match scalar {
+                    ScalarValue::Binary(Some(v))
+                    | ScalarValue::LargeBinary(Some(v))
+                    | ScalarValue::BinaryView(Some(v)) => v.as_slice(),
+                    ScalarValue::FixedSizeBinary(_, Some(v)) => v.as_slice(),
+                    scalar if scalar.is_null() => {
+                        return Ok(null_scalar(&return_datatype));
+                    }
+                    other => {
+                        return internal_err!("Expected binary separator, got {other:?}");
+                    }
                 };
 
-                match scalar.try_as_str() {
-                    Some(Some(v)) => values.push(v),
-                    Some(None) => {} // null literal string
+                let mut values: Vec<&[u8]> = Vec::with_capacity(args.len() - 1);
+                for arg in &args[1..] {
+                    let ColumnarValue::Scalar(s) = arg else {
+                        unreachable!()
+                    };
+                    match s {
+                        ScalarValue::Binary(Some(v))
+                        | ScalarValue::LargeBinary(Some(v))
+                        | ScalarValue::BinaryView(Some(v)) => values.push(v.as_slice()),
+                        ScalarValue::FixedSizeBinary(_, Some(v)) => {
+                            values.push(v.as_slice())
+                        }
+                        // skip null
+                        scalar if scalar.is_null() => {}
+                        other => {
+                            return internal_err!("Expected binary value, got {other:?}");
+                        }
+                    }
+                }
+                let result = values.join(sep_bytes);
+
+                match return_datatype {
+                    DataType::Binary => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(result))))
+                    }
+                    DataType::LargeBinary => Ok(ColumnarValue::Scalar(
+                        ScalarValue::LargeBinary(Some(result)),
+                    )),
+                    DataType::BinaryView => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::BinaryView(Some(result))))
+                    }
+                    other => {
+                        plan_err!("concat_ws does not support return type {other}")
+                    }
+                }
+            } else {
+                // String scalar path
+                let sep = match scalar.try_as_str() {
+                    Some(Some(s)) => s,
+                    Some(None) => {
+                        return Ok(null_scalar(&return_datatype));
+                    }
                     None => {
                         return internal_err!("Expected string literal, got {scalar:?}");
                     }
-                }
-            }
-            let result = values.join(sep);
+                };
 
-            return match return_datatype {
-                DataType::Utf8View => {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
+                let mut values = Vec::with_capacity(args.len() - 1);
+                for arg in &args[1..] {
+                    let ColumnarValue::Scalar(scalar) = arg else {
+                        unreachable!()
+                    };
+
+                    match scalar.try_as_str() {
+                        Some(Some(v)) => values.push(v),
+                        Some(None) => {} // null literal string
+                        None => {
+                            return internal_err!(
+                                "Expected string literal, got {scalar:?}"
+                            );
+                        }
+                    }
                 }
-                DataType::LargeUtf8 => {
-                    Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
+                let result = values.join(sep);
+
+                match return_datatype {
+                    DataType::Utf8View => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
+                    }
+                    DataType::LargeUtf8 => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
+                    }
+                    DataType::Utf8 => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
+                    }
+                    other => {
+                        plan_err!("concat_ws does not support return type {other}")
+                    }
                 }
-                _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result)))),
             };
         }
 
@@ -190,190 +249,66 @@ impl ScalarUDFImpl for ConcatWsFunc {
         let len = array_len.unwrap();
         let mut data_size = 0;
 
-        // parse sep
-        let sep = match &args[0] {
-            ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
-                Some(Some(s)) => {
-                    data_size += s.len() * len * (args.len() - 2); // estimate
-                    ColumnarValueRef::Scalar(s.as_bytes())
-                }
-                Some(None) => {
-                    return match return_datatype {
-                        DataType::Utf8View => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)))
-                        }
-                        DataType::LargeUtf8 => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)))
-                        }
-                        _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-                    };
-                }
-                None => {
-                    return internal_err!("Expected string separator, got {scalar:?}");
-                }
-            },
-            ColumnarValue::Array(array) => match array.data_type() {
-                DataType::Utf8 => {
-                    let string_array = as_string_array(array)?;
-                    data_size += string_array.values().len() * (args.len() - 2);
-                    if array.is_nullable() {
-                        ColumnarValueRef::NullableArray(string_array)
-                    } else {
-                        ColumnarValueRef::NonNullableArray(string_array)
-                    }
-                }
-                DataType::LargeUtf8 => {
-                    let string_array = as_large_string_array(array)?;
-                    data_size += string_array.values().len() * (args.len() - 2);
-                    if array.is_nullable() {
-                        ColumnarValueRef::NullableLargeStringArray(string_array)
-                    } else {
-                        ColumnarValueRef::NonNullableLargeStringArray(string_array)
-                    }
-                }
-                DataType::Utf8View => {
-                    let string_array = as_string_view_array(array)?;
-                    data_size +=
-                        string_array.total_buffer_bytes_used() * (args.len() - 2);
-                    if array.is_nullable() {
-                        ColumnarValueRef::NullableStringViewArray(string_array)
-                    } else {
-                        ColumnarValueRef::NonNullableStringViewArray(string_array)
-                    }
-                }
-                other => {
-                    return plan_err!(
-                        "Input was {other} which is not a supported datatype for concat_ws separator"
-                    );
-                }
-            },
-        };
+        let sep_column = &args[0];
+
+        // A null scalar separator makes the entire result null for all rows.
+        if matches!(sep_column, ColumnarValue::Scalar(s) if s.is_null()) {
+            return Ok(null_scalar(&return_datatype));
+        }
+
+        let sep: ColumnarValueRef = ColumnarValueRef::from_columnar_value(sep_column, &mut data_size, len, args.len() - 2, true)?
+            .map(Ok)
+            .unwrap_or_else(|| plan_err!(
+                "Input {sep_column} which is not a supported datatype for concat_ws separator"
+            ))?;
 
         let mut columns = Vec::with_capacity(args.len() - 1);
         for arg in &args[1..] {
-            match arg {
-                ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value))
-                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(maybe_value))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(maybe_value)) => {
-                    if let Some(s) = maybe_value {
-                        data_size += s.len() * len;
-                        columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
-                    }
-                }
-                ColumnarValue::Array(array) => {
-                    match array.data_type() {
-                        DataType::Utf8 => {
-                            let string_array = as_string_array(array)?;
-
-                            data_size += string_array.values().len();
-                            let column = if array.is_nullable() {
-                                ColumnarValueRef::NullableArray(string_array)
-                            } else {
-                                ColumnarValueRef::NonNullableArray(string_array)
-                            };
-                            columns.push(column);
-                        }
-                        DataType::LargeUtf8 => {
-                            let string_array = as_large_string_array(array)?;
-
-                            data_size += string_array.values().len();
-                            let column = if array.is_nullable() {
-                                ColumnarValueRef::NullableLargeStringArray(string_array)
-                            } else {
-                                ColumnarValueRef::NonNullableLargeStringArray(
-                                    string_array,
-                                )
-                            };
-                            columns.push(column);
-                        }
-                        DataType::Utf8View => {
-                            let string_array = as_string_view_array(array)?;
-
-                            // This is an estimate; in particular, it will
-                            // undercount arrays of short strings (<= 12 bytes).
-                            data_size += string_array.total_buffer_bytes_used();
-                            let column = if array.is_nullable() {
-                                ColumnarValueRef::NullableStringViewArray(string_array)
-                            } else {
-                                ColumnarValueRef::NonNullableStringViewArray(string_array)
-                            };
-                            columns.push(column);
-                        }
-                        other => {
-                            return plan_err!(
-                                "Input was {other} which is not a supported datatype for concat_ws function."
-                            );
-                        }
-                    };
-                }
-                _ => unreachable!(),
+            if let Some(column) =
+                ColumnarValueRef::from_columnar_value(arg, &mut data_size, len, 1, false)?
+            {
+                columns.push(column);
             }
         }
 
         match return_datatype {
-            DataType::Utf8View => {
-                let mut builder = ConcatStringViewBuilder::with_capacity(len, data_size);
-                for i in 0..len {
-                    if !sep.is_valid(i) {
-                        builder.append_offset()?;
-                        continue;
-                    }
-                    let mut first = true;
-                    for column in &columns {
-                        if column.is_valid(i) {
-                            if !first {
-                                builder.write::<false>(&sep, i);
-                            }
-                            builder.write::<false>(column, i);
-                            first = false;
-                        }
-                    }
-                    builder.append_offset()?;
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
-            }
-            DataType::LargeUtf8 => {
-                let mut builder = ConcatLargeStringBuilder::with_capacity(len, data_size);
-                for i in 0..len {
-                    if !sep.is_valid(i) {
-                        builder.append_offset()?;
-                        continue;
-                    }
-                    let mut first = true;
-                    for column in &columns {
-                        if column.is_valid(i) {
-                            if !first {
-                                builder.write::<false>(&sep, i);
-                            }
-                            builder.write::<false>(column, i);
-                            first = false;
-                        }
-                    }
-                    builder.append_offset()?;
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
-            }
-            _ => {
-                let mut builder = ConcatStringBuilder::with_capacity(len, data_size);
-                for i in 0..len {
-                    if !sep.is_valid(i) {
-                        builder.append_offset()?;
-                        continue;
-                    }
-                    let mut first = true;
-                    for column in &columns {
-                        if column.is_valid(i) {
-                            if !first {
-                                builder.write::<false>(&sep, i);
-                            }
-                            builder.write::<false>(column, i);
-                            first = false;
-                        }
-                    }
-                    builder.append_offset()?;
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
-            }
+            DataType::Utf8 => build_concat_ws(
+                ConcatStringBuilder::with_capacity(len, data_size),
+                &sep,
+                &columns,
+                len,
+            ),
+            DataType::LargeUtf8 => build_concat_ws(
+                ConcatLargeStringBuilder::with_capacity(len, data_size),
+                &sep,
+                &columns,
+                len,
+            ),
+            DataType::Utf8View => build_concat_ws(
+                ConcatStringViewBuilder::with_capacity(len, data_size),
+                &sep,
+                &columns,
+                len,
+            ),
+            DataType::Binary => build_concat_ws(
+                ConcatBinaryBuilder::with_capacity(len, data_size),
+                &sep,
+                &columns,
+                len,
+            ),
+            DataType::LargeBinary => build_concat_ws(
+                ConcatLargeBinaryBuilder::with_capacity(len, data_size),
+                &sep,
+                &columns,
+                len,
+            ),
+            DataType::BinaryView => build_concat_ws(
+                ConcatBinaryViewBuilder::with_capacity(len, data_size),
+                &sep,
+                &columns,
+                len,
+            ),
+            other => plan_err!("concat_ws does not support return type {other}"),
         }
     }
 
@@ -398,6 +333,41 @@ impl ScalarUDFImpl for ConcatWsFunc {
     }
 }
 
+/// Build a `concat_ws` output array using a generic [`ConcatBuilder`].
+/// Write non-null column values per row, inserting the separator between them
+fn build_concat_ws<B: ConcatBuilder>(
+    mut builder: B,
+    sep: &ColumnarValueRef,
+    columns: &[ColumnarValueRef],
+    len: usize,
+) -> Result<ColumnarValue> {
+    for i in 0..len {
+        if !sep.is_valid(i) {
+            builder.append_offset()?;
+            continue;
+        }
+        let mut first = true;
+        for column in columns {
+            if column.is_valid(i) {
+                if !first {
+                    builder.write::<false>(sep, i)?;
+                }
+                builder.write::<false>(column, i)?;
+                first = false;
+            }
+        }
+        builder.append_offset()?;
+    }
+    let array = builder.finish(sep.nulls())?;
+    Ok(ColumnarValue::Array(array))
+}
+
+fn null_scalar(dt: &DataType) -> ColumnarValue {
+    ColumnarValue::Scalar(
+        ScalarValue::try_new_null(dt).unwrap_or(ScalarValue::Utf8(None)),
+    )
+}
+
 fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyResult> {
     // Preserve the delimiter's string type for any new literals produced
     // during simplification.
@@ -405,6 +375,17 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
         Expr::Literal(v, _) => v.data_type(),
         _ => DataType::Utf8,
     };
+
+    // Shortcut for binary delimiters
+    if is_binary(&delimiter_type) {
+        let mut args = args
+            .iter()
+            .filter(|x| !is_null(x))
+            .cloned()
+            .collect::<Vec<_>>();
+        args.insert(0, delimiter.clone());
+        return Ok(ExprSimplifyResult::Original(args));
+    }
 
     let typed_lit = |s: String| -> Expr {
         match delimiter_type {
@@ -532,8 +513,11 @@ mod tests {
     use std::sync::Arc;
 
     use crate::string::concat_ws::ConcatWsFunc;
-    use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray};
-    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
+    use arrow::array::{
+        Array, ArrayRef, BinaryArray, LargeBinaryArray, LargeStringArray, StringArray,
+        StringViewArray,
+    };
+    use arrow::datatypes::DataType::{Binary, LargeBinary, LargeUtf8, Utf8, Utf8View};
     use arrow::datatypes::Field;
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
@@ -934,4 +918,116 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn concat_ws_binary_scalars() -> Result<()> {
+        let c0 = ColumnarValue::Scalar(ScalarValue::Binary(Some(b"|".to_vec())));
+        let c1 = ColumnarValue::Scalar(ScalarValue::Binary(Some(b"aa".to_vec())));
+        let c2 = ColumnarValue::Scalar(ScalarValue::Binary(None));
+        let c3 = ColumnarValue::Scalar(ScalarValue::Binary(Some(b"cc".to_vec())));
+
+        let arg_fields = vec![
+            Field::new("a", Binary, true).into(),
+            Field::new("a", Binary, true).into(),
+            Field::new("a", Binary, true).into(),
+            Field::new("a", Binary, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2, c3],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", Binary, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Binary(Some(v))) => {
+                assert_eq!(v, b"aa|cc");
+            }
+            other => panic!("Expected Binary scalar, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn concat_ws_binary_arrays() -> Result<()> {
+        let c0 = ColumnarValue::Scalar(ScalarValue::Binary(Some(b",".to_vec())));
+        let c1 = ColumnarValue::Array(Arc::new(BinaryArray::from_vec(vec![
+            b"foo".as_ref(),
+            b"bar",
+            b"baz",
+        ])));
+        let c2 = ColumnarValue::Array(Arc::new(LargeBinaryArray::from_opt_vec(vec![
+            Some(b"x".as_ref()),
+            None,
+            Some(b"z"),
+        ])));
+
+        let arg_fields = vec![
+            Field::new("a", Binary, true).into(),
+            Field::new("a", Binary, true).into(),
+            Field::new("a", LargeBinary, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2],
+            arg_fields,
+            number_rows: 3,
+            return_field: Field::new("f", LargeBinary, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
+        let expected = Arc::new(LargeBinaryArray::from_opt_vec(vec![
+            Some(b"foo,x".as_ref()),
+            Some(b"bar"),
+            Some(b"baz,z"),
+        ])) as ArrayRef;
+        match &result {
+            ColumnarValue::Array(array) => assert_eq!(&expected, array),
+            _ => panic!("Expected array result"),
+        }
+
+        Ok(())
+    }
+    //
+    // #[test]
+    // fn concat_ws_large_binary_arrays() -> Result<()> {
+    //     let c0 = ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(b",".to_vec())));
+    //     let c1 = ColumnarValue::Array(Arc::new(LargeBinaryArray::from_vec(vec![
+    //         b"foo".as_ref(),
+    //         b"bar",
+    //         b"baz",
+    //     ])));
+    //     let c2 = ColumnarValue::Array(Arc::new(LargeBinaryArray::from_opt_vec(vec![
+    //         Some(b"x".as_ref()),
+    //         None,
+    //         Some(b"z"),
+    //     ])));
+    //
+    //     let arg_fields = vec![
+    //         Field::new("a", LargeBinary, true).into(),
+    //         Field::new("a", LargeBinary, true).into(),
+    //         Field::new("a", LargeBinary, true).into(),
+    //     ];
+    //     let args = ScalarFunctionArgs {
+    //         args: vec![c0, c1, c2],
+    //         arg_fields,
+    //         number_rows: 3,
+    //         return_field: Field::new("f", LargeBinary, true).into(),
+    //         config_options: Arc::new(ConfigOptions::default()),
+    //     };
+    //
+    //     let result = ConcatWsFunc::new().invoke_with_args(args)?;
+    //     let expected = Arc::new(LargeBinaryArray::from_opt_vec(vec![
+    //         Some(b"foo,x".as_ref()),
+    //         Some(b"bar"),
+    //         Some(b"baz,z"),
+    //     ])) as ArrayRef;
+    //     match &result {
+    //         ColumnarValue::Array(array) => assert_eq!(&expected, array),
+    //         _ => panic!("expected array result"),
+    //     }
+    //     Ok(())
+    // }
 }
