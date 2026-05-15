@@ -499,19 +499,22 @@ impl ParquetSource {
         Some((col.name().to_string(), self.reverse_row_groups))
     }
 
-    /// Extract the sort key from a file's statistics for reordering.
+    /// File's per-column `min` for the reorder key, matching the
+    /// row-group-level `reorder_by_statistics` which also keys off
+    /// `min`. Direction is applied by `reorder_files`'s comparator,
+    /// not by switching to `max` for ASC — see that method for the
+    /// rationale.
     fn sort_key_for_file(
         file: &datafusion_datasource::PartitionedFile,
         col_idx: usize,
-        descending: bool,
     ) -> Option<datafusion_common::ScalarValue> {
         let stats = file.statistics.as_ref()?;
-        let col_stats = stats.column_statistics.get(col_idx)?;
-        if descending {
-            col_stats.min_value.get_value().cloned()
-        } else {
-            col_stats.max_value.get_value().cloned()
-        }
+        stats
+            .column_statistics
+            .get(col_idx)?
+            .min_value
+            .get_value()
+            .cloned()
     }
 }
 
@@ -616,6 +619,21 @@ impl FileSource for ParquetSource {
         }))
     }
 
+    /// Reorder the files in the shared work queue so the most
+    /// "promising" files are read first, matching the strategy of
+    /// [`PreparedAccessPlan::reorder_by_statistics`] at the row-group
+    /// level: key off the file's `min`, and let the sort direction
+    /// follow the request (ASC by `min` for ASC requests, DESC by
+    /// `min` for DESC requests).
+    ///
+    /// Keeping both layers consistent matters because they share the
+    /// same convergence story for TopK's dynamic filter: file `i`'s
+    /// `min` is a lower bound on every row group inside it, so the
+    /// order chosen here is a natural prefix of the order
+    /// `reorder_by_statistics` will produce within each file.
+    ///
+    /// Files missing statistics sort to the end so present-stats
+    /// files run first.
     fn reorder_files(
         &self,
         mut files: Vec<datafusion_datasource::PartitionedFile>,
@@ -625,22 +643,19 @@ impl FileSource for ParquetSource {
             None => return files,
         };
 
-        let table_schema = self.table_schema.table_schema();
-        let col_idx = match table_schema.index_of(&col_name) {
+        let col_idx = match self.table_schema.table_schema().index_of(&col_name) {
             Ok(idx) => idx,
             Err(_) => return files,
         };
 
         files.sort_by(|a, b| {
-            let key_a = Self::sort_key_for_file(a, col_idx, descending);
-            let key_b = Self::sort_key_for_file(b, col_idx, descending);
+            let key_a = Self::sort_key_for_file(a, col_idx);
+            let key_b = Self::sort_key_for_file(b, col_idx);
             match (key_a, key_b) {
                 (Some(va), Some(vb)) => {
-                    if descending {
-                        vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
-                    } else {
-                        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
-                    }
+                    let cmp =
+                        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal);
+                    if descending { cmp.reverse() } else { cmp }
                 }
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
@@ -649,7 +664,7 @@ impl FileSource for ParquetSource {
         });
 
         log::debug!(
-            "Reordered {} files by {} {} for TopK optimization",
+            "Reordered {} files by min({}) {} for TopK optimization",
             files.len(),
             col_name,
             if descending { "DESC" } else { "ASC" }
@@ -1362,6 +1377,139 @@ mod tests {
             "request reached via reversed_satisfies (column-not-in-file-schema) \
              must set reverse_row_groups to flip the file's natural order",
         );
+    }
+
+    /// Helpers for the `reorder_files` regression tests below.
+    mod reorder_files_helpers {
+        use super::*;
+        use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+        use datafusion_common::stats::Precision;
+        use datafusion_datasource::PartitionedFile;
+
+        pub(super) fn file_with_min(name: &str, min: Option<i32>) -> PartitionedFile {
+            let mut pf = PartitionedFile::new(name.to_string(), 0);
+            let min_value = min
+                .map(|v| Precision::Exact(ScalarValue::Int32(Some(v))))
+                .unwrap_or(Precision::Absent);
+            pf.statistics = Some(Arc::new(Statistics {
+                num_rows: Precision::Absent,
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                }],
+            }));
+            pf
+        }
+
+        pub(super) fn names(files: &[PartitionedFile]) -> Vec<&str> {
+            files
+                .iter()
+                .map(|f| f.object_meta.location.as_ref())
+                .collect()
+        }
+    }
+
+    /// ASC TopK: `reorder_files` keys off file `min` and sorts ASC,
+    /// so the file with the smallest `min` is read first. This
+    /// matches `PreparedAccessPlan::reorder_by_statistics` at the
+    /// row-group level (also `min ASC`).
+    #[test]
+    fn reorder_files_sorts_asc_by_min_for_asc_request() {
+        use pushdown_sort_helpers::*;
+        use reorder_files_helpers::*;
+
+        let schema = schema_with_a_int();
+        let mut source = ParquetSource::new(Arc::clone(&schema));
+        source.sort_order_for_reorder =
+            Some(LexOrdering::new(vec![sort_expr_on(&schema, "a", false)]).unwrap());
+        // ASC request → `reverse_row_groups` left at its default `false`.
+
+        let reordered = source.reorder_files(vec![
+            file_with_min("middle", Some(50)),
+            file_with_min("small", Some(10)),
+            file_with_min("large", Some(100)),
+        ]);
+
+        assert_eq!(names(&reordered), vec!["small", "middle", "large"]);
+    }
+
+    /// DESC TopK: same `min` key, but sorted DESC — file with the
+    /// largest `min` first. Mirrors the row-group strategy of
+    /// "ASC-by-min then `reverse`".
+    #[test]
+    fn reorder_files_sorts_desc_by_min_for_desc_request() {
+        use pushdown_sort_helpers::*;
+        use reorder_files_helpers::*;
+
+        let schema = schema_with_a_int();
+        let mut source = ParquetSource::new(Arc::clone(&schema))
+            .with_reverse_row_groups(true);
+        source.sort_order_for_reorder =
+            Some(LexOrdering::new(vec![sort_expr_on(&schema, "a", true)]).unwrap());
+
+        let reordered = source.reorder_files(vec![
+            file_with_min("middle", Some(50)),
+            file_with_min("small", Some(10)),
+            file_with_min("large", Some(100)),
+        ]);
+
+        assert_eq!(names(&reordered), vec!["large", "middle", "small"]);
+    }
+
+    /// Files without statistics sort to the *end* so present-stats
+    /// files run first regardless of direction. Verified for both
+    /// ASC and DESC.
+    #[test]
+    fn reorder_files_pushes_missing_stats_to_the_end() {
+        use pushdown_sort_helpers::*;
+        use reorder_files_helpers::*;
+
+        let schema = schema_with_a_int();
+        let mut source = ParquetSource::new(Arc::clone(&schema));
+        source.sort_order_for_reorder =
+            Some(LexOrdering::new(vec![sort_expr_on(&schema, "a", false)]).unwrap());
+
+        let reordered = source.reorder_files(vec![
+            file_with_min("no_stats", None),
+            file_with_min("has_min", Some(10)),
+        ]);
+        assert_eq!(names(&reordered), vec!["has_min", "no_stats"]);
+
+        // Same for DESC.
+        let mut source = ParquetSource::new(Arc::clone(&schema))
+            .with_reverse_row_groups(true);
+        source.sort_order_for_reorder =
+            Some(LexOrdering::new(vec![sort_expr_on(&schema, "a", true)]).unwrap());
+        let reordered = source.reorder_files(vec![
+            file_with_min("no_stats", None),
+            file_with_min("has_min", Some(10)),
+        ]);
+        assert_eq!(names(&reordered), vec!["has_min", "no_stats"]);
+    }
+
+    /// When no sort pushdown has fired (`sort_order_for_reorder` is
+    /// `None`), `reorder_files` is a no-op and preserves input order.
+    #[test]
+    fn reorder_files_is_a_no_op_without_pushdown() {
+        use reorder_files_helpers::*;
+        use pushdown_sort_helpers::*;
+
+        let schema = schema_with_a_int();
+        let source = ParquetSource::new(schema);
+        // No `sort_order_for_reorder` set on the source.
+
+        let input = vec![
+            file_with_min("c", Some(30)),
+            file_with_min("a", Some(10)),
+            file_with_min("b", Some(20)),
+        ];
+        let reordered = source.reorder_files(input.clone());
+        assert_eq!(names(&reordered), names(&input));
     }
 
     /// `sort_order_for_reorder` is surfaced in both `EXPLAIN` (Default)
