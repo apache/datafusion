@@ -439,8 +439,8 @@ logical_plan
 01)Sort: timeseries_parquet.timeframe ASC NULLS LAST, timeseries_parquet.period_end DESC NULLS FIRST, fetch=3
 02)--TableScan: timeseries_parquet projection=[timeframe, period_end, value]
 physical_plan
-01)SortExec: TopK(fetch=3), expr=[timeframe@0 ASC NULLS LAST, period_end@1 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[timeframe@0 ASC NULLS LAST, period_end@1 DESC]
+01)SortExec: TopK(fetch=3), expr=[timeframe@0 ASC NULLS LAST, period_end@1 DESC], preserve_partitioning=[false], sort_prefix=[timeframe@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], output_ordering=[timeframe@0 ASC NULLS LAST, period_end@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 # Test 2.7: Disable sort pushdown and verify filter still works
 statement ok

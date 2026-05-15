@@ -890,6 +890,24 @@ impl FileSource for ParquetSource {
             });
         }
 
+        // If the source's declared ordering is a non-empty *proper* prefix
+        // of the request (e.g. source `[a DESC, b ASC]`, request
+        // `[a DESC, b ASC, c DESC]`), decline pushdown so the outer
+        // `SortExec`'s `sort_prefix` optimisation — prefix-aware early
+        // termination in `TopK` — can still fire. Firing the Inexact
+        // pipeline below would invalidate the source's `output_ordering`
+        // (the runtime row-group reorder is approximate, so we can't
+        // honour the declared ordering anymore), which is exactly what
+        // `EnforceSorting` needs to derive `sort_prefix`. On data that
+        // is already in prefix order the stats-based reorder is mostly
+        // a no-op anyway, so the trade-off is plainly bad.
+        for prefix_len in 1..order.len() {
+            let prefix = order[..prefix_len].to_vec();
+            if eq_properties.ordering_satisfy(prefix.iter().cloned())? {
+                return Ok(SortOrderPushdownResult::Unsupported);
+            }
+        }
+
         // Inexact pushdown. Two independent signals; either is enough
         // to produce an approximate ordering, and they compose when
         // both apply:
@@ -1375,6 +1393,83 @@ mod tests {
             inner_parquet.reverse_row_groups(),
             "request reached via reversed_satisfies (column-not-in-file-schema) \
              must set reverse_row_groups to flip the file's natural order",
+        );
+    }
+
+    /// Regression: when the source's declared ordering is a non-empty
+    /// *proper* prefix of the request, `try_pushdown_sort` must return
+    /// `Unsupported` so that the outer `SortExec` can keep its
+    /// `sort_prefix` annotation and `TopK` can early-terminate within
+    /// each prefix block. Letting the Phase 3 Inexact pipeline fire
+    /// would drop the source's `output_ordering`, destroying the
+    /// information `EnforceSorting` needs to compute `sort_prefix`.
+    #[test]
+    fn try_pushdown_sort_preserves_sort_prefix_when_source_declares_prefix_ordering() {
+        use arrow::compute::SortOptions;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_physical_expr::EquivalenceProperties;
+        use datafusion_physical_expr::expressions::Column;
+        use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]));
+        let source = ParquetSource::new(Arc::clone(&schema));
+
+        // Source declares `[a DESC, b ASC NULLS LAST]` — the same prefix
+        // the SortExec input will see.
+        let mut eq = EquivalenceProperties::new(Arc::clone(&schema));
+        eq.add_ordering(vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                },
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            },
+        ]);
+
+        // Request `[a DESC, b ASC NULLS LAST, c DESC]` — three columns;
+        // source's two-column declaration is a strict prefix.
+        let order = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                },
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                },
+            },
+        ];
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+        assert!(
+            matches!(result, SortOrderPushdownResult::Unsupported),
+            "source ordering [a DESC, b ASC NULLS LAST] is a proper prefix \
+             of the request — `try_pushdown_sort` must return Unsupported so \
+             the SortExec sort_prefix optimisation can fire",
         );
     }
 
