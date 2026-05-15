@@ -59,6 +59,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 - [pow](#pow)
 - [power](#power)
 - [radians](#radians)
+- [rand](#rand)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
@@ -739,6 +740,10 @@ radians(numeric_expression)
 +----------------+
 ```
 
+### `rand`
+
+_Alias of [random](#random)._
+
 ### `random`
 
 Returns a random float value in the range [0, 1).
@@ -758,6 +763,10 @@ random()
 | 0.7389238902938  |
 +------------------+
 ```
+
+#### Aliases
+
+- rand
 
 ### `round`
 
@@ -2573,7 +2582,7 @@ date_part(part, expression)
   - dow (day of the week where Sunday is 0)
   - doy (day of the year)
   - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
-  - isodow (day of the week where Monday is 0)
+  - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
@@ -3284,9 +3293,11 @@ _Alias of [current_date](#current_date)._
 - [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
 - [cosine_distance](#cosine_distance)
+- [dot_product](#dot_product)
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
+- [inner_product](#inner_product)
 - [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
@@ -4561,6 +4572,10 @@ cosine_distance(array1, array2)
 +-----------------------------------------------+
 ```
 
+### `dot_product`
+
+_Alias of [inner_product](#inner_product)._
+
 ### `empty`
 
 Returns 1 for an empty array or 0 for a non-empty array.
@@ -4642,6 +4657,34 @@ generate_series(start, stop[, step])
 | [1, 2, 3]                          |
 +------------------------------------+
 ```
+
+### `inner_product`
+
+Returns the inner product (dot product) of two input arrays of equal length, computed as `sum(array1[i] * array2[i])`. Returns NULL if either array is NULL or contains NULL elements. Returns 0.0 for two empty arrays.
+
+```sql
+inner_product(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
++-------------------------------------------------------+
+| inner_product(List([1.0,2.0,3.0]),List([4.0,5.0,6.0])) |
++-------------------------------------------------------+
+| 32.0                                                  |
++-------------------------------------------------------+
+```
+
+#### Aliases
+
+- dot_product
 
 ### `list_any_match`
 

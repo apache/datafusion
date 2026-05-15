@@ -19,11 +19,14 @@
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, LargeListArray, ListArray},
+    compute::take_arrays,
     datatypes::{DataType, Field, FieldRef},
 };
 use datafusion_common::{
     Result, ScalarValue, exec_err, plan_err,
-    utils::{adjust_offsets_for_slice, list_values, take_function_args},
+    utils::{
+        adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
+    },
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
@@ -203,7 +206,12 @@ impl HigherOrderUDF for ArrayTransform {
 
         // call the transforming lambda
         let transformed_values = lambda
-            .evaluate(&[&values_param])?
+            .evaluate(&[&values_param], |arrays| {
+                // if any column got captured, we need to adjust it to the values arrays,
+                // duplicating values of list with multitple values and removing values of empty lists
+                let indices = list_values_row_number(&list_array)?;
+                Ok(take_arrays(arrays, &indices, None)?)
+            })?
             .into_array(list_values.len())?;
 
         let field = match args.return_field.data_type() {
@@ -284,10 +292,8 @@ mod tests {
     };
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
-        Expr, col,
-        execution_props::ExecutionProps,
-        expr::{HigherOrderFunction, LambdaVariable},
-        lambda, lit,
+        Expr, col, execution_props::ExecutionProps, expr::HigherOrderFunction, lambda,
+        lambda_var, lit,
     };
     use datafusion_physical_expr::create_physical_expr;
 
@@ -319,18 +325,10 @@ mod tests {
         create_physical_expr(
             &Expr::HigherOrderFunction(HigherOrderFunction::new(
                 array_transform,
-                vec![
-                    col("list"),
-                    lambda(
-                        ["v"],
-                        lit(100i32)
-                            / Expr::LambdaVariable(LambdaVariable::new(
-                                "v".to_string(),
-                                Some(Arc::new(Field::new("v", DataType::Int32, true))),
-                            )),
-                    ),
-                ],
-            )),
+                vec![col("list"), lambda(["v"], lit(100i32) / lambda_var("v"))],
+            ))
+            .resolve_lambda_variables(&schema)?
+            .data,
             &schema,
             &ExecutionProps::new(),
         )?

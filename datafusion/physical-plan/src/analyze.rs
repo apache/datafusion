@@ -214,6 +214,7 @@ impl ExecutionPlan for AnalyzeExec {
             while let Some(batch) = input_stream.next().await.transpose()? {
                 total_rows += batch.num_rows();
             }
+            drop(input_stream);
 
             let duration = Instant::now() - start;
             create_output_batch(

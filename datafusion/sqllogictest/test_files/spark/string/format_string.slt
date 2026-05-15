@@ -348,6 +348,10 @@ Char: A    |
 statement error
 SELECT format_string('Char: %5c', true);
 
+## Character with invalid negative codepoint
+statement error
+SELECT format_string('Char: %c', -1);
+
 # ================================
 # Time formatting tests
 # ================================

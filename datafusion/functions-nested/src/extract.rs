@@ -602,14 +602,12 @@ fn combine_input_nulls(
     to_array: &Int64Array,
     stride: Option<&Int64Array>,
 ) -> Option<NullBuffer> {
-    [
+    NullBuffer::union_many([
         array.nulls(),
         from_array.nulls(),
         to_array.nulls(),
         stride.and_then(|s| s.nulls()),
-    ]
-    .into_iter()
-    .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls))
+    ])
 }
 
 fn general_array_slice<O: OffsetSizeTrait>(

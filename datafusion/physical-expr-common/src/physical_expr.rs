@@ -37,6 +37,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr_common::statistics::Distribution;
 
 use itertools::izip;
@@ -161,6 +162,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>;
 
     /// Returns a new PhysicalExpr where all children were replaced by new exprs.
+    ///
+    /// If the implementation returns a [`PhysicalExpr::expression_id`], then
+    /// the identifier should be preserved by the new expression.
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
@@ -247,6 +251,11 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// statistics accordingly. The default implementation simply creates an
     /// unknown output distribution by combining input ranges. This logic loses
     /// distribution information, but is a safe default.
+    #[deprecated(
+        since = "54.0.0",
+        note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+    )]
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         let children_ranges = children
             .iter()
@@ -295,6 +304,11 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// default implementation simply creates an unknown distribution if it can
     /// narrow the range by propagating ranges. This logic loses distribution
     /// information, but is a safe default.
+    #[deprecated(
+        since = "54.0.0",
+        note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+    )]
+    #[expect(deprecated)]
     fn propagate_statistics(
         &self,
         parent: &Distribution,
@@ -443,6 +457,23 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// The default implementation returns [`ExpressionPlacement::KeepInPlace`].
     fn placement(&self) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
+    }
+
+    /// Return a stable, globally-unique identifier for this [`PhysicalExpr`], if it
+    /// has one.
+    ///
+    /// This identifier tracks which expressions which are connected (e.g. `DynamicFilterPhysicalExpr`
+    /// where two expressions may be different but store the same mutable inner state). Tracking
+    /// connected expressions helps preserve referential integrity within plan nodes
+    /// during serialization and deserialization.
+    ///
+    /// This id must be preserved across [`PhysicalExpr::with_new_children`] or any other
+    /// methods which may want to preserve identity.
+    ///
+    /// Default is `None`: the expression has no identity worth preserving across a
+    /// serialization boundary.
+    fn expression_id(&self) -> Option<u64> {
+        None
     }
 }
 

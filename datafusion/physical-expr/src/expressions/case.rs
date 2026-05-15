@@ -19,7 +19,7 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::PhysicalExpr;
-use crate::expressions::{LambdaExpr, LambdaVariable, lit, try_cast};
+use crate::expressions::{LambdaVariable, lit, try_cast};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -33,8 +33,9 @@ use datafusion_common::{
     internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -128,7 +129,8 @@ impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
     fn project(&self) -> Result<ProjectedCaseBody> {
         // Determine the set of columns that are used in all the expressions of the case body.
-        let mut used_column_indices = IndexSet::<usize>::new();
+        // Use an ordered set so lambda variables continue to be positioned after columns
+        let mut used_column_indices = BTreeSet::<usize>::new();
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
                 if let Some(column) = expr.downcast_ref::<Column>() {
@@ -137,9 +139,6 @@ impl CaseBody {
                     expr.downcast_ref::<LambdaVariable>()
                 {
                     used_column_indices.insert(lambda_variable.index());
-                } else if expr.is::<LambdaExpr>() {
-                    //todo: remove this branch when lambda supports column capture
-                    return Ok(TreeNodeRecursion::Jump);
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
@@ -189,9 +188,6 @@ impl CaseBody {
                                 Arc::clone(lambda_variable.field()),
                             ))));
                         }
-                    } else if e.is::<LambdaExpr>() {
-                        //todo: remove this branch when lambda supports column capture
-                        return Ok(Transformed::new(e, false, TreeNodeRecursion::Jump));
                     }
                     Ok(Transformed::no(e))
                 })
@@ -272,13 +268,30 @@ struct ProjectedCaseBody {
 ///     [WHEN ...]
 ///     [ELSE result]
 /// END
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct CaseExpr {
     /// The case expression body
     body: CaseBody,
     /// Evaluation method to use
     eval_method: EvalMethod,
 }
+
+// eval_method is functionally derived from body, so excluding it from
+// Hash/Eq avoids redundantly hashing the expression tree twice. For
+// nested CASE chains this prevents exponential blowup (see #22173).
+impl Hash for CaseExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.body.hash(state);
+    }
+}
+
+impl PartialEq for CaseExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.body == other.body
+    }
+}
+
+impl Eq for CaseExpr {}
 
 impl std::fmt::Display for CaseExpr {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
@@ -1034,8 +1047,15 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if projected.projection.len() < batch.num_columns() {
-            let projected_batch = batch.project(&projected.projection)?;
+        // projected.projection may include indexes of lambda variables not available on this batch
+        let projection = projected
+            .projection
+            .iter()
+            .copied()
+            .filter(|index| *index < batch.num_columns())
+            .collect::<Vec<_>>();
+        if projection.len() < batch.num_columns() {
+            let projected_batch = batch.project(&projection)?;
             projected
                 .body
                 .case_when_with_expr(&projected_batch, &return_type)
@@ -1057,8 +1077,15 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if projected.projection.len() < batch.num_columns() {
-            let projected_batch = batch.project(&projected.projection)?;
+        // projected.projection may include indexes of lambda variables not available on this batch
+        let projection = projected
+            .projection
+            .iter()
+            .copied()
+            .filter(|index| *index < batch.num_columns())
+            .collect::<Vec<_>>();
+        if projection.len() < batch.num_columns() {
+            let projected_batch = batch.project(&projection)?;
             projected
                 .body
                 .case_when_no_expr(&projected_batch, &return_type)
@@ -1175,14 +1202,23 @@ impl CaseExpr {
                     )?))
                 }
             }
-        } else if projected.projection.len() < batch.num_columns() {
-            // The case expressions do not use all the columns of the input batch.
-            // Project first to reduce time spent filtering.
-            let projected_batch = batch.project(&projected.projection)?;
-            projected.body.expr_or_expr(&projected_batch, when_value)
         } else {
-            // All columns are used in the case expressions, so there is no need to project.
-            self.body.expr_or_expr(batch, when_value)
+            // projected.projection may include indexes of lambda variables not available on this batch
+            let projection = projected
+                .projection
+                .iter()
+                .copied()
+                .filter(|index| *index < batch.num_columns())
+                .collect::<Vec<_>>();
+            if projection.len() < batch.num_columns() {
+                // The case expressions do not use all the columns of the input batch.
+                // Project first to reduce time spent filtering.
+                let projected_batch = batch.project(&projection)?;
+                projected.body.expr_or_expr(&projected_batch, when_value)
+            } else {
+                // All columns are used in the case expressions, so there is no need to project.
+                self.body.expr_or_expr(batch, when_value)
+            }
         }
     }
 
@@ -3100,5 +3136,60 @@ mod tests {
             Some(ScalarValue::Int32(Some(else_value))),
             Arc::new(expected_with_else),
         );
+    }
+
+    /// Reproduces https://github.com/apache/datafusion/issues/22173
+    ///
+    /// Nested self-referential CASE chains (common in rewrite-style projections)
+    /// should not cause exponential hashing work during physical planning.
+    #[test]
+    fn nested_self_referential_case_hash_stays_bounded() -> Result<()> {
+        use std::hash::Hasher;
+
+        #[derive(Default)]
+        struct CountingHasher {
+            write_calls: usize,
+            bytes_written: usize,
+        }
+
+        impl Hasher for CountingHasher {
+            fn finish(&self) -> u64 {
+                0
+            }
+
+            fn write(&mut self, bytes: &[u8]) {
+                self.write_calls += 1;
+                self.bytes_written += bytes.len();
+            }
+        }
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("kind", DataType::Utf8, true)]));
+
+        let kind = col("kind", &schema)?;
+        let mut label = Arc::clone(&kind);
+
+        let num_levels = 18;
+        for idx in 0..num_levels {
+            let predicate = Arc::new(BinaryExpr::new(
+                Arc::clone(&kind),
+                Operator::Eq,
+                lit(idx.to_string()),
+            )) as Arc<dyn PhysicalExpr>;
+
+            label = case(None, vec![(predicate, lit("label"))], Some(label))?;
+        }
+
+        let mut hasher = CountingHasher::default();
+        label.hash(&mut hasher);
+
+        assert!(
+            hasher.write_calls < 50_000,
+            "hashing nested CASE expression took {} hasher writes and {} bytes",
+            hasher.write_calls,
+            hasher.bytes_written
+        );
+
+        Ok(())
     }
 }

@@ -2231,6 +2231,74 @@ NULL|(empty)
     }
 
     #[tokio::test]
+    async fn parser_applies_data_dir_replacement_in_load_query_file() {
+        let temp_dir = tempdir().expect("failed to create benchmark test directory");
+        let data_dir = temp_dir.path().join("non_default_data");
+        let csv_dir = data_dir.join("tpch_sf1/csv/generated");
+        fs::create_dir_all(&csv_dir).expect("failed to create generated data directory");
+        fs::write(csv_dir.join("generated.1.csv"), "value\n42\n")
+            .expect("failed to write generated csv file");
+
+        let load_path = write_test_file(
+            &temp_dir,
+            "load_generated_csv.sql",
+            "CREATE EXTERNAL TABLE generated(value INT) STORED AS CSV LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/csv/generated/generated.1.csv' OPTIONS ('format.has_header' 'true');\n",
+        );
+        let template_path = write_test_file(
+            &temp_dir,
+            "load_file_template.benchmark",
+            &format!(
+                "load {}\n\nrun\nSELECT value FROM generated;\n",
+                load_path.display()
+            ),
+        );
+        let benchmark_path = write_test_file(
+            &temp_dir,
+            "load_file_driver.benchmark",
+            &format!(
+                "template {}\nDATA_DIR={}\n",
+                template_path.display(),
+                data_dir.display()
+            ),
+        );
+
+        let ctx = SessionContext::new();
+        let path_string = benchmark_path.to_string_lossy().into_owned();
+        let mut benchmark = SqlBenchmark::new(&ctx, &path_string, "/tmp")
+            .await
+            .expect("benchmark should parse");
+
+        let load_queries = benchmark
+            .queries()
+            .get(&QueryDirective::Load)
+            .expect("load queries");
+        assert_eq!(load_queries.len(), 1);
+        assert!(
+            load_queries.iter().all(|query| !query.contains("${")),
+            "all placeholders should be replaced: {load_queries:?}"
+        );
+        let expected_location = format!(
+            "LOCATION '{}/tpch_sf1/csv/generated/generated.1.csv'",
+            data_dir.display()
+        );
+        assert!(
+            load_queries[0].contains(&expected_location),
+            "all load locations should use the non-default DATA_DIR: {load_queries:?}"
+        );
+
+        benchmark
+            .initialize(&ctx)
+            .await
+            .expect("benchmark should load generated csv file");
+        benchmark
+            .run(&ctx, true)
+            .await
+            .expect("benchmark should read generated csv file");
+
+        assert_eq!(formatted_last_results(&benchmark), vec![vec!["42"]]);
+    }
+
+    #[tokio::test]
     async fn parser_rejects_inline_sql_when_query_file_is_provided() {
         let temp_dir = tempdir().expect("failed to create benchmark test directory");
         let query_path =
