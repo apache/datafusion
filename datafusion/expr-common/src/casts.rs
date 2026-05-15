@@ -319,12 +319,12 @@ fn is_decimal_safe(from: &DataType, to: &DataType) -> bool {
     // full integer range. min_int_digits = number of digits max value uses;
     // we need p - s >= min_int_digits, i.e. p >= min_int_digits + s.
     let min_int_digits = integer_min_decimal_precision(from);
-    #[allow(clippy::collapsible_if)]
-    if min_int_digits > 0 {
-        if let Some((p, s)) = decimal_precision_scale(to) {
-            return p >= min_int_digits + s as u8;
-        }
+    if min_int_digits > 0
+        && let Some((p, s)) = decimal_precision_scale(to)
+    {
+        return p >= min_int_digits + s as u8;
     }
+
     false
 }
 
