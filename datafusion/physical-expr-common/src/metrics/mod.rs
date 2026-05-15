@@ -624,6 +624,61 @@ mod tests {
     }
 
     #[test]
+    fn test_conditional_metric_builder_uses_metric_type_level() {
+        for (enabled_level, metric_type, should_register) in [
+            (MetricType::Summary, MetricType::Summary, true),
+            (MetricType::Summary, MetricType::Dev, false),
+            (MetricType::Summary, MetricType::Internal, false),
+            (MetricType::Dev, MetricType::Summary, true),
+            (MetricType::Dev, MetricType::Dev, true),
+            (MetricType::Dev, MetricType::Internal, false),
+            (MetricType::Internal, MetricType::Summary, true),
+            (MetricType::Internal, MetricType::Dev, true),
+            (MetricType::Internal, MetricType::Internal, true),
+        ] {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let metric = MetricBuilder::new(&metrics)
+                .with_type(metric_type)
+                .if_enabled(enabled_level)
+                .subset_time("conditional_time", 0);
+
+            assert_eq!(
+                metric.is_some(),
+                should_register,
+                "enabled_level={enabled_level:?} metric_type={metric_type:?}"
+            );
+            assert_eq!(
+                metrics
+                    .clone_inner()
+                    .sum_by_name("conditional_time")
+                    .is_some(),
+                should_register,
+                "enabled_level={enabled_level:?} metric_type={metric_type:?}"
+            );
+        }
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let label = Label::new("label", "value");
+        let metric = MetricBuilder::new(&metrics)
+            .with_type(MetricType::Internal)
+            .with_category(MetricCategory::Timing)
+            .if_enabled(MetricType::Internal)
+            .with_label(label.clone())
+            .subset_time("internal_time", 0);
+
+        assert!(metric.is_some());
+
+        let metrics = metrics.clone_inner();
+        let metric = metrics
+            .iter()
+            .find(|metric| metric.value().name() == "internal_time")
+            .expect("registered internal metric");
+        assert_eq!(metric.metric_type(), MetricType::Internal);
+        assert_eq!(metric.metric_category(), Some(MetricCategory::Timing));
+        assert_eq!(metric.labels(), &[label]);
+    }
+
+    #[test]
     fn test_elapsed_compute() {
         let metrics = ExecutionPlanMetricsSet::new();
         assert!(metrics.clone_inner().elapsed_compute().is_none());

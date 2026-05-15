@@ -236,6 +236,25 @@ async fn collect_plan_with_categories(
         .to_string()
 }
 
+async fn collect_plan_after_set(
+    ctx: &SessionContext,
+    level: &str,
+    sql_str: &str,
+) -> String {
+    ctx.sql(&format!("SET datafusion.explain.analyze_level = '{level}'"))
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let dataframe = ctx.sql(sql_str).await.unwrap();
+    let batches = dataframe.collect().await.unwrap();
+    arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string()
+}
+
 async fn collect_plan(sql_str: &str, level: MetricType) -> String {
     let ctx = SessionContext::new();
     collect_plan_with_context(sql_str, &ctx, level).await
@@ -257,6 +276,10 @@ async fn explain_analyze_level() {
         (MetricType::Dev, "output_rows", true),
         (MetricType::Dev, "output_bytes", true),
         (MetricType::Dev, "output_batches", true),
+        (MetricType::Internal, "spill_count", true),
+        (MetricType::Internal, "output_rows", true),
+        (MetricType::Internal, "output_bytes", true),
+        (MetricType::Internal, "output_batches", true),
     ] {
         let plan = collect_plan(sql, level).await;
         assert_eq!(
@@ -265,6 +288,33 @@ async fn explain_analyze_level() {
             "plan for level {level:?} unexpected content: {plan}"
         );
     }
+}
+
+#[tokio::test]
+async fn explain_analyze_internal_repartition_metrics() {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new()
+            .with_target_partitions(4)
+            .with_batch_size(4096),
+    );
+    register_aggregate_csv_by_sql(&ctx).await;
+
+    let sql = "EXPLAIN ANALYZE \
+        SELECT c1, count(*) \
+        FROM aggregate_test_100 \
+        GROUP BY c1";
+
+    let dev_plan = collect_plan_after_set(&ctx, "dev", sql).await;
+    assert_contains!(&dev_plan, "RepartitionExec");
+    assert_not_contains!(&dev_plan, "hash_compute_time");
+    assert_not_contains!(&dev_plan, "route_time");
+    assert_not_contains!(&dev_plan, "batch_build_time");
+
+    let internal_plan = collect_plan_after_set(&ctx, "internal", sql).await;
+    assert_contains!(&internal_plan, "RepartitionExec");
+    assert_contains!(&internal_plan, "hash_compute_time");
+    assert_contains!(&internal_plan, "route_time");
+    assert_contains!(&internal_plan, "batch_build_time");
 }
 
 #[tokio::test]
@@ -284,6 +334,8 @@ async fn explain_analyze_level_datasource_parquet() {
         (MetricType::Summary, "page_index_eval_time", false),
         (MetricType::Dev, "metadata_load_time", true),
         (MetricType::Dev, "page_index_eval_time", true),
+        (MetricType::Internal, "metadata_load_time", true),
+        (MetricType::Internal, "page_index_eval_time", true),
     ] {
         let plan = collect_plan_with_context(&sql, &ctx, level).await;
 

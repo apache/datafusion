@@ -1385,6 +1385,7 @@ config_namespace! {
         /// Verbosity level for "EXPLAIN ANALYZE". Default is "dev"
         /// "summary" shows common metrics for high-level insights.
         /// "dev" provides deep operator-level introspection for developers.
+        /// "internal" provides low-level kernel debugging metrics.
         pub analyze_level: MetricType, default = MetricType::Dev
 
         /// Which metric categories to include in "EXPLAIN ANALYZE" output.

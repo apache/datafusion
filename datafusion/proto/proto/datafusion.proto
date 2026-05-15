@@ -1230,6 +1230,9 @@ message AnalyzeExecNode {
   // Empty means "plan only". Absent (has_metric_categories=false) means "all".
   bool has_metric_categories = 5;
   repeated string metric_categories = 6;
+  // Metric type filters for EXPLAIN ANALYZE output.
+  // Empty preserves the legacy default of summary and dev metrics.
+  repeated string metric_types = 7;
 }
 
 message CrossJoinExecNode {

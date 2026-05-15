@@ -210,7 +210,8 @@ impl ConfigField for ExplainFormat {
 ///
 /// The `datafusion.explain.analyze_level` configuration controls which
 /// type is shown:
-/// - `"dev"` (the default): all metrics are shown.
+/// - `"dev"` (the default): summary and developer-facing metrics are shown.
+/// - `"internal"`: all metrics are shown, including kernel debugging metrics.
 /// - `"summary"`: only metrics tagged as `Summary` are shown.
 ///
 /// This is orthogonal to [`MetricCategory`], which filters by *what kind*
@@ -228,18 +229,29 @@ pub enum MetricType {
     Summary,
     /// For deep operator-level introspection for developers
     Dev,
+    /// For low-level kernel debugging and DataFusion development
+    Internal,
 }
 
 impl MetricType {
     /// Returns the set of metric types that should be shown for this level.
     ///
-    /// `Dev` is a superset of `Summary`: when the user selects
-    /// `analyze_level = 'dev'`, both `Summary` and `Dev` metrics are shown.
+    /// `Dev` is a superset of `Summary`, and `Internal` is a superset of
+    /// both: when the user selects `analyze_level = 'internal'`, `Summary`,
+    /// `Dev`, and `Internal` metrics are shown.
     pub fn included_types(self) -> Vec<MetricType> {
         match self {
             MetricType::Summary => vec![MetricType::Summary],
             MetricType::Dev => vec![MetricType::Summary, MetricType::Dev],
+            MetricType::Internal => {
+                vec![MetricType::Summary, MetricType::Dev, MetricType::Internal]
+            }
         }
+    }
+
+    /// Returns true if `self` includes metrics tagged as `metric_type`.
+    pub fn includes(self, metric_type: MetricType) -> bool {
+        self.included_types().contains(&metric_type)
     }
 }
 
@@ -250,8 +262,9 @@ impl FromStr for MetricType {
         match s.trim().to_lowercase().as_str() {
             "summary" => Ok(Self::Summary),
             "dev" => Ok(Self::Dev),
+            "internal" => Ok(Self::Internal),
             other => Err(DataFusionError::Configuration(format!(
-                "Invalid explain analyze level. Expected 'summary' or 'dev'. Got '{other}'"
+                "Invalid explain analyze level. Expected 'summary', 'dev', or 'internal'. Got '{other}'"
             ))),
         }
     }
@@ -262,6 +275,7 @@ impl Display for MetricType {
         match self {
             Self::Summary => write!(f, "summary"),
             Self::Dev => write!(f, "dev"),
+            Self::Internal => write!(f, "internal"),
         }
     }
 }

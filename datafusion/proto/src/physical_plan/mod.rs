@@ -1821,10 +1821,19 @@ impl protobuf::PhysicalPlanNode {
         } else {
             None
         };
+        let metric_types = if analyze.metric_types.is_empty() {
+            vec![MetricType::Summary, MetricType::Dev]
+        } else {
+            analyze
+                .metric_types
+                .iter()
+                .map(|s| s.parse::<MetricType>())
+                .collect::<Result<Vec<_>>>()?
+        };
         Ok(Arc::new(AnalyzeExec::new(
             analyze.verbose,
             analyze.show_statistics,
-            vec![MetricType::Summary, MetricType::Dev],
+            metric_types,
             metric_categories,
             input,
             Arc::new(convert_required!(analyze.schema)?),
@@ -2319,6 +2328,11 @@ impl protobuf::PhysicalPlanNode {
                     schema: Some(exec.schema().as_ref().try_into()?),
                     has_metric_categories,
                     metric_categories,
+                    metric_types: exec
+                        .metric_types()
+                        .iter()
+                        .map(|metric_type| metric_type.to_string())
+                        .collect(),
                 },
             ))),
         })

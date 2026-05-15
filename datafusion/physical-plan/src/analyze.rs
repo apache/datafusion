@@ -94,6 +94,11 @@ impl AnalyzeExec {
         self.metric_categories.as_deref()
     }
 
+    /// Access to metric_types
+    pub fn metric_types(&self) -> &[MetricType] {
+        &self.metric_types
+    }
+
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -187,6 +192,8 @@ impl ExecutionPlan for AnalyzeExec {
         let num_input_partitions = self.input.output_partitioning().partition_count();
         let mut builder =
             RecordBatchReceiverStream::builder(self.schema(), num_input_partitions);
+        let metric_types = self.metric_types.clone();
+        let context = task_context_with_metric_level(context, &metric_types);
 
         for input_partition in 0..num_input_partitions {
             builder.run_input(
@@ -202,7 +209,6 @@ impl ExecutionPlan for AnalyzeExec {
         let captured_schema = Arc::clone(&self.schema);
         let verbose = self.verbose;
         let show_statistics = self.show_statistics;
-        let metric_types = self.metric_types.clone();
         let metric_categories = self.metric_categories.clone();
 
         // future that gathers the results from all the tasks in the
@@ -292,11 +298,48 @@ fn create_output_batch(
     .map_err(DataFusionError::from)
 }
 
+fn task_context_with_metric_level(
+    context: Arc<TaskContext>,
+    metric_types: &[MetricType],
+) -> Arc<TaskContext> {
+    let analyze_level = analyze_level_from_metric_types(metric_types);
+    if context.session_config().options().explain.analyze_level == analyze_level {
+        return context;
+    }
+
+    let mut session_config = context.session_config().clone();
+    session_config.options_mut().explain.analyze_level = analyze_level;
+
+    Arc::new(TaskContext::new(
+        context.task_id(),
+        context.session_id(),
+        session_config,
+        context.scalar_functions().clone(),
+        context.higher_order_functions().clone(),
+        context.aggregate_functions().clone(),
+        context.window_functions().clone(),
+        context.runtime_env(),
+    ))
+}
+
+fn analyze_level_from_metric_types(metric_types: &[MetricType]) -> MetricType {
+    if metric_types.contains(&MetricType::Internal) {
+        MetricType::Internal
+    } else if metric_types.contains(&MetricType::Dev) {
+        MetricType::Dev
+    } else {
+        MetricType::Summary
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         collect,
+        empty::EmptyExec,
+        expressions::col,
+        repartition::RepartitionExec,
         test::{
             assert_is_pending,
             exec::{BlockingExec, assert_strong_count_converges_to_zero},
@@ -304,6 +347,7 @@ mod tests {
     };
 
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::util::pretty::pretty_format_batches;
     use futures::FutureExt;
 
     #[tokio::test]
@@ -329,6 +373,41 @@ mod tests {
         assert_is_pending(&mut fut);
         drop(fut);
         assert_strong_count_converges_to_zero(refs).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn analyze_exec_metric_types_drive_child_metric_registration() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let repartition = Arc::new(RepartitionExec::try_new(
+            input,
+            Partitioning::Hash(vec![col("i", &schema)?], 2),
+        )?);
+
+        let analyze_schema = Arc::new(Schema::new(vec![
+            Field::new("plan_type", DataType::Utf8, false),
+            Field::new("plan", DataType::Utf8, false),
+        ]));
+        let analyze_exec = Arc::new(AnalyzeExec::new(
+            false,
+            false,
+            vec![MetricType::Summary, MetricType::Dev, MetricType::Internal],
+            None,
+            repartition,
+            analyze_schema,
+        ));
+
+        // TaskContext defaults to analyze_level = dev. The AnalyzeExec setting
+        // must still drive internal metric registration in the analyzed child.
+        let batches = collect(analyze_exec, Arc::new(TaskContext::default())).await?;
+        let formatted = pretty_format_batches(&batches)?.to_string();
+
+        assert!(
+            formatted.contains("hash_compute_time"),
+            "internal repartition metrics should be registered from AnalyzeExec metric_types: {formatted}"
+        );
 
         Ok(())
     }

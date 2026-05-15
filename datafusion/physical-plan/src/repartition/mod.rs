@@ -239,7 +239,7 @@ impl RepartitionExecState {
         &mut self,
         input: &Arc<dyn ExecutionPlan>,
         metrics: &ExecutionPlanMetricsSet,
-        output_partitions: usize,
+        partitioning: &Partitioning,
         ctx: &Arc<TaskContext>,
     ) -> Result<()> {
         if !matches!(self, RepartitionExecState::NotInitialized) {
@@ -247,10 +247,12 @@ impl RepartitionExecState {
         }
 
         let num_input_partitions = input.output_partitioning().partition_count();
+        let analyze_level = ctx.session_config().options().explain.analyze_level;
         let mut streams_and_metrics = Vec::with_capacity(num_input_partitions);
 
         for i in 0..num_input_partitions {
-            let metrics = RepartitionMetrics::new(i, output_partitions, metrics);
+            let metrics =
+                RepartitionMetrics::new(i, partitioning, metrics, analyze_level);
 
             let timer = metrics.fetch_time.timer();
             let stream = input.execute(i, Arc::clone(ctx))?;
@@ -278,7 +280,7 @@ impl RepartitionExecState {
                 self.ensure_input_streams_initialized(
                     input,
                     metrics,
-                    partitioning.partition_count(),
+                    partitioning,
                     context,
                 )?;
                 let RepartitionExecState::InputStreamsInitialized(value) = self else {
@@ -418,7 +420,7 @@ impl RepartitionExecState {
 /// A utility that can be used to partition batches based on [`Partitioning`]
 pub struct BatchPartitioner {
     state: BatchPartitionerState,
-    timer: metrics::Time,
+    metrics: BatchPartitionerMetrics,
 }
 
 enum BatchPartitionerState {
@@ -432,6 +434,29 @@ enum BatchPartitionerState {
         num_partitions: usize,
         next_idx: usize,
     },
+}
+
+#[derive(Debug, Clone)]
+struct BatchPartitionerMetrics {
+    /// End-to-end time spent repartitioning a batch.
+    total_time: metrics::Time,
+    /// Time spent evaluating partitioning expressions and computing hashes.
+    hash_compute_time: Option<metrics::Time>,
+    /// Time spent routing row indices to output partitions.
+    route_time: Option<metrics::Time>,
+    /// Time spent materializing partitioned output batches from routed indices.
+    batch_build_time: Option<metrics::Time>,
+}
+
+impl BatchPartitionerMetrics {
+    fn new(total_time: metrics::Time) -> Self {
+        Self {
+            total_time,
+            hash_compute_time: None,
+            route_time: None,
+            batch_build_time: None,
+        }
+    }
 }
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
@@ -523,10 +548,10 @@ impl BatchPartitioner {
     ///
     /// # Errors
     /// Returns an error if `num_partitions` is zero.
-    pub fn new_hash_partitioner(
+    fn new_hash_partitioner_with_metrics(
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
-        timer: metrics::Time,
+        metrics: BatchPartitionerMetrics,
     ) -> Result<Self> {
         if num_partitions == 0 {
             return internal_err!("Hash repartition requires at least one partition");
@@ -539,8 +564,58 @@ impl BatchPartitioner {
                 hash_buffer: vec![],
                 indices: vec![vec![]; num_partitions],
             },
-            timer,
+            metrics,
         })
+    }
+
+    /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
+    ///
+    /// # Parameters
+    /// - `exprs`: Expressions used to compute the hash for each input row.
+    /// - `num_partitions`: Total number of output partitions.
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    ///
+    /// The partition count is fixed for the lifetime of the partitioner, so this
+    /// precomputes a strength-reduced reducer for `hash % num_partitions`.
+    ///
+    /// # Errors
+    /// Returns an error if `num_partitions` is zero.
+    pub fn new_hash_partitioner(
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        num_partitions: usize,
+        timer: metrics::Time,
+    ) -> Result<Self> {
+        Self::new_hash_partitioner_with_metrics(
+            exprs,
+            num_partitions,
+            BatchPartitionerMetrics::new(timer),
+        )
+    }
+
+    /// Create a new [`BatchPartitioner`] for round-robin repartitioning.
+    ///
+    /// # Parameters
+    /// - `num_partitions`: Total number of output partitions.
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    /// - `input_partition`: Index of the current input partition.
+    /// - `num_input_partitions`: Total number of input partitions.
+    ///
+    /// # Notes
+    /// The starting output partition is derived from the input partition
+    /// to avoid skew when multiple input partitions are used.
+    fn new_round_robin_partitioner_with_metrics(
+        num_partitions: usize,
+        metrics: BatchPartitionerMetrics,
+        input_partition: usize,
+        num_input_partitions: usize,
+    ) -> Self {
+        Self {
+            state: BatchPartitionerState::RoundRobin {
+                num_partitions,
+                next_idx: (input_partition * num_partitions) / num_input_partitions,
+            },
+            metrics,
+        }
     }
 
     /// Create a new [`BatchPartitioner`] for round-robin repartitioning.
@@ -560,13 +635,12 @@ impl BatchPartitioner {
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Self {
-        Self {
-            state: BatchPartitionerState::RoundRobin {
-                num_partitions,
-                next_idx: (input_partition * num_partitions) / num_input_partitions,
-            },
-            timer,
-        }
+        Self::new_round_robin_partitioner_with_metrics(
+            num_partitions,
+            BatchPartitionerMetrics::new(timer),
+            input_partition,
+            num_input_partitions,
+        )
     }
     /// Create a new [`BatchPartitioner`] based on the provided [`Partitioning`] scheme.
     ///
@@ -649,6 +723,7 @@ impl BatchPartitioner {
                     num_partitions,
                     next_idx,
                 } => {
+                    let _total_time_scope = self.metrics.total_time.timer();
                     let idx = *next_idx;
                     *next_idx = (*next_idx + 1) % *num_partitions;
                     Box::new(std::iter::once(Ok((idx, batch))))
@@ -659,30 +734,34 @@ impl BatchPartitioner {
                     hash_buffer,
                     indices,
                 } => {
-                    // Tracking time required for distributing indexes across output partitions
-                    let timer = self.timer.timer();
+                    let _total_time_scope = self.metrics.total_time.timer();
 
-                    let arrays =
-                        evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
+                    {
+                        let _hash_compute_time_scope = self
+                            .metrics
+                            .hash_compute_time
+                            .as_ref()
+                            .map(|time| time.timer());
 
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
+                        let arrays =
+                            evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
 
-                    create_hashes(
-                        &arrays,
-                        REPARTITION_RANDOM_STATE.random_state(),
-                        hash_buffer,
-                    )?;
+                        hash_buffer.clear();
+                        hash_buffer.resize(batch.num_rows(), 0);
 
-                    indices.iter_mut().for_each(|v| v.clear());
+                        create_hashes(
+                            &arrays,
+                            REPARTITION_RANDOM_STATE.random_state(),
+                            hash_buffer,
+                        )?;
+                    }
 
-                    partition_reducer.partition_indices(hash_buffer, indices);
-
-                    // Finished building index-arrays for output partitions
-                    timer.done();
-
-                    // Borrowing partitioner timer to prevent moving `self` to closure
-                    let partitioner_timer = &self.timer;
+                    {
+                        let _route_time_scope =
+                            self.metrics.route_time.as_ref().map(|time| time.timer());
+                        indices.iter_mut().for_each(|v| v.clear());
+                        partition_reducer.partition_indices(hash_buffer, indices);
+                    }
 
                     let mut partitioned_batches = vec![];
                     for (partition, p_indices) in indices.iter_mut().enumerate() {
@@ -691,12 +770,14 @@ impl BatchPartitioner {
                             let indices_array: PrimitiveArray<UInt32Type> =
                                 taken_indices.into();
 
-                            // Tracking time required for repartitioned batches construction
-                            let _timer = partitioner_timer.timer();
-
-                            // Produce batches based on indices
-                            let columns =
-                                take_arrays(batch.columns(), &indices_array, None)?;
+                            let columns = {
+                                let _batch_build_time_scope = self
+                                    .metrics
+                                    .batch_build_time
+                                    .as_ref()
+                                    .map(|time| time.timer());
+                                take_arrays(batch.columns(), &indices_array, None)?
+                            };
 
                             let mut options = RecordBatchOptions::new();
                             options = options.with_row_count(Some(indices_array.len()));
@@ -862,18 +943,32 @@ struct RepartitionMetrics {
     fetch_time: metrics::Time,
     /// Repartitioning elapsed time in nanos
     repartition_time: metrics::Time,
+    /// Time in nanos spent evaluating partitioning expressions and computing hashes.
+    hash_compute_time: Option<metrics::Time>,
+    /// Time in nanos spent routing row indices to output partitions.
+    route_time: Option<metrics::Time>,
+    /// Time in nanos spent constructing output batches.
+    batch_build_time: Option<metrics::Time>,
     /// Time in nanos for sending resulting batches to channels.
     ///
     /// One metric per output partition.
     send_time: Vec<metrics::Time>,
+    /// Time in nanos spent waiting for channel capacity.
+    channel_wait_time: Vec<metrics::Time>,
+    /// Time in nanos spent writing spilled batches.
+    spill_write_time: Vec<metrics::Time>,
 }
 
 impl RepartitionMetrics {
     pub fn new(
         input_partition: usize,
-        num_output_partitions: usize,
+        partitioning: &Partitioning,
         metrics: &ExecutionPlanMetricsSet,
+        analyze_level: metrics::MetricType,
     ) -> Self {
+        let num_output_partitions = partitioning.partition_count();
+        let register_hash_metrics = matches!(partitioning, Partitioning::Hash(_, _));
+
         // Time in nanos to execute child operator and fetch batches
         let fetch_time =
             MetricBuilder::new(metrics).subset_time("fetch_time", input_partition);
@@ -881,6 +976,36 @@ impl RepartitionMetrics {
         // Time in nanos to perform repartitioning
         let repartition_time =
             MetricBuilder::new(metrics).subset_time("repartition_time", input_partition);
+
+        // Time in nanos to evaluate partition expressions and compute row hashes
+        let hash_compute_time = register_hash_metrics
+            .then(|| {
+                MetricBuilder::new(metrics)
+                    .with_type(metrics::MetricType::Internal)
+                    .if_enabled(analyze_level)
+                    .subset_time("hash_compute_time", input_partition)
+            })
+            .flatten();
+
+        // Time in nanos to route row indices to output partitions
+        let route_time = register_hash_metrics
+            .then(|| {
+                MetricBuilder::new(metrics)
+                    .with_type(metrics::MetricType::Internal)
+                    .if_enabled(analyze_level)
+                    .subset_time("route_time", input_partition)
+            })
+            .flatten();
+
+        // Time in nanos to build output batches from routed row indices
+        let batch_build_time = register_hash_metrics
+            .then(|| {
+                MetricBuilder::new(metrics)
+                    .with_type(metrics::MetricType::Internal)
+                    .if_enabled(analyze_level)
+                    .subset_time("batch_build_time", input_partition)
+            })
+            .flatten();
 
         // Time in nanos for sending resulting batches to channels
         let send_time = (0..num_output_partitions)
@@ -893,10 +1018,50 @@ impl RepartitionMetrics {
             })
             .collect();
 
+        // Time in nanos waiting for output channel capacity
+        let channel_wait_time = (0..num_output_partitions)
+            .filter_map(|output_partition| {
+                let label =
+                    metrics::Label::new("outputPartition", output_partition.to_string());
+                MetricBuilder::new(metrics)
+                    .with_type(metrics::MetricType::Internal)
+                    .if_enabled(analyze_level)
+                    .with_label(label)
+                    .subset_time("channel_wait_time", input_partition)
+            })
+            .collect();
+
+        // Time in nanos writing spilled batches to spill storage
+        let spill_write_time = (0..num_output_partitions)
+            .filter_map(|output_partition| {
+                let label =
+                    metrics::Label::new("outputPartition", output_partition.to_string());
+                MetricBuilder::new(metrics)
+                    .with_type(metrics::MetricType::Internal)
+                    .if_enabled(analyze_level)
+                    .with_label(label)
+                    .subset_time("spill_write_time", input_partition)
+            })
+            .collect();
+
         Self {
             fetch_time,
             repartition_time,
+            hash_compute_time,
+            route_time,
+            batch_build_time,
             send_time,
+            channel_wait_time,
+            spill_write_time,
+        }
+    }
+
+    fn batch_partitioner_metrics(&self) -> BatchPartitionerMetrics {
+        BatchPartitionerMetrics {
+            total_time: self.repartition_time.clone(),
+            hash_compute_time: self.hash_compute_time.clone(),
+            route_time: self.route_time.clone(),
+            batch_build_time: self.batch_build_time.clone(),
         }
     }
 }
@@ -1070,7 +1235,7 @@ impl ExecutionPlan for RepartitionExec {
             state.ensure_input_streams_initialized(
                 &input,
                 &metrics,
-                partitioning.partition_count(),
+                &partitioning,
                 &context,
             )?;
         }
@@ -1431,18 +1596,19 @@ impl RepartitionExec {
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<()> {
+        let batch_partitioner_metrics = metrics.batch_partitioner_metrics();
         let mut partitioner = match &partitioning {
             Partitioning::Hash(exprs, num_partitions) => {
-                BatchPartitioner::new_hash_partitioner(
+                BatchPartitioner::new_hash_partitioner_with_metrics(
                     exprs.clone(),
                     *num_partitions,
-                    metrics.repartition_time.clone(),
+                    batch_partitioner_metrics.clone(),
                 )?
             }
             Partitioning::RoundRobinBatch(num_partitions) => {
-                BatchPartitioner::new_round_robin_partitioner(
+                BatchPartitioner::new_round_robin_partitioner_with_metrics(
                     *num_partitions,
-                    metrics.repartition_time.clone(),
+                    batch_partitioner_metrics,
                     input_partition,
                     num_input_partitions,
                 )
@@ -1487,13 +1653,25 @@ impl RepartitionExec {
                             Err(_) => {
                                 // We're memory limited - spill to SpillPool
                                 // SpillPool handles file handle reuse and rotation
+                                let _spill_write_time_scope = metrics
+                                    .spill_write_time
+                                    .get(partition)
+                                    .map(|time| time.timer());
                                 channel.spill_writer.push_batch(&batch)?;
                                 // Send marker indicating batch was spilled
                                 (RepartitionBatch::Spilled, false)
                             }
                         };
 
-                    if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
+                    let send_err = {
+                        let _channel_wait_time_scope = metrics
+                            .channel_wait_time
+                            .get(partition)
+                            .map(|time| time.timer());
+                        channel.sender.send(Some(Ok(batch_to_send))).await.is_err()
+                    };
+
+                    if send_err {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         // Only shrink memory if it was a memory batch
                         if is_memory_batch {
@@ -2041,6 +2219,121 @@ mod tests {
         assert_eq!(total_rows, 8 * 50 * 3);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn repartition_internal_metrics_require_internal_level() -> Result<()> {
+        let schema = test_schema();
+        for level in [metrics::MetricType::Summary, metrics::MetricType::Dev] {
+            let metrics = repartition_metric_names(
+                level,
+                Partitioning::Hash(vec![col("c0", &schema)?], 2),
+            )
+            .await?;
+            assert!(
+                !metrics.contains("hash_compute_time"),
+                "{level:?} metrics should not include repartition internals: {metrics:?}"
+            );
+            assert!(
+                !metrics.contains("route_time"),
+                "{level:?} metrics should not include repartition internals: {metrics:?}"
+            );
+            assert!(
+                !metrics.contains("channel_wait_time"),
+                "{level:?} metrics should not include repartition internals: {metrics:?}"
+            );
+            assert!(
+                !metrics.contains("spill_write_time"),
+                "{level:?} metrics should not include repartition internals: {metrics:?}"
+            );
+            assert!(
+                !metrics.contains("sent_rows"),
+                "removed repartition counters should not be registered: {metrics:?}"
+            );
+        }
+
+        let internal_metrics = repartition_metric_names(
+            metrics::MetricType::Internal,
+            Partitioning::Hash(vec![col("c0", &schema)?], 2),
+        )
+        .await?;
+        assert!(
+            internal_metrics.contains("hash_compute_time"),
+            "internal metrics should include hash_compute_time: {internal_metrics:?}"
+        );
+        assert!(
+            internal_metrics.contains("route_time"),
+            "internal metrics should include route_time: {internal_metrics:?}"
+        );
+        assert!(
+            internal_metrics.contains("batch_build_time"),
+            "internal metrics should include batch_build_time: {internal_metrics:?}"
+        );
+        assert!(
+            internal_metrics.contains("channel_wait_time"),
+            "internal metrics should include channel_wait_time: {internal_metrics:?}"
+        );
+        assert!(
+            internal_metrics.contains("spill_write_time"),
+            "internal metrics should include spill_write_time: {internal_metrics:?}"
+        );
+        assert!(
+            !internal_metrics.contains("partitioned_rows")
+                && !internal_metrics.contains("partitioned_batches")
+                && !internal_metrics.contains("sent_rows")
+                && !internal_metrics.contains("sent_batches"),
+            "removed repartition counters should not be registered: {internal_metrics:?}"
+        );
+
+        let round_robin_metrics = repartition_metric_names(
+            metrics::MetricType::Internal,
+            Partitioning::RoundRobinBatch(2),
+        )
+        .await?;
+        assert!(
+            !round_robin_metrics.contains("hash_compute_time")
+                && !round_robin_metrics.contains("route_time")
+                && !round_robin_metrics.contains("batch_build_time"),
+            "round-robin repartition should not register hash-only metrics: {round_robin_metrics:?}"
+        );
+        assert!(
+            round_robin_metrics.contains("channel_wait_time")
+                && round_robin_metrics.contains("spill_write_time"),
+            "round-robin repartition should still register non-hash internals: {round_robin_metrics:?}"
+        );
+
+        Ok(())
+    }
+
+    async fn repartition_metric_names(
+        analyze_level: metrics::MetricType,
+        partitioning: Partitioning,
+    ) -> Result<HashSet<String>> {
+        let schema = test_schema();
+        let partition = create_vec_batches(4);
+        let partitions = vec![partition];
+
+        let exec = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
+
+        let mut session_config = SessionConfig::new();
+        session_config.options_mut().explain.analyze_level = analyze_level;
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                result?;
+            }
+        }
+
+        Ok(exec
+            .metrics()
+            .expect("repartition metrics")
+            .iter()
+            .map(|metric| metric.value().name().to_owned())
+            .collect())
     }
 
     #[tokio::test]
