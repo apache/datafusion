@@ -195,6 +195,11 @@ fn is_supported_comparison_unwrap_cast(
             DataType::Timestamp(from_unit, from_tz),
             DataType::Timestamp(to_unit, to_tz),
         ) => {
+            // TODO: Cross-timezone timestamp comparison could be supported
+            // if `cast_between_timestamp` handled the timezone offset. Currently
+            // it only adjusts the precision unit (e.g. ms→ns), so the literal
+            // round-trip check would falsely pass for same i64 values that
+            // represent different instants in different timezones.
             from_tz == to_tz
                 && timestamp_unit_scale(from_unit) <= timestamp_unit_scale(to_unit)
         }
