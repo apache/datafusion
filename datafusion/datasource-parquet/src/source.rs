@@ -794,6 +794,18 @@ impl FileSource for ParquetSource {
                     write!(f, ", reverse_row_groups=true")?;
                 }
 
+                // In `EXPLAIN VERBOSE` / `EXPLAIN ANALYZE`, surface the inexact
+                // sort-pushdown hint so readers can see that the source has
+                // been asked to reorder row groups by min/max statistics at
+                // runtime (Inexact ordering — the surrounding `SortExec` still
+                // does the final ordering, but the source's read order will
+                // already be close).
+                if matches!(t, DisplayFormatType::Verbose)
+                    && let Some(sort_order) = &self.sort_order_for_reorder
+                {
+                    write!(f, ", sort_order_for_reorder=[{sort_order}]")?;
+                }
+
                 // Try to build the pruning predicates.
                 // These are only generated here because it's useful to have *some*
                 // idea of what pushdown is happening when viewing plans.
@@ -1400,6 +1412,59 @@ mod tests {
         assert!(
             matches!(result, SortOrderPushdownResult::Unsupported),
             "column not in file schema must yield Unsupported",
+        );
+    }
+
+    /// `sort_order_for_reorder` is hidden from `EXPLAIN` (Default) to keep
+    /// compact output uncluttered. `EXPLAIN VERBOSE` / `EXPLAIN ANALYZE`
+    /// (Verbose display) surface it so readers can see the inexact
+    /// sort-pushdown hint the source picked up.
+    #[test]
+    fn sort_order_for_reorder_shown_only_in_verbose_display() {
+        use pushdown_sort_helpers::*;
+
+        // `std::fmt::Formatter` can't be constructed outside core fmt
+        // machinery, so we drive `fmt_extra` through a Display adapter
+        // and read the rendered string back with `format!`.
+        struct DisplayHelper<'a> {
+            source: &'a ParquetSource,
+            mode: DisplayFormatType,
+        }
+        impl std::fmt::Display for DisplayHelper<'_> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                self.source.fmt_extra(self.mode, f)
+            }
+        }
+
+        let schema = schema_with_a_int();
+        let mut source = ParquetSource::new(Arc::clone(&schema));
+        // Same shape `try_pushdown_sort` would produce on an ASC
+        // column-in-schema request.
+        let order = LexOrdering::new(vec![sort_expr_on(&schema, "a", false)]).unwrap();
+        source.sort_order_for_reorder = Some(order);
+
+        let default_out = format!(
+            "{}",
+            DisplayHelper {
+                source: &source,
+                mode: DisplayFormatType::Default,
+            },
+        );
+        assert!(
+            !default_out.contains("sort_order_for_reorder"),
+            "Default display must not surface sort_order_for_reorder, got: {default_out}",
+        );
+
+        let verbose_out = format!(
+            "{}",
+            DisplayHelper {
+                source: &source,
+                mode: DisplayFormatType::Verbose,
+            },
+        );
+        assert!(
+            verbose_out.contains("sort_order_for_reorder=[a@0 ASC]"),
+            "Verbose display must surface sort_order_for_reorder, got: {verbose_out}",
         );
     }
 }
