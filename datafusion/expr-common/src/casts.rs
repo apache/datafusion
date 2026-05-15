@@ -118,7 +118,7 @@ impl CastComparisonRewrite {
 
 /// Tries to rewrite the literal so a cast can be removed from the expression.
 ///
-/// This is intentionally closed-by-default: only certain casts explicitly allowed are eligible. 
+/// This is intentionally closed-by-default: only certain casts explicitly allowed are eligible.
 /// Literal round-tripping
 /// is required so rewrites such as `CAST(ts_ms AS Timestamp(ns)) = lit_ns` are
 /// only applied when `lit_ns` lies exactly on a millisecond boundary.
@@ -192,10 +192,7 @@ fn is_supported_comparison_unwrap_cast(
     op: Operator,
 ) -> bool {
     match (from_type, to_type) {
-        (
-            DataType::Timestamp(from_unit, _),
-            DataType::Timestamp(to_unit, _),
-        ) => {
+        (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _)) => {
             // Timestamp values are stored as UTC epoch internally, so the
             // timezone label is just for display — comparing raw i64 values
             // across different timezones is equivalent to comparing the same
