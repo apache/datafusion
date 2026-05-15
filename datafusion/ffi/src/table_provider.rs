@@ -135,12 +135,10 @@ pub struct FFI_TableProvider {
         insert_op: FFI_InsertOp,
     ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>>,
 
-    /// Snapshot the provider's table-level statistics. The inner
-    /// [`FFI_Option::None`] corresponds to [`TableProvider::statistics`]
-    /// returning `None`; `Some(bytes)` is a prost-encoded
-    /// `datafusion_proto_common::Statistics`.
-    pub statistics:
-        unsafe extern "C" fn(provider: &Self) -> FFI_Result<FFI_Option<SVec<u8>>>,
+    /// Snapshot the provider's table-level statistics. [`FFI_Option::None`]
+    /// corresponds to [`TableProvider::statistics`] returning `None`;
+    /// `Some(bytes)` is a prost-encoded `datafusion_proto_common::Statistics`.
+    pub statistics: unsafe extern "C" fn(provider: &Self) -> FFI_Option<SVec<u8>>,
 
     pub logical_codec: FFI_LogicalExtensionCodec,
 
@@ -190,12 +188,12 @@ unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedS
 
 unsafe extern "C" fn statistics_fn_wrapper(
     provider: &FFI_TableProvider,
-) -> FFI_Result<FFI_Option<SVec<u8>>> {
+) -> FFI_Option<SVec<u8>> {
     let serialized: Option<SVec<u8>> = provider
         .inner()
         .statistics()
         .map(|s| serialize_statistics(&s).into_iter().collect());
-    FFI_Result::Ok(serialized.into())
+    serialized.into()
 }
 
 unsafe extern "C" fn table_type_fn_wrapper(

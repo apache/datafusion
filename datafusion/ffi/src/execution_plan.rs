@@ -712,7 +712,7 @@ pub mod tests {
     fn test_ffi_execution_plan_partition_statistics_round_trip() -> Result<()> {
         use datafusion_common::stats::Precision;
         use datafusion_common::{ColumnStatistics, ScalarValue};
-        
+
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, true),
         ]));
