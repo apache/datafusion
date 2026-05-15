@@ -70,6 +70,18 @@ impl ParquetScanOptions {
         config.execution.parquet.pushdown_filters = self.pushdown_filters;
         config.execution.parquet.reorder_filters = self.reorder_filters;
         config.execution.parquet.enable_page_index = self.enable_page_index;
+        // When pushdown is requested in a test, force the adaptive
+        // selectivity tracker to promote every filter to row-level
+        // immediately. The tracker's production default
+        // (min_bytes_per_sec = INFINITY) sends every filter to
+        // post-scan until enough bytes-saved-per-sec evidence
+        // accumulates, which is the right behaviour at scale but
+        // keeps the row-level path / predicate cache / row-group
+        // pruning unexercised inside short, deterministic test
+        // queries.
+        if self.pushdown_filters {
+            config.execution.parquet.filter_pushdown_min_bytes_per_sec = 0.0;
+        }
         config.into()
     }
 }

@@ -34,6 +34,7 @@ use datafusion_expr::WindowFrame;
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
+use datafusion_physical_expr_common::physical_expr::OptionalFilterPhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, DynamicFilterPhysicalExpr, InListExpr,
@@ -566,6 +567,17 @@ pub fn serialize_physical_expr_with_converter(
                     generation: inner.generation,
                     inner_expr: Some(inner_expr),
                     is_complete: inner.is_complete,
+                }),
+            )),
+        })
+    } else if let Some(opt) = expr.downcast_ref::<OptionalFilterPhysicalExpr>() {
+        let inner_expr =
+            Box::new(proto_converter.physical_expr_to_proto(&opt.inner(), codec)?);
+        Ok(protobuf::PhysicalExprNode {
+            expr_id,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::OptionalFilter(
+                Box::new(protobuf::PhysicalOptionalFilterNode {
+                    inner: Some(inner_expr),
                 }),
             )),
         })

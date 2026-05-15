@@ -65,6 +65,7 @@
 //! - `WHERE s['value'] > 5` — pushed down (accesses a primitive leaf)
 //! - `WHERE s IS NOT NULL`  — not pushed down (references the whole struct)
 
+use log::debug;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -81,10 +82,10 @@ use parquet::schema::types::SchemaDescriptor;
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
-use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
 
@@ -119,18 +120,49 @@ pub(crate) struct DatafusionArrowPredicate {
     rows_matched: metrics::Count,
     /// how long was spent evaluating this predicate
     time: metrics::Time,
+    /// Stable id used by the adaptive selectivity tracker to key per-filter
+    /// statistics across files.
+    filter_id: crate::selectivity::FilterId,
+    /// Shared handle to the adaptive selectivity tracker. Per-batch stats
+    /// are reported through `update()` after each `evaluate()` call.
+    tracker: Arc<crate::selectivity::SelectivityTracker>,
+    /// Estimated *late-materialization savings* per row for this filter:
+    /// the compressed bytes of projection columns that the filter does
+    /// NOT reference, amortised across the file's rows. When a pruned
+    /// row is dropped by the filter, these are the bytes the reader
+    /// avoids decoding further along the pipeline — the quantity the
+    /// adaptive tracker needs in order to rank filters by "cost avoided
+    /// per unit evaluation time". This MUST match the metric the
+    /// post-scan path reports in `apply_post_scan_filters_with_stats`
+    /// (see `opener.rs::post_scan_other_bytes_per_row`); if the two
+    /// paths disagreed, the tracker would rank row-filter and post-scan
+    /// candidates on incomparable axes and wrongly promote or demote them.
+    other_projected_bytes_per_row: f64,
+    /// Mid-stream "drop" flag, shared with the
+    /// [`crate::selectivity::SelectivityTracker`]. The tracker flips this
+    /// when an `OptionalFilterPhysicalExpr` proves CPU-dominated and
+    /// ineffective; once set, [`Self::evaluate`] returns an all-true mask
+    /// without invoking `physical_expr`. Filter columns are still decoded
+    /// (the parquet decoder cannot be reconfigured mid-scan), so this only
+    /// reclaims CPU, not I/O. Flagged only for filters known to be
+    /// optional, so correctness is preserved by the join itself.
+    skip_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DatafusionArrowPredicate {
-    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`
+    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`.
     pub fn try_new(
         candidate: FilterCandidate,
         rows_pruned: metrics::Count,
         rows_matched: metrics::Count,
         time: metrics::Time,
+        filter_id: crate::selectivity::FilterId,
+        tracker: Arc<crate::selectivity::SelectivityTracker>,
+        other_projected_bytes_per_row: f64,
     ) -> Result<Self> {
         let physical_expr =
             reassign_expr_columns(candidate.expr, &candidate.read_plan.projected_schema)?;
+        let skip_flag = tracker.skip_flag(filter_id);
 
         Ok(Self {
             physical_expr,
@@ -138,6 +170,10 @@ impl DatafusionArrowPredicate {
             rows_pruned,
             rows_matched,
             time,
+            filter_id,
+            tracker,
+            other_projected_bytes_per_row,
+            skip_flag,
         })
     }
 }
@@ -148,10 +184,27 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
+        // Mid-stream drop: the tracker has decided this optional filter is
+        // pulling its weight no longer. Return an all-true mask to bypass
+        // expression evaluation entirely. We still bump `rows_matched` so
+        // the per-predicate count stays consistent with input rows; the
+        // tracker is intentionally NOT updated for skipped batches because
+        // (a) we have nothing meaningful to report and (b) flooding it
+        // with zero-cost samples would mask the underlying effectiveness
+        // signal if the flag is ever cleared.
+        if self.skip_flag.load(std::sync::atomic::Ordering::Acquire) {
+            let rows_in_batch = batch.num_rows();
+            self.rows_matched.add(rows_in_batch);
+            return Ok(BooleanArray::from(vec![true; rows_in_batch]));
+        }
+
         // scoped timer updates on drop
         let mut timer = self.time.timer();
+        let start_nanos = datafusion_common::instant::Instant::now();
 
-        self.physical_expr
+        let rows_in_batch = batch.num_rows();
+        let result = self
+            .physical_expr
             .evaluate(&batch)
             .and_then(|v| v.into_array(batch.num_rows()))
             .and_then(|array| {
@@ -161,13 +214,42 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 self.rows_pruned.add(num_pruned);
                 self.rows_matched.add(num_matched);
                 timer.stop();
-                Ok(bool_arr)
+                Ok((bool_arr, num_matched))
             })
             .map_err(|e| {
                 ArrowError::ComputeError(format!(
                     "Error evaluating filter predicate: {e:?}"
                 ))
-            })
+            });
+
+        match result {
+            Ok((bool_arr, num_matched)) => {
+                let eval_nanos = start_nanos.elapsed().as_nanos() as u64;
+                // Scatter-aware skippable bytes: same units as the
+                // post-scan path (see `apply_post_scan_filters_with_stats`).
+                // At row-level this is a conservative *measurement* of
+                // what the decoder skipped — it counts only fully-empty
+                // sub-windows and ignores the additional savings from
+                // within-window RowSelection narrowing, which biases
+                // the demote-or-not decision in the safe direction.
+                let total_other_bytes = (rows_in_batch as f64
+                    * self.other_projected_bytes_per_row)
+                    .round() as u64;
+                let skippable_bytes = crate::selectivity::count_skippable_bytes(
+                    &bool_arr,
+                    total_other_bytes,
+                );
+                self.tracker.update(
+                    self.filter_id,
+                    num_matched as u64,
+                    rows_in_batch as u64,
+                    eval_nanos,
+                    skippable_bytes,
+                );
+                Ok(bool_arr)
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -991,95 +1073,167 @@ fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usiz
     Ok(total_size)
 }
 
-/// Build a [`RowFilter`] from the given predicate expression if possible.
+/// A list of filters that could not be represented as `ArrowPredicate`s and
+/// must be applied post-scan instead. Each carries its stable filter id so
+/// the adaptive selectivity tracker can keep per-filter stats for them.
+pub type UnbuildableFilters = Vec<(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)>;
+
+/// Build row-level filters for the row-filter partition chosen by the
+/// adaptive selectivity tracker.
+///
+/// Each input filter keeps its stable filter id so the resulting
+/// `ArrowPredicate`s can report per-batch statistics back to the tracker on
+/// each `evaluate()` call, driving future promote/demote decisions.
+///
+/// Filters that cannot be represented as an `ArrowPredicate` (e.g. whole
+/// struct references or other unsupported patterns) are returned in the
+/// second element of the returned tuple so the opener can apply them
+/// post-scan instead of silently dropping them.
 ///
 /// # Arguments
-/// * `expr` - The filter predicate, already adapted to reference columns in `file_schema`
-/// * `file_schema` - The Arrow schema of the parquet file (the result of converting
-///   the parquet schema to Arrow, potentially with type coercions applied)
-/// * `metadata` - Parquet file metadata used for cost estimation
-/// * `reorder_predicates` - If true, reorder predicates to minimize I/O
-/// * `file_metrics` - Metrics for tracking filter performance
+/// * `filters` — The candidate filters paired with their stable ids. Assumed
+///   to already be adapted to reference columns in `file_schema`.
+/// * `file_schema` — The Arrow schema of the parquet file.
+/// * `metadata` — Parquet file metadata used for cost estimation.
+/// * `projection_compressed_bytes` — Total compressed bytes the user
+///   projection reads across the file. Used to derive the per-filter
+///   *late-materialization savings* reported to the tracker, so that
+///   row-filter and post-scan candidates are ranked on a single common
+///   axis.
+/// * `tracker` — Shared adaptive selectivity tracker.
+/// * `file_metrics` — Metrics for tracking filter performance.
 ///
 /// # Returns
-/// * `Ok(Some(row_filter))` if the expression can be used as a RowFilter
-/// * `Ok(None)` if the expression cannot be used as a RowFilter
-/// * `Err(e)` if an error occurs while building the filter
-///
-/// Note: The returned `RowFilter` may not contain all conjuncts from the original
-/// expression. Conjuncts that cannot be evaluated as an `ArrowPredicate` are ignored.
-///
-/// For example, if the expression is `a = 1 AND b = 2 AND c = 3` and `b = 2`
-/// cannot be evaluated for some reason, the returned `RowFilter` will contain
-/// only `a = 1` and `c = 3`.
+/// * `Ok((Some(row_filter), unbuildable))` when at least one filter could be
+///   represented as a row-level predicate.
+/// * `Ok((None, unbuildable))` when no filters could be represented as row
+///   filters; all are returned in `unbuildable`.
+/// * `Err(e)` if an error occurs while building the filter.
 pub fn build_row_filter(
-    expr: &Arc<dyn PhysicalExpr>,
+    filters: &[(crate::selectivity::FilterId, Arc<dyn PhysicalExpr>)],
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
-    reorder_predicates: bool,
+    projection_compressed_bytes: usize,
+    tracker: &Arc<crate::selectivity::SelectivityTracker>,
     file_metrics: &ParquetFileMetrics,
-) -> Result<Option<RowFilter>> {
+) -> Result<(Option<RowFilter>, UnbuildableFilters)> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
     let time = &file_metrics.row_pushdown_eval_time;
 
-    // Split into conjuncts:
-    // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
-    let predicates = split_conjunction(expr);
+    // Total rows in the file, used to amortise compressed-byte totals
+    // over rows. We floor at 1 so empty files don't divide by zero; any
+    // effectiveness contribution in that degenerate case is irrelevant
+    // because there are no batches to track anyway.
+    let total_rows: i64 = metadata.row_groups().iter().map(|rg| rg.num_rows()).sum();
+    let total_rows_f = total_rows.max(1) as f64;
 
-    // Determine which conjuncts can be evaluated as ArrowPredicates, if any
-    let mut candidates: Vec<FilterCandidate> = predicates
-        .into_iter()
-        .map(|expr| {
-            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
-                .build(metadata)
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-
-    // no candidates
-    if candidates.is_empty() {
-        return Ok(None);
+    // Try to build a candidate for each filter independently. Any filter
+    // that can't be represented as an `ArrowPredicate`, for *any* reason
+    // (the candidate builder returned `None`, the builder returned an
+    // `Err`, or the `DatafusionArrowPredicate` constructor failed below),
+    // falls through into `unbuildable` so the caller can apply it
+    // post-scan. Silently dropping any conjunct here would relax the
+    // user's predicate and return wrong results — see the
+    // `post_scan_conjuncts` fallthrough in
+    // `ParquetOpener::build_stream`.
+    let mut buildable: Vec<(crate::selectivity::FilterId, FilterCandidate)> =
+        Vec::with_capacity(filters.len());
+    let mut unbuildable: UnbuildableFilters = Vec::new();
+    for (id, expr) in filters {
+        match FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
+            .build(metadata)
+        {
+            Ok(Some(c)) => buildable.push((*id, c)),
+            Ok(None) => unbuildable.push((*id, Arc::clone(expr))),
+            Err(e) => {
+                debug!(
+                    "failed to build row-filter candidate for {id}: {e}; falling through to post-scan"
+                );
+                unbuildable.push((*id, Arc::clone(expr)));
+            }
+        }
     }
 
-    if reorder_predicates {
-        candidates.sort_unstable_by_key(|c| c.required_bytes);
+    if buildable.is_empty() {
+        return Ok((None, unbuildable));
     }
 
     // To avoid double-counting metrics when multiple predicates are used:
-    // - All predicates should count rows_pruned (cumulative pruned rows)
-    // - Only the last predicate should count rows_matched (final result)
-    // This ensures: rows_matched + rows_pruned = total rows processed
-    let total_candidates = candidates.len();
+    // - All predicates share the cumulative rows_pruned counter
+    // - Only the last predicate writes to rows_matched (final pass count)
+    // This preserves the invariant: rows_matched + rows_pruned = total rows.
+    let total_candidates = buildable.len();
 
-    candidates
-        .into_iter()
-        .enumerate()
-        .map(|(idx, candidate)| {
-            let is_last = idx == total_candidates - 1;
+    let mut predicates: Vec<Box<dyn ArrowPredicate>> =
+        Vec::with_capacity(total_candidates);
+    for (idx, (filter_id, candidate)) in buildable.into_iter().enumerate() {
+        let is_last = idx == total_candidates - 1;
+        let predicate_rows_pruned = rows_pruned.clone();
+        let predicate_rows_matched = if is_last {
+            rows_matched.clone()
+        } else {
+            metrics::Count::new()
+        };
+        // Late-materialization savings: bytes of the *non-filter* portion
+        // of the projection, per row. When the filter prunes a row, the
+        // decoder avoids decoding these bytes further downstream — that
+        // is the quantity the tracker needs as `batch_bytes` so its
+        // effectiveness metric (bytes-saved / eval-time) ranks filters
+        // by actual savings rather than by their own read cost. Match the
+        // post-scan path's formula in
+        // `opener.rs::post_scan_other_bytes_per_row`.
+        let other_projected_bytes_per_row =
+            projection_compressed_bytes.saturating_sub(candidate.required_bytes) as f64
+                / total_rows_f;
+        // Remember the original expression before we move `candidate` into
+        // `try_new`, so that a failed predicate construction can fall back
+        // into `unbuildable` rather than being silently dropped.
+        let original_expr = Arc::clone(&candidate.expr);
+        match DatafusionArrowPredicate::try_new(
+            candidate,
+            predicate_rows_pruned,
+            predicate_rows_matched,
+            time.clone(),
+            filter_id,
+            Arc::clone(tracker),
+            other_projected_bytes_per_row,
+        ) {
+            Ok(pred) => predicates.push(Box::new(pred) as _),
+            Err(e) => {
+                debug!(
+                    "failed to construct ArrowPredicate for filter {filter_id}: {e}; \
+                     falling through to post-scan"
+                );
+                unbuildable.push((filter_id, original_expr));
+            }
+        }
+    }
 
-            // All predicates share the pruned counter (cumulative)
-            let predicate_rows_pruned = rows_pruned.clone();
+    if predicates.is_empty() {
+        Ok((None, unbuildable))
+    } else {
+        Ok((Some(RowFilter::new(predicates)), unbuildable))
+    }
+}
 
-            // Only the last predicate tracks matched rows (final result)
-            let predicate_rows_matched = if is_last {
-                rows_matched.clone()
-            } else {
-                metrics::Count::new()
-            };
-
-            DatafusionArrowPredicate::try_new(
-                candidate,
-                predicate_rows_pruned,
-                predicate_rows_matched,
-                time.clone(),
-            )
-            .map(|pred| Box::new(pred) as _)
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(|filters| Some(RowFilter::new(filters)))
+/// Estimate the total on-disk (compressed) byte cost of reading the given
+/// leaf column indices across every row group in the file. Used by the
+/// adaptive [`crate::selectivity::SelectivityTracker`] as a cheap proxy for
+/// filter evaluation cost before runtime stats are available.
+pub(crate) fn total_compressed_bytes(
+    column_indices: &[usize],
+    metadata: &ParquetMetaData,
+) -> usize {
+    let mut total: i64 = 0;
+    for rg in metadata.row_groups() {
+        for &idx in column_indices {
+            if let Some(col) = rg.columns().get(idx) {
+                total += col.compressed_size();
+            }
+        }
+    }
+    total.max(0) as usize
 }
 
 #[cfg(test)]
@@ -1183,11 +1337,15 @@ mod test {
             .expect("building candidate")
             .expect("candidate expected");
 
+        let test_tracker = Arc::new(crate::selectivity::SelectivityTracker::new());
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
             Count::new(),
             Count::new(),
             Time::new(),
+            0,
+            Arc::clone(&test_tracker),
+            0.0,
         )
         .expect("creating filter predicate");
 
@@ -1222,11 +1380,15 @@ mod test {
             .expect("building candidate")
             .expect("candidate expected");
 
+        let test_tracker = Arc::new(crate::selectivity::SelectivityTracker::new());
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
             Count::new(),
             Count::new(),
             Time::new(),
+            0,
+            Arc::clone(&test_tracker),
+            0.0,
         )
         .expect("creating filter predicate");
 
@@ -1371,10 +1533,18 @@ mod test {
         let file_metrics =
             ParquetFileMetrics::new(0, &format!("{func_name}.parquet"), &metrics);
 
-        let row_filter =
-            build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
-                .expect("building row filter")
-                .expect("row filter should exist");
+        let tracker = Arc::new(crate::selectivity::SelectivityTracker::new());
+        let filters = vec![(0usize, expr)];
+        let (row_filter, _unbuildable) = build_row_filter(
+            &filters,
+            &file_schema,
+            &metadata,
+            0,
+            &tracker,
+            &file_metrics,
+        )
+        .expect("building row filter");
+        let row_filter = row_filter.expect("row filter should exist");
 
         let reader = parquet_reader_builder
             .with_row_filter(row_filter)
@@ -1949,10 +2119,18 @@ mod test {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics = ParquetFileMetrics::new(0, "struct_e2e.parquet", &metrics);
 
-        let row_filter =
-            build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
-                .expect("building row filter")
-                .expect("row filter should exist");
+        let tracker = Arc::new(crate::selectivity::SelectivityTracker::new());
+        let filters = vec![(0usize, expr)];
+        let (row_filter, _unbuildable) = build_row_filter(
+            &filters,
+            &file_schema,
+            &metadata,
+            0,
+            &tracker,
+            &file_metrics,
+        )
+        .expect("building row filter");
+        let row_filter = row_filter.expect("row filter should exist");
 
         let reader = parquet_reader_builder
             .with_row_filter(row_filter)

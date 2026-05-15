@@ -16972,6 +16972,9 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::DynamicFilter(v) => {
                     struct_ser.serialize_field("dynamicFilter", v)?;
                 }
+                physical_expr_node::ExprType::OptionalFilter(v) => {
+                    struct_ser.serialize_field("optionalFilter", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -17022,6 +17025,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "scalarSubquery",
             "dynamic_filter",
             "dynamicFilter",
+            "optional_filter",
+            "optionalFilter",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17048,6 +17053,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             HashExpr,
             ScalarSubquery,
             DynamicFilter,
+            OptionalFilter,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17091,6 +17097,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "hashExpr" | "hash_expr" => Ok(GeneratedField::HashExpr),
                             "scalarSubquery" | "scalar_subquery" => Ok(GeneratedField::ScalarSubquery),
                             "dynamicFilter" | "dynamic_filter" => Ok(GeneratedField::DynamicFilter),
+                            "optionalFilter" | "optional_filter" => Ok(GeneratedField::OptionalFilter),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17267,6 +17274,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("dynamicFilter"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::DynamicFilter)
+;
+                        }
+                        GeneratedField::OptionalFilter => {
+                            if expr_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("optionalFilter"));
+                            }
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::OptionalFilter)
 ;
                         }
                     }
@@ -18378,6 +18392,97 @@ impl<'de> serde::Deserialize<'de> for PhysicalNot {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalNot", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PhysicalOptionalFilterNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.inner.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalOptionalFilterNode", len)?;
+        if let Some(v) = self.inner.as_ref() {
+            struct_ser.serialize_field("inner", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalOptionalFilterNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "inner",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Inner,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "inner" => Ok(GeneratedField::Inner),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalOptionalFilterNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalOptionalFilterNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalOptionalFilterNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut inner__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Inner => {
+                            if inner__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inner"));
+                            }
+                            inner__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(PhysicalOptionalFilterNode {
+                    inner: inner__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalOptionalFilterNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalPlanNode {
