@@ -92,6 +92,16 @@ pub async fn json_shredding() -> Result<()> {
     // Set up query execution
     let mut cfg = SessionConfig::new();
     cfg.options_mut().execution.parquet.pushdown_filters = true;
+    // Force every filter to row-level so the example's
+    // `pushdown_rows_pruned=1` assertion is deterministic. The default
+    // adaptive scheduler keeps small-file filters on the post-scan path
+    // (via the byte-ratio heuristic), where `pushdown_rows_pruned` stays
+    // 0; setting `filter_pushdown_min_bytes_per_sec = 0` disables that
+    // heuristic.
+    cfg.options_mut()
+        .execution
+        .parquet
+        .filter_pushdown_min_bytes_per_sec = 0.0;
     let ctx = SessionContext::new_with_config(cfg);
     ctx.runtime_env().register_object_store(
         ObjectStoreUrl::parse("memory://")?.as_ref(),

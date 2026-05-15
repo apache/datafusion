@@ -2952,14 +2952,24 @@ async fn test_discover_dynamic_filters_via_expressions_api() {
     use datafusion_common::JoinType;
     use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+    use datafusion_physical_expr_common::physical_expr::OptionalFilterPhysicalExpr;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     fn count_dynamic_filters(plan: &Arc<dyn ExecutionPlan>) -> usize {
         let mut count = 0;
 
-        // Check expressions from this node using apply_expressions
+        // Check expressions from this node using apply_expressions. The hash
+        // join wraps the pushed-down dynamic filter in
+        // `OptionalFilterPhysicalExpr`, so peek inside that wrapper too.
         let _ = plan.apply_expressions(&mut |expr| {
-            if let Some(_df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+            if expr.downcast_ref::<DynamicFilterPhysicalExpr>().is_some() {
+                count += 1;
+            } else if let Some(opt) = expr.downcast_ref::<OptionalFilterPhysicalExpr>()
+                && opt
+                    .inner()
+                    .downcast_ref::<DynamicFilterPhysicalExpr>()
+                    .is_some()
+            {
                 count += 1;
             }
             Ok(TreeNodeRecursion::Continue)

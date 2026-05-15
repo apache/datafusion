@@ -431,28 +431,53 @@ impl RowGroupAccessPlanFilter {
     ///
     /// Updates this set with row groups that should not be scanned.
     /// `row_group_bloom_filters[idx]` contains the bloom filters for the
-    /// parquet row group at index `idx`.
+    /// parquet row group at index `idx`. Surfaces per-conjunct
+    /// bloom-filter pruning stats aggregated across row groups,
+    /// populated when the predicate was built via
+    /// `PruningPredicate::try_new_tagged_conjuncts`. Empty `Vec` on the
+    /// untagged path.
     ///
     /// # Panics
     /// if `row_group_bloom_filters` does not have the same number of row groups as this set
-    pub(crate) fn prune_by_bloom_filters(
+    pub(crate) fn prune_by_bloom_filters_with_per_conjunct_stats(
         &mut self,
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
         row_group_bloom_filters: &[BloomFilterStatistics],
-    ) {
+    ) -> Vec<datafusion_pruning::PerConjunctPruneStats> {
         // scoped timer updates on drop
         let _timer_guard = metrics.bloom_filter_eval_time.timer();
 
         assert_eq!(row_group_bloom_filters.len(), self.access_plan.len());
+
+        // Per-conjunct accumulators. Indexed by conjunct position in
+        // the predicate's `sub_predicates` order.
+        let mut tags: Vec<Option<usize>> = Vec::new();
+        let mut seen: Vec<usize> = Vec::new();
+        let mut pruned: Vec<usize> = Vec::new();
+
         for (idx, stats) in row_group_bloom_filters.iter().enumerate() {
             if !self.access_plan.should_scan(idx) {
                 continue;
             }
 
             // Can this group be pruned?
-            let prune_group = match predicate.prune(stats) {
-                Ok(values) => !values[0],
+            let prune_group = match predicate.prune_per_conjunct(stats) {
+                Ok((values, per_conjunct)) => {
+                    // Initialize tags/accumulators on first row group.
+                    if tags.is_empty() && !per_conjunct.is_empty() {
+                        tags = per_conjunct.iter().map(|s| s.tag).collect();
+                        seen = vec![0; per_conjunct.len()];
+                        pruned = vec![0; per_conjunct.len()];
+                    }
+                    for (i, sub) in per_conjunct.iter().enumerate() {
+                        if i < seen.len() {
+                            seen[i] += sub.containers_seen;
+                            pruned[i] += sub.containers_pruned;
+                        }
+                    }
+                    !values[0]
+                }
                 Err(e) => {
                     log::debug!(
                         "Error evaluating row group predicate on bloom filter: {e}"
@@ -469,6 +494,15 @@ impl RowGroupAccessPlanFilter {
                 metrics.row_groups_pruned_bloom_filter.add_matched(1);
             }
         }
+
+        tags.into_iter()
+            .zip(seen.into_iter().zip(pruned))
+            .map(|(tag, (s, p))| datafusion_pruning::PerConjunctPruneStats {
+                tag,
+                containers_seen: s,
+                containers_pruned: p,
+            })
+            .collect()
     }
 }
 
@@ -1941,7 +1975,7 @@ mod tests {
             }
             row_group_bloom_filters[idx] = BloomFilterStatistics { column_sbbf };
         }
-        pruned_row_groups.prune_by_bloom_filters(
+        pruned_row_groups.prune_by_bloom_filters_with_per_conjunct_stats(
             pruning_predicate,
             &file_metrics,
             &row_group_bloom_filters,

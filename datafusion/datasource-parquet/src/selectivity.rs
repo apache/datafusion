@@ -66,8 +66,6 @@ pub(crate) const SKIP_WINDOW_ROWS: usize = 8192;
 ///   an additional uncounted bonus. So at row-level this is a *lower
 ///   bound* of real savings, which is the safe direction for the
 ///   demote-or-not decision.
-// Consumed by the adaptive parquet scan, added later in this stack.
-#[expect(dead_code)]
 pub(crate) fn count_skippable_bytes(
     bool_arr: &BooleanArray,
     total_other_bytes: u64,
@@ -638,8 +636,6 @@ impl SelectivityTracker {
     /// decides the filter has stopped pulling its weight. The post-scan
     /// path uses [`Self::is_filter_skipped`] instead — it does not need a
     /// long-lived handle.
-    // Consumed by the adaptive parquet scan, added later in this stack.
-    #[expect(dead_code)]
     pub(crate) fn skip_flag(&self, id: FilterId) -> Arc<AtomicBool> {
         if let Some(existing) = self.skip_flags.read().get(&id) {
             return Arc::clone(existing);
@@ -656,8 +652,6 @@ impl SelectivityTracker {
     ///
     /// Cheap: a single `RwLock::read` plus an atomic load. Called from the
     /// post-scan filter loop in `apply_post_scan_filters_with_stats`.
-    // Consumed by the adaptive parquet scan, added later in this stack.
-    #[expect(dead_code)]
     pub(crate) fn is_filter_skipped(&self, id: FilterId) -> bool {
         self.skip_flags
             .read()
