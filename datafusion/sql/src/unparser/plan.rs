@@ -434,6 +434,7 @@ impl Unparser<'_> {
                     name: Ident::with_quote('"', &flatten_alias_name),
                     columns: vec![],
                     explicit: true,
+                    at: None,
                 }));
 
                 if !select.already_projected() {
@@ -1208,6 +1209,7 @@ impl Unparser<'_> {
                             name: Ident::with_quote('"', &alias),
                             columns: vec![],
                             explicit: true,
+                            at: None,
                         }));
                     }
                     relation.flatten(flatten_relation);
@@ -1447,10 +1449,10 @@ impl Unparser<'_> {
 
     fn collect_flatten_aliases(plan: &LogicalPlan, select: &mut SelectBuilder) {
         match plan {
-            LogicalPlan::SubqueryAlias(alias) => {
-                if Self::contains_unnest(alias.input.as_ref()) {
-                    select.add_flatten_table_alias(alias.alias.table().to_string());
-                }
+            LogicalPlan::SubqueryAlias(alias)
+                if Self::contains_unnest(alias.input.as_ref()) =>
+            {
+                select.add_flatten_table_alias(alias.alias.table().to_string());
             }
             LogicalPlan::Join(join) => {
                 Self::collect_flatten_aliases(&join.left, select);
@@ -1902,6 +1904,7 @@ impl Unparser<'_> {
             name: self.new_ident_quoted_if_needs(alias),
             columns,
             explicit: true,
+            at: None,
         }
     }
 

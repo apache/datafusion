@@ -413,7 +413,7 @@ impl PhysicalGroupBy {
     fn group_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = Vec::with_capacity(self.num_group_exprs());
         for ((expr, name), group_expr_nullable) in
-            self.expr.iter().zip(self.exprs_nullable().into_iter())
+            self.expr.iter().zip(self.exprs_nullable())
         {
             fields.push(
                 Field::new(
