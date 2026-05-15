@@ -59,35 +59,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      # `origin` may point at a fork (when a contributor runs this locally) or
-      # at a stale ref. Fetch the base branch from the PR's upstream repo into
-      # a dedicated `apache/<base>` ref so the baseline is unambiguous and the
-      # same ref name works locally (`git remote add apache ...`) and in CI.
-      - name: Fetch base branch
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          REPO: ${{ github.repository }}
-        run: git fetch "https://github.com/${REPO}.git" "${BASE_REF}:refs/remotes/apache/${BASE_REF}"
-
-      - name: Determine changed crates
-        id: changed_crates
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          PACKAGES=$(ci/scripts/changed_crates.sh changed-crates "apache/${BASE_REF}")
-          echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
-          echo "Changed crates: $PACKAGES"
-
       - name: Setup semver check
-        if: steps.changed_crates.outputs.packages != ''
+        id: semver_setup
         uses: ./.github/actions/setup-semver-check
+        with:
+          base_ref: ${{ github.base_ref }}
+          repository: ${{ github.repository }}
 
       - name: Run cargo-semver-checks against PR base branch
         id: check_semver
-        if: steps.changed_crates.outputs.packages != ''
+        if: steps.semver_setup.outputs.packages != ''
         env:
           BASE_REF: ${{ github.base_ref }}
-          PACKAGES: ${{ steps.changed_crates.outputs.packages }}
+          PACKAGES: ${{ steps.semver_setup.outputs.packages }}
         run: |
           set +e
           # `tee` lets cargo's output stream live into the Actions log
@@ -143,11 +127,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch base branch
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          REPO: ${{ github.repository }}
-        run: git fetch "https://github.com/${REPO}.git" "${BASE_REF}:refs/remotes/apache/${BASE_REF}"
+      - name: Setup semver check
+        id: semver_setup
+        uses: ./.github/actions/setup-semver-check
+        with:
+          base_ref: ${{ github.base_ref }}
+          repository: ${{ github.repository }}
 
       - name: Determine latest stable release tag
         id: latest_release
@@ -157,25 +142,12 @@ jobs:
           echo "tag=$LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "Latest stable release tag: $LATEST_RELEASE_TAG"
 
-      - name: Determine changed crates
-        id: changed_crates
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          PACKAGES=$(ci/scripts/changed_crates.sh changed-crates "apache/${BASE_REF}")
-          echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
-          echo "Changed crates: $PACKAGES"
-
-      - name: Setup semver check
-        if: steps.changed_crates.outputs.packages != ''
-        uses: ./.github/actions/setup-semver-check
-
       - name: Run cargo-semver-checks against latest stable release
         id: check_semver
-        if: steps.changed_crates.outputs.packages != ''
+        if: steps.semver_setup.outputs.packages != ''
         env:
           LATEST_RELEASE_TAG: ${{ steps.latest_release.outputs.tag }}
-          PACKAGES: ${{ steps.changed_crates.outputs.packages }}
+          PACKAGES: ${{ steps.semver_setup.outputs.packages }}
         run: |
           set +e
           ci/scripts/changed_crates.sh semver-check "$LATEST_RELEASE_TAG" $PACKAGES \

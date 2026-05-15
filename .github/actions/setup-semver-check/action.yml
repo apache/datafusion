@@ -16,20 +16,54 @@
 # under the License.
 
 name: Setup semver check
-description: Install tools required by cargo-semver-checks for changed crates.
+description: Fetch PR base, determine changed crates, and install tools required by cargo-semver-checks.
+inputs:
+  base_ref:
+    description: Pull request base branch ref.
+    required: true
+  repository:
+    description: Repository to fetch the base branch from.
+    required: true
+outputs:
+  packages:
+    description: Space-separated changed publishable crate names.
+    value: ${{ steps.changed_crates.outputs.packages }}
 runs:
   using: composite
   steps:
+    # `origin` may point at a fork (when a contributor runs this locally) or
+    # at a stale ref. Fetch the base branch from the PR's upstream repo into
+    # a dedicated `apache/<base>` ref so the baseline is unambiguous and the
+    # same ref name works locally (`git remote add apache ...`) and in CI.
+    - name: Fetch base branch
+      shell: bash
+      env:
+        BASE_REF: ${{ inputs.base_ref }}
+        REPO: ${{ inputs.repository }}
+      run: git fetch "https://github.com/${REPO}.git" "${BASE_REF}:refs/remotes/apache/${BASE_REF}"
+
+    - name: Determine changed crates
+      id: changed_crates
+      shell: bash
+      env:
+        BASE_REF: ${{ inputs.base_ref }}
+      run: |
+        PACKAGES=$(ci/scripts/changed_crates.sh changed-crates "apache/${BASE_REF}")
+        echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
+        echo "Changed crates: $PACKAGES"
+
     # `datafusion-substrait` (and crates that depend on it via sqllogictest)
     # have a build script that calls protoc, which is not preinstalled on
     # ubuntu-latest runners.
     - name: Install Protobuf Compiler
+      if: steps.changed_crates.outputs.packages != ''
       shell: bash
       run: |
         sudo apt-get update
         sudo apt-get install -y protobuf-compiler
 
     - name: Install cargo-semver-checks
+      if: steps.changed_crates.outputs.packages != ''
       uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8  # v2.77.6
       with:
         tool: cargo-semver-checks
