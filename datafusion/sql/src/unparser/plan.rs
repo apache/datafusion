@@ -48,9 +48,9 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{OUTER_REFERENCE_COLUMN_PREFIX, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    Aggregate, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
-    UserDefinedLogicalNode, expr::Alias,
+    UserDefinedLogicalNode, Window, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::{sync::Arc, vec};
@@ -478,6 +478,80 @@ impl Unparser<'_> {
         Ok(false)
     }
 
+    fn project_window_output(
+        &self,
+        window_expr: &[Expr],
+        select: &mut SelectBuilder,
+        agg: Option<&Aggregate>,
+    ) -> Result<()> {
+        let mut items = if select.already_projected() {
+            select.pop_projections()
+        } else {
+            vec![ast::SelectItem::Wildcard(
+                ast::WildcardAdditionalOptions::default(),
+            )]
+        };
+
+        items.extend(
+            window_expr
+                .iter()
+                .map(|expr| {
+                    let expr = if let Some(agg) = agg {
+                        unproject_agg_exprs(expr.clone(), agg, None)?
+                    } else {
+                        expr.clone()
+                    };
+                    self.select_item_to_sql(&expr)
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+        select.projection(items);
+
+        Ok(())
+    }
+
+    fn window_input_requires_derived_subquery(plan: &LogicalPlan) -> bool {
+        // These operators either produce a SELECT list or apply SQL clauses
+        // that are evaluated after window functions in a single SELECT block.
+        // Keep them below the Window node by emitting a derived table.
+        matches!(
+            plan,
+            LogicalPlan::Projection(_)
+                | LogicalPlan::Distinct(_)
+                | LogicalPlan::Limit(_)
+                | LogicalPlan::Sort(_)
+                | LogicalPlan::Union(_)
+        )
+    }
+
+    fn window_to_sql_with_derived_input(
+        &self,
+        window: &Window,
+        select: &mut SelectBuilder,
+        relation: &mut RelationBuilder,
+    ) -> Result<()> {
+        let input_alias = "derived_window_input";
+        self.derive(
+            window.input.as_ref(),
+            relation,
+            Some(self.new_table_alias(input_alias.to_string(), vec![])),
+            false,
+        )?;
+
+        let input_schema = window.input.schema();
+        let mut alias_rewriter = TableAliasRewriter {
+            table_schema: input_schema.as_arrow(),
+            alias_name: TableReference::bare(input_alias),
+        };
+        let window_expr = window
+            .window_expr
+            .iter()
+            .map(|expr| expr.clone().rewrite(&mut alias_rewriter).data())
+            .collect::<Result<Vec<_>>>()?;
+
+        self.project_window_output(&window_expr, select, None)
+    }
+
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn select_to_sql_recursively(
         &self,
@@ -610,25 +684,28 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
             }
             LogicalPlan::Filter(filter) => {
-                if let Some(agg) =
-                    find_agg_node_within_select(plan, select.already_projected())
+                let window = find_window_nodes_within_select(
+                    plan,
+                    None,
+                    select.already_projected(),
+                );
+                let agg = find_agg_node_within_select(plan, select.already_projected());
+
+                if let (Some(window), true) =
+                    (window.as_deref(), self.dialect.supports_qualify())
                 {
+                    let mut unprojected =
+                        unproject_window_exprs(filter.predicate.clone(), window)?;
+                    if let Some(agg) = agg {
+                        unprojected = unproject_agg_exprs(unprojected, agg, None)?;
+                    }
+                    let filter_expr = self.expr_to_sql(&unprojected)?;
+                    select.qualify(Some(filter_expr));
+                } else if let Some(agg) = agg {
                     let unprojected =
                         unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
-                } else if let (Some(window), true) = (
-                    find_window_nodes_within_select(
-                        plan,
-                        None,
-                        select.already_projected(),
-                    ),
-                    self.dialect.supports_qualify(),
-                ) {
-                    let unprojected =
-                        unproject_window_exprs(filter.predicate.clone(), &window)?;
-                    let filter_expr = self.expr_to_sql(&unprojected)?;
-                    select.qualify(Some(filter_expr));
                 } else {
                     let filter_expr = self.expr_to_sql(&filter.predicate)?;
                     select.selection(Some(filter_expr));
@@ -1143,13 +1220,37 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Window(window) => {
-                // Window nodes are handled simultaneously with Projection nodes
+                // Window nodes are usually handled simultaneously with Projection
+                // nodes, where projected columns are unprojected back into their
+                // corresponding window expressions. Manually built plans can have
+                // Window nodes without an enclosing Projection, so in that case
+                // the Window node itself must contribute its output expressions.
+                let project_window_output = !select.already_projected();
+                if project_window_output
+                    && Self::window_input_requires_derived_subquery(window.input.as_ref())
+                {
+                    return self
+                        .window_to_sql_with_derived_input(window, select, relation);
+                }
+
+                let agg = if project_window_output {
+                    find_agg_node_within_select(plan, false)
+                } else {
+                    None
+                };
+
                 self.select_to_sql_recursively(
                     window.input.as_ref(),
                     query,
                     select,
                     relation,
-                )
+                )?;
+
+                if project_window_output {
+                    self.project_window_output(&window.window_expr, select, agg)?;
+                }
+
+                Ok(())
             }
             LogicalPlan::EmptyRelation(_) => {
                 // An EmptyRelation could be behind an UNNEST node. If the dialect supports UNNEST as a table factor,
