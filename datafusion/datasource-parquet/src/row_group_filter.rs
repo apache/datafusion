@@ -253,6 +253,28 @@ impl RowGroupAccessPlanFilter {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
+        self.prune_by_statistics_with_per_conjunct_stats(
+            arrow_schema,
+            parquet_schema,
+            groups,
+            predicate,
+            metrics,
+        );
+    }
+
+    /// Variant of [`Self::prune_by_statistics`] that also returns
+    /// per-conjunct pruning stats produced by
+    /// [`PruningPredicate::prune_per_conjunct`].  Returns an empty
+    /// `Vec` when the predicate was not constructed with tagged
+    /// conjuncts, so callers can ignore it on the untagged path.
+    pub fn prune_by_statistics_with_per_conjunct_stats(
+        &mut self,
+        arrow_schema: &Schema,
+        parquet_schema: &SchemaDescriptor,
+        groups: &[RowGroupMetaData],
+        predicate: &PruningPredicate,
+        metrics: &ParquetFileMetrics,
+    ) -> Vec<datafusion_pruning::PerConjunctPruneStats> {
         // scoped timer updates on drop
         let _timer_guard = metrics.statistics_eval_time.timer();
 
@@ -275,9 +297,14 @@ impl RowGroupAccessPlanFilter {
             missing_null_counts_as_zero: true,
         };
 
-        // try to prune the row groups in a single call
-        match predicate.prune(&pruning_stats) {
-            Ok(values) => {
+        let mut per_conjunct: Vec<datafusion_pruning::PerConjunctPruneStats> = Vec::new();
+
+        // try to prune the row groups in a single call (now also captures
+        // per-conjunct rates when the predicate was built with
+        // `try_new_tagged_conjuncts`).
+        match predicate.prune_per_conjunct(&pruning_stats) {
+            Ok((values, stats)) => {
+                per_conjunct = stats;
                 let mut fully_contained_candidates_original_idx: Vec<usize> = Vec::new();
                 for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
                     if !value {
@@ -305,6 +332,8 @@ impl RowGroupAccessPlanFilter {
                 metrics.predicate_evaluation_errors.add(1);
             }
         }
+
+        per_conjunct
     }
 
     /// Identifies row groups that are fully matched by the predicate.
@@ -607,11 +636,11 @@ impl PruningStatistics for BloomFilterStatistics {
 }
 
 /// Wraps a slice of [`RowGroupMetaData`] in a way that implements [`PruningStatistics`]
-struct RowGroupPruningStatistics<'a> {
-    parquet_schema: &'a SchemaDescriptor,
-    row_group_metadatas: Vec<&'a RowGroupMetaData>,
-    arrow_schema: &'a Schema,
-    missing_null_counts_as_zero: bool,
+pub(crate) struct RowGroupPruningStatistics<'a> {
+    pub(crate) parquet_schema: &'a SchemaDescriptor,
+    pub(crate) row_group_metadatas: Vec<&'a RowGroupMetaData>,
+    pub(crate) arrow_schema: &'a Schema,
+    pub(crate) missing_null_counts_as_zero: bool,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {
