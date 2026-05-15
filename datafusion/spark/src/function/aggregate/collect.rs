@@ -96,7 +96,7 @@ impl AggregateUDFImpl for SparkCollectList {
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
             ArrayAggAccumulator::try_new(field, ignore_nulls)?,
-            Arc::clone(field),
+            field,
         )))
     }
 }
@@ -162,7 +162,7 @@ impl AggregateUDFImpl for SparkCollectSet {
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
             DistinctArrayAggAccumulator::try_new(field, None, ignore_nulls)?,
-            Arc::clone(field),
+            field,
         )))
     }
 }
@@ -181,10 +181,10 @@ struct NullToEmptyListAccumulator<T: Accumulator> {
 }
 
 impl<T: Accumulator> NullToEmptyListAccumulator<T> {
-    pub fn new(inner: T, value_field: FieldRef) -> Self {
+    pub fn new(inner: T, value_field: &FieldRef) -> Self {
         Self {
             inner,
-            item_field: nullable_list_item_field_from(&value_field),
+            item_field: nullable_list_item_field_from(value_field),
         }
     }
 }
