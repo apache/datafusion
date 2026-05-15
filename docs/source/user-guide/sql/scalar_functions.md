@@ -5702,6 +5702,7 @@ union_tag(union_expression)
 - [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
 - [cast_to_type](#cast_to_type)
+- [file_row_index](#file_row_index)
 - [get_field](#get_field)
 - [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
@@ -5883,6 +5884,27 @@ cast_to_type(expression, reference)
 +-----+
 | 3.0 |
 +-----+
+```
+
+### `file_row_index`
+
+Returns the zero-based row offset within the source file
+that produced the current row.
+
+The value is scoped to one file, so rows from different files in the same scan
+can have the same row index. This function is intended to be rewritten at
+file-scan time. If the input file is not known (for example, if this function
+is evaluated outside a file scan, or was not pushed down into one), this
+function returns NULL.
+
+```sql
+file_row_index()
+```
+
+#### Example
+
+```sql
+SELECT file_row_index() FROM t;
 ```
 
 ### `get_field`
