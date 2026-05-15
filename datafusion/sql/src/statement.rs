@@ -892,8 +892,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .map(|expr| self.sql_to_expr(expr, &empty_schema, planner_context))
                     .collect::<Result<Vec<Expr>>>()?;
 
+                let name = name.ok_or_else(|| {
+                    plan_datafusion_err!("EXECUTE statement requires a name")
+                })?;
+
                 Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
-                    name: object_name_to_string(&name.unwrap()),
+                    name: object_name_to_string(&name),
                     parameters,
                 })))
             }
