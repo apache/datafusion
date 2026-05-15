@@ -653,8 +653,7 @@ impl FileSource for ParquetSource {
             let key_b = Self::sort_key_for_file(b, col_idx);
             match (key_a, key_b) {
                 (Some(va), Some(vb)) => {
-                    let cmp =
-                        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal);
+                    let cmp = va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal);
                     if descending { cmp.reverse() } else { cmp }
                 }
                 (Some(_), None) => std::cmp::Ordering::Less,
@@ -1382,8 +1381,8 @@ mod tests {
     /// Helpers for the `reorder_files` regression tests below.
     mod reorder_files_helpers {
         use super::*;
-        use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
         use datafusion_common::stats::Precision;
+        use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
         use datafusion_datasource::PartitionedFile;
 
         pub(super) fn file_with_min(name: &str, min: Option<i32>) -> PartitionedFile {
@@ -1447,8 +1446,8 @@ mod tests {
         use reorder_files_helpers::*;
 
         let schema = schema_with_a_int();
-        let mut source = ParquetSource::new(Arc::clone(&schema))
-            .with_reverse_row_groups(true);
+        let mut source =
+            ParquetSource::new(Arc::clone(&schema)).with_reverse_row_groups(true);
         source.sort_order_for_reorder =
             Some(LexOrdering::new(vec![sort_expr_on(&schema, "a", true)]).unwrap());
 
@@ -1481,8 +1480,8 @@ mod tests {
         assert_eq!(names(&reordered), vec!["has_min", "no_stats"]);
 
         // Same for DESC.
-        let mut source = ParquetSource::new(Arc::clone(&schema))
-            .with_reverse_row_groups(true);
+        let mut source =
+            ParquetSource::new(Arc::clone(&schema)).with_reverse_row_groups(true);
         source.sort_order_for_reorder =
             Some(LexOrdering::new(vec![sort_expr_on(&schema, "a", true)]).unwrap());
         let reordered = source.reorder_files(vec![
@@ -1496,8 +1495,8 @@ mod tests {
     /// `None`), `reorder_files` is a no-op and preserves input order.
     #[test]
     fn reorder_files_is_a_no_op_without_pushdown() {
-        use reorder_files_helpers::*;
         use pushdown_sort_helpers::*;
+        use reorder_files_helpers::*;
 
         let schema = schema_with_a_int();
         let source = ParquetSource::new(schema);

@@ -560,7 +560,6 @@ impl PreparedAccessPlan {
                     "RG reorder: cannot create stats converter for `{}`: {e}",
                     column.name(),
                 );
-                debug!("Skipping RG reorder: cannot create stats converter: {e}");
                 return Ok(self);
             }
         };
@@ -580,7 +579,6 @@ impl PreparedAccessPlan {
                     "RG reorder: cannot get min values for `{}`: {e}",
                     column.name(),
                 );
-                debug!("Skipping RG reorder: cannot get min values: {e}");
                 return Ok(self);
             }
         };
@@ -598,7 +596,6 @@ impl PreparedAccessPlan {
                         "RG reorder: arrow sort_to_indices failed for `{}`: {e}",
                         column.name(),
                     );
-                    debug!("Skipping RG reorder: sort failed: {e}");
                     return Ok(self);
                 }
             };
@@ -850,5 +847,183 @@ mod test {
             .build()
             .unwrap();
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    // ----------------------------------------------------------------
+    // `reorder_by_statistics` tests
+    // ----------------------------------------------------------------
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, lit};
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use parquet::file::metadata::FileMetaData;
+    use parquet::file::statistics::Statistics as ParquetStatistics;
+
+    /// Single-column int32 schema named "a".
+    fn int_schema_descr() -> SchemaDescPtr {
+        use parquet::basic::Type as PhysicalType;
+        use parquet::schema::types::Type as SchemaType;
+        let field = SchemaType::primitive_type_builder("a", PhysicalType::INT32)
+            .build()
+            .unwrap();
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(field)])
+            .build()
+            .unwrap();
+        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    /// Build a `ParquetMetaData` with one row group per element of
+    /// `mins`. Each row group declares int32 statistics with
+    /// `min == max == mins[i]` so the reorder key is unambiguous.
+    fn parquet_metadata_with_int_mins(mins: &[i32]) -> ParquetMetaData {
+        let schema_descr = int_schema_descr();
+        let row_groups: Vec<RowGroupMetaData> = mins
+            .iter()
+            .map(|&m| {
+                let stats =
+                    ParquetStatistics::int32(Some(m), Some(m), None, Some(0), false);
+                let column = ColumnChunkMetaData::builder(schema_descr.column(0))
+                    .set_statistics(stats)
+                    .set_num_values(100)
+                    .build()
+                    .unwrap();
+                RowGroupMetaData::builder(schema_descr.clone())
+                    .set_num_rows(100)
+                    .set_column_metadata(vec![column])
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+        let file_metadata =
+            FileMetaData::new(0, 0, None, None, schema_descr.clone(), None);
+        ParquetMetaData::new(file_metadata, row_groups)
+    }
+
+    fn arrow_schema_a_int() -> Schema {
+        Schema::new(vec![Field::new("a", DataType::Int32, true)])
+    }
+
+    fn lex_ordering_a_asc() -> LexOrdering {
+        LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("a", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }])
+        .unwrap()
+    }
+
+    /// Happy path: three row groups with mins 50/10/100. After
+    /// `reorder_by_statistics` the indexes are ordered ASC by `min`,
+    /// i.e. RG 1 (min=10) first, then RG 0 (min=50), then RG 2
+    /// (min=100).
+    #[test]
+    fn reorder_by_statistics_sorts_row_groups_asc_by_min() {
+        let metadata = parquet_metadata_with_int_mins(&[50, 10, 100]);
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+
+        let result = plan
+            .reorder_by_statistics(
+                &lex_ordering_a_asc(),
+                &metadata,
+                &arrow_schema_a_int(),
+            )
+            .unwrap();
+
+        assert_eq!(result.row_group_indexes, vec![1, 0, 2]);
+    }
+
+    /// A `row_selection` is "too complex to remap" through reorder,
+    /// so the function short-circuits and returns the input untouched.
+    #[test]
+    fn reorder_by_statistics_skips_when_row_selection_present() {
+        let metadata = parquet_metadata_with_int_mins(&[50, 10]);
+        let selection = RowSelection::from(vec![RowSelector::select(100)]);
+        let plan = PreparedAccessPlan::new(vec![0, 1], Some(selection)).unwrap();
+
+        let result = plan
+            .reorder_by_statistics(
+                &lex_ordering_a_asc(),
+                &metadata,
+                &arrow_schema_a_int(),
+            )
+            .unwrap();
+
+        assert_eq!(result.row_group_indexes, vec![0, 1]);
+    }
+
+    /// One row group means nothing to reorder.
+    #[test]
+    fn reorder_by_statistics_skips_when_at_most_one_row_group() {
+        let metadata = parquet_metadata_with_int_mins(&[50]);
+        let plan = PreparedAccessPlan::new(vec![0], None).unwrap();
+
+        let result = plan
+            .reorder_by_statistics(
+                &lex_ordering_a_asc(),
+                &metadata,
+                &arrow_schema_a_int(),
+            )
+            .unwrap();
+
+        assert_eq!(result.row_group_indexes, vec![0]);
+    }
+
+    /// Non-`Column` sort expressions (e.g. `a + 1`,
+    /// `date_trunc(...)`) can't drive a stats lookup, so reorder is
+    /// skipped. The opener falls back to whatever order it received.
+    #[test]
+    fn reorder_by_statistics_skips_for_non_column_sort_expr() {
+        let metadata = parquet_metadata_with_int_mins(&[50, 10]);
+        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        let arrow_schema = arrow_schema_a_int();
+        let order = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Plus,
+                lit(1i32),
+            )),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }])
+        .unwrap();
+
+        let result = plan
+            .reorder_by_statistics(&order, &metadata, &arrow_schema)
+            .unwrap();
+
+        assert_eq!(result.row_group_indexes, vec![0, 1]);
+    }
+
+    /// When the sort column lives outside the file's arrow schema
+    /// (e.g. a partition column that reached this method through
+    /// `try_pushdown_sort`'s reversed-equivalence branch), reorder is
+    /// an expected graceful skip — no `debug_assert!` should fire.
+    #[test]
+    fn reorder_by_statistics_skips_when_column_not_in_arrow_schema() {
+        let metadata = parquet_metadata_with_int_mins(&[50, 10]);
+        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        // Arrow schema only has "a"; the sort references "b".
+        let arrow_schema = arrow_schema_a_int();
+        let order = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("b", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }])
+        .unwrap();
+
+        let result = plan
+            .reorder_by_statistics(&order, &metadata, &arrow_schema)
+            .unwrap();
+
+        assert_eq!(result.row_group_indexes, vec![0, 1]);
     }
 }
