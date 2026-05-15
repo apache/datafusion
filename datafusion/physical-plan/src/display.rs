@@ -23,9 +23,7 @@ use std::fmt::Formatter;
 
 use arrow::datatypes::SchemaRef;
 
-use datafusion_common::display::{
-    GraphvizBuilder, PlanType, StringifiedPlan,
-};
+use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 
 #[deprecated(
     since = "54.0.0",

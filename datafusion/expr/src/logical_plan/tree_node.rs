@@ -61,11 +61,8 @@ impl FormattedTreeNode for LogicalPlan {}
 impl DisplayAs for LogicalPlan {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         if let DisplayFormatType::TreeRender = t {
-            match &self {
-                LogicalPlan::TableScan(TableScan { table_name, .. }) => {
-                    return write!(f, "TableScan {table_name}");
-                }
-                _ => {}
+            if let LogicalPlan::TableScan(TableScan { table_name, .. }) = &self {
+                return write!(f, "TableScan {table_name}");
             };
             return write!(f, "{}", self.display());
         }

@@ -381,7 +381,7 @@ impl RenderTree {
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
-            let extra_left_space = if total_spaces % 2 == 0 { 0 } else { 1 };
+            let extra_left_space = if total_spaces.is_multiple_of(2) { 0 } else { 1 };
             format!(
                 "{}{}{}",
                 " ".repeat(half_spaces + extra_left_space),
@@ -475,9 +475,13 @@ pub trait FormattedTreeNode: TreeNode + DisplayAs {
 
 /// Represents a 2D coordinate in the rendered tree.
 /// Used to track positions of nodes and their connections.
-struct Coordinate {
-    x: usize,
-    y: usize,
+pub struct Coordinate {
+    /// Horizontal position in the tree
+    #[expect(dead_code)]
+    pub x: usize,
+    /// Vertical position in the tree
+    #[expect(dead_code)]
+    pub y: usize,
 }
 
 impl Coordinate {
@@ -672,7 +676,7 @@ pub fn create_tree_recursive<T: FormattedTreeNode>(
         let child_y = y + 1;
         rendered_node.add_child_position(child_x, child_y);
         *width_ref += create_tree_recursive(result, n, child_x, child_y);
-        return Ok(TreeNodeRecursion::Continue);
+        Ok(TreeNodeRecursion::Continue)
     })
     .unwrap();
 
