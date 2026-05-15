@@ -885,17 +885,38 @@ impl FileSource for ParquetSource {
         //    can sort row groups by that column's `min` via parquet
         //    statistics. Drives `sort_order_for_reorder`'s actual use.
         //
-        // 2. `reversed_satisfies`: the source's declared ordering, when
-        //    reversed, satisfies the request. Covers cases where
-        //    `EquivalenceProperties`'s monotonicity reasoning lets a
-        //    function-wrapped sort (e.g. `date_trunc('day', ts) DESC`)
-        //    benefit from flipping iteration order even though parquet
-        //    has no stats keyed by the function expression.
+        // 2. `reversed_satisfies`: the source's declared ordering,
+        //    when reversed, satisfies the request. This is strictly
+        //    more powerful than the column-in-schema check because it
+        //    runs the request through `EquivalenceProperties`'s full
+        //    reasoning machinery:
+        //
+        //    - Function monotonicity: e.g. file declares
+        //      `[extract_year_month(ws) DESC, ws DESC]`, request is
+        //      `[ws ASC]`; the reversed ordering still satisfies the
+        //      request via `extract_year_month`'s monotonicity even
+        //      though parquet has no stats keyed by the function
+        //      expression itself.
+        //    - Constant columns from filters: equivalence classes can
+        //      mark columns as constant under a predicate, allowing
+        //      requested orderings on those columns to be trivially
+        //      satisfied.
+        //    - Other equivalence relationships (e.g. `a = b` transfers
+        //      ordering between `a` and `b`).
+        //
+        //    `reorder_by_statistics` can't substitute for any of the
+        //    above because it can only look up min/max for a plain
+        //    physical column.
         //
         // `sort_order_for_reorder` is set in both cases so EXPLAIN
         // shows what the source was asked to approximate; the opener
         // skips stats-based reorder when the leading expression isn't
         // a plain `Column`.
+        //
+        // The reversal flips each `PhysicalSortExpr` (both descending
+        // and nulls_first) and rebuilds an `EquivalenceProperties` so
+        // the request can be tested against the reversed orderings
+        // via the same `ordering_satisfy` API.
         let reversed_eq_properties = {
             let mut new = eq_properties.clone();
             new.clear_orderings();
@@ -1231,6 +1252,115 @@ mod tests {
         assert!(
             matches!(result, SortOrderPushdownResult::Unsupported),
             "column not in file schema must yield Unsupported",
+        );
+    }
+
+    /// Regression: when the source declares `[a DESC]` and the request is
+    /// `[a ASC]`, both `column_in_file_schema` and `reversed_satisfies`
+    /// are true. `reverse_row_groups` must follow the *request's*
+    /// direction (false for ASC) — not the source's, and not the OR of
+    /// both signals. The opener's stats-based reorder produces
+    /// ASC-by-min, so an ASC request needs no further flip; flipping
+    /// would incorrectly emit DESC.
+    #[test]
+    fn try_pushdown_sort_source_desc_request_asc_does_not_reverse() {
+        use datafusion_physical_expr::EquivalenceProperties;
+        use pushdown_sort_helpers::*;
+
+        let schema = schema_with_a_int();
+        let source = ParquetSource::new(Arc::clone(&schema));
+        // Source declares `[a DESC]`.
+        let mut eq = EquivalenceProperties::new(Arc::clone(&schema));
+        eq.add_ordering(vec![sort_expr_on(&schema, "a", true)]);
+        // Request `[a ASC]`.
+        let order = vec![sort_expr_on(&schema, "a", false)];
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("expected Inexact, got a different variant");
+        };
+        let inner_parquet = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(
+            inner_parquet.sort_order_for_reorder.is_some(),
+            "sort_order_for_reorder must be set",
+        );
+        assert!(
+            !inner_parquet.reverse_row_groups(),
+            "ASC request on source-DESC must not set reverse_row_groups; \
+             a stale `reversed_satisfies || is_descending` formula would \
+             incorrectly flip iteration to DESC after the stats reorder",
+        );
+    }
+
+    /// A sort column that is *not* in the file schema (here: a partition
+    /// column `b`) but the source's *reversed* declared ordering does
+    /// satisfy the request. Pushdown fires via the reversed-equivalence
+    /// path; `sort_order_for_reorder` is still set (so EXPLAIN reflects
+    /// what the source was asked to approximate, even though the opener
+    /// will skip its stats reorder because `b` has no per-RG min/max in
+    /// the parquet file), and `reverse_row_groups` is `true` because we
+    /// flip the file's natural order rather than re-sort by stats.
+    #[test]
+    fn try_pushdown_sort_returns_inexact_via_reversed_eq_when_column_not_in_file_schema()
+    {
+        use arrow::compute::SortOptions;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_datasource::TableSchema;
+        use datafusion_physical_expr::EquivalenceProperties;
+        use datafusion_physical_expr::expressions::Column;
+        use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+        // File schema is just `[a]`; `b` lives as a partition column on
+        // top, so it appears in the table schema but not the file schema
+        // — the same shape `column_in_file_schema` discards.
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let partition_b = Arc::new(Field::new("b", DataType::Int32, true));
+        let table_schema = TableSchema::new(file_schema, vec![partition_b]);
+        let source = ParquetSource::new(table_schema);
+
+        // EquivalenceProperties is built on the *full* table schema so
+        // it can carry an ordering on `b`.
+        let full_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        // Construct the request first, then derive the declared
+        // ordering as its reverse, so `ordering_satisfy` on the
+        // reversed-eq holds exactly. `PhysicalSortExpr::reverse` flips
+        // both `descending` and `nulls_first`, so spelling the
+        // declared ordering directly is error-prone.
+        let request_expr = PhysicalSortExpr {
+            expr: Arc::new(Column::new("b", 1)),
+            options: SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        };
+        let declared = request_expr.reverse();
+        let mut eq = EquivalenceProperties::new(Arc::clone(&full_schema));
+        eq.add_ordering(vec![declared]);
+        let order = vec![request_expr];
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("expected Inexact, got a different variant");
+        };
+        let inner_parquet = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(
+            inner_parquet.sort_order_for_reorder.is_some(),
+            "sort_order_for_reorder must be set so EXPLAIN reflects the request",
+        );
+        assert!(
+            inner_parquet.reverse_row_groups(),
+            "request reached via reversed_satisfies (column-not-in-file-schema) \
+             must set reverse_row_groups to flip the file's natural order",
         );
     }
 

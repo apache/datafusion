@@ -529,7 +529,25 @@ impl PreparedAccessPlan {
             }
         };
 
-        // Build statistics converter for this column
+        // Expected graceful skip: the sort column lives outside the
+        // file schema (e.g. a partition column whose ordering came
+        // through `reversed_satisfies` rather than `column_in_file_schema`).
+        // Parquet has no per-RG stats for it. Bail out quietly — no
+        // `debug_assert!` because this is a normal pushdown shape.
+        if arrow_schema.field_with_name(column.name()).is_err() {
+            debug!(
+                "Skipping RG reorder: column `{}` not in file schema",
+                column.name()
+            );
+            return Ok(self);
+        }
+
+        // From here, any `StatisticsConverter` / stats read / sort
+        // failure is unexpected — the column exists in the file
+        // schema, so building the converter and pulling typed mins
+        // should succeed on any well-formed parquet file. Trip a
+        // `debug_assert!` so CI catches regressions, but stay graceful
+        // in release so a single odd file can't take down a scan.
         let converter = match StatisticsConverter::try_new(
             column.name(),
             arrow_schema,
@@ -537,6 +555,11 @@ impl PreparedAccessPlan {
         ) {
             Ok(c) => c,
             Err(e) => {
+                debug_assert!(
+                    false,
+                    "RG reorder: cannot create stats converter for `{}`: {e}",
+                    column.name(),
+                );
                 debug!("Skipping RG reorder: cannot create stats converter: {e}");
                 return Ok(self);
             }
@@ -552,6 +575,11 @@ impl PreparedAccessPlan {
         let stat_mins = match converter.row_group_mins(rg_metadata.iter().copied()) {
             Ok(vals) => vals,
             Err(e) => {
+                debug_assert!(
+                    false,
+                    "RG reorder: cannot get min values for `{}`: {e}",
+                    column.name(),
+                );
                 debug!("Skipping RG reorder: cannot get min values: {e}");
                 return Ok(self);
             }
@@ -565,6 +593,11 @@ impl PreparedAccessPlan {
             match arrow::compute::sort_to_indices(&stat_mins, Some(sort_options), None) {
                 Ok(indices) => indices,
                 Err(e) => {
+                    debug_assert!(
+                        false,
+                        "RG reorder: arrow sort_to_indices failed for `{}`: {e}",
+                        column.name(),
+                    );
                     debug!("Skipping RG reorder: sort failed: {e}");
                     return Ok(self);
                 }

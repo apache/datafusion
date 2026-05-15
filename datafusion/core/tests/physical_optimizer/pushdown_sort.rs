@@ -512,8 +512,13 @@ fn test_multiple_sorts_different_columns() {
 }
 
 #[test]
-fn test_no_pushdown_for_unordered_source() {
-    // Verify pushdown does NOT happen for sources without ordering
+fn test_inexact_pushdown_for_unordered_source() {
+    // Source has no declared `output_ordering`, request is `[a ASC]`.
+    // The reversed-equivalence check can't fire (nothing to reverse),
+    // but 'a' is in the file schema — sort pushdown returns `Inexact`
+    // with `sort_order_for_reorder` set so the opener can sort row
+    // groups by `min(a)` at scan time. The surrounding `SortExec`
+    // stays in place to enforce the full ordering.
     let schema = schema();
     let source = parquet_exec(schema.clone()); // No output_ordering
     let sort_exprs = LexOrdering::new(vec![sort_expr("a", &schema)]).unwrap();
