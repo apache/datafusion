@@ -1449,10 +1449,10 @@ impl Unparser<'_> {
 
     fn collect_flatten_aliases(plan: &LogicalPlan, select: &mut SelectBuilder) {
         match plan {
-            LogicalPlan::SubqueryAlias(alias) => {
-                if Self::contains_unnest(alias.input.as_ref()) {
-                    select.add_flatten_table_alias(alias.alias.table().to_string());
-                }
+            LogicalPlan::SubqueryAlias(alias)
+                if Self::contains_unnest(alias.input.as_ref()) =>
+            {
+                select.add_flatten_table_alias(alias.alias.table().to_string());
             }
             LogicalPlan::Join(join) => {
                 Self::collect_flatten_aliases(&join.left, select);
