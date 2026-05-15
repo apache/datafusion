@@ -312,6 +312,12 @@ macro_rules! roundtrip_statement_with_dialect_helper {
         let state = MockSessionState::default()
             .with_aggregate_function(max_udaf())
             .with_aggregate_function(min_udaf())
+            .with_aggregate_function(
+                datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner));
@@ -3588,6 +3594,40 @@ fn snowflake_flatten_cross_join_unnest_table_column() -> Result<(), DataFusionEr
         parser_dialect: GenericDialect {},
         unparser_dialect: snowflake,
         expected: @r#"SELECT "multi_array_table"."column_a", "multi_array_table"."column_b", "a"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_approx_percentile_cont_within_group() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY salary) FROM person",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY person.salary ASC NULLS LAST) FROM person",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_percentile_cont_within_group() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY salary) FROM person",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY person.salary ASC NULLS LAST) FROM person",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_approx_percentile_cont_within_group_with_centroids()
+-> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT approx_percentile_cont(0.9, 200) WITHIN GROUP (ORDER BY salary * 2 DESC) FROM person",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT approx_percentile_cont(0.9, 200) WITHIN GROUP (ORDER BY (person.salary * 2) DESC NULLS FIRST) FROM person",
     );
     Ok(())
 }
