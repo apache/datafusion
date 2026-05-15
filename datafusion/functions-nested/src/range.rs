@@ -20,7 +20,7 @@
 use crate::utils::make_scalar_function;
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::TimeUnit;
-use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit::MonthDayNano};
+use arrow::datatypes::{DataType, Field, IntervalUnit::MonthDayNano};
 use arrow::{
     array::{
         Array, ArrayRef, Int64Array, ListArray, ListBuilder, NullBufferBuilder,
@@ -46,8 +46,8 @@ use datafusion_common::{
     },
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::cmp::Ordering;
@@ -246,50 +246,7 @@ impl ScalarUDFImpl for Range {
         }
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        if args.arg_fields.iter().any(|f| f.data_type().is_null()) {
-            return Ok(Arc::new(Field::new(self.name(), DataType::Null, true)));
-        }
-        // Reuse the data type computed by `return_type` so the date64→date32
-        // coercion and timezone preservation logic stays in one place. Then
-        // walk the result and replace the inner field with a metadata-bearing
-        // copy of the start arg's field so extension types flow through.
-        let arg_types: Vec<_> = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type().clone())
-            .collect();
-        let return_type = self.return_type(&arg_types)?;
-        let start_field = &args.arg_fields[0];
-        let inner = match &return_type {
-            DataType::List(f) => {
-                // Take the data type from `return_type` (so coercions apply)
-                // and graft on the start field's metadata.
-                let mut new = Field::new(
-                    Field::LIST_FIELD_DEFAULT_NAME,
-                    f.data_type().clone(),
-                    f.is_nullable(),
-                );
-                let m = start_field.metadata();
-                if !m.is_empty() && f.data_type() == start_field.data_type() {
-                    new = new.with_metadata(m.clone());
-                }
-                Arc::new(new)
-            }
-            _ => return Ok(Arc::new(Field::new(self.name(), return_type, true))),
-        };
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::List(inner),
-            true,
-        )))
-    }
-
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let inner_field = match args.return_field.data_type() {
-            DataType::List(f) => Some(Arc::clone(f)),
-            _ => None,
-        };
         let args = &args.args;
 
         if args.iter().any(|arg| arg.data_type().is_null()) {
@@ -297,22 +254,13 @@ impl ScalarUDFImpl for Range {
         }
         match args[0].data_type() {
             DataType::Int64 => {
-                let inner = inner_field.clone();
-                make_scalar_function(move |args| {
-                    self.gen_range_inner(args, inner.clone())
-                })(args)
+                make_scalar_function(|args| self.gen_range_inner(args))(args)
             }
             DataType::Date32 | DataType::Date64 => {
-                let inner = inner_field.clone();
-                make_scalar_function(move |args| self.gen_range_date(args, inner.clone()))(
-                    args,
-                )
+                make_scalar_function(|args| self.gen_range_date(args))(args)
             }
             DataType::Timestamp(_, _) => {
-                let inner = inner_field.clone();
-                make_scalar_function(move |args| {
-                    self.gen_range_timestamp(args, inner.clone())
-                })(args)
+                make_scalar_function(|args| self.gen_range_timestamp(args))(args)
             }
             dt => {
                 internal_err!(
@@ -347,11 +295,7 @@ impl Range {
     /// gen_range(3) => [0, 1, 2]
     /// gen_range(1, 4) => [1, 2, 3]
     /// gen_range(1, 7, 2) => [1, 3, 5]
-    fn gen_range_inner(
-        &self,
-        args: &[ArrayRef],
-        inner_field: Option<FieldRef>,
-    ) -> Result<ArrayRef> {
+    fn gen_range_inner(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let (start_array, stop_array, step_array) = match args {
             [stop_array] => (None, as_int64_array(stop_array)?, None),
             [start_array, stop_array] => (
@@ -396,10 +340,8 @@ impl Range {
                 }
             };
         }
-        let field = inner_field
-            .unwrap_or_else(|| Arc::new(Field::new_list_field(DataType::Int64, true)));
         let arr = Arc::new(ListArray::try_new(
-            field,
+            Arc::new(Field::new_list_field(DataType::Int64, true)),
             OffsetBuffer::new(offsets.into()),
             Arc::new(Int64Array::from(values)),
             valid.finish(),
@@ -407,11 +349,7 @@ impl Range {
         Ok(arr)
     }
 
-    fn gen_range_date(
-        &self,
-        args: &[ArrayRef],
-        inner_field: Option<FieldRef>,
-    ) -> Result<ArrayRef> {
+    fn gen_range_date(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let [start, stop, step] = take_function_args(self.name(), args)?;
         let step = as_interval_mdn_array(step)?;
 
@@ -470,15 +408,12 @@ impl Range {
             list_builder.append_value(values);
         }
 
-        let arr = list_builder.finish();
-        Ok(rewrite_list_field(arr, inner_field))
+        let arr = Arc::new(list_builder.finish());
+
+        Ok(arr)
     }
 
-    fn gen_range_timestamp(
-        &self,
-        args: &[ArrayRef],
-        inner_field: Option<FieldRef>,
-    ) -> Result<ArrayRef> {
+    fn gen_range_timestamp(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let [start, stop, step] = take_function_args(self.name(), args)?;
         let step = as_interval_mdn_array(step)?;
 
@@ -579,21 +514,10 @@ impl Range {
             list_builder.append_value(values);
         }
 
-        let arr = list_builder.finish();
-        Ok(rewrite_list_field(arr, inner_field))
-    }
-}
+        let arr = Arc::new(list_builder.finish());
 
-/// Rebuild `list` with `inner_field` as its element field when supplied,
-/// otherwise return it unchanged. Used by `range`/`generate_series`'s
-/// builder-based paths to graft on the planning-time inner field (which
-/// carries metadata) without rebuilding the values array.
-fn rewrite_list_field(list: ListArray, inner_field: Option<FieldRef>) -> ArrayRef {
-    let Some(inner) = inner_field else {
-        return Arc::new(list);
-    };
-    let (_, offsets, values, nulls) = list.into_parts();
-    Arc::new(ListArray::new(inner, offsets, values, nulls))
+        Ok(arr)
+    }
 }
 
 /// Get the (start, stop, step) args for the range and generate_series function.
@@ -682,39 +606,5 @@ fn date32_to_string(value: i32) -> String {
         format!("{value} ({d})")
     } else {
         format!("{value} (unknown date)")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    /// Regression test for #21982: `range` / `generate_series` must propagate
-    /// the start argument's metadata onto the resulting list's inner field.
-    #[test]
-    fn range_preserves_inner_field_metadata() -> Result<()> {
-        let metadata = HashMap::from([(
-            "ARROW:extension:name".to_string(),
-            "arrow.uuid".to_string(),
-        )]);
-        let start: FieldRef =
-            Arc::new(Field::new("s", DataType::Int64, true).with_metadata(metadata));
-        let stop: FieldRef = Arc::new(Field::new("e", DataType::Int64, true));
-        let arg_fields = vec![Arc::clone(&start), Arc::clone(&stop)];
-        let scalar_args: Vec<Option<&ScalarValue>> = vec![None, None];
-
-        let rf = Range::new().return_field_from_args(ReturnFieldArgs {
-            arg_fields: &arg_fields,
-            scalar_arguments: &scalar_args,
-        })?;
-        let DataType::List(inner) = rf.data_type() else {
-            panic!("expected List return type");
-        };
-        assert_eq!(
-            inner.metadata().get("ARROW:extension:name"),
-            Some(&"arrow.uuid".to_string())
-        );
-        Ok(())
     }
 }

@@ -171,13 +171,15 @@ impl ScalarUDFImpl for ArraysZip {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let inner_field = match args.return_field.data_type() {
-            List(field) | LargeList(field) | FixedSizeList(field, _) => {
-                Some(Arc::clone(field))
+            List(field) | LargeList(field) | FixedSizeList(field, _) => Arc::clone(field),
+            dt => {
+                return datafusion_common::internal_err!(
+                    "arrays_zip return field must be List-shaped, got {dt}"
+                );
             }
-            _ => None,
         };
         make_scalar_function(move |arrays: &[ArrayRef]| {
-            arrays_zip_inner_with_field(arrays, inner_field.clone())
+            arrays_zip_inner_with_field(arrays, Arc::clone(&inner_field))
         })(&args.args)
     }
 
@@ -198,7 +200,7 @@ impl ScalarUDFImpl for ArraysZip {
 /// Supports List, LargeList, and Null input types.
 fn arrays_zip_inner_with_field(
     args: &[ArrayRef],
-    inner_field: Option<FieldRef>,
+    inner_field: FieldRef,
 ) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("arrays_zip requires at least one argument");
@@ -264,10 +266,14 @@ fn arrays_zip_inner_with_field(
         .map(|v| v.as_ref().map(|view| view.values.to_data()))
         .collect();
 
-    // Prefer the planning-time struct fields (which preserve input metadata)
-    // when available; fall back to building bare fields from element types.
-    let struct_fields: Fields = match inner_field.as_ref().map(|f| f.data_type()) {
-        Some(DataType::Struct(fields)) => fields.clone(),
+    // Use the planning-time struct fields (which preserve input metadata).
+    // Fall back to building bare fields from element types only if the
+    // planning-time inner field doesn't carry a struct — that shouldn't
+    // happen for a normal `arrays_zip` invocation (`return_field_from_args`
+    // always returns `List<Struct<...>>`), but it is reachable if a caller
+    // constructs `ScalarFunctionArgs` manually with a custom `return_field`.
+    let struct_fields: Fields = match inner_field.data_type() {
+        DataType::Struct(fields) => fields.clone(),
         _ => element_types
             .iter()
             .enumerate()
@@ -361,12 +367,16 @@ fn arrays_zip_inner_with_field(
 
     let null_buffer = null_builder.finish();
 
-    let list_inner = inner_field.unwrap_or_else(|| {
+    // Reuse the planning-time inner field when its data type matches the
+    // assembled struct; otherwise (see fallback above) rebuild it.
+    let list_inner = if inner_field.data_type() == struct_array.data_type() {
+        inner_field
+    } else {
         Arc::new(Field::new_list_field(
             struct_array.data_type().clone(),
             true,
         ))
-    });
+    };
     let result = ListArray::try_new(
         list_inner,
         OffsetBuffer::new(offsets.into()),
@@ -384,14 +394,19 @@ mod tests {
 
     /// Regression test for #21982: `arrays_zip` must propagate each input
     /// list's element-field metadata onto the corresponding struct member.
+    ///
+    /// Uses arbitrary key/value metadata (not the official `ARROW:extension:*`
+    /// keys) since the bare data types here would not be valid extension-type
+    /// storage anyway; what we're asserting is that metadata flows through,
+    /// not extension-type semantics.
     #[test]
     fn arrays_zip_preserves_struct_member_metadata() -> Result<()> {
         let with_meta = |k: &str, v: &str, dt: DataType| -> FieldRef {
             let metadata = HashMap::from([(k.to_string(), v.to_string())]);
             Arc::new(Field::new("e", dt, true).with_metadata(metadata))
         };
-        let a_inner = with_meta("ARROW:extension:name", "arrow.uuid", DataType::Int64);
-        let b_inner = with_meta("ARROW:extension:name", "arrow.json", DataType::Utf8);
+        let a_inner = with_meta("unit", "ms", DataType::Int64);
+        let b_inner = with_meta("source", "sensor", DataType::Utf8);
         let a: FieldRef = Arc::new(Field::new("a", List(Arc::clone(&a_inner)), true));
         let b: FieldRef = Arc::new(Field::new("b", List(Arc::clone(&b_inner)), true));
         let arg_fields = vec![a, b];
@@ -407,13 +422,10 @@ mod tests {
         let DataType::Struct(fields) = list_inner.data_type() else {
             panic!("expected struct inner");
         };
+        assert_eq!(fields[0].metadata().get("unit"), Some(&"ms".to_string()));
         assert_eq!(
-            fields[0].metadata().get("ARROW:extension:name"),
-            Some(&"arrow.uuid".to_string())
-        );
-        assert_eq!(
-            fields[1].metadata().get("ARROW:extension:name"),
-            Some(&"arrow.json".to_string())
+            fields[1].metadata().get("source"),
+            Some(&"sensor".to_string())
         );
         Ok(())
     }

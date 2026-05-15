@@ -457,6 +457,13 @@ impl SingleRowListArrayBuilder {
     /// Propagating metadata is required for Arrow extension types
     /// (`ARROW:extension:name` / `ARROW:extension:metadata`) to round-trip
     /// through SQL list constructors (e.g. `make_array`, `array_agg`).
+    ///
+    /// The field's name is preserved verbatim — most callers pass a
+    /// planning-time inner field whose name has already been normalized
+    /// (e.g. via [`nullable_list_item_field_from`]), and a small number of
+    /// callers (notably `ScalarValue::try_from_array` for `DataType::List`)
+    /// deliberately rely on the source name surviving round-trips through
+    /// the scalar/array boundary.
     pub fn with_field(mut self, field: &Field) -> Self {
         self.field_name = Some(field.name().to_owned());
         self.nullable = field.is_nullable();

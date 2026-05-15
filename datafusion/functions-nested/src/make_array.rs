@@ -129,11 +129,15 @@ impl ScalarUDFImpl for MakeArray {
         let inner_field = match args.return_field.data_type() {
             DataType::List(field)
             | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _) => Some(Arc::clone(field)),
-            _ => None,
+            | DataType::FixedSizeList(field, _) => Arc::clone(field),
+            dt => {
+                return datafusion_common::internal_err!(
+                    "make_array return field must be List-shaped, got {dt}"
+                );
+            }
         };
         make_scalar_function(move |arrays: &[ArrayRef]| {
-            make_array_inner_with_field(arrays, inner_field.clone())
+            make_array_inner_with_field(arrays, Arc::clone(&inner_field))
         })(&args.args)
     }
 
@@ -157,16 +161,29 @@ impl ScalarUDFImpl for MakeArray {
 /// `make_array_inner` is the implementation of the `make_array` function.
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
+///
+/// This entry point synthesizes a bare inner field with no metadata. Prefer
+/// [`make_array_inner_with_field`] from contexts where a planning-time
+/// `FieldRef` is available (e.g. `MakeArray::invoke_with_args`) so that
+/// per-field metadata (notably Arrow extension types) flows through.
 pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    make_array_inner_with_field(arrays, None)
+    let data_type = arrays
+        .iter()
+        .find_map(|a| {
+            let dt = a.data_type();
+            (!dt.is_null()).then(|| dt.clone())
+        })
+        .unwrap_or(Null);
+    let inner = Arc::new(Field::new_list_field(data_type, true));
+    make_array_inner_with_field(arrays, inner)
 }
 
 /// Like [`make_array_inner`] but uses `inner_field` for the resulting list's
-/// inner field when supplied, so callers can propagate the input field's
-/// metadata onto the constructed `ListArray`'s inner field.
+/// inner field, so callers can propagate the input field's metadata onto
+/// the constructed `ListArray`'s inner field.
 pub(crate) fn make_array_inner_with_field(
     arrays: &[ArrayRef],
-    inner_field: Option<FieldRef>,
+    inner_field: FieldRef,
 ) -> Result<ArrayRef> {
     let data_type = arrays.iter().find_map(|arg| {
         let arg_type = arg.data_type();
@@ -178,20 +195,13 @@ pub(crate) fn make_array_inner_with_field(
         // Either an empty array or all nulls:
         let length = arrays.iter().map(|a| a.len()).sum();
         let array = new_null_array(&Null, length);
-        let mut builder = SingleRowListArrayBuilder::new(array);
-        if let Some(field) = inner_field.as_ref() {
-            builder = builder.with_field(field);
-        }
-        Ok(Arc::new(builder.build_list_array()))
+        Ok(Arc::new(
+            SingleRowListArrayBuilder::new(array)
+                .with_field(&inner_field)
+                .build_list_array(),
+        ))
     } else {
-        match inner_field {
-            Some(field) => array_array_with_field::<i32>(arrays, field),
-            None => array_array::<i32>(
-                arrays,
-                data_type.clone(),
-                Field::LIST_FIELD_DEFAULT_NAME,
-            ),
-        }
+        array_array_with_field::<i32>(arrays, inner_field)
     }
 }
 
@@ -325,11 +335,12 @@ mod tests {
     use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
     use std::collections::HashMap;
 
-    fn ext_field(data_type: DataType) -> FieldRef {
-        let metadata = HashMap::from([(
-            "ARROW:extension:name".to_string(),
-            "arrow.uuid".to_string(),
-        )]);
+    /// Arbitrary key/value metadata (not the official `ARROW:extension:*`
+    /// keys) — what we assert is that metadata flows through, not extension-
+    /// type semantics, and `Int64` would not be valid storage for any real
+    /// extension type anyway.
+    fn meta_field(data_type: DataType) -> FieldRef {
+        let metadata = HashMap::from([("unit".to_string(), "ms".to_string())]);
         Arc::new(Field::new("v", data_type, true).with_metadata(metadata))
     }
 
@@ -337,7 +348,7 @@ mod tests {
     /// field's metadata onto the resulting list's inner field.
     #[test]
     fn make_array_preserves_inner_field_metadata() -> Result<()> {
-        let input = ext_field(DataType::Int64);
+        let input = meta_field(DataType::Int64);
         let scalar_args: Vec<Option<&ScalarValue>> = vec![None];
         let arg_fields_owned = vec![Arc::clone(&input)];
         let return_field =
@@ -350,8 +361,8 @@ mod tests {
             panic!("expected List return type");
         };
         assert_eq!(
-            inner.metadata().get("ARROW:extension:name"),
-            Some(&"arrow.uuid".to_string()),
+            inner.metadata().get("unit"),
+            Some(&"ms".to_string()),
             "make_array dropped the input field's metadata"
         );
 
@@ -368,10 +379,7 @@ mod tests {
         let DataType::List(rt_inner) = array.data_type() else {
             panic!("runtime output not a List");
         };
-        assert_eq!(
-            rt_inner.metadata().get("ARROW:extension:name"),
-            Some(&"arrow.uuid".to_string())
-        );
+        assert_eq!(rt_inner.metadata().get("unit"), Some(&"ms".to_string()));
 
         Ok(())
     }

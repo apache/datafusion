@@ -364,13 +364,13 @@ mod tests {
     use std::collections::HashMap;
 
     /// Regression test for #21982: `array_repeat` must propagate the input
-    /// field's metadata onto the resulting list's inner field.
+    /// field's metadata onto the resulting list's inner field. Uses
+    /// arbitrary key/value metadata (not the official `ARROW:extension:*`
+    /// keys) since `Int64` would not be valid storage for any real extension
+    /// type; what we assert is that metadata flows through.
     #[test]
     fn array_repeat_preserves_inner_field_metadata() -> Result<()> {
-        let metadata = HashMap::from([(
-            "ARROW:extension:name".to_string(),
-            "arrow.uuid".to_string(),
-        )]);
+        let metadata = HashMap::from([("unit".to_string(), "ms".to_string())]);
         let element: FieldRef =
             Arc::new(Field::new("v", DataType::Int64, true).with_metadata(metadata));
         let count: FieldRef = Arc::new(Field::new("n", DataType::Int64, true));
@@ -385,10 +385,7 @@ mod tests {
         let List(inner) = return_field.data_type() else {
             panic!("expected List return type");
         };
-        assert_eq!(
-            inner.metadata().get("ARROW:extension:name"),
-            Some(&"arrow.uuid".to_string())
-        );
+        assert_eq!(inner.metadata().get("unit"), Some(&"ms".to_string()));
         Ok(())
     }
 }

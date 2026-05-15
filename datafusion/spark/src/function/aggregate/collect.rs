@@ -17,7 +17,9 @@
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::utils::SingleRowListArrayBuilder;
+use datafusion_common::utils::{
+    SingleRowListArrayBuilder, nullable_list_item_field_from,
+};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -70,23 +72,31 @@ impl AggregateUDFImpl for SparkCollectList {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new_list(
-                format_state_name(args.name, "collect_list"),
-                Field::new_list_field(args.input_fields[0].data_type().clone(), true),
-                true,
-            )
-            .into(),
-        ])
+        // Propagate input-field metadata onto the state list's inner field so
+        // Arrow extension types survive multi-batch aggregation.
+        let inner = nullable_list_item_field_from(&args.input_fields[0]);
+        Ok(vec![Arc::new(Field::new(
+            format_state_name(args.name, "collect_list"),
+            DataType::List(inner),
+            true,
+        ))])
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        let inner = nullable_list_item_field_from(&arg_fields[0]);
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::List(inner),
+            true,
+        )))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let field = &acc_args.expr_fields[0];
-        let data_type = field.data_type().clone();
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
             ArrayAggAccumulator::try_new(field, ignore_nulls)?,
-            data_type,
+            Arc::clone(field),
         )))
     }
 }
@@ -128,23 +138,31 @@ impl AggregateUDFImpl for SparkCollectSet {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new_list(
-                format_state_name(args.name, "collect_set"),
-                Field::new_list_field(args.input_fields[0].data_type().clone(), true),
-                true,
-            )
-            .into(),
-        ])
+        // Propagate input-field metadata onto the state list's inner field so
+        // Arrow extension types survive multi-batch aggregation.
+        let inner = nullable_list_item_field_from(&args.input_fields[0]);
+        Ok(vec![Arc::new(Field::new(
+            format_state_name(args.name, "collect_set"),
+            DataType::List(inner),
+            true,
+        ))])
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        let inner = nullable_list_item_field_from(&arg_fields[0]);
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::List(inner),
+            true,
+        )))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let field = &acc_args.expr_fields[0];
-        let data_type = field.data_type().clone();
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
             DistinctArrayAggAccumulator::try_new(field, None, ignore_nulls)?,
-            data_type,
+            Arc::clone(field),
         )))
     }
 }
@@ -154,12 +172,15 @@ impl AggregateUDFImpl for SparkCollectSet {
 #[derive(Debug)]
 struct NullToEmptyListAccumulator<T: Accumulator> {
     inner: T,
-    data_type: DataType,
+    /// Input element field. Carries the data type for the empty list payload
+    /// and the metadata that must flow onto the resulting list's inner field
+    /// (Arrow extension types survive the all-NULL case this wrapper handles).
+    value_field: FieldRef,
 }
 
 impl<T: Accumulator> NullToEmptyListAccumulator<T> {
-    pub fn new(inner: T, data_type: DataType) -> Self {
-        Self { inner, data_type }
+    pub fn new(inner: T, value_field: FieldRef) -> Self {
+        Self { inner, value_field }
     }
 }
 
@@ -179,14 +200,16 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let result = self.inner.evaluate()?;
         if result.is_null() {
-            let empty_array = arrow::array::new_empty_array(&self.data_type);
-            Ok(SingleRowListArrayBuilder::new(empty_array).build_list_scalar())
+            let empty_array = arrow::array::new_empty_array(self.value_field.data_type());
+            Ok(SingleRowListArrayBuilder::new(empty_array)
+                .with_field(&self.value_field)
+                .build_list_scalar())
         } else {
             Ok(result)
         }
     }
 
     fn size(&self) -> usize {
-        self.inner.size() + self.data_type.size()
+        self.inner.size() + self.value_field.data_type().size()
     }
 }

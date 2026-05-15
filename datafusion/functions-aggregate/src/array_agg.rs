@@ -1538,7 +1538,7 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 282);
+        assert_eq!(acc1.size(), 266);
 
         Ok(())
     }
@@ -2063,7 +2063,10 @@ mod tests {
 
     #[test]
     fn retract_basic_sliding_window() -> Result<()> {
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), false)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            false,
+        )?;
 
         // Simulate ROWS BETWEEN 1 PRECEDING AND CURRENT ROW over [A, B, C, D]
         // Row 1: frame = [A]
@@ -2089,7 +2092,10 @@ mod tests {
 
     #[test]
     fn retract_multi_element_across_arrays() -> Result<()> {
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), false)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            false,
+        )?;
 
         // First batch: 3 elements
         acc.update_batch(&[data(["A", "B", "C"])])?;
@@ -2119,7 +2125,10 @@ mod tests {
     #[test]
     fn retract_with_nulls_preserved() -> Result<()> {
         // ignore_nulls = false: NULLs are stored and counted for retract
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), false)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            false,
+        )?;
 
         acc.update_batch(&[data([Some("A"), None, Some("C")])])?;
         assert_eq!(
@@ -2138,7 +2147,10 @@ mod tests {
     fn retract_with_ignore_nulls() -> Result<()> {
         // ignore_nulls = true: NULLs are NOT stored by update_batch,
         // so retract must only count non-null values
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), true)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            true,
+        )?;
 
         // update_batch with [A, NULL, C] → stores only [A, C] (NULL filtered)
         acc.update_batch(&[data([Some("A"), None, Some("C")])])?;
@@ -2163,7 +2175,10 @@ mod tests {
     #[test]
     fn retract_ignore_nulls_all_nulls_batch() -> Result<()> {
         // When ignore_nulls = true and retract batch is all NULLs, nothing is retracted
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), true)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            true,
+        )?;
 
         acc.update_batch(&[data([Some("A"), Some("B")])])?;
         assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["A", "B"]);
@@ -2177,7 +2192,10 @@ mod tests {
 
     #[test]
     fn retract_empty_accumulator() -> Result<()> {
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), false)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            false,
+        )?;
 
         // Retract on empty accumulator should be a no-op
         acc.retract_batch(&[data(["A"])])?;
@@ -2200,7 +2218,10 @@ mod tests {
         // Row 3 (ts=3): no change      (same frame [0..4))
         // Row 4 (ts=4): retract [A]    (ts=1 leaves, partial consume)
         // Row 5 (ts=100): retract [B,C,D] (3-element retract spanning arrays)
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), false)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            false,
+        )?;
 
         // Row 1: update_batch(["A","B","C"])
         acc.update_batch(&[data(["A", "B", "C"])])?;
@@ -2229,7 +2250,10 @@ mod tests {
     #[test]
     fn retract_update_after_full_drain() -> Result<()> {
         // Verify accumulator works correctly after being fully drained
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), false)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            false,
+        )?;
 
         acc.update_batch(&[data(["A", "B"])])?;
         acc.retract_batch(&[data(["A", "B"])])?;
@@ -2253,10 +2277,16 @@ mod tests {
 
     #[test]
     fn retract_supports_retract_batch() -> Result<()> {
-        let acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), false)?;
+        let acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            false,
+        )?;
         assert!(acc.supports_retract_batch());
 
-        let acc_ignore = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", DataType::Utf8, true)), true)?;
+        let acc_ignore = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", DataType::Utf8, true)),
+            true,
+        )?;
         assert!(acc_ignore.supports_retract_batch());
 
         Ok(())
@@ -2272,7 +2302,10 @@ mod tests {
 
         let dict_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", dict_type.clone(), true)), true)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", dict_type.clone(), true)),
+            true,
+        )?;
 
         // Dictionary values: ["hello", NULL, "world"]
         // Keys: [0, 1, 2, 1] — all valid, but keys 1 and 3 point to null value
@@ -2324,7 +2357,10 @@ mod tests {
 
         let dict_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-        let mut acc = ArrayAggAccumulator::try_new(&Arc::new(Field::new("c", dict_type.clone(), true)), true)?;
+        let mut acc = ArrayAggAccumulator::try_new(
+            &Arc::new(Field::new("c", dict_type.clone(), true)),
+            true,
+        )?;
 
         // update with ["A", "B", "C"] (no nulls)
         let values = StringArray::from(vec!["A", "B", "C"]);
