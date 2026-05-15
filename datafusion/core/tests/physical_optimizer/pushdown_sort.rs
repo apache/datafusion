@@ -145,7 +145,7 @@ fn test_sort_multiple_columns_phase1() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
 }
@@ -180,7 +180,7 @@ fn test_prefix_match_single_column() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
 }
@@ -249,7 +249,7 @@ fn test_prefix_match_through_transparent_nodes() {
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
 }
@@ -288,12 +288,10 @@ fn test_exact_prefix_match_same_direction() {
 fn test_inexact_pushdown_when_prefix_longer_than_source() {
     // Source has [a DESC] ordering, request is [a ASC, b DESC] — longer
     // than the source ordering so the prefix can't be matched. The
-    // primary sort column 'a' is still in the file schema though, so the
-    // sort pushdown rule returns `Inexact` with `sort_order_for_reorder`
-    // set on the leading column, drops the source's `output_ordering`
-    // (since the source no longer guarantees it after stats-based RG
-    // reorder), and leaves the outer `SortExec` in place to enforce the
-    // full requested ordering.
+    // primary sort column 'a' is in the file schema, so sort pushdown
+    // returns `Inexact` with `sort_order_for_reorder` set, drops the
+    // source's `output_ordering` (the runtime reorder invalidates it),
+    // and leaves the outer `SortExec` to enforce the full ordering.
     let schema = schema();
 
     // Source has [a DESC] ordering (single column)
@@ -540,11 +538,11 @@ fn test_no_pushdown_for_unordered_source() {
 fn test_inexact_pushdown_when_request_doesnt_match_source_ordering() {
     // The requested sort column ('b') doesn't match the source's natural
     // ordering ('a' ASC). Neither natural nor reversed satisfies the
-    // request, but 'b' is in the file schema — so the sort pushdown rule
-    // returns `Inexact` with `sort_order_for_reorder` set, dropping the
-    // source's claimed `output_ordering` (the source no longer guarantees
-    // it after the runtime row-group reorder) but keeping the surrounding
-    // `SortExec` on top for correctness.
+    // request, but 'b' is in the file schema — so sort pushdown returns
+    // `Inexact` with `sort_order_for_reorder` set, drops the source's
+    // claimed `output_ordering` (the runtime row-group reorder
+    // invalidates it), and keeps the surrounding `SortExec` for
+    // correctness.
     let schema = schema();
 
     // Source sorted by 'a' ASC

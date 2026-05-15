@@ -289,12 +289,12 @@ pub struct ParquetSource {
     pub(crate) projection: ProjectionExprs,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
-    /// If true, read files in reverse order and reverse row groups within files.
-    /// But it's not guaranteed that rows within row groups are in reverse order,
-    /// so we still need to sort them after reading, so the reverse scan is inexact.
-    /// Used to optimize ORDER BY ... DESC on sorted data.
+    /// If true, the opener flips row-group iteration order. Within-
+    /// row-group order is on-disk order, so the scan is `Inexact` and
+    /// a `SortExec` is kept in the plan.
     reverse_row_groups: bool,
-    /// Optional sort order used to reorder row groups by min/max statistics.
+    /// Sort order driving `PreparedAccessPlan::reorder_by_statistics`
+    /// in the opener.
     sort_order_for_reorder: Option<LexOrdering>,
 }
 
@@ -486,13 +486,9 @@ impl ParquetSource {
         self.reverse_row_groups
     }
 
-    /// Extract the (column name, descending) tuple used by file-level
-    /// reordering. Driven entirely from the sort-pushdown channel
-    /// (`sort_order_for_reorder` + `reverse_row_groups`) — set by
-    /// `try_pushdown_sort`. We do not consult any dynamic-filter
-    /// metadata here: `DynamicFilterPhysicalExpr` is for runtime
-    /// threshold pruning, not for telling the source how to schedule
-    /// reads.
+    /// Extract the `(column name, descending)` tuple used by file-level
+    /// reordering, derived from `sort_order_for_reorder` and
+    /// `reverse_row_groups` (both populated by `try_pushdown_sort`).
     fn extract_topk_sort_info(&self) -> Option<(String, bool)> {
         let sort_order = self.sort_order_for_reorder.as_ref()?;
         let first = sort_order.first();
@@ -516,76 +512,6 @@ impl ParquetSource {
             col_stats.max_value.get_value().cloned()
         }
     }
-}
-
-/// Threshold (fraction in `[0, 1]`) for the overlap guard in
-/// [`ParquetSource::reorder_files`]. When at least this fraction of
-/// adjacent file pairs (in sorted-by-min order) have overlapping
-/// `[min, max]` ranges, file reorder is skipped — file-level pruning
-/// cannot help and the reorder cost would dominate.
-const FILE_REORDER_OVERLAP_SKIP_THRESHOLD: f64 = 0.5;
-
-/// Returns `true` when adjacent file `[min, max]` ranges (in sorted-by-min
-/// order) overlap above [`FILE_REORDER_OVERLAP_SKIP_THRESHOLD`].
-///
-/// Files lacking statistics are conservatively treated as overlapping —
-/// missing stats discourage rather than silently disable the guard.
-fn files_have_heavy_overlap(
-    files: &[datafusion_datasource::PartitionedFile],
-    col_idx: usize,
-) -> bool {
-    if files.len() < 2 {
-        return false;
-    }
-
-    // Collect per-file (min, max). `None` propagates as an unknown bound.
-    let intervals: Vec<(
-        Option<datafusion_common::ScalarValue>,
-        Option<datafusion_common::ScalarValue>,
-    )> = files
-        .iter()
-        .map(|f| {
-            let col_stats = f
-                .statistics
-                .as_ref()
-                .and_then(|s| s.column_statistics.get(col_idx));
-            (
-                col_stats.and_then(|cs| cs.min_value.get_value().cloned()),
-                col_stats.and_then(|cs| cs.max_value.get_value().cloned()),
-            )
-        })
-        .collect();
-
-    // Sort by min. `None` mins go to the end so they form trailing "unknown"
-    // pairs that count as overlaps.
-    let mut order: Vec<usize> = (0..intervals.len()).collect();
-    order.sort_by(|&a, &b| match (&intervals[a].0, &intervals[b].0) {
-        (Some(x), Some(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
-
-    let mut overlaps = 0usize;
-    for window in order.windows(2) {
-        let (_, prev_max) = &intervals[window[0]];
-        let (next_min, _) = &intervals[window[1]];
-        let pair_overlaps = match (prev_max, next_min) {
-            (Some(pm), Some(nm)) => {
-                // Overlap when next_min <= prev_max.
-                nm.partial_cmp(pm)
-                    .is_some_and(|ord| ord != std::cmp::Ordering::Greater)
-            }
-            // Either bound unknown — conservatively treat as overlap.
-            _ => true,
-        };
-        if pair_overlaps {
-            overlaps += 1;
-        }
-    }
-
-    let total_pairs = order.len() - 1;
-    (overlaps as f64) / (total_pairs as f64) >= FILE_REORDER_OVERLAP_SKIP_THRESHOLD
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
@@ -703,19 +629,6 @@ impl FileSource for ParquetSource {
             Ok(idx) => idx,
             Err(_) => return files,
         };
-
-        // Skip when adjacent file [min, max] ranges overlap heavily —
-        // reordering cannot enable file-level pruning and the reorder cost
-        // (CPU sort + lost IO sequential locality + parallel scheduling
-        // pessimization across workers all pulling "best" files first)
-        // dominates. Same rationale as the RG-level guard in
-        // `PreparedAccessPlan::reorder_by_statistics`.
-        if files_have_heavy_overlap(&files, col_idx) {
-            log::debug!(
-                "Skipping file reorder for {col_name}: file stats overlap >= 50%"
-            );
-            return files;
-        }
 
         files.sort_by(|a, b| {
             let key_a = Self::sort_key_for_file(a, col_idx, descending);
@@ -916,25 +829,44 @@ impl FileSource for ParquetSource {
 
     /// Try to optimize the scan to produce data in the requested sort order.
     ///
-    /// This method receives:
+    /// Inputs:
     /// 1. The query's required ordering (`order` parameter)
-    /// 2. The file's natural ordering (via `self.file_ordering`, set by FileScanConfig)
-    ///
-    /// With both pieces of information, ParquetSource can decide what optimizations to apply.
-    ///
-    /// # Behavior
-    /// - Returns `Exact` when the file's natural ordering (from Parquet metadata) already
-    ///   satisfies the requested ordering. This allows the Sort operator to be eliminated
-    ///   if the files within each group are also non-overlapping (checked by FileScanConfig).
-    /// - Returns `Inexact` when reversing the row group scan order would help satisfy the
-    ///   requested ordering. We still need a Sort operator at a higher level because:
-    ///   - We only reverse row group read order, not rows within row groups
-    ///   - This provides approximate ordering that benefits limit pushdown
+    /// 2. The source's equivalence properties (`eq_properties`)
     ///
     /// # Returns
-    /// - `Exact`: The file's natural ordering satisfies the request (within-file ordering guaranteed)
-    /// - `Inexact`: Created an optimized source (e.g., reversed scan) that approximates the order
-    /// - `Unsupported`: Cannot optimize for this ordering
+    /// - `Exact`: the source's natural ordering already satisfies the
+    ///   request. The surrounding `SortExec` can be eliminated provided
+    ///   files within each group are non-overlapping (verified by
+    ///   `FileScanConfig`).
+    /// - `Inexact`: the source can approximate the request — either by
+    ///   reordering row groups based on min/max statistics (when the
+    ///   leading sort column is a plain `Column` in the file schema), or
+    ///   by reversing the row-group iteration order (when the request
+    ///   matches the reversed source ordering, e.g. for function-wrapped
+    ///   sort expressions). A `SortExec` is still required for full
+    ///   correctness, but limit pushdown and `TopK` benefit immediately.
+    /// - `Unsupported`: no approximation is available.
+    ///
+    /// # Why two separate flags on the inexact source
+    ///
+    /// The Inexact result is communicated to the opener through two
+    /// fields on `ParquetSource` — `sort_order_for_reorder` and
+    /// `reverse_row_groups` — driving two independent runtime steps:
+    /// stats-based row-group reorder, then iteration reverse. They
+    /// are not redundant:
+    ///
+    /// - Plain-`Column` leading sort: both fields are set. The opener
+    ///   sorts row groups ASC by `min(col)` using parquet stats, then
+    ///   reverses iteration if the request was DESC.
+    /// - Function-wrapped sort (e.g. `date_trunc('day', ts) DESC`):
+    ///   `reverse_row_groups` only. Parquet stats are keyed by column
+    ///   name, so a stats-based reorder isn't available, but if the
+    ///   reversed source ordering satisfies the request, flipping
+    ///   iteration alone still helps.
+    ///
+    /// The two "reverse" operations have different starting points
+    /// (post-stats-reorder ASC-by-min vs. file's natural order), so
+    /// they can't be collapsed into a single direction-carrying flag.
     fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],
@@ -954,58 +886,13 @@ impl FileSource for ParquetSource {
             });
         }
 
-        // Build new equivalence properties with the reversed ordering.
-        // This allows us to check if the reversed ordering satisfies the request
-        // by leveraging:
-        // - Function monotonicity (e.g., extract_year_month preserves ordering)
-        // - Constant columns (from filters)
-        // - Other equivalence relationships
-        //
-        // Example flow:
-        // 1. File ordering: [extract_year_month(ws) DESC, ws DESC]
-        // 2. After reversal: [extract_year_month(ws) ASC, ws ASC]
-        // 3. Requested: [ws ASC]
-        // 4. Through extract_year_month's monotonicity property, the reversed
-        //    ordering satisfies [ws ASC] even though it has additional prefix
-        let reversed_eq_properties = {
-            let mut new = eq_properties.clone();
-            new.clear_orderings();
-
-            // Reverse each ordering in the equivalence properties
-            let reversed_orderings = eq_properties
-                .oeq_class()
-                .iter()
-                .map(|ordering| {
-                    ordering
-                        .iter()
-                        .map(|expr| expr.reverse())
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
-
-            new.add_orderings(reversed_orderings);
-            new
-        };
-
-        // Check if the reversed ordering satisfies the requested ordering.
-        // If yes, this is the "Inexact via row-group reversal" case: source
-        // declares ASC ordering, request is DESC (or vice versa), so iterating
-        // RGs in reverse approximates the requested order.
-        if reversed_eq_properties.ordering_satisfy(order.iter().cloned())? {
-            let sort_order = LexOrdering::new(order.iter().cloned());
-            let mut new_source = self.clone().with_reverse_row_groups(true);
-            new_source.sort_order_for_reorder = sort_order;
-            return Ok(SortOrderPushdownResult::Inexact {
-                inner: Arc::new(new_source) as Arc<dyn FileSource>,
-            });
-        }
-
-        // Inexact via stats-based row-group reorder. Even when neither natural
-        // nor reversed ordering matches (e.g. the table has no declared ordering),
-        // if the sort column is a plain column present in the file schema, the
-        // source can still reorder row groups by their min/max statistics at
-        // runtime. This helps any `ORDER BY` on a sorted source, not just TopK
-        // — the optimization is no longer tied to the dynamic filter path.
+        // Plain `Column` leading sort: parquet min/max stats can be
+        // looked up by column name, so the opener can sort row groups
+        // by `min(col)` ASC at runtime. `reverse_row_groups` is taken
+        // from the request's direction — the stats-based reorder
+        // normalises iteration to ASC-by-min regardless of how the
+        // file was written, so the reverse step depends only on what
+        // the query asks for.
         if let Some(sort_order) = LexOrdering::new(order.iter().cloned()) {
             let first = sort_order.first();
             let is_descending = first.options.descending;
@@ -1019,18 +906,44 @@ impl FileSource for ParquetSource {
                         .is_ok()
                 });
             if column_in_file_schema {
-                let mut new_source = self.clone();
+                let mut new_source = self.clone().with_reverse_row_groups(is_descending);
                 new_source.sort_order_for_reorder = Some(sort_order);
-                // For DESC requests, also set `reverse_row_groups` so the
-                // opener's reverse pass flips RG iteration order after the
-                // stats-based reorder.
-                if is_descending {
-                    new_source.reverse_row_groups = true;
-                }
                 return Ok(SortOrderPushdownResult::Inexact {
                     inner: Arc::new(new_source) as Arc<dyn FileSource>,
                 });
             }
+        }
+
+        // Function-wrapped sort (e.g. `date_trunc('day', ts) DESC`,
+        // `ceil(value) DESC`): parquet stats are keyed by column name
+        // so a stats-based reorder isn't available. Instead, use
+        // `EquivalenceProperties`'s monotonicity inference to check
+        // whether the reversed source ordering satisfies the request —
+        // if so, flipping row-group iteration alone helps the
+        // surrounding `SortExec`. `sort_order_for_reorder` stays unset
+        // because `reorder_by_statistics` would reject a non-`Column`
+        // sort expression anyway.
+        let reversed_eq_properties = {
+            let mut new = eq_properties.clone();
+            new.clear_orderings();
+            let reversed_orderings = eq_properties
+                .oeq_class()
+                .iter()
+                .map(|ordering| {
+                    ordering
+                        .iter()
+                        .map(|expr| expr.reverse())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            new.add_orderings(reversed_orderings);
+            new
+        };
+        if reversed_eq_properties.ordering_satisfy(order.iter().cloned())? {
+            let new_source = self.clone().with_reverse_row_groups(true);
+            return Ok(SortOrderPushdownResult::Inexact {
+                inner: Arc::new(new_source) as Arc<dyn FileSource>,
+            });
         }
 
         Ok(SortOrderPushdownResult::Unsupported)
@@ -1061,96 +974,7 @@ impl FileSource for ParquetSource {
 mod tests {
     use super::*;
     use arrow::datatypes::Schema;
-    use datafusion_common::ScalarValue;
-    use datafusion_common::stats::Precision;
-    use datafusion_datasource::PartitionedFile;
     use datafusion_physical_expr::expressions::lit;
-
-    fn file_with_min_max(min: Option<i32>, max: Option<i32>) -> PartitionedFile {
-        let mut pf = PartitionedFile::new("test".to_string(), 0);
-        let col_stats = datafusion_common::ColumnStatistics {
-            null_count: Precision::Absent,
-            max_value: max
-                .map(|v| Precision::Exact(ScalarValue::Int32(Some(v))))
-                .unwrap_or(Precision::Absent),
-            min_value: min
-                .map(|v| Precision::Exact(ScalarValue::Int32(Some(v))))
-                .unwrap_or(Precision::Absent),
-            sum_value: Precision::Absent,
-            distinct_count: Precision::Absent,
-            byte_size: Precision::Absent,
-        };
-        let stats = datafusion_common::Statistics {
-            num_rows: Precision::Absent,
-            total_byte_size: Precision::Absent,
-            column_statistics: vec![col_stats],
-        };
-        pf.statistics = Some(Arc::new(stats));
-        pf
-    }
-
-    #[test]
-    fn files_overlap_disjoint_sorted() {
-        let files = vec![
-            file_with_min_max(Some(0), Some(10)),
-            file_with_min_max(Some(20), Some(30)),
-            file_with_min_max(Some(40), Some(50)),
-        ];
-        assert!(!files_have_heavy_overlap(&files, 0));
-    }
-
-    #[test]
-    fn files_overlap_disjoint_after_reorder() {
-        // Original order is shuffled but ranges themselves are disjoint.
-        let files = vec![
-            file_with_min_max(Some(40), Some(50)),
-            file_with_min_max(Some(0), Some(10)),
-            file_with_min_max(Some(20), Some(30)),
-        ];
-        assert!(!files_have_heavy_overlap(&files, 0));
-    }
-
-    #[test]
-    fn files_overlap_fully() {
-        let files = vec![
-            file_with_min_max(Some(0), Some(100)),
-            file_with_min_max(Some(0), Some(100)),
-            file_with_min_max(Some(0), Some(100)),
-        ];
-        assert!(files_have_heavy_overlap(&files, 0));
-    }
-
-    #[test]
-    fn files_overlap_partial_below_threshold() {
-        // Sorted-by-min: [0,15] [20,25] [30,40] [45,50]
-        //   pair 0: 20 <= 15 → no
-        //   pair 1: 30 <= 25 → no
-        //   pair 2: 45 <= 40 → no
-        // Ratio 0/3 → no skip.
-        let files = vec![
-            file_with_min_max(Some(0), Some(15)),
-            file_with_min_max(Some(20), Some(25)),
-            file_with_min_max(Some(30), Some(40)),
-            file_with_min_max(Some(45), Some(50)),
-        ];
-        assert!(!files_have_heavy_overlap(&files, 0));
-    }
-
-    #[test]
-    fn files_overlap_missing_stats_treated_as_overlap() {
-        let files = vec![
-            file_with_min_max(Some(0), Some(10)),
-            file_with_min_max(None, None),
-            file_with_min_max(Some(20), Some(30)),
-        ];
-        assert!(files_have_heavy_overlap(&files, 0));
-    }
-
-    #[test]
-    fn files_overlap_too_few_files() {
-        let files = vec![file_with_min_max(Some(0), Some(10))];
-        assert!(!files_have_heavy_overlap(&files, 0));
-    }
 
     #[test]
     #[expect(deprecated)]
@@ -1273,10 +1097,9 @@ mod tests {
         }
     }
 
-    /// New `Inexact` branch in `try_pushdown_sort` (the one this refactor
-    /// exists for): when neither natural nor reversed ordering matches
-    /// the request, but the sort column is a plain `Column` present in
-    /// the file schema, the source should still return `Inexact` with
+    /// When neither natural nor reversed ordering matches the request,
+    /// but the sort column is a plain `Column` present in the file
+    /// schema, `try_pushdown_sort` returns `Inexact` with
     /// `sort_order_for_reorder` set so the opener can reorder row
     /// groups by min/max statistics at runtime.
     #[test]
@@ -1296,7 +1119,7 @@ mod tests {
             panic!("expected Inexact, got a different variant");
         };
         // Downcast back to `ParquetSource` to inspect the fields the
-        // opener now reads.
+        // opener reads to drive `reorder_by_statistics` / `reverse`.
         let inner_parquet = inner
             .downcast_ref::<ParquetSource>()
             .expect("inner is ParquetSource");
@@ -1312,9 +1135,8 @@ mod tests {
         );
     }
 
-    /// Same as above but for DESC. In addition to setting
-    /// `sort_order_for_reorder`, `reverse_row_groups` must be `true`
-    /// so the opener flips RG iteration after the stats-based reorder.
+    /// Same as above but for DESC. `reverse_row_groups` must also be
+    /// `true` so the opener flips iteration order.
     #[test]
     fn try_pushdown_sort_returns_inexact_when_column_in_schema_desc() {
         use datafusion_physical_expr::EquivalenceProperties;
@@ -1336,18 +1158,14 @@ mod tests {
         assert!(inner_parquet.sort_order_for_reorder.is_some());
         assert!(
             inner_parquet.reverse_row_groups(),
-            "DESC request must set reverse_row_groups so the opener's reverse \
-             pass runs after the stats-based reorder",
+            "DESC request must set reverse_row_groups",
         );
     }
 
-    /// Boundary case: when the sort expression is not a plain `Column`
-    /// (e.g. a function call like `date_trunc('hour', ts)`), the new
-    /// `Inexact` branch must NOT fire — the parquet `StatisticsConverter`
-    /// needs a plain column name to look up min/max, so non-column
-    /// expressions can't drive stats-based reorder. The result is
-    /// `Unsupported` so the optimizer keeps the `SortExec` and does
-    /// not attach a meaningless reorder hint.
+    /// A non-`Column` leading sort expression (e.g. `a + 1`,
+    /// `date_trunc('hour', ts)`) with no declared source ordering
+    /// yields `Unsupported` — parquet stats need a column name to
+    /// look up min/max, and there's no source ordering to reverse.
     #[test]
     fn try_pushdown_sort_returns_unsupported_for_non_column_sort_expr() {
         use arrow::compute::SortOptions;
@@ -1380,11 +1198,9 @@ mod tests {
         );
     }
 
-    /// Boundary case: when the requested sort column is **not** in the
-    /// file schema (e.g. an aggregated alias only present after a
-    /// projection), the new `Inexact` branch must NOT fire either —
-    /// the parquet file has no min/max for that column to reorder by.
-    /// Result is `Unsupported`.
+    /// A sort column missing from the file schema with no declared
+    /// source ordering yields `Unsupported` — there are no parquet
+    /// stats for that column and no source ordering to reverse.
     #[test]
     fn try_pushdown_sort_returns_unsupported_when_column_not_in_file_schema() {
         use arrow::compute::SortOptions;
@@ -1438,8 +1254,6 @@ mod tests {
 
         let schema = schema_with_a_int();
         let mut source = ParquetSource::new(Arc::clone(&schema));
-        // Same shape `try_pushdown_sort` would produce on an ASC
-        // column-in-schema request.
         let order = LexOrdering::new(vec![sort_expr_on(&schema, "a", false)]).unwrap();
         source.sort_order_for_reorder = Some(order);
 
