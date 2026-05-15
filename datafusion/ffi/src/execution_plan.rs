@@ -490,10 +490,6 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
 #[cfg(any(test, feature = "integration-tests"))]
 pub mod tests {
-    #[cfg(test)]
-    use datafusion_common::stats::Precision;
-    #[cfg(test)]
-    use datafusion_common::{ColumnStatistics, ScalarValue};
     use datafusion_physical_plan::Partitioning;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
@@ -714,6 +710,9 @@ pub mod tests {
 
     #[test]
     fn test_ffi_execution_plan_partition_statistics_round_trip() -> Result<()> {
+        use datafusion_common::stats::Precision;
+        use datafusion_common::{ColumnStatistics, ScalarValue};
+        
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, true),
         ]));
