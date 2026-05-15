@@ -3256,7 +3256,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
-    
+
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
     fn make_session_state() -> SessionState {
