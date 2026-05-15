@@ -78,20 +78,9 @@ jobs:
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           echo "Changed crates: $PACKAGES"
 
-      # `datafusion-substrait` (and crates that depend on it via sqllogictest)
-      # have a build script that calls protoc, which is not preinstalled on
-      # ubuntu-latest runners.
-      - name: Install Protobuf Compiler
+      - name: Setup semver check
         if: steps.changed_crates.outputs.packages != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - name: Install cargo-semver-checks
-        if: steps.changed_crates.outputs.packages != ''
-        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8  # v2.77.6
-        with:
-          tool: cargo-semver-checks
+        uses: ./.github/actions/setup-semver-check
 
       - name: Run cargo-semver-checks against PR base branch
         id: check_semver
@@ -164,14 +153,7 @@ jobs:
         id: latest_release
         run: |
           git fetch --tags --force
-          LATEST_RELEASE_TAG=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' \
-            | grep -Ev '-' \
-            | sort -V \
-            | tail -n1)
-          if [ -z "$LATEST_RELEASE_TAG" ]; then
-            echo "Could not determine latest stable release tag" >&2
-            exit 1
-          fi
+          LATEST_RELEASE_TAG=$(ci/scripts/changed_crates.sh latest-release-tag)
           echo "tag=$LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "Latest stable release tag: $LATEST_RELEASE_TAG"
 
@@ -184,17 +166,9 @@ jobs:
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           echo "Changed crates: $PACKAGES"
 
-      - name: Install Protobuf Compiler
+      - name: Setup semver check
         if: steps.changed_crates.outputs.packages != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - name: Install cargo-semver-checks
-        if: steps.changed_crates.outputs.packages != ''
-        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8  # v2.77.6
-        with:
-          tool: cargo-semver-checks
+        uses: ./.github/actions/setup-semver-check
 
       - name: Run cargo-semver-checks against latest stable release
         id: check_semver
@@ -227,6 +201,7 @@ jobs:
           echo "$PR_NUMBER" > semver-blocking-artifact/pr_number
           echo "$CHECK_RESULT" > semver-blocking-artifact/result
           echo "$LATEST_RELEASE_TAG" > semver-blocking-artifact/baseline_ref
+          echo "$LATEST_RELEASE_TAG" > semver-blocking-artifact/latest_release_tag
           if [ -f /tmp/blocking-semver-output.txt ]; then
             sed 's/\x1b\[[0-9;]*m//g' /tmp/blocking-semver-output.txt > semver-blocking-artifact/logs
           else

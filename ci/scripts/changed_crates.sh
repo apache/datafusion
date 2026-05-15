@@ -24,10 +24,15 @@
 #       Only published workspace members (those without `publish = false`) are
 #       considered.
 #
-#   semver-check <base_ref> <packages...>
-#       Run cargo-semver-checks for the given packages against base_ref.
-#       Output and exit code are passed through unchanged; the caller is
-#       responsible for capturing/formatting them.
+#   latest-release-tag
+#       Print the latest stable release tag. RC and other pre-release tags are
+#       ignored. Tags must be plain semver values like `53.1.0`.
+#
+#   semver-check <baseline_ref> <packages...>
+#       Run cargo-semver-checks for the given packages against baseline_ref.
+#       baseline_ref can be a tag or any git ref. Output and exit code are
+#       passed through unchanged; the caller is responsible for capturing and
+#       formatting them.
 
 set -euo pipefail
 
@@ -59,9 +64,25 @@ cmd_changed_crates() {
   done <<<"$crates" | xargs
 }
 
+# ── latest-release-tag ──────────────────────────────────────────────
+cmd_latest_release_tag() {
+  local latest_release_tag
+  latest_release_tag=$(git tag --list \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V \
+    | tail -n1 || true)
+
+  if [ -z "$latest_release_tag" ]; then
+    echo "No stable release tags found" >&2
+    return 1
+  fi
+
+  echo "$latest_release_tag"
+}
+
 # ── semver-check ────────────────────────────────────────────────────
 cmd_semver_check() {
-  local base_ref="${1:?Usage: changed_crates.sh semver-check <base_ref> <packages...>}"
+  local base_ref="${1:?Usage: changed_crates.sh semver-check <baseline_ref> <packages...>}"
   shift
 
   local args=()
@@ -73,11 +94,12 @@ cmd_semver_check() {
 }
 
 # ── main ────────────────────────────────────────────────────────────
-cmd="${1:?Usage: changed_crates.sh <changed-crates|semver-check> [args...]}"
+cmd="${1:?Usage: changed_crates.sh <changed-crates|latest-release-tag|semver-check> [args...]}"
 shift
 
 case "$cmd" in
-  changed-crates) cmd_changed_crates "$@" ;;
-  semver-check)   cmd_semver_check "$@" ;;
+  changed-crates)      cmd_changed_crates "$@" ;;
+  latest-release-tag)  cmd_latest_release_tag "$@" ;;
+  semver-check)        cmd_semver_check "$@" ;;
   *) echo "Unknown command: $cmd" >&2; exit 1 ;;
 esac

@@ -119,6 +119,7 @@ jobs:
 
           ADVISORY_BASELINE=$(cat ./semver-advisory-artifact/baseline_ref)
           BLOCKING_BASELINE=$(cat ./semver-blocking-artifact/baseline_ref)
+          LATEST_RELEASE_TAG=$(cat ./semver-blocking-artifact/latest_release_tag)
           if ! [[ "$ADVISORY_BASELINE" =~ ^[A-Za-z0-9._/-]+$ ]]; then
             echo "Invalid advisory baseline: $ADVISORY_BASELINE" >&2
             exit 1
@@ -127,12 +128,21 @@ jobs:
             echo "Invalid blocking baseline: $BLOCKING_BASELINE" >&2
             exit 1
           fi
+          if ! [[ "$LATEST_RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid latest release tag: $LATEST_RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [ "$BLOCKING_BASELINE" != "$LATEST_RELEASE_TAG" ]; then
+            echo "Mismatched blocking baseline and latest release tag: $BLOCKING_BASELINE != $LATEST_RELEASE_TAG" >&2
+            exit 1
+          fi
 
           echo "pr_number=$ADVISORY_PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "advisory_result=$ADVISORY_RESULT" >> "$GITHUB_OUTPUT"
           echo "blocking_result=$BLOCKING_RESULT" >> "$GITHUB_OUTPUT"
           echo "advisory_baseline=$ADVISORY_BASELINE" >> "$GITHUB_OUTPUT"
           echo "blocking_baseline=$BLOCKING_BASELINE" >> "$GITHUB_OUTPUT"
+          echo "latest_release_tag=$LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
           # Multi-line output: random delimiter so a malicious log line can't
           # close the heredoc and inject extra output keys. See:
@@ -170,9 +180,9 @@ jobs:
             ## Blocking latest-release signal
 
             Result: `${{ steps.read.outputs.blocking_result }}`
-            Baseline: `${{ steps.read.outputs.blocking_baseline }}`
+            Latest release tag: `${{ steps.read.outputs.latest_release_tag }}`
 
-            If this result is `failure`, the pull request contains API changes that are not SemVer-compatible with the latest stable release. This is the blocking semver warning signal and applies the `${{ env.BREAKING_CHANGE_LABEL }}` label.
+            If this result is `failure`, the pull request contains API changes that are not SemVer-compatible with the latest stable release tag. This is the blocking semver warning signal and applies the `${{ env.BREAKING_CHANGE_LABEL }}` label.
 
             <details>
             <summary>Blocking latest-release details</summary>
