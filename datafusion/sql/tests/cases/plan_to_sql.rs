@@ -2883,6 +2883,75 @@ fn test_unparse_window_over_aggregate_without_projection() -> Result<()> {
 }
 
 #[test]
+fn test_unparse_filter_on_window_over_aggregate_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("value", DataType::Float64, true),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("time").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("gas"), &schema, None)?
+        .aggregate(vec![col("time")], vec![sum(col("value")).alias("sum_n")])?
+        .window(vec![window_expr])?
+        .filter(col("row_idx").eq(lit(0i64)))?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT sum(gas."value") AS sum_n, gas."time", row_number() OVER (ORDER BY gas."time" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM gas GROUP BY gas."time" QUALIFY (row_number() OVER (ORDER BY gas."time" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) = 0)"#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_filter_on_aggregate_output_above_window_without_projection() -> Result<()>
+{
+    let schema = Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("value", DataType::Float64, true),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("time").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("gas"), &schema, None)?
+        .aggregate(vec![col("time")], vec![sum(col("value")).alias("sum_n")])?
+        .window(vec![window_expr])?
+        .filter(col("sum_n").eq(lit(0f64)))?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT sum(gas."value") AS sum_n, gas."time", row_number() OVER (ORDER BY gas."time" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM gas GROUP BY gas."time" QUALIFY (sum(gas."value") = 0.0)"#
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_unparse_window_over_table_scan_without_projection() -> Result<()> {
     let schema = Schema::new(vec![
         Field::new("k", DataType::Int32, false),

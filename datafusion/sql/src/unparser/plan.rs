@@ -683,25 +683,28 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
             }
             LogicalPlan::Filter(filter) => {
-                if let Some(agg) =
-                    find_agg_node_within_select(plan, select.already_projected())
+                let window = find_window_nodes_within_select(
+                    plan,
+                    None,
+                    select.already_projected(),
+                );
+                let agg = find_agg_node_within_select(plan, select.already_projected());
+
+                if let (Some(window), true) =
+                    (window.as_deref(), self.dialect.supports_qualify())
                 {
+                    let mut unprojected =
+                        unproject_window_exprs(filter.predicate.clone(), window)?;
+                    if let Some(agg) = agg {
+                        unprojected = unproject_agg_exprs(unprojected, agg, None)?;
+                    }
+                    let filter_expr = self.expr_to_sql(&unprojected)?;
+                    select.qualify(Some(filter_expr));
+                } else if let Some(agg) = agg {
                     let unprojected =
                         unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
-                } else if let (Some(window), true) = (
-                    find_window_nodes_within_select(
-                        plan,
-                        None,
-                        select.already_projected(),
-                    ),
-                    self.dialect.supports_qualify(),
-                ) {
-                    let unprojected =
-                        unproject_window_exprs(filter.predicate.clone(), &window)?;
-                    let filter_expr = self.expr_to_sql(&unprojected)?;
-                    select.qualify(Some(filter_expr));
                 } else {
                     let filter_expr = self.expr_to_sql(&filter.predicate)?;
                     select.selection(Some(filter_expr));
