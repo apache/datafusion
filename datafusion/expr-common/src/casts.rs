@@ -160,6 +160,8 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
 /// Allowed cases:
 /// - Same-timezone timestamp casts where target precision is the same or finer
 ///   (e.g. `Timestamp(ms) -> Timestamp(ns)` or same-precision identity).
+///   Cross-timezone is blocked — `cast_between_timestamp` doesn't handle
+///   timezone offsets, so same-i64 round-trips would falsely pass.
 ///   NOTE: Precision widening can overflow on the source side when the
 ///   source value is outside the target timestamp's i64 domain (e.g.
 ///   `Timestamp(Second)` cannot hold all widened `Timestamp(Nanosecond)`
