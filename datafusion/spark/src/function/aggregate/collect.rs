@@ -172,15 +172,20 @@ impl AggregateUDFImpl for SparkCollectSet {
 #[derive(Debug)]
 struct NullToEmptyListAccumulator<T: Accumulator> {
     inner: T,
-    /// Input element field. Carries the data type for the empty list payload
-    /// and the metadata that must flow onto the resulting list's inner field
-    /// (Arrow extension types survive the all-NULL case this wrapper handles).
-    value_field: FieldRef,
+    /// Canonical list-item field for the resulting list. Carries the data type
+    /// for the empty list payload and the metadata that must flow onto the
+    /// resulting list's inner field (Arrow extension types survive the
+    /// all-NULL case this wrapper handles). Already named `"item"` so the
+    /// empty list matches the declared `return_field` / `state_fields` type.
+    item_field: FieldRef,
 }
 
 impl<T: Accumulator> NullToEmptyListAccumulator<T> {
     pub fn new(inner: T, value_field: FieldRef) -> Self {
-        Self { inner, value_field }
+        Self {
+            inner,
+            item_field: nullable_list_item_field_from(&value_field),
+        }
     }
 }
 
@@ -200,9 +205,9 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let result = self.inner.evaluate()?;
         if result.is_null() {
-            let empty_array = arrow::array::new_empty_array(self.value_field.data_type());
+            let empty_array = arrow::array::new_empty_array(self.item_field.data_type());
             Ok(SingleRowListArrayBuilder::new(empty_array)
-                .with_field(&self.value_field)
+                .with_field(&self.item_field)
                 .build_list_scalar())
         } else {
             Ok(result)
@@ -210,6 +215,6 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        self.inner.size() + self.value_field.data_type().size()
+        self.inner.size() + self.item_field.data_type().size()
     }
 }
