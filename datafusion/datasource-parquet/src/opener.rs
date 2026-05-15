@@ -19,7 +19,9 @@
 
 use crate::access_plan::PreparedAccessPlan;
 use crate::page_filter::PagePruningAccessPlanFilter;
-use crate::row_filter::{self, ParquetReadPlan, build_projection_read_plan};
+use crate::row_filter::{
+    ParquetReadPlan, RowFilterGenerator, build_projection_read_plan,
+};
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
@@ -70,14 +72,14 @@ use parquet::DecodeResult;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, RowFilter, RowSelectionPolicy,
+    ArrowReaderMetadata, ArrowReaderOptions, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
 /// Stateless Parquet morselizer implementation.
 ///
@@ -1158,8 +1160,17 @@ impl RowGroupsPrunedParquetOpen {
         );
 
         let (decoder, pending_decoders, remaining_limit) = {
-            let mut row_filter_generator =
-                RowFilterGenerator::new(&prepared, file_metadata.as_ref());
+            let pushdown_predicate = prepared
+                .pushdown_filters
+                .then_some(prepared.predicate.as_ref())
+                .flatten();
+            let mut row_filter_generator = RowFilterGenerator::new(
+                pushdown_predicate,
+                &prepared.physical_file_schema,
+                file_metadata.as_ref(),
+                prepared.reorder_predicates,
+                &prepared.file_metrics,
+            );
 
             // Split into consecutive runs of row groups that share the same filter
             // requirement. Fully matched row groups skip the RowFilter; others need it.
@@ -1256,70 +1267,6 @@ impl RowGroupsPrunedParquetOpen {
             .boxed())
         } else {
             Ok(stream.boxed())
-        }
-    }
-}
-
-/// Builds row filters for decoder runs.
-///
-/// A [`RowFilter`] must be owned by a decoder, so scans split across multiple
-/// decoder runs need a fresh filter for each run that evaluates row predicates.
-struct RowFilterGenerator<'a> {
-    predicate: Option<&'a Arc<dyn PhysicalExpr>>,
-    physical_file_schema: &'a SchemaRef,
-    file_metadata: &'a ParquetMetaData,
-    reorder_predicates: bool,
-    file_metrics: &'a ParquetFileMetrics,
-    first_row_filter: Option<RowFilter>,
-}
-
-impl<'a> RowFilterGenerator<'a> {
-    fn new(
-        prepared: &'a PreparedParquetOpen,
-        file_metadata: &'a ParquetMetaData,
-    ) -> Self {
-        let predicate = prepared
-            .pushdown_filters
-            .then_some(prepared.predicate.as_ref())
-            .flatten();
-
-        let mut generator = Self {
-            predicate,
-            physical_file_schema: &prepared.physical_file_schema,
-            file_metadata,
-            reorder_predicates: prepared.reorder_predicates,
-            file_metrics: &prepared.file_metrics,
-            first_row_filter: None,
-        };
-        generator.first_row_filter = generator.build_row_filter();
-        generator
-    }
-
-    fn has_row_filter(&self) -> bool {
-        self.first_row_filter.is_some()
-    }
-
-    fn next_filter(&mut self) -> Option<RowFilter> {
-        self.first_row_filter
-            .take()
-            .or_else(|| self.build_row_filter())
-    }
-
-    fn build_row_filter(&self) -> Option<RowFilter> {
-        let predicate = self.predicate?;
-        match row_filter::build_row_filter(
-            predicate,
-            self.physical_file_schema,
-            self.file_metadata,
-            self.reorder_predicates,
-            self.file_metrics,
-        ) {
-            Ok(Some(filter)) => Some(filter),
-            Ok(None) => None,
-            Err(e) => {
-                debug!("Ignoring error building row filter for '{predicate:?}': {e}");
-                None
-            }
         }
     }
 }
