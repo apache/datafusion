@@ -19,11 +19,11 @@
 
 use crate::access_plan::PreparedAccessPlan;
 use crate::page_filter::PagePruningAccessPlanFilter;
-use crate::row_filter::build_projection_read_plan;
+use crate::row_filter::{self, ParquetReadPlan, build_projection_read_plan};
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
-    apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
+    apply_file_schema_type_coercions, coerce_int96_to_resolution,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
@@ -76,7 +76,9 @@ use parquet::arrow::parquet_column;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+use parquet::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+};
 
 /// Stateless Parquet morselizer implementation.
 ///
@@ -1076,41 +1078,6 @@ impl RowGroupsPrunedParquetOpen {
         let file_metadata = Arc::clone(reader_metadata.metadata());
         let rg_metadata = file_metadata.row_groups();
 
-        // Filter pushdown: evaluate predicates during scan.
-        // Keep the predicate around so we can rebuild RowFilter per decoder run
-        // when fully matched row groups split the scan into multiple decoders.
-        let pushdown_predicate = prepared
-            .pushdown_filters
-            .then_some(prepared.predicate.clone())
-            .flatten();
-
-        let try_build_row_filter =
-            |predicate: &Arc<dyn PhysicalExpr>| -> Option<RowFilter> {
-                match row_filter::build_row_filter(
-                    predicate,
-                    &prepared.physical_file_schema,
-                    file_metadata.as_ref(),
-                    prepared.reorder_predicates,
-                    &prepared.file_metrics,
-                ) {
-                    Ok(Some(filter)) => Some(filter),
-                    Ok(None) => None,
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{predicate:?}': {e}"
-                        );
-                        None
-                    }
-                }
-            };
-
-        // Build the first RowFilter eagerly; it will be reused for the first
-        // filtered decoder run and rebuilt from pushdown_predicate for any
-        // additional filtered runs.
-        let mut first_row_filter =
-            pushdown_predicate.as_ref().and_then(&try_build_row_filter);
-        let has_row_filter = first_row_filter.is_some();
-
         // Prune by limit if limit is set and limit order is not sensitive
         if let (Some(limit), false) = (prepared.limit, prepared.preserve_order) {
             row_groups.prune_by_limit(limit, rg_metadata, &prepared.file_metrics);
@@ -1128,33 +1095,22 @@ impl RowGroupsPrunedParquetOpen {
             && !access_plan.is_empty()
             && let Some(page_pruning_predicate) = page_pruning_predicate
         {
-            let (page_pruned_access_plan, pages_skipped_by_fully_matched) =
-                page_pruning_predicate.prune_plan_with_page_index(
+            let page_pruning_result = page_pruning_predicate
+                .prune_plan_with_page_index_and_metrics(
                     access_plan,
                     &prepared.physical_file_schema,
                     reader_metadata.parquet_schema(),
                     file_metadata.as_ref(),
                     &prepared.file_metrics,
                 );
-            access_plan = page_pruned_access_plan;
+            access_plan = page_pruning_result.access_plan;
             ParquetFileMetrics::add_page_index_pages_skipped_by_fully_matched(
                 &prepared.metrics,
                 prepared.partition_index,
                 &prepared.file_name,
-                pages_skipped_by_fully_matched,
+                page_pruning_result.pages_skipped_by_fully_matched,
             );
         }
-
-        // Prepare access plans (extract row groups and row selection).
-        let prepare_access_plan =
-            |plan: ParquetAccessPlan| -> Result<PreparedAccessPlan> {
-                let mut prepared_access_plan = plan.prepare(rg_metadata)?;
-                if prepared.reverse_row_groups {
-                    prepared_access_plan =
-                        prepared_access_plan.reverse(file_metadata.as_ref())?;
-                }
-                Ok(prepared_access_plan)
-            };
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
         let read_plan = build_projection_read_plan(
@@ -1163,69 +1119,63 @@ impl RowGroupsPrunedParquetOpen {
             reader_metadata.parquet_schema(),
         );
 
-        // Split into consecutive runs of row groups that share the same filter
-        // requirement. Fully matched row groups skip the RowFilter; others need it.
-        // Reverse the run order for reverse scans so the combined decoder stream
-        // preserves the requested global row group order.
-        let mut runs = access_plan.split_runs(has_row_filter);
-        if prepared.reverse_row_groups {
-            runs.reverse();
-        }
-        let run_count = runs.len();
-        let decoder_limit = prepared.limit.filter(|_| run_count == 1);
-        let remaining_limit = prepared.limit.filter(|_| run_count > 1);
+        let (decoder, pending_decoders, remaining_limit) = {
+            let mut row_filter_generator =
+                RowFilterGenerator::new(&prepared, file_metadata.as_ref());
 
-        // Helper: configure a decoder builder with shared options from
-        // the prepared plan.
-        let build_decoder = |prepared_access_plan: PreparedAccessPlan,
-                             metadata: ArrowReaderMetadata|
-         -> Result<ParquetPushDecoderBuilder> {
-            let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
-                .with_projection(read_plan.projection_mask.clone())
-                .with_batch_size(prepared.batch_size)
-                .with_metrics(arrow_reader_metrics.clone());
-            if prepared.force_filter_selections {
-                builder =
-                    builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
+            // Split into consecutive runs of row groups that share the same filter
+            // requirement. Fully matched row groups skip the RowFilter; others need it.
+            // Reverse the run order for reverse scans so the combined decoder stream
+            // preserves the requested global row group order.
+            let mut runs = access_plan.split_runs(row_filter_generator.has_row_filter());
+            if prepared.reverse_row_groups {
+                runs.reverse();
             }
-            if let Some(row_selection) = prepared_access_plan.row_selection {
-                builder = builder.with_row_selection(row_selection);
+            let run_count = runs.len();
+            let decoder_limit = prepared.limit.filter(|_| run_count == 1);
+            let remaining_limit = prepared.limit.filter(|_| run_count > 1);
+
+            let decoder_config = DecoderBuilderConfig {
+                read_plan: &read_plan,
+                batch_size: prepared.batch_size,
+                arrow_reader_metrics: &arrow_reader_metrics,
+                force_filter_selections: prepared.force_filter_selections,
+                decoder_limit,
+            };
+
+            // Build a decoder per run.
+            let mut decoders = VecDeque::with_capacity(runs.len());
+            for run in runs {
+                let prepared_access_plan = prepare_access_plan(
+                    run.access_plan,
+                    rg_metadata,
+                    file_metadata.as_ref(),
+                    prepared.reverse_row_groups,
+                )?;
+                let mut builder = build_decoder_builder(
+                    prepared_access_plan,
+                    reader_metadata.clone(),
+                    &decoder_config,
+                );
+                if run.needs_filter {
+                    if let Some(row_filter) = row_filter_generator.next_filter() {
+                        builder = builder.with_row_filter(row_filter);
+                    }
+                    if let Some(max_predicate_cache_size) =
+                        prepared.max_predicate_cache_size
+                    {
+                        builder = builder
+                            .with_max_predicate_cache_size(max_predicate_cache_size);
+                    }
+                }
+                decoders.push_back(builder.build()?);
             }
-            builder = builder.with_row_groups(prepared_access_plan.row_group_indexes);
-            if let Some(limit) = decoder_limit {
-                builder = builder.with_limit(limit);
-            }
-            Ok(builder)
+
+            let decoder = decoders
+                .pop_front()
+                .expect("at least one decoder must be created");
+            (decoder, decoders, remaining_limit)
         };
-
-        // Build a decoder per run.
-        let mut decoders = VecDeque::with_capacity(runs.len());
-        for run in runs {
-            let prepared_access_plan = prepare_access_plan(run.access_plan)?;
-            let mut builder =
-                build_decoder(prepared_access_plan, reader_metadata.clone())?;
-            if run.needs_filter {
-                // Reuse pre-built filter for the first filtered run,
-                // rebuild from the predicate for subsequent ones.
-                let row_filter = first_row_filter.take().or_else(|| {
-                    pushdown_predicate.as_ref().and_then(&try_build_row_filter)
-                });
-                if let Some(row_filter) = row_filter {
-                    builder = builder.with_row_filter(row_filter);
-                }
-                if let Some(max_predicate_cache_size) = prepared.max_predicate_cache_size
-                {
-                    builder =
-                        builder.with_max_predicate_cache_size(max_predicate_cache_size);
-                }
-            }
-            decoders.push_back(builder.build()?);
-        }
-
-        let decoder = decoders
-            .pop_front()
-            .expect("at least one decoder must be created");
-        let pending_decoders = decoders;
 
         let predicate_cache_inner_records =
             prepared.file_metrics.predicate_cache_inner_records.clone();
@@ -1278,6 +1228,113 @@ impl RowGroupsPrunedParquetOpen {
             Ok(stream.boxed())
         }
     }
+}
+
+/// Builds row filters for decoder runs.
+///
+/// A [`RowFilter`] must be owned by a decoder, so scans split across multiple
+/// decoder runs need a fresh filter for each run that evaluates row predicates.
+struct RowFilterGenerator<'a> {
+    predicate: Option<&'a Arc<dyn PhysicalExpr>>,
+    physical_file_schema: &'a SchemaRef,
+    file_metadata: &'a ParquetMetaData,
+    reorder_predicates: bool,
+    file_metrics: &'a ParquetFileMetrics,
+    first_row_filter: Option<RowFilter>,
+}
+
+impl<'a> RowFilterGenerator<'a> {
+    fn new(
+        prepared: &'a PreparedParquetOpen,
+        file_metadata: &'a ParquetMetaData,
+    ) -> Self {
+        let predicate = prepared
+            .pushdown_filters
+            .then_some(prepared.predicate.as_ref())
+            .flatten();
+
+        let mut generator = Self {
+            predicate,
+            physical_file_schema: &prepared.physical_file_schema,
+            file_metadata,
+            reorder_predicates: prepared.reorder_predicates,
+            file_metrics: &prepared.file_metrics,
+            first_row_filter: None,
+        };
+        generator.first_row_filter = generator.build_row_filter();
+        generator
+    }
+
+    fn has_row_filter(&self) -> bool {
+        self.first_row_filter.is_some()
+    }
+
+    fn next_filter(&mut self) -> Option<RowFilter> {
+        self.first_row_filter
+            .take()
+            .or_else(|| self.build_row_filter())
+    }
+
+    fn build_row_filter(&self) -> Option<RowFilter> {
+        let predicate = self.predicate?;
+        match row_filter::build_row_filter(
+            predicate,
+            self.physical_file_schema,
+            self.file_metadata,
+            self.reorder_predicates,
+            self.file_metrics,
+        ) {
+            Ok(Some(filter)) => Some(filter),
+            Ok(None) => None,
+            Err(e) => {
+                debug!("Ignoring error building row filter for '{predicate:?}': {e}");
+                None
+            }
+        }
+    }
+}
+
+fn prepare_access_plan(
+    plan: ParquetAccessPlan,
+    rg_metadata: &[RowGroupMetaData],
+    file_metadata: &ParquetMetaData,
+    reverse_row_groups: bool,
+) -> Result<PreparedAccessPlan> {
+    let mut prepared_access_plan = plan.prepare(rg_metadata)?;
+    if reverse_row_groups {
+        prepared_access_plan = prepared_access_plan.reverse(file_metadata)?;
+    }
+    Ok(prepared_access_plan)
+}
+
+struct DecoderBuilderConfig<'a> {
+    read_plan: &'a ParquetReadPlan,
+    batch_size: usize,
+    arrow_reader_metrics: &'a ArrowReaderMetrics,
+    force_filter_selections: bool,
+    decoder_limit: Option<usize>,
+}
+
+fn build_decoder_builder(
+    prepared_access_plan: PreparedAccessPlan,
+    metadata: ArrowReaderMetadata,
+    config: &DecoderBuilderConfig<'_>,
+) -> ParquetPushDecoderBuilder {
+    let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
+        .with_projection(config.read_plan.projection_mask.clone())
+        .with_batch_size(config.batch_size)
+        .with_metrics(config.arrow_reader_metrics.clone());
+    if config.force_filter_selections {
+        builder = builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
+    }
+    if let Some(row_selection) = prepared_access_plan.row_selection {
+        builder = builder.with_row_selection(row_selection);
+    }
+    builder = builder.with_row_groups(prepared_access_plan.row_group_indexes);
+    if let Some(limit) = config.decoder_limit {
+        builder = builder.with_limit(limit);
+    }
+    builder
 }
 
 /// State for a stream that decodes a single Parquet file using a push-based decoder.
