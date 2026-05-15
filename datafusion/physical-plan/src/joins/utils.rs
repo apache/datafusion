@@ -144,6 +144,11 @@ pub fn adjust_right_output_partitioning(
                 .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
         }
+        Partitioning::Expr(_) => {
+            return not_impl_err!(
+                "Expression partitioning is not supported for join output partitioning"
+            );
+        }
         result => result.clone(),
     };
     Ok(result)

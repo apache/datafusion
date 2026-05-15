@@ -48,7 +48,9 @@ use datafusion_physical_plan::expressions::{
 };
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion_physical_plan::{
+    ExprPartitioning, Partitioning, PhysicalExpr, WindowExpr,
+};
 use datafusion_proto_common::common::proto_error;
 use object_store::ObjectMeta;
 use object_store::path::Path;
@@ -632,6 +634,14 @@ pub fn parse_protobuf_partitioning(
                     proto_converter,
                 )
             }
+            Some(protobuf::partitioning::PartitionMethod::Expr(expr_partitioning)) => {
+                Ok(Some(parse_protobuf_expr_partitioning(
+                    expr_partitioning,
+                    ctx,
+                    input_schema,
+                    proto_converter,
+                )?))
+            }
             Some(protobuf::partitioning::PartitionMethod::Unknown(partition_count)) => {
                 Ok(Some(Partitioning::UnknownPartitioning(
                     *partition_count as usize,
@@ -641,6 +651,21 @@ pub fn parse_protobuf_partitioning(
         },
         None => Ok(None),
     }
+}
+
+fn parse_protobuf_expr_partitioning(
+    expr_partitioning: &protobuf::PhysicalExprPartitioning,
+    ctx: &PhysicalPlanDecodeContext<'_>,
+    input_schema: &Schema,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<Partitioning> {
+    let partition_exprs = parse_physical_exprs(
+        &expr_partitioning.partition_expr,
+        ctx,
+        input_schema,
+        proto_converter,
+    )?;
+    Ok(Partitioning::Expr(ExprPartitioning::new(partition_exprs)))
 }
 
 pub fn parse_protobuf_file_scan_schema(

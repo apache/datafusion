@@ -1505,11 +1505,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt64, false)]);
         let properties = CongestedExec::compute_properties(Arc::new(schema.clone()));
-        let &partition_count = match properties.output_partitioning() {
-            Partitioning::RoundRobinBatch(partitions) => partitions,
-            Partitioning::Hash(_, partitions) => partitions,
-            Partitioning::UnknownPartitioning(partitions) => partitions,
-        };
+        let partition_count = properties.output_partitioning().partition_count();
         let source = CongestedExec {
             schema: schema.clone(),
             cache: Arc::new(properties),

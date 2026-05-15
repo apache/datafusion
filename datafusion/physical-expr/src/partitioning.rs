@@ -117,6 +117,8 @@ pub enum Partitioning {
     /// Allocate rows based on a hash of one of more expressions and the specified number of
     /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
+    /// Partition rows by source-declared expression domains
+    Expr(ExprPartitioning),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
@@ -133,10 +135,91 @@ impl Display for Partitioning {
                     .join(", ");
                 write!(f, "Hash([{phy_exprs_str}], {size})")
             }
+            Partitioning::Expr(expr) => write!(f, "{expr}"),
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
             }
         }
+    }
+}
+
+/// Physical expression partitioning.
+///
+/// Partition `i` contains rows where `partition_exprs[i]` evaluates to true.
+/// The source declaring partitioning is responsible for ensuring that, for every
+/// row emitted, exactly one partition expression evaluates to true and that row
+/// is emitted by the corresponding partition. The expressions do not need to
+/// cover values that the plan cannot emit.
+///
+/// For example, a scan that can only emit rows for `2022` can declare two date
+/// partitions as:
+///
+/// ```text
+/// partition_exprs[0] = date >= 2022-01-01 AND date < 2022-07-01
+/// partition_exprs[1] = date >= 2022-07-01 AND date < 2023-01-01
+/// ```
+///
+/// This is valid even though values outside `2022` are not covered, as long as
+/// the source does not emit rows outside those ranges. It would not be valid
+/// for this plan to emit a row from `partition[i]` whose date is not within
+/// `partition_exprs[i]`, or to emit a row whose date matches multiple
+/// partition expressions.
+///
+/// More complex partitioning can be represented using normal expression
+/// composition. For example, one partition in a date and city range can be
+/// represented as `date >= 2021-01-01 AND date < 2022-07-01 AND city < 'Boston'`.
+///
+/// NOTE: Optimizer and execution behavior for this partitioning is intentionally
+/// not implemented and will be introduced incrementally.
+#[derive(Debug, Clone)]
+pub struct ExprPartitioning {
+    partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+impl ExprPartitioning {
+    /// Creates expression partitioning metadata from one predicate expression
+    /// per partition.
+    pub fn new(partition_exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        Self { partition_exprs }
+    }
+
+    /// Returns the partition predicate expressions.
+    pub fn partition_exprs(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.partition_exprs
+    }
+
+    /// Returns the number of partitions.
+    pub fn partition_count(&self) -> usize {
+        self.partition_exprs.len()
+    }
+
+    fn project(
+        &self,
+        mapping: &ProjectionMapping,
+        input_eq_properties: &EquivalenceProperties,
+    ) -> Option<Self> {
+        let partition_exprs = input_eq_properties
+            .project_expressions(&self.partition_exprs, mapping)
+            .collect::<Option<Vec<_>>>()?;
+
+        Some(Self { partition_exprs })
+    }
+}
+
+impl Display for ExprPartitioning {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Expr({}, {})",
+            format_physical_expr_list(&self.partition_exprs),
+            self.partition_count()
+        )
+    }
+}
+
+impl PartialEq for ExprPartitioning {
+    fn eq(&self, other: &Self) -> bool {
+        physical_exprs_equal(&self.partition_exprs, &other.partition_exprs)
     }
 }
 
@@ -167,6 +250,7 @@ impl Partitioning {
         use Partitioning::*;
         match self {
             RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
+            Expr(expr) => expr.partition_count(),
         }
     }
 
@@ -277,19 +361,27 @@ impl Partitioning {
         mapping: &ProjectionMapping,
         input_eq_properties: &EquivalenceProperties,
     ) -> Self {
-        if let Partitioning::Hash(exprs, part) = self {
-            let normalized_exprs = input_eq_properties
-                .project_expressions(exprs, mapping)
-                .zip(exprs)
-                .map(|(proj_expr, expr)| {
-                    proj_expr.unwrap_or_else(|| {
-                        Arc::new(UnKnownColumn::new(&expr.to_string()))
+        match self {
+            Partitioning::Hash(exprs, part) => {
+                let normalized_exprs = input_eq_properties
+                    .project_expressions(exprs, mapping)
+                    .zip(exprs)
+                    .map(|(proj_expr, expr)| {
+                        proj_expr.unwrap_or_else(|| {
+                            Arc::new(UnKnownColumn::new(&expr.to_string()))
+                        })
                     })
-                })
-                .collect();
-            Partitioning::Hash(normalized_exprs, *part)
-        } else {
-            self.clone()
+                    .collect();
+                Partitioning::Hash(normalized_exprs, *part)
+            }
+            Partitioning::Expr(expr) => {
+                if let Some(projected) = expr.project(mapping, input_eq_properties) {
+                    Partitioning::Expr(projected)
+                } else {
+                    Partitioning::UnknownPartitioning(expr.partition_count())
+                }
+            }
+            _ => self.clone(),
         }
     }
 }
@@ -306,6 +398,7 @@ impl PartialEq for Partitioning {
             {
                 true
             }
+            (Partitioning::Expr(left), Partitioning::Expr(right)) => left == right,
             _ => false,
         }
     }
@@ -842,6 +935,69 @@ mod tests {
                 "Failed for {desc} with subset disabled"
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_partitioning_metadata() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+
+        let expr_partitioning =
+            ExprPartitioning::new(vec![Arc::clone(&col_a), Arc::clone(&col_a)]);
+        let partitioning = Partitioning::Expr(expr_partitioning);
+
+        assert_eq!(partitioning.partition_count(), 2);
+        assert_eq!(partitioning.to_string(), "Expr([a@0, a@0], 2)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_partitioning_project_degrades_when_expr_dropped() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let projection_mapping = ProjectionMapping::from_indices(&[0], &schema)?;
+        let expr_partitioning = Partitioning::Expr(ExprPartitioning::new(vec![col_b]));
+
+        let projected = expr_partitioning.project(&projection_mapping, &eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_multi_partition_expr_does_not_satisfy_hash_distribution() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let expr_partitioning = Partitioning::Expr(ExprPartitioning::new(vec![
+            Arc::clone(&col_a),
+            Arc::clone(&col_b),
+        ]));
+        let required = Distribution::HashPartitioned(vec![col_a, col_b]);
+
+        assert_eq!(
+            expr_partitioning.satisfaction(&required, &eq_properties, false),
+            PartitioningSatisfaction::NotSatisfied
+        );
 
         Ok(())
     }

@@ -37,7 +37,7 @@ pub use datafusion_expr::{Accumulator, ColumnarValue};
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    Distribution, Partitioning, PhysicalExpr, expressions,
+    Distribution, ExprPartitioning, Partitioning, PhysicalExpr, expressions,
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};

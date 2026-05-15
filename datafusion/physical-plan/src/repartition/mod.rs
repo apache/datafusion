@@ -738,6 +738,11 @@ impl BatchPartitioner {
                     num_input_partitions,
                 ))
             }
+            Partitioning::Expr(_) => {
+                not_impl_err!(
+                    "Expression partitioning is not supported by RepartitionExec"
+                )
+            }
             other => {
                 not_impl_err!("Unsupported repartitioning scheme {other:?}")
             }
@@ -1446,6 +1451,11 @@ impl ExecutionPlan for RepartitionExec {
                 }
                 Partitioning::Hash(new_partitions, *size)
             }
+            Partitioning::Expr(_) => {
+                return not_impl_err!(
+                    "Expression partitioning is not supported for projection pushdown through RepartitionExec"
+                );
+            }
             others => others.clone(),
         };
 
@@ -1482,6 +1492,11 @@ impl ExecutionPlan for RepartitionExec {
         if !self.maintains_input_order()[0] {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
+        if matches!(self.partitioning(), Partitioning::Expr(_)) {
+            return not_impl_err!(
+                "Expression partitioning is not supported for sort pushdown through RepartitionExec"
+            );
+        }
 
         // Delegate to the child and wrap with a new RepartitionExec
         self.input.try_pushdown_sort(order)?.try_map(|new_input| {
@@ -1505,6 +1520,11 @@ impl ExecutionPlan for RepartitionExec {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
+            Expr(_) => {
+                return not_impl_err!(
+                    "Expression partitioning is not supported for changing RepartitionExec partition counts"
+                );
+            }
         };
         Ok(Some(Arc::new(Self {
             input: Arc::clone(&self.input),
@@ -1632,6 +1652,11 @@ impl RepartitionExec {
                     input_partition,
                     num_input_partitions,
                 )
+            }
+            Partitioning::Expr(_) => {
+                return not_impl_err!(
+                    "Expression partitioning is not supported by RepartitionExec"
+                );
             }
             other => {
                 return not_impl_err!("Unsupported repartitioning scheme {other:?}");
@@ -1990,6 +2015,7 @@ mod tests {
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_physical_expr::ExprPartitioning;
     use insta::assert_snapshot;
 
     #[test]
@@ -2280,6 +2306,34 @@ mod tests {
                 .contains("Unsupported repartitioning scheme UnknownPartitioning(1)"),
             "actual: {result_string}"
         );
+    }
+
+    #[tokio::test]
+    async fn unsupported_expr_partitioning() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let batch = RecordBatch::try_from_iter(vec![(
+            "my_awesome_field",
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
+        )])?;
+
+        let schema = batch.schema();
+        let expr = col("my_awesome_field", &schema)?;
+        let input = MockExec::new(vec![Ok(batch)], Arc::clone(&schema));
+        let partitioning = Partitioning::Expr(ExprPartitioning::new(vec![expr]));
+        let exec = RepartitionExec::try_new(Arc::new(input), partitioning)?;
+        let output_stream = exec.execute(0, task_ctx)?;
+
+        let result_string = crate::common::collect(output_stream)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            result_string
+                .contains("Expression partitioning is not supported by RepartitionExec"),
+            "actual: {result_string}"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]

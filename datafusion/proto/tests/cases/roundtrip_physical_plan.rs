@@ -89,8 +89,8 @@ use datafusion::physical_plan::windows::{
     create_udwf_window_expr,
 };
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PhysicalExpr, SendableRecordBatchStream, Statistics, displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExprPartitioning, InputOrderMode,
+    Partitioning, PhysicalExpr, SendableRecordBatchStream, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -1804,6 +1804,19 @@ fn roundtrip_repartition_preserve_order() -> Result<()> {
     let repartition = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
         .with_preserve_order();
     assert!(repartition.preserve_order());
+
+    roundtrip_test(Arc::new(repartition))
+}
+
+#[test]
+fn roundtrip_expr_partitioning() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let expr_partitioning =
+        Partitioning::Expr(ExprPartitioning::new(vec![col("a", &schema)?]));
+    // RepartitionExec is used only to carry the partitioning through proto.
+    // Executing expression repartitioning is intentionally unsupported.
+    let repartition = RepartitionExec::try_new(input, expr_partitioning)?;
 
     roundtrip_test(Arc::new(repartition))
 }

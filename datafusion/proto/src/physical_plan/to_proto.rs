@@ -43,7 +43,9 @@ use datafusion_physical_plan::expressions::{
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
-use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion_physical_plan::{
+    ExprPartitioning, Partitioning, PhysicalExpr, WindowExpr,
+};
 
 use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
@@ -621,6 +623,11 @@ pub fn serialize_partitioning(
                 )),
             }
         }
+        Partitioning::Expr(expr) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::Expr(
+                serialize_expr_partitioning(expr, codec, proto_converter)?,
+            )),
+        },
         Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
             partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
                 *partition_count as u64,
@@ -628,6 +635,20 @@ pub fn serialize_partitioning(
         },
     };
     Ok(serialized_partitioning)
+}
+
+fn serialize_expr_partitioning(
+    expr: &ExprPartitioning,
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<protobuf::PhysicalExprPartitioning> {
+    Ok(protobuf::PhysicalExprPartitioning {
+        partition_expr: serialize_physical_exprs(
+            expr.partition_exprs(),
+            codec,
+            proto_converter,
+        )?,
+    })
 }
 
 fn serialize_when_then_expr(

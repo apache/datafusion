@@ -1380,12 +1380,17 @@ message PhysicalHashRepartition {
   uint64 partition_count = 2;
 }
 
+message PhysicalExprPartitioning {
+  repeated PhysicalExprNode partition_expr = 1;
+}
+
 message RepartitionExecNode{
   PhysicalPlanNode input = 1;
   // oneof partition_method {
   //   uint64 round_robin = 2;
   //   PhysicalHashRepartition hash = 3;
   //   uint64 unknown = 4;
+  //   PhysicalExprPartitioning expr = 5;
   // }
   Partitioning partitioning = 5;
   bool preserve_order = 6;
@@ -1396,6 +1401,7 @@ message Partitioning {
     uint64 round_robin = 1;
     PhysicalHashRepartition hash = 2;
     uint64 unknown = 3;
+    PhysicalExprPartitioning expr = 4;
   }
 }
 

@@ -15750,6 +15750,9 @@ impl serde::Serialize for Partitioning {
                     #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("unknown", ToString::to_string(&v).as_str())?;
                 }
+                partitioning::PartitionMethod::Expr(v) => {
+                    struct_ser.serialize_field("expr", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -15766,6 +15769,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
             "roundRobin",
             "hash",
             "unknown",
+            "expr",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15773,6 +15777,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
             RoundRobin,
             Hash,
             Unknown,
+            Expr,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15797,6 +15802,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
                             "roundRobin" | "round_robin" => Ok(GeneratedField::RoundRobin),
                             "hash" => Ok(GeneratedField::Hash),
                             "unknown" => Ok(GeneratedField::Unknown),
+                            "expr" => Ok(GeneratedField::Expr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15837,6 +15843,13 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
                                 return Err(serde::de::Error::duplicate_field("unknown"));
                             }
                             partition_method__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| partitioning::PartitionMethod::Unknown(x.0));
+                        }
+                        GeneratedField::Expr => {
+                            if partition_method__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("expr"));
+                            }
+                            partition_method__ = map_.next_value::<::std::option::Option<_>>()?.map(partitioning::PartitionMethod::Expr)
+;
                         }
                     }
                 }
@@ -17332,6 +17345,98 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalExprNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PhysicalExprPartitioning {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.partition_expr.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExprPartitioning", len)?;
+        if !self.partition_expr.is_empty() {
+            struct_ser.serialize_field("partitionExpr", &self.partition_expr)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalExprPartitioning {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "partition_expr",
+            "partitionExpr",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            PartitionExpr,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "partitionExpr" | "partition_expr" => Ok(GeneratedField::PartitionExpr),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalExprPartitioning;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalExprPartitioning")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalExprPartitioning, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut partition_expr__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::PartitionExpr => {
+                            if partition_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionExpr"));
+                            }
+                            partition_expr__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PhysicalExprPartitioning {
+                    partition_expr: partition_expr__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalExprPartitioning", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalExtensionExprNode {
