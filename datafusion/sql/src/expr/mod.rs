@@ -900,7 +900,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<Value>,
+        escape_char: Option<ValueWithSpan>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
@@ -910,7 +910,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("ANY in LIKE expression");
         }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let escape_char = match escape_char {
+        let escape_char = match escape_char.map(|v| v.value) {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
@@ -935,7 +935,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<Value>,
+        escape_char: Option<ValueWithSpan>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -944,7 +944,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
-        let escape_char = match escape_char {
+        let escape_char = match escape_char.map(|v| v.value) {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
@@ -1351,7 +1351,9 @@ mod tests {
     use datafusion_common::TableReference;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+    use datafusion_expr::{
+        AggregateUDF, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
+    };
 
     use super::*;
 
@@ -1391,6 +1393,10 @@ mod tests {
             None
         }
 
+        fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+            None
+        }
+
         fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
             match name {
                 "sum" => Some(datafusion_functions_aggregate::sum::sum_udaf()),
@@ -1411,6 +1417,10 @@ mod tests {
         }
 
         fn udf_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn higher_order_function_names(&self) -> Vec<String> {
             Vec::new()
         }
 

@@ -1019,7 +1019,7 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
               RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
                 DataSourceExec: file_groups={1 group: [[TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
         CoalescePartitionsExec
-          ProjectionExec: expr=[id@0 + 1 as ns.id + Int64(1), level@1 + 1 as ns.level + Int64(1)]
+          ProjectionExec: expr=[id@0 + 1 as id, level@1 + 1 as level]
             FilterExec: id@0 < 10
               RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
                 WorkTableExec: name=number_series

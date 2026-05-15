@@ -26,29 +26,23 @@ use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::*;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::compute::SortOptions;
 use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
-use arrow::compute::{SortOptions, take};
 use arrow::datatypes::*;
-use arrow::util::bit_iterator::BitIndexIterator;
-use datafusion_common::hash_utils::with_hashes;
+
 use datafusion_common::{
-    DFSchema, HashSet, Result, ScalarValue, assert_or_internal_err, exec_datafusion_err,
-    exec_err,
+    DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
 };
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
-use datafusion_common::HashMap;
-use datafusion_common::hash_utils::RandomState;
-use hashbrown::hash_map::RawEntryMut;
+mod array_static_filter;
+mod primitive_filter;
+mod static_filter;
+mod strategy;
 
-/// Trait for InList static filters
-trait StaticFilter {
-    fn null_count(&self) -> usize;
-
-    /// Checks if values in `v` are contained in the filter
-    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
-}
+use static_filter::StaticFilter;
+use strategy::instantiate_static_filter;
 
 /// InList
 pub struct InListExpr {
@@ -68,83 +62,6 @@ impl Debug for InListExpr {
     }
 }
 
-/// Static filter for InList that stores the array and hash set for O(1) lookups
-#[derive(Debug, Clone)]
-struct ArrayStaticFilter {
-    in_array: ArrayRef,
-    state: RandomState,
-    /// Used to provide a lookup from value to in list index
-    ///
-    /// Note: usize::hash is not used, instead the raw entry
-    /// API is used to store entries w.r.t their value
-    map: HashMap<usize, (), ()>,
-}
-
-impl StaticFilter for ArrayStaticFilter {
-    fn null_count(&self) -> usize {
-        self.in_array.null_count()
-    }
-
-    /// Checks if values in `v` are contained in the `in_array` using this hash set for lookup.
-    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        // Null type comparisons always return null (SQL three-valued logic)
-        if v.data_type() == &DataType::Null
-            || self.in_array.data_type() == &DataType::Null
-        {
-            let nulls = NullBuffer::new_null(v.len());
-            return Ok(BooleanArray::new(
-                BooleanBuffer::new_unset(v.len()),
-                Some(nulls),
-            ));
-        }
-
-        // Unwrap dictionary-encoded needles when the value type matches
-        // in_array, evaluating against the dictionary values and mapping
-        // back via keys.
-        downcast_dictionary_array! {
-            v => {
-                // Only unwrap when the haystack (in_array) type matches
-                // the dictionary value type
-                if v.values().data_type() == self.in_array.data_type() {
-                    let values_contains = self.contains(v.values().as_ref(), negated)?;
-                    let result = take(&values_contains, v.keys(), None)?;
-                    return Ok(downcast_array(result.as_ref()));
-                }
-            }
-            _ => {}
-        }
-
-        let needle_nulls = v.logical_nulls();
-        let needle_nulls = needle_nulls.as_ref();
-        let haystack_has_nulls = self.in_array.null_count() != 0;
-
-        with_hashes([v], &self.state, |hashes| {
-            let cmp = make_comparator(v, &self.in_array, SortOptions::default())?;
-            Ok((0..v.len())
-                .map(|i| {
-                    // SQL three-valued logic: null IN (...) is always null
-                    if needle_nulls.is_some_and(|nulls| nulls.is_null(i)) {
-                        return None;
-                    }
-
-                    let hash = hashes[i];
-                    let contains = self
-                        .map
-                        .raw_entry()
-                        .from_hash(hash, |idx| cmp(i, *idx).is_eq())
-                        .is_some();
-
-                    match contains {
-                        true => Some(!negated),
-                        false if haystack_has_nulls => None,
-                        false => Some(negated),
-                    }
-                })
-                .collect())
-        })
-    }
-}
-
 /// Returns true if Arrow's vectorized `eq` kernel supports this data type.
 ///
 /// Supported: primitives, boolean, strings (Utf8/LargeUtf8/Utf8View),
@@ -159,400 +76,6 @@ fn supports_arrow_eq(dt: &DataType) -> bool {
         _ => dt.is_primitive() || dt.is_null() || dt.is_string(),
     }
 }
-
-fn instantiate_static_filter(
-    in_array: ArrayRef,
-) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
-    match in_array.data_type() {
-        // Integer primitive types
-        DataType::Int8 => Ok(Arc::new(Int8StaticFilter::try_new(&in_array)?)),
-        DataType::Int16 => Ok(Arc::new(Int16StaticFilter::try_new(&in_array)?)),
-        DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
-        DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
-        DataType::UInt8 => Ok(Arc::new(UInt8StaticFilter::try_new(&in_array)?)),
-        DataType::UInt16 => Ok(Arc::new(UInt16StaticFilter::try_new(&in_array)?)),
-        DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
-        DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
-        // Float primitive types (use ordered wrappers for Hash/Eq)
-        DataType::Float32 => Ok(Arc::new(Float32StaticFilter::try_new(&in_array)?)),
-        DataType::Float64 => Ok(Arc::new(Float64StaticFilter::try_new(&in_array)?)),
-        _ => {
-            /* fall through to generic implementation for unsupported types (Struct, etc.) */
-            Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?))
-        }
-    }
-}
-
-impl ArrayStaticFilter {
-    /// Computes a [`StaticFilter`] for the provided [`Array`] if there
-    /// are nulls present or there are more than the configured number of
-    /// elements.
-    ///
-    /// Note: This is split into a separate function as higher-rank trait bounds currently
-    /// cause type inference to misbehave
-    fn try_new(in_array: ArrayRef) -> Result<ArrayStaticFilter> {
-        // Null type has no natural order - return empty hash set
-        if in_array.data_type() == &DataType::Null {
-            return Ok(ArrayStaticFilter {
-                in_array,
-                state: RandomState::default(),
-                map: HashMap::with_hasher(()),
-            });
-        }
-
-        let state = RandomState::default();
-        let mut map: HashMap<usize, (), ()> = HashMap::with_hasher(());
-
-        with_hashes([&in_array], &state, |hashes| -> Result<()> {
-            let cmp = make_comparator(&in_array, &in_array, SortOptions::default())?;
-
-            let insert_value = |idx| {
-                let hash = hashes[idx];
-                if let RawEntryMut::Vacant(v) = map
-                    .raw_entry_mut()
-                    .from_hash(hash, |x| cmp(*x, idx).is_eq())
-                {
-                    v.insert_with_hasher(hash, idx, (), |x| hashes[*x]);
-                }
-            };
-
-            match in_array.nulls() {
-                Some(nulls) => {
-                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
-                        .for_each(insert_value)
-                }
-                None => (0..in_array.len()).for_each(insert_value),
-            }
-
-            Ok(())
-        })?;
-
-        Ok(Self {
-            in_array,
-            state,
-            map,
-        })
-    }
-}
-
-/// Wrapper for f32 that implements Hash and Eq using bit comparison.
-/// This treats NaN values as equal to each other when they have the same bit pattern.
-#[derive(Clone, Copy)]
-struct OrderedFloat32(f32);
-
-impl Hash for OrderedFloat32 {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_ne_bytes().hash(state);
-    }
-}
-
-impl PartialEq for OrderedFloat32 {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_bits() == other.0.to_bits()
-    }
-}
-
-impl Eq for OrderedFloat32 {}
-
-impl From<f32> for OrderedFloat32 {
-    fn from(v: f32) -> Self {
-        Self(v)
-    }
-}
-
-/// Wrapper for f64 that implements Hash and Eq using bit comparison.
-/// This treats NaN values as equal to each other when they have the same bit pattern.
-#[derive(Clone, Copy)]
-struct OrderedFloat64(f64);
-
-impl Hash for OrderedFloat64 {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_ne_bytes().hash(state);
-    }
-}
-
-impl PartialEq for OrderedFloat64 {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_bits() == other.0.to_bits()
-    }
-}
-
-impl Eq for OrderedFloat64 {}
-
-impl From<f64> for OrderedFloat64 {
-    fn from(v: f64) -> Self {
-        Self(v)
-    }
-}
-
-// Macro to generate specialized StaticFilter implementations for primitive types
-macro_rules! primitive_static_filter {
-    ($Name:ident, $ArrowType:ty) => {
-        struct $Name {
-            null_count: usize,
-            values: HashSet<<$ArrowType as ArrowPrimitiveType>::Native>,
-        }
-
-        impl $Name {
-            fn try_new(in_array: &ArrayRef) -> Result<Self> {
-                let in_array = in_array
-                    .as_primitive_opt::<$ArrowType>()
-                    .ok_or_else(|| exec_datafusion_err!("Failed to downcast an array to a '{}' array", stringify!($ArrowType)))?;
-
-                let mut values = HashSet::with_capacity(in_array.len());
-                let null_count = in_array.null_count();
-
-                for v in in_array.iter().flatten() {
-                    values.insert(v);
-                }
-
-                Ok(Self { null_count, values })
-            }
-        }
-
-        impl StaticFilter for $Name {
-            fn null_count(&self) -> usize {
-                self.null_count
-            }
-
-            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-                // Handle dictionary arrays by recursing on the values
-                downcast_dictionary_array! {
-                    v => {
-                        let values_contains = self.contains(v.values().as_ref(), negated)?;
-                        let result = take(&values_contains, v.keys(), None)?;
-                        return Ok(downcast_array(result.as_ref()))
-                    }
-                    _ => {}
-                }
-
-                let v = v
-                    .as_primitive_opt::<$ArrowType>()
-                    .ok_or_else(|| exec_datafusion_err!("Failed to downcast an array to a '{}' array", stringify!($ArrowType)))?;
-
-                let haystack_has_nulls = self.null_count > 0;
-
-                let needle_values = v.values();
-                let needle_nulls = v.nulls();
-                let needle_has_nulls = v.null_count() > 0;
-
-                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
-                // ("-" means the value doesn't affect the result)
-                //
-                // | needle_null | haystack_null | negated | in set? | result |
-                // |-------------|---------------|---------|---------|--------|
-                // | true        | -             | false   | -       | null   |
-                // | true        | -             | true    | -       | null   |
-                // | false       | true          | false   | yes     | true   |
-                // | false       | true          | false   | no      | null   |
-                // | false       | true          | true    | yes     | false  |
-                // | false       | true          | true    | no      | null   |
-                // | false       | false         | false   | yes     | true   |
-                // | false       | false         | false   | no      | false  |
-                // | false       | false         | true    | yes     | false  |
-                // | false       | false         | true    | no      | true   |
-
-                // Compute the "contains" result using collect_bool (fast batched approach)
-                // This ignores nulls - we handle them separately
-                let contains_buffer = if negated {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        !self.values.contains(&needle_values[i])
-                    })
-                } else {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        self.values.contains(&needle_values[i])
-                    })
-                };
-
-                // Compute the null mask
-                // Output is null when:
-                // 1. needle value is null, OR
-                // 2. needle value is not in set AND haystack has nulls
-                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
-                    (false, false) => {
-                        // No nulls anywhere
-                        None
-                    }
-                    (true, false) => {
-                        // Only needle has nulls - just use needle's null mask
-                        needle_nulls.cloned()
-                    }
-                    (false, true) => {
-                        // Only haystack has nulls - result is null when value not in set
-                        // Valid (not null) when original "in set" is true
-                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
-                        let validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        Some(NullBuffer::new(validity))
-                    }
-                    (true, true) => {
-                        // Both have nulls - combine needle nulls with haystack-induced nulls
-                        let needle_validity = needle_nulls.map(|n| n.inner().clone())
-                            .unwrap_or_else(|| BooleanBuffer::new_set(needle_values.len()));
-
-                        // Valid when original "in set" is true (see above)
-                        let haystack_validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-
-                        // Combined validity: valid only where both are valid
-                        let combined_validity = &needle_validity & &haystack_validity;
-                        Some(NullBuffer::new(combined_validity))
-                    }
-                };
-
-                Ok(BooleanArray::new(contains_buffer, result_nulls))
-            }
-        }
-    };
-}
-
-// Generate specialized filters for all integer primitive types
-primitive_static_filter!(Int8StaticFilter, Int8Type);
-primitive_static_filter!(Int16StaticFilter, Int16Type);
-primitive_static_filter!(Int32StaticFilter, Int32Type);
-primitive_static_filter!(Int64StaticFilter, Int64Type);
-primitive_static_filter!(UInt8StaticFilter, UInt8Type);
-primitive_static_filter!(UInt16StaticFilter, UInt16Type);
-primitive_static_filter!(UInt32StaticFilter, UInt32Type);
-primitive_static_filter!(UInt64StaticFilter, UInt64Type);
-
-// Macro to generate specialized StaticFilter implementations for float types
-// Floats require a wrapper type (OrderedFloat*) to implement Hash/Eq due to NaN semantics
-macro_rules! float_static_filter {
-    ($Name:ident, $ArrowType:ty, $OrderedType:ty) => {
-        struct $Name {
-            null_count: usize,
-            values: HashSet<$OrderedType>,
-        }
-
-        impl $Name {
-            fn try_new(in_array: &ArrayRef) -> Result<Self> {
-                let in_array = in_array
-                    .as_primitive_opt::<$ArrowType>()
-                    .ok_or_else(|| exec_datafusion_err!("Failed to downcast an array to a '{}' array", stringify!($ArrowType)))?;
-
-                let mut values = HashSet::with_capacity(in_array.len());
-                let null_count = in_array.null_count();
-
-                for v in in_array.iter().flatten() {
-                    values.insert(<$OrderedType>::from(v));
-                }
-
-                Ok(Self { null_count, values })
-            }
-        }
-
-        impl StaticFilter for $Name {
-            fn null_count(&self) -> usize {
-                self.null_count
-            }
-
-            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-                // Handle dictionary arrays by recursing on the values
-                downcast_dictionary_array! {
-                    v => {
-                        let values_contains = self.contains(v.values().as_ref(), negated)?;
-                        let result = take(&values_contains, v.keys(), None)?;
-                        return Ok(downcast_array(result.as_ref()))
-                    }
-                    _ => {}
-                }
-
-                let v = v
-                    .as_primitive_opt::<$ArrowType>()
-                    .ok_or_else(|| exec_datafusion_err!("Failed to downcast an array to a '{}' array", stringify!($ArrowType)))?;
-
-                let haystack_has_nulls = self.null_count > 0;
-
-                let needle_values = v.values();
-                let needle_nulls = v.nulls();
-                let needle_has_nulls = v.null_count() > 0;
-
-                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
-                // ("-" means the value doesn't affect the result)
-                //
-                // | needle_null | haystack_null | negated | in set? | result |
-                // |-------------|---------------|---------|---------|--------|
-                // | true        | -             | false   | -       | null   |
-                // | true        | -             | true    | -       | null   |
-                // | false       | true          | false   | yes     | true   |
-                // | false       | true          | false   | no      | null   |
-                // | false       | true          | true    | yes     | false  |
-                // | false       | true          | true    | no      | null   |
-                // | false       | false         | false   | yes     | true   |
-                // | false       | false         | false   | no      | false  |
-                // | false       | false         | true    | yes     | false  |
-                // | false       | false         | true    | no      | true   |
-
-                // Compute the "contains" result using collect_bool (fast batched approach)
-                // This ignores nulls - we handle them separately
-                let contains_buffer = if negated {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        !self.values.contains(&<$OrderedType>::from(needle_values[i]))
-                    })
-                } else {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        self.values.contains(&<$OrderedType>::from(needle_values[i]))
-                    })
-                };
-
-                // Compute the null mask
-                // Output is null when:
-                // 1. needle value is null, OR
-                // 2. needle value is not in set AND haystack has nulls
-                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
-                    (false, false) => {
-                        // No nulls anywhere
-                        None
-                    }
-                    (true, false) => {
-                        // Only needle has nulls - just use needle's null mask
-                        needle_nulls.cloned()
-                    }
-                    (false, true) => {
-                        // Only haystack has nulls - result is null when value not in set
-                        // Valid (not null) when original "in set" is true
-                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
-                        let validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        Some(NullBuffer::new(validity))
-                    }
-                    (true, true) => {
-                        // Both have nulls - combine needle nulls with haystack-induced nulls
-                        let needle_validity = needle_nulls.map(|n| n.inner().clone())
-                            .unwrap_or_else(|| BooleanBuffer::new_set(needle_values.len()));
-
-                        // Valid when original "in set" is true (see above)
-                        let haystack_validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-
-                        // Combined validity: valid only where both are valid
-                        let combined_validity = &needle_validity & &haystack_validity;
-                        Some(NullBuffer::new(combined_validity))
-                    }
-                };
-
-                Ok(BooleanArray::new(contains_buffer, result_nulls))
-            }
-        }
-    };
-}
-
-// Generate specialized filters for float types using ordered wrappers
-float_static_filter!(Float32StaticFilter, Float32Type, OrderedFloat32);
-float_static_filter!(Float64StaticFilter, Float64Type, OrderedFloat64);
 
 /// Evaluates the list of expressions into an array, flattening any dictionaries
 fn evaluate_list(
@@ -600,6 +123,23 @@ fn try_evaluate_constant_list(
     }
 }
 
+/// Asserts that the InList expression's data type matches a list element's
+/// data type. `DataType::Null` list elements are accepted unconditionally so
+/// that null literals and `NullArray` haystacks remain compatible with any
+/// expression type.
+fn assert_inlist_data_types_match(
+    expr_data_type: &DataType,
+    list_data_type: &DataType,
+) -> Result<()> {
+    if *list_data_type != DataType::Null {
+        assert_or_internal_err!(
+            DFSchema::datatype_is_logically_equal(expr_data_type, list_data_type),
+            "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_data_type}"
+        );
+    }
+    Ok(())
+}
+
 impl InListExpr {
     /// Create a new InList expression
     fn new(
@@ -641,20 +181,28 @@ impl InListExpr {
 
     /// Create a new InList expression directly from an array, bypassing expression evaluation.
     ///
-    /// This is more efficient than `in_list()` when you already have the list as an array,
-    /// as it avoids the conversion: `ArrayRef -> Vec<PhysicalExpr> -> ArrayRef -> StaticFilter`.
-    /// Instead it goes directly: `ArrayRef -> StaticFilter`.
+    /// This is more efficient than [`InListExpr::try_new`] when you already have the list
+    /// as an array, as it builds the static filter directly from the array instead of
+    /// reconstructing an intermediate array from literal expressions.
     ///
-    /// The `list` field will be empty when using this constructor, as the array is stored
-    /// directly in the static filter.
+    /// The `list` field is populated with literal expressions extracted from
+    /// the array, and the array is used to build a static filter for
+    /// efficient set membership evaluation.
     ///
-    /// This does not make the expression any more performant at runtime, but it does make it slightly
-    /// cheaper to build.
+    /// The `array` may be dictionary-encoded — it will be flattened to its
+    /// value type such that specialized filters are used.
+    ///
+    /// Returns an error if the expression's data type and the array's data type
+    /// are not logically equal. Null arrays are always accepted.
     pub fn try_new_from_array(
         expr: Arc<dyn PhysicalExpr>,
         array: ArrayRef,
         negated: bool,
+        schema: &Schema,
     ) -> Result<Self> {
+        let expr_data_type = expr.data_type(schema)?;
+        assert_inlist_data_types_match(&expr_data_type, array.data_type())?;
+
         let list = (0..array.len())
             .map(|i| {
                 let scalar = ScalarValue::try_from_array(array.as_ref(), i)?;
@@ -687,13 +235,7 @@ impl InListExpr {
         let expr_data_type = expr.data_type(schema)?;
         for list_expr in list.iter() {
             let list_expr_data_type = list_expr.data_type(schema)?;
-            assert_or_internal_err!(
-                DFSchema::datatype_is_logically_equal(
-                    &expr_data_type,
-                    &list_expr_data_type
-                ),
-                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-            );
+            assert_inlist_data_types_match(&expr_data_type, &list_expr_data_type)?;
         }
 
         // Try to create a static filter if all list expressions are constants
@@ -854,7 +396,7 @@ impl PhysicalExpr for InListExpr {
                 for expr in self.list.iter().skip(1) {
                     // Short-circuit: if every non-null row is already true,
                     // no further list items can change the result.
-                    if found.null_count() == 0 && found.true_count() == num_rows {
+                    if found.null_count() == 0 && !found.has_false() {
                         break;
                     }
                     found = or_kleene(&found, &compare_one(expr)?)?;
@@ -2312,6 +1854,7 @@ mod tests {
             Arc::clone(&col_a),
             array,
             false,
+            &schema,
         )?) as Arc<dyn PhysicalExpr>;
 
         // Create test data: [1, 2, 3, 4, null]
@@ -2441,6 +1984,7 @@ mod tests {
             Arc::clone(&col_a),
             null_array,
             false,
+            &schema,
         )?) as Arc<dyn PhysicalExpr>;
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
@@ -2469,6 +2013,7 @@ mod tests {
             Arc::clone(&col_a),
             null_array,
             false,
+            &schema,
         )?) as Arc<dyn PhysicalExpr>;
 
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
@@ -3905,8 +3450,9 @@ mod tests {
         let schema =
             Schema::new(vec![Field::new("a", needle.data_type().clone(), false)]);
         let col_a = col("a", &schema)?;
-        let expr = Arc::new(InListExpr::try_new_from_array(col_a, in_array, false)?)
-            as Arc<dyn PhysicalExpr>;
+        let expr = Arc::new(InListExpr::try_new_from_array(
+            col_a, in_array, false, &schema,
+        )?) as Arc<dyn PhysicalExpr>;
         let batch = RecordBatch::try_new(Arc::new(schema), vec![needle])?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         Ok(as_boolean_array(&result).clone())
@@ -4039,41 +3585,237 @@ mod tests {
         Ok(())
     }
 
+    fn make_int32_dict_array(values: Vec<Option<i32>>) -> ArrayRef {
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+        for v in values {
+            match v {
+                Some(val) => builder.append_value(val),
+                None => builder.append_null(),
+            }
+        }
+        Arc::new(builder.finish())
+    }
+
+    fn make_f64_dict_array(values: Vec<Option<f64>>) -> ArrayRef {
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Float64Type>::new();
+        for v in values {
+            match v {
+                Some(val) => builder.append_value(val),
+                None => builder.append_null(),
+            }
+        }
+        Arc::new(builder.finish())
+    }
+
     #[test]
-    fn test_in_list_from_array_type_mismatch_errors() -> Result<()> {
-        // Utf8 needle, Dict(Utf8) in_array
-        let err = eval_in_list_from_array(
-            Arc::new(StringArray::from(vec!["a", "d", "b"])),
-            wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            err.contains("Can't compare arrays of different types"),
-            "{err}"
+    fn test_try_new_from_array_dict_haystack_int32() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let needle = Int32Array::from(vec![1, 2, 3, 4]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let haystack = make_int32_dict_array(vec![Some(1), None, Some(3)]);
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), None, Some(true), None])
         );
 
-        // Dict(Utf8) needle, Int64 in_array: specialized Int64StaticFilter
-        // rejects the Utf8 dictionary values at construction time
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_from_array_type_mismatch_errors() -> Result<()> {
+        // Utf8 needle, Dict(Utf8) in_array: now works with dict haystack support
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), Some(false), Some(true)]),
+            eval_in_list_from_array(
+                Arc::new(StringArray::from(vec!["a", "d", "b"])),
+                wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
+            )?
+        );
+
+        // Dict(Utf8) needle, Int64 in_array: type validation rejects at construction
         let err = eval_in_list_from_array(
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "d", "b"]))),
             Arc::new(Int64Array::from(vec![1, 2, 3])),
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("Failed to downcast"), "{err}");
+        assert!(err.contains("The data type inlist should be same"), "{err}");
 
         // Dict(Int64) needle, Dict(Utf8) in_array: both Dict but different
-        // value types, make_comparator rejects the comparison
+        // value types, type validation rejects at construction
         let err = eval_in_list_from_array(
             wrap_in_dict(Arc::new(Int64Array::from(vec![1, 4, 2]))),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
         )
         .unwrap_err()
         .to_string();
-        assert!(
-            err.contains("Can't compare arrays of different types"),
-            "{err}"
+        assert!(err.contains("The data type inlist should be same"), "{err}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_negated() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let needle = Int32Array::from(vec![1, 2, 3, 4]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let haystack = make_int32_dict_array(vec![Some(1), None, Some(3)]);
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, true, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(false), None, Some(false), None])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_utf8() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let needle = StringArray::from(vec!["a", "b", "c"]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let dict_builder = StringDictionaryBuilder::<Int8Type>::new();
+        let mut builder = dict_builder;
+        builder.append_value("a");
+        builder.append_value("c");
+        let haystack: ArrayRef = Arc::new(builder.finish());
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_needle_and_plain_haystack() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            false,
+        )]);
+
+        let needle = make_int32_dict_array(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::clone(&needle)])?;
+
+        let haystack: ArrayRef = Arc::new(Int32Array::from(vec![1, 3]));
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(false)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_float64() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let needle = Float64Array::from(vec![1.0, 2.0, 3.0]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(needle)])?;
+
+        let haystack = make_f64_dict_array(vec![Some(1.0), Some(3.0)]);
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(col_a, haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_type_mismatch_rejects() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let col_a = col("a", &schema)?;
+        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+
+        let result = InListExpr::try_new_from_array(col_a, haystack, false, &schema);
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_struct_haystack() -> Result<()> {
+        let struct_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
+        ]);
+        let struct_dt = DataType::Struct(struct_fields.clone());
+        let schema = Schema::new(vec![Field::new("a", struct_dt, true)]);
+
+        // Needle: [{1,"a"}, {2,"b"}, NULL, {4,"d"}]
+        let needle = Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            ],
+            Some(vec![true, true, false, true].into()),
+        ));
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![needle])?;
+
+        // Haystack: [{1,"a"}, {4,"d"}]
+        let haystack: ArrayRef = Arc::new(StructArray::new(
+            struct_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 4])),
+                Arc::new(StringArray::from(vec!["a", "d"])),
+            ],
+            None,
+        ));
+
+        let col_a = col("a", &schema)?;
+        let expr = InListExpr::try_new_from_array(
+            Arc::clone(&col_a),
+            Arc::clone(&haystack),
+            false,
+            &schema,
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        // {1,"a"} -> true, {2,"b"} -> false, NULL -> NULL, {4,"d"} -> true
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), None, Some(true)])
+        );
+
+        // Negated path
+        let expr = InListExpr::try_new_from_array(col_a, haystack, true, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(false), Some(true), None, Some(false)])
         );
 
         Ok(())

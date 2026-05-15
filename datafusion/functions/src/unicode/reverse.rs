@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
+use crate::strings::{
+    BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringViewArrayBuilder,
+};
 use crate::utils::make_scalar_function;
 use DataType::{LargeUtf8, Utf8, Utf8View};
-use arrow::array::{
-    Array, ArrayRef, AsArray, LargeStringBuilder, StringArrayType, StringBuilder,
-    StringLikeArrayBuilder, StringViewBuilder,
-};
+use arrow::array::{Array, ArrayRef, AsArray, StringArrayType};
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
@@ -103,17 +101,17 @@ fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = args[0].len();
 
     match args[0].data_type() {
+        LargeUtf8 => reverse_impl(
+            &args[0].as_string::<i64>(),
+            GenericStringArrayBuilder::<i64>::with_capacity(len, 1024),
+        ),
         Utf8 => reverse_impl(
             &args[0].as_string::<i32>(),
-            StringBuilder::with_capacity(len, 1024),
+            GenericStringArrayBuilder::<i32>::with_capacity(len, 1024),
         ),
         Utf8View => reverse_impl(
             &args[0].as_string_view(),
-            StringViewBuilder::with_capacity(len),
-        ),
-        LargeUtf8 => reverse_impl(
-            &args[0].as_string::<i64>(),
-            LargeStringBuilder::with_capacity(len, 1024),
+            StringViewArrayBuilder::with_capacity(len),
         ),
         _ => unreachable!(
             "Reverse can only be applied to Utf8View, Utf8 and LargeUtf8 types"
@@ -121,38 +119,61 @@ fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn reverse_impl<'a, StringArrType, StringBuilderType>(
+fn reverse_impl<'a, StringArrType, B>(
     string_array: &StringArrType,
-    mut array_builder: StringBuilderType,
+    mut array_builder: B,
 ) -> Result<ArrayRef>
 where
     StringArrType: StringArrayType<'a>,
-    StringBuilderType: StringLikeArrayBuilder,
+    B: BulkNullStringArrayBuilder,
 {
+    let item_len = string_array.len();
+    // Null-preserving: reuse the input null buffer as the output null buffer.
+    let nulls = string_array.nulls().cloned();
     let mut string_buf = String::new();
     let mut byte_buf = Vec::<u8>::new();
 
-    for string in string_array.iter() {
-        if let Some(s) = string {
-            if s.is_ascii() {
-                // reverse bytes directly since ASCII characters are single bytes
-                byte_buf.extend(s.as_bytes());
-                byte_buf.reverse();
-                // SAFETY: Since the original string was ASCII, reversing the bytes still results in valid UTF-8.
-                let reversed = unsafe { std::str::from_utf8_unchecked(&byte_buf) };
-                array_builder.append_value(reversed);
-                byte_buf.clear();
+    if let Some(ref n) = nulls {
+        for i in 0..item_len {
+            if n.is_null(i) {
+                array_builder.append_placeholder();
             } else {
-                string_buf.extend(s.chars().rev());
-                array_builder.append_value(&string_buf);
-                string_buf.clear();
+                // SAFETY: `n.is_null(i)` was false in the branch above.
+                let s = unsafe { string_array.value_unchecked(i) };
+                append_reversed(s, &mut array_builder, &mut byte_buf, &mut string_buf);
             }
-        } else {
-            array_builder.append_null();
+        }
+    } else {
+        for i in 0..item_len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_array.value_unchecked(i) };
+            append_reversed(s, &mut array_builder, &mut byte_buf, &mut string_buf);
         }
     }
 
-    Ok(Arc::new(array_builder.finish()) as ArrayRef)
+    array_builder.finish(nulls)
+}
+
+#[inline]
+fn append_reversed<B: BulkNullStringArrayBuilder>(
+    s: &str,
+    builder: &mut B,
+    byte_buf: &mut Vec<u8>,
+    string_buf: &mut String,
+) {
+    if s.is_ascii() {
+        // reverse bytes directly since ASCII characters are single bytes
+        byte_buf.extend(s.as_bytes());
+        byte_buf.reverse();
+        // SAFETY: input was ASCII, so reversed bytes are still valid UTF-8.
+        let reversed = unsafe { std::str::from_utf8_unchecked(byte_buf) };
+        builder.append_value(reversed);
+        byte_buf.clear();
+    } else {
+        string_buf.extend(s.chars().rev());
+        builder.append_value(string_buf);
+        string_buf.clear();
+    }
 }
 
 #[cfg(test)]
@@ -212,5 +233,59 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_array_with_nulls() {
+        use crate::unicode::reverse::reverse;
+        use arrow::array::ArrayRef;
+        use std::sync::Arc;
+
+        let input_values = vec![Some("abcd"), None, Some("XYZ"), Some("héllo"), None];
+        let expected: Vec<Option<&str>> =
+            vec![Some("dcba"), None, Some("ZYX"), Some("olléh"), None];
+
+        let cases: Vec<(&str, ArrayRef)> = vec![
+            (
+                "StringArray",
+                Arc::new(StringArray::from(input_values.clone())),
+            ),
+            (
+                "LargeStringArray",
+                Arc::new(LargeStringArray::from(input_values.clone())),
+            ),
+            (
+                "StringViewArray",
+                Arc::new(StringViewArray::from(input_values.clone())),
+            ),
+        ];
+
+        for (label, input) in cases {
+            let out = reverse(&[input]).unwrap();
+            assert_eq!(out.len(), expected.len(), "{label}: length mismatch");
+
+            let actual: Vec<Option<&str>> = match out.data_type() {
+                Utf8 => out
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .iter()
+                    .collect(),
+                LargeUtf8 => out
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .unwrap()
+                    .iter()
+                    .collect(),
+                Utf8View => out
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .unwrap()
+                    .iter()
+                    .collect(),
+                other => panic!("{label}: unexpected output type {other:?}"),
+            };
+            assert_eq!(actual, expected, "{label}: value mismatch");
+        }
     }
 }
