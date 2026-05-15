@@ -17,12 +17,12 @@
 
 //! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{
     Result, ScalarValue, arrow_datafusion_err, datatype::DataTypeExt,
-    exec_datafusion_err, exec_err, internal_err, types::logical_string,
-    utils::take_function_args,
+    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err,
+    types::logical_string, utils::take_function_args,
 };
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -140,10 +140,9 @@ impl ScalarUDFImpl for ArrowCastFunc {
                         self.name()
                     )
                 },
-                |casted_type| match casted_type.parse::<DataType>() {
-                    Ok(data_type) => Ok(Field::new(self.name(), data_type, nullable).into()),
-                    Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
-                    Err(e) => Err(arrow_datafusion_err!(e)),
+                |casted_type| {
+                    let data_type = parse_arrow_cast_data_type(casted_type)?;
+                    Ok(Field::new(self.name(), data_type, nullable).into())
                 },
             )
     }
@@ -189,10 +188,35 @@ pub(crate) fn data_type_from_type_arg(name: &str, type_arg: &Expr) -> Result<Dat
         );
     };
 
-    val.parse().map_err(|e| match e {
-        // If the data type cannot be parsed, return a Plan error to signal an
-        // error in the input rather than a more general ArrowError
+    parse_arrow_cast_data_type(val)
+}
+
+pub(crate) fn parse_arrow_cast_data_type(casted_type: &str) -> Result<DataType> {
+    let data_type = casted_type.parse().map_err(|e| match e {
         ArrowError::ParseError(e) => exec_datafusion_err!("{e}"),
         e => arrow_datafusion_err!(e),
-    })
+    })?;
+
+    validate_arrow_cast_data_type(&data_type)?;
+    Ok(data_type)
+}
+
+fn validate_arrow_cast_data_type(data_type: &DataType) -> Result<()> {
+    match data_type {
+        DataType::Time32(unit @ (TimeUnit::Microsecond | TimeUnit::Nanosecond)) => {
+            Err(plan_datafusion_err!(
+                "Invalid Arrow type combination: Time32 only supports Second and Millisecond, got {:?}. Use Time64({:?}) for sub-millisecond precision",
+                unit,
+                unit
+            ))
+        }
+        DataType::Time64(unit @ (TimeUnit::Second | TimeUnit::Millisecond)) => {
+            Err(plan_datafusion_err!(
+                "Invalid Arrow type combination: Time64 only supports Microsecond and Nanosecond, got {:?}. Use Time32({:?}) for second or millisecond precision",
+                unit,
+                unit
+            ))
+        }
+        _ => Ok(()),
+    }
 }

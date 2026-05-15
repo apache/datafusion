@@ -18,10 +18,9 @@
 //! [`ArrowTryCastFunc`]: Implementation of the `arrow_try_cast`
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use arrow::error::ArrowError;
 use datafusion_common::{
-    Result, arrow_datafusion_err, datatype::DataTypeExt, exec_datafusion_err, exec_err,
-    internal_err, types::logical_string, utils::take_function_args,
+    Result, datatype::DataTypeExt, exec_err, internal_err, types::logical_string,
+    utils::take_function_args,
 };
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -31,7 +30,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use super::arrow_cast::data_type_from_type_arg;
+use super::arrow_cast::{data_type_from_type_arg, parse_arrow_cast_data_type};
 
 /// Like [`arrow_cast`](super::arrow_cast::ArrowCastFunc) but returns NULL on cast failure instead of erroring.
 ///
@@ -111,12 +110,9 @@ impl ScalarUDFImpl for ArrowTryCastFunc {
                         self.name()
                     )
                 },
-                |casted_type| match casted_type.parse::<DataType>() {
-                    Ok(data_type) => {
-                        Ok(Field::new(self.name(), data_type, true).into())
-                    }
-                    Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
-                    Err(e) => Err(arrow_datafusion_err!(e)),
+                |casted_type| {
+                    let data_type = parse_arrow_cast_data_type(casted_type)?;
+                    Ok(Field::new(self.name(), data_type, true).into())
                 },
             )
     }
