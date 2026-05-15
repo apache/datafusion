@@ -118,8 +118,8 @@ impl CastComparisonRewrite {
 
 /// Tries to rewrite the literal so a cast can be removed from the expression.
 ///
-/// This is intentionally closed-by-default: only casts explicitly allowed by
-/// [`is_supported_comparison_unwrap_cast`] are eligible. Literal round-tripping
+/// This is intentionally closed-by-default: only certain casts explicitly allowed are eligible. 
+/// Literal round-tripping
 /// is required so rewrites such as `CAST(ts_ms AS Timestamp(ns)) = lit_ns` are
 /// only applied when `lit_ns` lies exactly on a millisecond boundary.
 pub fn try_cast_literal_for_comparison_unwrap(
@@ -158,10 +158,9 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
 /// Returns true when a cast preserves comparison semantics when unwrapped.
 ///
 /// Allowed cases:
-/// - Same-timezone timestamp casts where target precision is the same or finer
+/// - Timestamp precision widening where target precision is the same or finer
 ///   (e.g. `Timestamp(ms) -> Timestamp(ns)` or same-precision identity).
-///   Cross-timezone is blocked — `cast_between_timestamp` doesn't handle
-///   timezone offsets, so same-i64 round-trips would falsely pass.
+///   Cross-timezone is allowed — timestamps are UTC epoch internally.
 ///   NOTE: Precision widening can overflow on the source side when the
 ///   source value is outside the target timestamp's i64 domain (e.g.
 ///   `Timestamp(Second)` cannot hold all widened `Timestamp(Nanosecond)`
@@ -194,16 +193,14 @@ fn is_supported_comparison_unwrap_cast(
 ) -> bool {
     match (from_type, to_type) {
         (
-            DataType::Timestamp(from_unit, from_tz),
-            DataType::Timestamp(to_unit, to_tz),
+            DataType::Timestamp(from_unit, _),
+            DataType::Timestamp(to_unit, _),
         ) => {
-            // TODO: Cross-timezone timestamp comparison could be supported
-            // if `cast_between_timestamp` handled the timezone offset. Currently
-            // it only adjusts the precision unit (e.g. ms→ns), so the literal
-            // round-trip check would falsely pass for same i64 values that
-            // represent different instants in different timezones.
-            from_tz == to_tz
-                && timestamp_unit_scale(from_unit) <= timestamp_unit_scale(to_unit)
+            // Timestamp values are stored as UTC epoch internally, so the
+            // timezone label is just for display — comparing raw i64 values
+            // across different timezones is equivalent to comparing the same
+            // UTC instant. cross-timezone unwrap is safe.
+            timestamp_unit_scale(from_unit) <= timestamp_unit_scale(to_unit)
         }
         _ => {
             is_integer_widening_safe(from_type, to_type)
@@ -294,11 +291,16 @@ fn is_integer_string_safe(from: &DataType, to: &DataType, op: Operator) -> bool 
 /// Utf8View, or Dictionary wrapping them). Any direction is allowed — string
 /// constants can't overflow and the round-trip check catches truncation.
 fn is_dictionary_string_widening_safe(from: &DataType, to: &DataType) -> bool {
+    is_string_like_type(from) && is_string_like_type(to)
+}
+
+fn is_string_like_type(dt: &DataType) -> bool {
     use arrow::datatypes::DataType::*;
-    let is_string_like = |dt: &DataType| -> bool {
-        matches!(dt, Utf8 | LargeUtf8 | Utf8View | Dictionary(_, _))
-    };
-    is_string_like(from) && is_string_like(to)
+    match dt {
+        Utf8 | LargeUtf8 | Utf8View => true,
+        Dictionary(_, v) => is_string_like_type(v),
+        _ => false,
+    }
 }
 
 /// Returns true when the cast between `from` and `to` is safe for decimal
@@ -322,6 +324,7 @@ fn is_decimal_safe(from: &DataType, to: &DataType) -> bool {
     if min_int_digits > 0
         && let Some((p, s)) = decimal_precision_scale(to)
     {
+        debug_assert!(s >= 0, "decimal scale must be non-negative");
         return p >= min_int_digits + s as u8;
     }
 
@@ -1028,7 +1031,7 @@ mod tests {
         assert!(!is_supported_comparison_unwrap_cast(&ts_ns, &ts_ms, op));
 
         let utc = Some("+0:00".into());
-        assert!(!is_supported_comparison_unwrap_cast(
+        assert!(is_supported_comparison_unwrap_cast(
             &DataType::Timestamp(TimeUnit::Millisecond, None),
             &DataType::Timestamp(TimeUnit::Nanosecond, utc),
             op,

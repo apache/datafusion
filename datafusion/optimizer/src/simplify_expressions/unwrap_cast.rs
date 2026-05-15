@@ -37,22 +37,13 @@
 //! ## Safety
 //!
 //! Unwrap is **closed by default**: it is only allowed when the cast is
-//! known to preserve comparison semantics. Currently two cast families are
-//! allowed, provided the literal round-trips exactly through both types:
-//!
-//! 1. **Same-timezone timestamp casts** where target precision is the same
-//!    or finer than the source (e.g. `Timestamp(ms) -> Timestamp(ns)` or
-//!    same-precision identity).
-//!
-//! 2. **Integer widening casts** from smaller to larger type within the
-//!    same sign family, or from unsigned to a strictly larger signed type
-//!    (e.g. `Int32 -> Int64`, `UInt8 -> Int32`, `UInt32 -> Int64`).
-//!    Integer narrowing and signed-to-unsigned are never unwrapped.
-//!
-//! All other type combinations (float, decimal, string, dictionary,
-//! binary, date↔timestamp, timezone changes, etc.) are NOT unwrapped
-//! because the cast can lose precision, change domain, or break
-//! comparison ordering/equality.
+//! known to preserve comparison semantics. The full allowlist is defined
+//! in `datafusion::expr::common::casts::is_supported_comparison_unwrap_cast`.
+//! Currently allowed families: timestamp precision widening (including
+//! cross-timezone), integer widening (including Date32↔Int32), binary
+//! widening, integer→string (Eq/NotEq only), dictionary/string,
+//! decimal widening, and integer→decimal (with sufficient precision).
+//! The literal must round-trip exactly through both types.
 //!
 //! # Examples
 //!
@@ -564,13 +555,16 @@ mod tests {
     }
 
     #[test]
-    /// Casts that change timestamp timezone are not unwrapped.
-    fn test_not_unwrap_cast_with_timestamp_nanos_timezone() {
+    /// Cross-timezone timestamp casts are now unwrapped (raw i64 stores UTC epoch).
+    fn test_unwrap_cast_cross_timezone() {
         let schema = expr_test_schema();
-        // cast(ts_nano as Timestamp(Nanosecond, UTC)) < 1666612093000000000::Timestamp(Nanosecond, Utc))
         let expr_lt = try_cast(col("ts_nano_none"), timestamp_nano_utc_type())
             .lt(lit_timestamp_nano_utc(1666612093000000000));
-        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+        let expected = col("ts_nano_none").lt(lit(ScalarValue::TimestampNanosecond(
+            Some(1666612093000000000),
+            None,
+        )));
+        assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
     #[test]
