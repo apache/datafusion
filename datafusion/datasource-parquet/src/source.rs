@@ -621,7 +621,7 @@ impl FileSource for ParquetSource {
 
     /// Reorder the files in the shared work queue so the most
     /// "promising" files are read first, matching the strategy of
-    /// [`PreparedAccessPlan::reorder_by_statistics`] at the row-group
+    /// `PreparedAccessPlan::reorder_by_statistics` at the row-group
     /// level: key off the file's `min`, and let the sort direction
     /// follow the request (ASC by `min` for ASC requests, DESC by
     /// `min` for DESC requests).
