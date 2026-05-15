@@ -86,3 +86,7 @@ harness = false
 [[bench]]
 name = "parquet_struct_filter_pushdown"
 harness = false
+
+[[bench]]
+name = "selectivity_tracker"
+harness = false

@@ -1082,6 +1082,25 @@ pub fn build_row_filter(
         .map(|filters| Some(RowFilter::new(filters)))
 }
 
+/// Sum the compressed size of the given leaf-column indices across every
+/// row group in the file. Used by the adaptive selectivity tracker to
+/// weigh the I/O cost of decoding a filter's columns against the cost of
+/// the projection.
+pub(crate) fn total_compressed_bytes(
+    column_indices: &[usize],
+    metadata: &ParquetMetaData,
+) -> usize {
+    let mut total: i64 = 0;
+    for rg in metadata.row_groups() {
+        for &idx in column_indices {
+            if let Some(col) = rg.columns().get(idx) {
+                total += col.compressed_size();
+            }
+        }
+    }
+    total.max(0) as usize
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
