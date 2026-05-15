@@ -211,8 +211,8 @@ mod tests {
     }
 
     #[test]
-    fn test_no_unwrap_cast_decimal_literal_on_left_side() {
-        // Decimal casts are not currently unwrapped.
+    fn test_unwrap_cast_decimal_literal_on_left_side() {
+        // Decimal128 precision widening is now unwrapped.
         let schema = Schema::new(vec![Field::new(
             "decimal_col",
             DataType::Decimal128(9, 2),
@@ -231,7 +231,7 @@ mod tests {
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
-        assert!(!result.transformed);
+        assert!(result.transformed);
     }
 
     #[test]
@@ -474,13 +474,14 @@ mod tests {
     }
 
     #[test]
-    fn test_no_unwrap_lossy_decimal_precision_casts() {
+    fn test_unwrap_lossy_decimal_precision_casts() {
         let schema = Schema::new(vec![Field::new(
             "decimal_col",
             DataType::Decimal128(18, 2),
             true,
         )]);
 
+        // Decimal→Decimal: (18,2)→(18,1) is scale narrowing. NOT unwrapped.
         let column_expr = col("decimal_col", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(
             column_expr,
@@ -493,6 +494,7 @@ mod tests {
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
         assert!(!result.transformed);
 
+        // Decimal→Decimal: (18,2)→(10,2) is precision narrowing. NOT unwrapped.
         let column_expr = col("decimal_col", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(
             column_expr,
@@ -505,6 +507,7 @@ mod tests {
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
         assert!(!result.transformed);
 
+        // Decimal→Decimal: (18,2)→(12,4) loses integer digits. NOT unwrapped.
         let column_expr = col("decimal_col", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(
             column_expr,
@@ -517,6 +520,7 @@ mod tests {
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
         assert!(!result.transformed);
 
+        // Decimal→Integer is still NOT allowed.
         let column_expr = col("decimal_col", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
         let literal_expr = lit(ScalarValue::Int64(Some(16)));
@@ -595,7 +599,7 @@ mod tests {
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
         assert!(!result.transformed);
 
-        // Decimal(10, 2) cannot hold the scaled Int64 domain.
+        // Int64→Decimal: NOT allowed (column overflow risk).
         let column_expr = col("int64_col", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(
             column_expr,
@@ -610,7 +614,8 @@ mod tests {
     }
 
     #[test]
-    fn test_no_unwrap_cast_with_decimal_types() {
+    fn test_unwrap_cast_with_decimal_types() {
+        // Decimal→Decimal precision widening is now unwrapped.
         let test_cases = vec![
             // (column_precision, column_scale, cast_precision, cast_scale, value)
             (9, 2, 22, 2, 400),
@@ -636,7 +641,7 @@ mod tests {
                 Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
 
             let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
-            assert!(!result.transformed);
+            assert!(result.transformed);
 
             let cast_expr = Arc::new(CastExpr::new(
                 column_expr,
@@ -648,7 +653,7 @@ mod tests {
                 Arc::new(BinaryExpr::new(literal_expr, Operator::Lt, cast_expr));
 
             let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
-            assert!(!result.transformed);
+            assert!(result.transformed);
         }
     }
 

@@ -123,9 +123,8 @@ SELECT
 ----
 1 0
 
-# Integer-to-decimal can be partial when the decimal target cannot represent the
-# full integer source domain. The out-of-range negative value must stay NULL
-# under TRY_CAST and must not match the simplified predicate.
+# Integer-to-decimal unwrap is NOT allowed: some integer values overflow the
+# decimal (e.g. Int64::MAX → Decimal(10,2)). The CAST stays on the original side.
 query I
 SELECT column1
 FROM (VALUES

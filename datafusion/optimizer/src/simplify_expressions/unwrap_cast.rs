@@ -294,13 +294,15 @@ mod tests {
         let expected = null_bool();
         assert_eq!(optimize_test(lit_lt_lit, &schema), expected);
 
-        // cast(c1, UTF8) = '123' is not currently unwrapped.
+        // cast(c1, UTF8) = '123': should BE unwrapped (Int→String is allowed with round-trip)
         let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("123"));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        let expected = col("c1").eq(lit(123i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
 
-        // cast(c1, UTF8) != '123' is not currently unwrapped.
+        // cast(c1, UTF8) != '123': Int→String is allowed for equality-like ops (Eq/NotEq/IsDistinctFrom)
         let expr_input = cast(col("c1"), DataType::Utf8).not_eq(lit("123"));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        let expected = col("c1").not_eq(lit(123i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
 
         // Comparison against NULL is still folded by general simplification.
         let expr_input = cast(col("c1"), DataType::Utf8).eq(lit(ScalarValue::Utf8(None)));
@@ -316,13 +318,15 @@ mod tests {
         let expected = col("c6").eq(lit(0u32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
-        // cast(c6, UTF8) = "123" is not currently unwrapped.
+        // cast(c6, UTF8) = "123": Integer→String is allowed for Eq (round-trip safe).
         let expr_input = cast(col("c6"), DataType::Utf8).eq(lit("123"));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        let expected = col("c6").eq(lit(123u32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
 
-        // cast(c6, UTF8) != "123" is not currently unwrapped.
+        // cast(c6, UTF8) != "123": Integer→String also allowed for NotEq.
         let expr_input = cast(col("c6"), DataType::Utf8).not_eq(lit("123"));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        let expected = col("c6").not_eq(lit(123u32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
     #[test]
@@ -333,17 +337,23 @@ mod tests {
             Box::new(ScalarValue::from("value")),
         );
 
-        // Dictionary casts are not currently unwrapped.
+        // Dictionary wrapping is widening: Utf8→Dict(Int32,Utf8) is now unwrapped.
         let expr_input = cast(col("str1"), dict.data_type()).eq(lit(dict.clone()));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        let expected = col("str1").eq(lit(ScalarValue::from("value")));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
 
-        // Dictionary casts are not currently unwrapped.
+        // Dictionary unwrapping: Dict→Utf8 is now unwrapped (widening from Utf8→Dict).
         let expr_input = cast(col("tag"), DataType::Utf8).eq(lit("value"));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        let expected = col("tag").eq(lit(ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Utf8(Some("value".to_owned()))),
+        )));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
 
-        // Verify reversed argument order.
+        // Reversed argument order: optimizer normalizes column-on-left.
         let expr_input = lit(dict.clone()).eq(cast(col("str1"), dict.data_type()));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        let expected = col("str1").eq(lit(ScalarValue::Utf8(Some("value".to_owned()))));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
     #[test]
@@ -355,7 +365,9 @@ mod tests {
             Box::new(ScalarValue::LargeUtf8(Some("value".to_owned()))),
         );
         let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        let expected =
+            col("largestr").eq(lit(ScalarValue::LargeUtf8(Some("value".to_owned()))));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
     #[test]
@@ -415,15 +427,16 @@ mod tests {
             cast(col("c3"), DataType::Decimal128(10, 3)).lt(lit_decimal(1230, 10, 3));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
-        // Decimal(10, 2) cannot hold the scaled Int32 domain.
+        // Int32→Decimal(10,2): p-s=8 < 10 integer digits → NOT safe, stays blocked
         let expr_lt =
             cast(col("c1"), DataType::Decimal128(10, 2)).lt(lit_decimal(12300, 10, 2));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
-        // Decimal casts are not currently unwrapped.
+        // Int32→Decimal(12,2): p-s=10 ≥ 10 → now unwraps
         let expr_lt =
             cast(col("c1"), DataType::Decimal128(12, 2)).lt(lit_decimal(12300, 12, 2));
-        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+        let expected = col("c1").lt(lit(123i32));
+        assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
     #[test]
@@ -477,8 +490,8 @@ mod tests {
         );
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
-        // Decimal casts are not currently unwrapped.
-        let expr_lt = cast(col("c3"), DataType::Decimal128(19, 3)).in_list(
+        // Decimal widening (18,2)→(19,3) is now unwrapped: same integer digits, scale 2→3.
+        let cast_expr = cast(col("c3"), DataType::Decimal128(19, 3)).in_list(
             vec![
                 lit_decimal(12000, 19, 3),
                 lit_decimal(24000, 19, 3),
@@ -487,7 +500,16 @@ mod tests {
             ],
             false,
         );
-        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+        let expected = col("c3").in_list(
+            vec![
+                lit_decimal(1200, 18, 2),
+                lit_decimal(2400, 18, 2),
+                lit_decimal(128, 18, 2),
+                lit_decimal(124, 18, 2),
+            ],
+            false,
+        );
+        assert_eq!(optimize_test(cast_expr, &schema), expected);
 
         // cast(INT32(12), INT64) IN (.....) =>
         // INT64(12) IN (INT64(12),INT64(13),INT64(14),INT64(15),INT64(16))

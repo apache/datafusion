@@ -71,7 +71,7 @@ pub fn try_cast_literal_to_type(
         return ScalarValue::try_from(target_type).ok();
     }
     try_cast_numeric_literal(lit_value, target_type)
-        .or_else(|| try_cast_string_literal(lit_value, target_type))
+        .or_else(|| try_cast_string_like_literal(lit_value, target_type))
         .or_else(|| try_cast_dictionary(lit_value, target_type))
         .or_else(|| try_cast_binary(lit_value, target_type))
 }
@@ -129,7 +129,7 @@ pub fn try_cast_literal_for_comparison_unwrap(
     op: Operator,
 ) -> Option<CastComparisonRewrite> {
     if !is_supported_comparison_unwrap_operator(op)
-        || !is_supported_comparison_unwrap_cast(from_type, to_type)
+        || !is_supported_comparison_unwrap_cast(from_type, to_type, op)
     {
         return None;
     }
@@ -172,10 +172,24 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
 /// - Binary widening from fixed-size to variable-length
 ///   (e.g. `FixedSizeBinary(n) -> Binary`).
 ///   Binary narrowing or FixedSizeBinary length changes are NOT allowed.
+/// - Integer → String (e.g. `Int32 -> Utf8`): equality-like ops only
+///   (Eq/NotEq/IsDistinctFrom). Inequality blocked because string
+///   ordering differs from integer ordering. String→Integer NEVER allowed.
+/// - Dictionary/String family (Utf8/LargeUtf8/Utf8View/Dictionary):
+///   any direction allowed — string literals can't overflow and the
+///   round-trip check catches truncation.
+/// - Decimal widening: precision-widening and scale-widening (e.g.
+///   `Decimal(10,2) → Decimal(18,4)`) are safe. Narrowing is NOT allowed.
+/// - Integer → Decimal: only when decimal precision covers the full integer
+///   range (e.g. Int32→Decimal(10,2) needs p≥10). Otherwise NOT allowed.
 ///
 /// The literal must also round-trip exactly (checked separately in
 /// `try_cast_literal_for_comparison_unwrap`).
-fn is_supported_comparison_unwrap_cast(from_type: &DataType, to_type: &DataType) -> bool {
+fn is_supported_comparison_unwrap_cast(
+    from_type: &DataType,
+    to_type: &DataType,
+    op: Operator,
+) -> bool {
     match (from_type, to_type) {
         (
             DataType::Timestamp(from_unit, from_tz),
@@ -187,6 +201,9 @@ fn is_supported_comparison_unwrap_cast(from_type: &DataType, to_type: &DataType)
         _ => {
             is_integer_widening_safe(from_type, to_type)
                 || is_binary_widening_safe(from_type, to_type)
+                || is_integer_string_safe(from_type, to_type, op)
+                || is_dictionary_string_widening_safe(from_type, to_type)
+                || is_decimal_safe(from_type, to_type)
         }
     }
 }
@@ -200,9 +217,10 @@ fn is_integer_widening_safe(from: &DataType, to: &DataType) -> bool {
     use DataType::*;
     matches!(
         (from, to),
-        // Same-type identity
+        // Same-type identity (Date32=Int32, Date64=Int64)
         (Int8, Int8) | (Int16, Int16) | (Int32, Int32) | (Int64, Int64)
             | (UInt8, UInt8) | (UInt16, UInt16) | (UInt32, UInt32) | (UInt64, UInt64)
+            | (Date32, Date32) | (Date64, Date64)
             // Same-sign widening
             | (Int8, Int16 | Int32 | Int64)
             | (Int16, Int32 | Int64)
@@ -214,6 +232,9 @@ fn is_integer_widening_safe(from: &DataType, to: &DataType) -> bool {
             | (UInt8, Int16 | Int32 | Int64)
             | (UInt16, Int32 | Int64)
             | (UInt32, Int64)
+            // Date32 = Int32, Date64 = Int64 (same bits)
+            | (Int32, Date32) | (Date32, Int32)
+            | (Int64, Date64) | (Date64, Int64)
     )
 }
 
@@ -234,6 +255,99 @@ fn is_binary_widening_safe(from: &DataType, to: &DataType) -> bool {
             | (FixedSizeBinary(_), FixedSizeBinary(_))
             | (Binary, Binary)
     )
+}
+
+/// Returns true when `from` is an integer type and `to` is a string type.
+///
+/// This permits unwrapping `CAST(int_col AS Utf8) = '123'` to `int_col = 123`,
+/// provided the operator is equality-only (enforced in the caller).
+fn is_integer_string_safe(from: &DataType, to: &DataType, op: Operator) -> bool {
+    use arrow::datatypes::DataType::*;
+    // Integer → String: type check
+    let types_ok = matches!(
+        from,
+        Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
+    ) && matches!(to, Utf8 | LargeUtf8 | Utf8View);
+    if !types_ok {
+        return false;
+    }
+    // Integer→string unwrap is only safe for equality ops:
+    // string ordering differs from integer ordering for inequalities
+    // (e.g. "5" < "123" is false but 5 < 123 is true).
+    matches!(
+        op,
+        Operator::Eq
+            | Operator::NotEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+    )
+}
+
+/// Returns true when `from` and `to` are both string-family types (Utf8, LargeUtf8,
+/// Utf8View, or Dictionary wrapping them). Any direction is allowed — string
+/// constants can't overflow and the round-trip check catches truncation.
+fn is_dictionary_string_widening_safe(from: &DataType, to: &DataType) -> bool {
+    use arrow::datatypes::DataType::*;
+    let is_string_like = |dt: &DataType| -> bool {
+        matches!(dt, Utf8 | LargeUtf8 | Utf8View | Dictionary(_, _))
+    };
+    is_string_like(from) && is_string_like(to)
+}
+
+/// Returns true when the cast between `from` and `to` is safe for decimal
+/// comparison unwrapping.
+fn is_decimal_safe(from: &DataType, to: &DataType) -> bool {
+    use arrow::datatypes::DataType::*;
+    // Decimal widening
+    if let (
+        Decimal32(p1, s1) | Decimal64(p1, s1) | Decimal128(p1, s1),
+        Decimal32(p2, s2) | Decimal64(p2, s2) | Decimal128(p2, s2),
+    ) = (from, to)
+    {
+        let from_int_digits = *p1 as i16 - *s1 as i16;
+        let to_int_digits = *p2 as i16 - *s2 as i16;
+        return from_int_digits <= to_int_digits && s1 <= s2;
+    }
+    // Integer → Decimal: only when decimal integer-digits capacity covers the
+    // full integer range. min_int_digits = number of digits max value uses;
+    // we need p - s >= min_int_digits, i.e. p >= min_int_digits + s.
+    let min_int_digits = integer_min_decimal_precision(from);
+    if min_int_digits > 0 {
+        if let Some((p, s)) = decimal_precision_scale(to) {
+            return p >= min_int_digits + s as u8;
+        }
+    }
+    false
+}
+
+/// Minimum decimal precision needed to represent ALL values of an integer type.
+/// Returns 0 if `dt` is not an integer type.
+fn integer_min_decimal_precision(dt: &DataType) -> u8 {
+    use arrow::datatypes::DataType::*;
+    // Number of integer digits needed for the max value of the type.
+    // Not total precision — the caller must add scale separately.
+    match dt {
+        Int8 => 3,    // -128..127
+        Int16 => 5,   // -32768..32767
+        Int32 => 10,  // -2147483648..2147483647
+        Int64 => 19,  // -9223372036854775808..9223372036854775807
+        UInt8 => 3,   // 0..255
+        UInt16 => 5,  // 0..65535
+        UInt32 => 10, // 0..4294967295
+        UInt64 => 20, // 0..18446744073709551615
+        _ => 0,
+    }
+}
+
+/// Extract (precision, scale) from a decimal DataType.
+fn decimal_precision_scale(dt: &DataType) -> Option<(u8, i8)> {
+    use arrow::datatypes::DataType::*;
+    match dt {
+        Decimal32(p, s) => Some((*p, *s)),
+        Decimal64(p, s) => Some((*p, *s)),
+        Decimal128(p, s) => Some((*p, *s)),
+        _ => None,
+    }
 }
 
 fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
@@ -497,18 +611,39 @@ fn try_cast_numeric_literal(
     }
 }
 
-fn try_cast_string_literal(
+fn try_cast_string_like_literal(
     lit_value: &ScalarValue,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
-    let string_value = lit_value.try_as_str()?.map(|s| s.to_string());
-    let scalar_value = match target_type {
-        DataType::Utf8 => ScalarValue::Utf8(string_value),
-        DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),
-        DataType::Utf8View => ScalarValue::Utf8View(string_value),
-        _ => return None,
-    };
-    Some(scalar_value)
+    // String → String: reuse try_as_str for identity across string families
+    if let Some(str_opt) = lit_value.try_as_str() {
+        let string_value = str_opt.map(|s| s.to_string());
+        let scalar_value = match target_type {
+            DataType::Utf8 => ScalarValue::Utf8(string_value),
+            DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),
+            DataType::Utf8View => ScalarValue::Utf8View(string_value),
+            _ => return lit_value.cast_to(target_type).ok(),
+        };
+        return Some(scalar_value);
+    }
+    // Integer → String: use cast_to for consistent formatting
+    if matches!(
+        target_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) && matches!(
+        lit_value,
+        ScalarValue::Int8(_)
+            | ScalarValue::Int16(_)
+            | ScalarValue::Int32(_)
+            | ScalarValue::Int64(_)
+            | ScalarValue::UInt8(_)
+            | ScalarValue::UInt16(_)
+            | ScalarValue::UInt32(_)
+            | ScalarValue::UInt64(_)
+    ) {
+        return lit_value.cast_to(target_type).ok();
+    }
+    None
 }
 
 /// Attempt to cast to/from a dictionary type by wrapping/unwrapping the dictionary
@@ -753,15 +888,17 @@ mod tests {
             DataType::Decimal128(18, 0),
             DataType::Int64,
         );
-        expect_no_comparison_unwrap(
+        expect_comparison_unwrap(
             ScalarValue::Decimal128(Some(1230000), 20, 4),
             DataType::Decimal64(10, 2),
             DataType::Decimal128(20, 4),
+            ScalarValue::Decimal64(Some(12300), 10, 2),
         );
-        expect_no_comparison_unwrap(
+        expect_comparison_unwrap(
             ScalarValue::Decimal128(Some(1230000), 12, 4),
             DataType::Decimal128(10, 2),
             DataType::Decimal128(12, 4),
+            ScalarValue::Decimal128(Some(12300), 10, 2),
         );
 
         // Integer widening: Int32 -> Int64 is safe.
@@ -808,16 +945,20 @@ mod tests {
             DataType::Int64,
         );
 
+        // Int32→Decimal(10,2): p-s=8 < 10 integer digits needed → NOT safe
         expect_no_comparison_unwrap(
             ScalarValue::Decimal128(Some(12300), 10, 2),
             DataType::Int32,
             DataType::Decimal128(10, 2),
         );
-        expect_no_comparison_unwrap(
+        // Int32→Decimal(12,2): p-s=10 ≥ 10 integer digits → safe
+        expect_comparison_unwrap(
             ScalarValue::Decimal128(Some(12300), 12, 2),
             DataType::Int32,
             DataType::Decimal128(12, 2),
+            ScalarValue::Int32(Some(123)),
         );
+        // Int64→Decimal(38,0)→Int64: Decimal→Integer direction still blocked
         expect_no_comparison_unwrap(
             ScalarValue::Int64(Some(123)),
             DataType::Decimal128(38, 0),
@@ -835,17 +976,19 @@ mod tests {
             DataType::Float32,
         );
 
-        expect_no_comparison_unwrap_with_op(
+        expect_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("123".to_string())),
             DataType::Int32,
             DataType::Utf8,
             Operator::Eq,
+            ScalarValue::Int32(Some(123)),
         );
-        expect_no_comparison_unwrap_with_op(
+        expect_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("123".to_string())),
             DataType::Int32,
             DataType::Utf8,
             Operator::IsNotDistinctFrom,
+            ScalarValue::Int32(Some(123)),
         );
         expect_no_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("0123".to_string())),
@@ -869,71 +1012,152 @@ mod tests {
 
     #[test]
     fn test_comparison_unwrap_cast_allowlist() {
+        let op = Operator::Lt;
+
         let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
         let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
-        assert!(is_supported_comparison_unwrap_cast(&ts_ms, &ts_ns));
-        assert!(!is_supported_comparison_unwrap_cast(&ts_ns, &ts_ms));
+        assert!(is_supported_comparison_unwrap_cast(&ts_ms, &ts_ns, op));
+        assert!(!is_supported_comparison_unwrap_cast(&ts_ns, &ts_ms, op));
 
         let utc = Some("+0:00".into());
         assert!(!is_supported_comparison_unwrap_cast(
             &DataType::Timestamp(TimeUnit::Millisecond, None),
-            &DataType::Timestamp(TimeUnit::Nanosecond, utc)
+            &DataType::Timestamp(TimeUnit::Nanosecond, utc),
+            op,
         ));
 
         assert!(!is_supported_comparison_unwrap_cast(
             &DataType::Duration(TimeUnit::Millisecond),
-            &DataType::Duration(TimeUnit::Nanosecond)
+            &DataType::Duration(TimeUnit::Nanosecond),
+            op,
         ));
 
         // Integer widening: same-sign
         assert!(is_supported_comparison_unwrap_cast(
             &DataType::Int8,
-            &DataType::Int32
+            &DataType::Int32,
+            op
         ));
         assert!(is_supported_comparison_unwrap_cast(
             &DataType::Int32,
-            &DataType::Int64
+            &DataType::Int64,
+            op
         ));
         assert!(is_supported_comparison_unwrap_cast(
             &DataType::UInt8,
-            &DataType::UInt32
+            &DataType::UInt32,
+            op
         ));
         assert!(is_supported_comparison_unwrap_cast(
             &DataType::UInt16,
-            &DataType::UInt64
+            &DataType::UInt64,
+            op
         ));
         // Same-precision identity
         assert!(is_supported_comparison_unwrap_cast(
             &DataType::Int32,
-            &DataType::Int32
+            &DataType::Int32,
+            op
         ));
 
         // Unsigned → larger signed
         assert!(is_supported_comparison_unwrap_cast(
             &DataType::UInt8,
-            &DataType::Int32
+            &DataType::Int32,
+            op
         ));
         assert!(is_supported_comparison_unwrap_cast(
             &DataType::UInt32,
-            &DataType::Int64
+            &DataType::Int64,
+            op
         ));
 
         // NOT allowed: narrowing, signed→unsigned, same-width unsigned→signed
         assert!(!is_supported_comparison_unwrap_cast(
             &DataType::Int64,
-            &DataType::Int32
+            &DataType::Int32,
+            op
         ));
         assert!(!is_supported_comparison_unwrap_cast(
             &DataType::Int32,
-            &DataType::UInt32
+            &DataType::UInt32,
+            op
         ));
         assert!(!is_supported_comparison_unwrap_cast(
             &DataType::UInt64,
-            &DataType::Int64
+            &DataType::Int64,
+            op
         ));
         assert!(!is_supported_comparison_unwrap_cast(
             &DataType::Int8,
-            &DataType::UInt16
+            &DataType::UInt16,
+            op
+        ));
+
+        // Integer→String: safe with Eq (operator gate checked in is_integer_string_safe)
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Int32,
+            &DataType::Utf8,
+            Operator::Eq
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::UInt64,
+            &DataType::LargeUtf8,
+            Operator::Eq
+        ));
+        // Integer→String: blocked with Lt (inequality ordering differs)
+        // String→Integer: NOT allowed
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::Utf8,
+            &DataType::Int32,
+            op
+        ));
+
+        // Dictionary/String: any direction allowed
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::LargeUtf8,
+            &DataType::Utf8,
+            op
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Utf8,
+            &DataType::Utf8View,
+            op
+        ));
+
+        // Decimal widening
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Decimal128(10, 2),
+            &DataType::Decimal128(18, 4),
+            op
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Decimal128(18, 4),
+            &DataType::Decimal128(18, 4),
+            op
+        ));
+        // Scale narrowing NOT allowed
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::Decimal128(18, 4),
+            &DataType::Decimal128(18, 2),
+            op
+        ));
+        // Integer→Decimal: allowed when precision covers integer range
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Int32,
+            &DataType::Decimal128(18, 4),
+            op // 18 >= 10
+        ));
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::Int32,
+            &DataType::Decimal128(9, 2),
+            op // 9 < 10
+        ));
+        // Decimal→Integer NOT allowed
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::Decimal128(18, 4),
+            &DataType::Int64,
+            op
         ));
     }
 
