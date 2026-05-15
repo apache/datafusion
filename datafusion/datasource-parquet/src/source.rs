@@ -702,21 +702,13 @@ impl FileSource for ParquetSource {
 
                 write!(f, "{predicate_string}")?;
 
-                // Add reverse_scan info if enabled
+                // Inexact sort-pushdown markers: surface both flags so
+                // readers can see the optimization fired.
+                if let Some(sort_order) = &self.sort_order_for_reorder {
+                    write!(f, ", sort_order_for_reorder=[{sort_order}]")?;
+                }
                 if self.reverse_row_groups {
                     write!(f, ", reverse_row_groups=true")?;
-                }
-
-                // In `EXPLAIN VERBOSE` / `EXPLAIN ANALYZE`, surface the inexact
-                // sort-pushdown hint so readers can see that the source has
-                // been asked to reorder row groups by min/max statistics at
-                // runtime (Inexact ordering — the surrounding `SortExec` still
-                // does the final ordering, but the source's read order will
-                // already be close).
-                if matches!(t, DisplayFormatType::Verbose)
-                    && let Some(sort_order) = &self.sort_order_for_reorder
-                {
-                    write!(f, ", sort_order_for_reorder=[{sort_order}]")?;
                 }
 
                 // Try to build the pruning predicates.
@@ -1231,12 +1223,11 @@ mod tests {
         );
     }
 
-    /// `sort_order_for_reorder` is hidden from `EXPLAIN` (Default) to keep
-    /// compact output uncluttered. `EXPLAIN VERBOSE` / `EXPLAIN ANALYZE`
-    /// (Verbose display) surface it so readers can see the inexact
-    /// sort-pushdown hint the source picked up.
+    /// `sort_order_for_reorder` is surfaced in both `EXPLAIN` (Default)
+    /// and `EXPLAIN VERBOSE` / `EXPLAIN ANALYZE` (Verbose) so readers
+    /// and snapshot tests can see the inexact sort-pushdown fired.
     #[test]
-    fn sort_order_for_reorder_shown_only_in_verbose_display() {
+    fn sort_order_for_reorder_shown_in_explain() {
         use pushdown_sort_helpers::*;
 
         // `std::fmt::Formatter` can't be constructed outside core fmt
@@ -1257,28 +1248,18 @@ mod tests {
         let order = LexOrdering::new(vec![sort_expr_on(&schema, "a", false)]).unwrap();
         source.sort_order_for_reorder = Some(order);
 
-        let default_out = format!(
-            "{}",
-            DisplayHelper {
-                source: &source,
-                mode: DisplayFormatType::Default,
-            },
-        );
-        assert!(
-            !default_out.contains("sort_order_for_reorder"),
-            "Default display must not surface sort_order_for_reorder, got: {default_out}",
-        );
-
-        let verbose_out = format!(
-            "{}",
-            DisplayHelper {
-                source: &source,
-                mode: DisplayFormatType::Verbose,
-            },
-        );
-        assert!(
-            verbose_out.contains("sort_order_for_reorder=[a@0 ASC]"),
-            "Verbose display must surface sort_order_for_reorder, got: {verbose_out}",
-        );
+        for mode in [DisplayFormatType::Default, DisplayFormatType::Verbose] {
+            let out = format!(
+                "{}",
+                DisplayHelper {
+                    source: &source,
+                    mode,
+                },
+            );
+            assert!(
+                out.contains("sort_order_for_reorder=[a@0 ASC]"),
+                "{mode:?} display must surface sort_order_for_reorder, got: {out}",
+            );
+        }
     }
 }
