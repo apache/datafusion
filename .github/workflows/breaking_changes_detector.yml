@@ -50,8 +50,8 @@ permissions:
   contents: read
 
 jobs:
-  check-semver:
-    name: Check semver
+  check-semver-advisory:
+    name: Check semver - advisory PR-local
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -93,7 +93,7 @@ jobs:
         with:
           tool: cargo-semver-checks
 
-      - name: Run cargo-semver-checks
+      - name: Run cargo-semver-checks against PR base branch
         id: check_semver
         if: steps.changed_crates.outputs.packages != ''
         env:
@@ -103,13 +103,13 @@ jobs:
           set +e
           # `tee` lets cargo's output stream live into the Actions log
           # while we also keep a copy for the PR comment.
-          # Using `apache` remote here to point to the repository the pull request is against
+          # Using `apache` remote here to point to the repository the pull request is against.
           ci/scripts/changed_crates.sh semver-check "apache/${BASE_REF}" $PACKAGES \
-            2>&1 | tee /tmp/semver-output.txt
+            2>&1 | tee /tmp/advisory-semver-output.txt
           EXIT_CODE=${PIPESTATUS[0]}
           # Pass the result through an output instead of failing the job:
-          # a detected breaking change should surface as a PR comment, not a
-          # red check, so PR authors aren't confused by an intentional break.
+          # a detected PR-local breaking change should surface as an advisory
+          # PR comment, not a red check.
           if [ "$EXIT_CODE" -eq 0 ]; then
             echo "result=success" >> "$GITHUB_OUTPUT"
           else
@@ -120,25 +120,123 @@ jobs:
       # directory. We default the result to "success" so the comment
       # workflow clears any stale comment when the check step is skipped
       # (e.g. no published crates changed).
-      - name: Stage artifact for comment workflow
+      - name: Stage advisory artifact for comment workflow
+        if: always()
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+          CHECK_RESULT: ${{ steps.check_semver.outputs.result || 'success' }}
+        run: |
+          mkdir -p semver-advisory-artifact
+          echo "$PR_NUMBER" > semver-advisory-artifact/pr_number
+          echo "$CHECK_RESULT" > semver-advisory-artifact/result
+          echo "apache/${BASE_REF}" > semver-advisory-artifact/baseline_ref
+          if [ -f /tmp/advisory-semver-output.txt ]; then
+            sed 's/\x1b\[[0-9;]*m//g' /tmp/advisory-semver-output.txt > semver-advisory-artifact/logs
+          else
+            : > semver-advisory-artifact/logs
+          fi
+
+      - name: Upload advisory artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: semver-advisory-check-result
+          path: semver-advisory-artifact/
+          retention-days: 1
+
+  check-semver-blocking:
+    name: Check semver - blocking latest release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          REPO: ${{ github.repository }}
+        run: git fetch "https://github.com/${REPO}.git" "${BASE_REF}:refs/remotes/apache/${BASE_REF}"
+
+      - name: Determine latest stable release tag
+        id: latest_release
+        run: |
+          git fetch --tags --force
+          LATEST_RELEASE_TAG=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' \
+            | grep -Ev '-' \
+            | sort -V \
+            | tail -n1)
+          if [ -z "$LATEST_RELEASE_TAG" ]; then
+            echo "Could not determine latest stable release tag" >&2
+            exit 1
+          fi
+          echo "tag=$LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Latest stable release tag: $LATEST_RELEASE_TAG"
+
+      - name: Determine changed crates
+        id: changed_crates
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          PACKAGES=$(ci/scripts/changed_crates.sh changed-crates "apache/${BASE_REF}")
+          echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
+          echo "Changed crates: $PACKAGES"
+
+      - name: Install Protobuf Compiler
+        if: steps.changed_crates.outputs.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install cargo-semver-checks
+        if: steps.changed_crates.outputs.packages != ''
+        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8  # v2.77.6
+        with:
+          tool: cargo-semver-checks
+
+      - name: Run cargo-semver-checks against latest stable release
+        id: check_semver
+        if: steps.changed_crates.outputs.packages != ''
+        env:
+          LATEST_RELEASE_TAG: ${{ steps.latest_release.outputs.tag }}
+          PACKAGES: ${{ steps.changed_crates.outputs.packages }}
+        run: |
+          set +e
+          ci/scripts/changed_crates.sh semver-check "$LATEST_RELEASE_TAG" $PACKAGES \
+            2>&1 | tee /tmp/blocking-semver-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          # Pass the result through an output instead of failing the job:
+          # release-baseline breakage should emit a blocking warning comment
+          # and label, while this CI job status stays green.
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stage blocking artifact for comment workflow
         if: always()
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           CHECK_RESULT: ${{ steps.check_semver.outputs.result || 'success' }}
+          LATEST_RELEASE_TAG: ${{ steps.latest_release.outputs.tag }}
         run: |
-          mkdir -p semver-artifact
-          echo "$PR_NUMBER" > semver-artifact/pr_number
-          echo "$CHECK_RESULT" > semver-artifact/result
-          if [ -f /tmp/semver-output.txt ]; then
-            sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt > semver-artifact/logs
+          mkdir -p semver-blocking-artifact
+          echo "$PR_NUMBER" > semver-blocking-artifact/pr_number
+          echo "$CHECK_RESULT" > semver-blocking-artifact/result
+          echo "$LATEST_RELEASE_TAG" > semver-blocking-artifact/baseline_ref
+          if [ -f /tmp/blocking-semver-output.txt ]; then
+            sed 's/\x1b\[[0-9;]*m//g' /tmp/blocking-semver-output.txt > semver-blocking-artifact/logs
           else
-            : > semver-artifact/logs
+            : > semver-blocking-artifact/logs
           fi
 
-      - name: Upload artifact
+      - name: Upload blocking artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: semver-check-result
-          path: semver-artifact/
+          name: semver-blocking-check-result
+          path: semver-blocking-artifact/
           retention-days: 1

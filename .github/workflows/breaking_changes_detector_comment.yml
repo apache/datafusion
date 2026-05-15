@@ -53,7 +53,8 @@ permissions:
 # A dedicated label, separate from the existing `api change` label.
 # `api change` may be applied manually for behavioral changes that aren't
 # strictly API changes, so we can't safely auto-remove it when this check
-# passes. This auto-managed label is fully owned by the workflow.
+# passes. This auto-managed label is fully owned by the workflow and tracks
+# only the blocking latest-release semver signal.
 env:
   BREAKING_CHANGE_LABEL: "auto detected api change"
 
@@ -62,53 +63,99 @@ jobs:
     name: Comment on pull request
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
-    # Scoped to the minimum needed to upsert/delete the sticky comment.
+    # Scoped to the minimum needed to upsert/delete the sticky comment and label.
     permissions:
       actions: read
+      issues: write
       pull-requests: write
     steps:
-      - name: Download semver-check artifact
+      - name: Download advisory semver-check artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: semver-check-result
+          name: semver-advisory-check-result
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-          path: ./semver-artifact
+          path: ./semver-advisory-artifact
 
-      - name: Read and validate artifact
+      - name: Download blocking semver-check artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: semver-blocking-check-result
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ./semver-blocking-artifact
+
+      - name: Read and validate artifacts
         id: read
         run: |
           set -euo pipefail
-          # Validate every field: the artifact comes from a workflow run
-          # that compiled fork-controlled code, so its contents are untrusted.
-          PR_NUMBER=$(cat ./semver-artifact/pr_number)
-          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
-            echo "Invalid PR number: $PR_NUMBER" >&2
+          # Validate every field: the artifacts come from workflow runs
+          # that compiled fork-controlled code, so their contents are untrusted.
+          ADVISORY_PR_NUMBER=$(cat ./semver-advisory-artifact/pr_number)
+          BLOCKING_PR_NUMBER=$(cat ./semver-blocking-artifact/pr_number)
+          if ! [[ "$ADVISORY_PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "Invalid advisory PR number: $ADVISORY_PR_NUMBER" >&2
             exit 1
           fi
-          CHECK_RESULT=$(cat ./semver-artifact/result)
-          if [[ "$CHECK_RESULT" != "success" && "$CHECK_RESULT" != "failure" ]]; then
-            echo "Invalid check result: $CHECK_RESULT" >&2
+          if ! [[ "$BLOCKING_PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "Invalid blocking PR number: $BLOCKING_PR_NUMBER" >&2
             exit 1
           fi
-          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "result=$CHECK_RESULT" >> "$GITHUB_OUTPUT"
+          if [ "$ADVISORY_PR_NUMBER" != "$BLOCKING_PR_NUMBER" ]; then
+            echo "Mismatched PR numbers: $ADVISORY_PR_NUMBER != $BLOCKING_PR_NUMBER" >&2
+            exit 1
+          fi
+
+          ADVISORY_RESULT=$(cat ./semver-advisory-artifact/result)
+          BLOCKING_RESULT=$(cat ./semver-blocking-artifact/result)
+          if [[ "$ADVISORY_RESULT" != "success" && "$ADVISORY_RESULT" != "failure" ]]; then
+            echo "Invalid advisory check result: $ADVISORY_RESULT" >&2
+            exit 1
+          fi
+          if [[ "$BLOCKING_RESULT" != "success" && "$BLOCKING_RESULT" != "failure" ]]; then
+            echo "Invalid blocking check result: $BLOCKING_RESULT" >&2
+            exit 1
+          fi
+
+          ADVISORY_BASELINE=$(cat ./semver-advisory-artifact/baseline_ref)
+          BLOCKING_BASELINE=$(cat ./semver-blocking-artifact/baseline_ref)
+          if ! [[ "$ADVISORY_BASELINE" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "Invalid advisory baseline: $ADVISORY_BASELINE" >&2
+            exit 1
+          fi
+          if ! [[ "$BLOCKING_BASELINE" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "Invalid blocking baseline: $BLOCKING_BASELINE" >&2
+            exit 1
+          fi
+
+          echo "pr_number=$ADVISORY_PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "advisory_result=$ADVISORY_RESULT" >> "$GITHUB_OUTPUT"
+          echo "blocking_result=$BLOCKING_RESULT" >> "$GITHUB_OUTPUT"
+          echo "advisory_baseline=$ADVISORY_BASELINE" >> "$GITHUB_OUTPUT"
+          echo "blocking_baseline=$BLOCKING_BASELINE" >> "$GITHUB_OUTPUT"
 
           # Multi-line output: random delimiter so a malicious log line can't
           # close the heredoc and inject extra output keys. See:
           #   https://docs.github.com/en/actions/reference/workflow-commands-for-github-actions#multiline-strings
-          DELIM="EOF_$(openssl rand -hex 16)"
+          ADVISORY_DELIM="EOF_$(openssl rand -hex 16)"
           {
-            echo "logs<<${DELIM}"
-            cat ./semver-artifact/logs
-            echo "${DELIM}"
+            echo "advisory_logs<<${ADVISORY_DELIM}"
+            cat ./semver-advisory-artifact/logs
+            echo "${ADVISORY_DELIM}"
+          } >> "$GITHUB_OUTPUT"
+
+          BLOCKING_DELIM="EOF_$(openssl rand -hex 16)"
+          {
+            echo "blocking_logs<<${BLOCKING_DELIM}"
+            cat ./semver-blocking-artifact/logs
+            echo "${BLOCKING_DELIM}"
           } >> "$GITHUB_OUTPUT"
 
       # The marker `<!-- semver-check-comment -->` is what makes the comment
       # "sticky": maintain-one-comment uses it to find and replace (or
       # delete) the existing comment instead of stacking new ones.
       - name: Upsert sticky comment
-        if: steps.read.outputs.result != 'success'
+        if: steps.read.outputs.advisory_result != 'success' || steps.read.outputs.blocking_result != 'success'
         uses: actions-cool/maintain-one-comment@909842216bc8e8658364c572ec52100f4c2cc50a  # v3.3.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -118,19 +165,42 @@ jobs:
             <!-- semver-check-comment -->
             Thank you for opening this pull request!
 
-            Reviewer note: [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported the current version number is not SemVer-compatible with the changes in this pull request (compared against the base branch).
+            [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported semver compatibility warnings for changed published crates.
+
+            ## Blocking latest-release signal
+
+            Result: `${{ steps.read.outputs.blocking_result }}`
+            Baseline: `${{ steps.read.outputs.blocking_baseline }}`
+
+            If this result is `failure`, the pull request contains API changes that are not SemVer-compatible with the latest stable release. This is the blocking semver warning signal and applies the `${{ env.BREAKING_CHANGE_LABEL }}` label.
 
             <details>
-            <summary>Details</summary>
+            <summary>Blocking latest-release details</summary>
 
             ```
-            ${{ steps.read.outputs.logs }}
+            ${{ steps.read.outputs.blocking_logs }}
+            ```
+
+            </details>
+
+            ## Advisory PR-local signal
+
+            Result: `${{ steps.read.outputs.advisory_result }}`
+            Baseline: `${{ steps.read.outputs.advisory_baseline }}`
+
+            If this result is `failure`, the pull request contains API changes that are not SemVer-compatible with its base branch. This is advisory review information only.
+
+            <details>
+            <summary>Advisory PR-local details</summary>
+
+            ```
+            ${{ steps.read.outputs.advisory_logs }}
             ```
 
             </details>
 
       - name: Delete sticky comment
-        if: steps.read.outputs.result == 'success'
+        if: steps.read.outputs.advisory_result == 'success' && steps.read.outputs.blocking_result == 'success'
         uses: actions-cool/maintain-one-comment@909842216bc8e8658364c572ec52100f4c2cc50a  # v3.3.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -139,7 +209,7 @@ jobs:
           delete: true
 
       - name: Add "auto detected api change" label
-        if: steps.read.outputs.result != 'success'
+        if: steps.read.outputs.blocking_result != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -149,7 +219,7 @@ jobs:
             --add-label "$BREAKING_CHANGE_LABEL"
 
       - name: Remove "auto detected api change" label
-        if: steps.read.outputs.result == 'success'
+        if: steps.read.outputs.blocking_result == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
