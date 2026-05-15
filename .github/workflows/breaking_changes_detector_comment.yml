@@ -89,18 +89,52 @@ jobs:
         id: read
         run: |
           set -euo pipefail
+          require_regex() {
+            local name=$1
+            local value=$2
+            local regex=$3
+            if ! [[ "$value" =~ $regex ]]; then
+              echo "Invalid $name: $value" >&2
+              exit 1
+            fi
+          }
+
+          require_result() {
+            local name=$1
+            local value=$2
+            if [[ "$value" != "success" && "$value" != "failure" ]]; then
+              echo "Invalid $name check result: $value" >&2
+              exit 1
+            fi
+          }
+
+          write_output() {
+            local key=$1
+            local value=$2
+            echo "$key=$value" >> "$GITHUB_OUTPUT"
+          }
+
+          write_multiline_output() {
+            local key=$1
+            local file=$2
+            # Random delimiter so a malicious log line can't close the heredoc
+            # and inject extra output keys. See:
+            # https://docs.github.com/en/actions/reference/workflow-commands-for-github-actions#multiline-strings
+            local delim
+            delim="EOF_$(openssl rand -hex 16)"
+            {
+              echo "${key}<<${delim}"
+              cat "$file"
+              echo "$delim"
+            } >> "$GITHUB_OUTPUT"
+          }
+
           # Validate every field: the artifacts come from workflow runs
           # that compiled fork-controlled code, so their contents are untrusted.
           ADVISORY_PR_NUMBER=$(cat ./semver-advisory-artifact/pr_number)
           BLOCKING_PR_NUMBER=$(cat ./semver-blocking-artifact/pr_number)
-          if ! [[ "$ADVISORY_PR_NUMBER" =~ ^[0-9]+$ ]]; then
-            echo "Invalid advisory PR number: $ADVISORY_PR_NUMBER" >&2
-            exit 1
-          fi
-          if ! [[ "$BLOCKING_PR_NUMBER" =~ ^[0-9]+$ ]]; then
-            echo "Invalid blocking PR number: $BLOCKING_PR_NUMBER" >&2
-            exit 1
-          fi
+          require_regex "advisory PR number" "$ADVISORY_PR_NUMBER" '^[0-9]+$'
+          require_regex "blocking PR number" "$BLOCKING_PR_NUMBER" '^[0-9]+$'
           if [ "$ADVISORY_PR_NUMBER" != "$BLOCKING_PR_NUMBER" ]; then
             echo "Mismatched PR numbers: $ADVISORY_PR_NUMBER != $BLOCKING_PR_NUMBER" >&2
             exit 1
@@ -108,58 +142,28 @@ jobs:
 
           ADVISORY_RESULT=$(cat ./semver-advisory-artifact/result)
           BLOCKING_RESULT=$(cat ./semver-blocking-artifact/result)
-          if [[ "$ADVISORY_RESULT" != "success" && "$ADVISORY_RESULT" != "failure" ]]; then
-            echo "Invalid advisory check result: $ADVISORY_RESULT" >&2
-            exit 1
-          fi
-          if [[ "$BLOCKING_RESULT" != "success" && "$BLOCKING_RESULT" != "failure" ]]; then
-            echo "Invalid blocking check result: $BLOCKING_RESULT" >&2
-            exit 1
-          fi
+          require_result "advisory" "$ADVISORY_RESULT"
+          require_result "blocking" "$BLOCKING_RESULT"
 
           ADVISORY_BASELINE=$(cat ./semver-advisory-artifact/baseline_ref)
           BLOCKING_BASELINE=$(cat ./semver-blocking-artifact/baseline_ref)
           LATEST_RELEASE_TAG=$(cat ./semver-blocking-artifact/latest_release_tag)
-          if ! [[ "$ADVISORY_BASELINE" =~ ^[A-Za-z0-9._/-]+$ ]]; then
-            echo "Invalid advisory baseline: $ADVISORY_BASELINE" >&2
-            exit 1
-          fi
-          if ! [[ "$BLOCKING_BASELINE" =~ ^[A-Za-z0-9._/-]+$ ]]; then
-            echo "Invalid blocking baseline: $BLOCKING_BASELINE" >&2
-            exit 1
-          fi
-          if ! [[ "$LATEST_RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid latest release tag: $LATEST_RELEASE_TAG" >&2
-            exit 1
-          fi
+          require_regex "advisory baseline" "$ADVISORY_BASELINE" '^[A-Za-z0-9._/-]+$'
+          require_regex "blocking baseline" "$BLOCKING_BASELINE" '^[A-Za-z0-9._/-]+$'
+          require_regex "latest release tag" "$LATEST_RELEASE_TAG" '^[0-9]+\.[0-9]+\.[0-9]+$'
           if [ "$BLOCKING_BASELINE" != "$LATEST_RELEASE_TAG" ]; then
             echo "Mismatched blocking baseline and latest release tag: $BLOCKING_BASELINE != $LATEST_RELEASE_TAG" >&2
             exit 1
           fi
 
-          echo "pr_number=$ADVISORY_PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "advisory_result=$ADVISORY_RESULT" >> "$GITHUB_OUTPUT"
-          echo "blocking_result=$BLOCKING_RESULT" >> "$GITHUB_OUTPUT"
-          echo "advisory_baseline=$ADVISORY_BASELINE" >> "$GITHUB_OUTPUT"
-          echo "blocking_baseline=$BLOCKING_BASELINE" >> "$GITHUB_OUTPUT"
-          echo "latest_release_tag=$LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
-
-          # Multi-line output: random delimiter so a malicious log line can't
-          # close the heredoc and inject extra output keys. See:
-          #   https://docs.github.com/en/actions/reference/workflow-commands-for-github-actions#multiline-strings
-          ADVISORY_DELIM="EOF_$(openssl rand -hex 16)"
-          {
-            echo "advisory_logs<<${ADVISORY_DELIM}"
-            cat ./semver-advisory-artifact/logs
-            echo "${ADVISORY_DELIM}"
-          } >> "$GITHUB_OUTPUT"
-
-          BLOCKING_DELIM="EOF_$(openssl rand -hex 16)"
-          {
-            echo "blocking_logs<<${BLOCKING_DELIM}"
-            cat ./semver-blocking-artifact/logs
-            echo "${BLOCKING_DELIM}"
-          } >> "$GITHUB_OUTPUT"
+          write_output "pr_number" "$ADVISORY_PR_NUMBER"
+          write_output "advisory_result" "$ADVISORY_RESULT"
+          write_output "blocking_result" "$BLOCKING_RESULT"
+          write_output "advisory_baseline" "$ADVISORY_BASELINE"
+          write_output "blocking_baseline" "$BLOCKING_BASELINE"
+          write_output "latest_release_tag" "$LATEST_RELEASE_TAG"
+          write_multiline_output "advisory_logs" ./semver-advisory-artifact/logs
+          write_multiline_output "blocking_logs" ./semver-blocking-artifact/logs
 
       # The marker `<!-- semver-check-comment -->` is what makes the comment
       # "sticky": maintain-one-comment uses it to find and replace (or

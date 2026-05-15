@@ -1,0 +1,64 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Stage semver artifact
+description: Stage semver result fields and sanitized logs for the comment workflow.
+inputs:
+  artifact_dir:
+    description: Directory to write artifact files into.
+    required: true
+  pr_number:
+    description: Pull request number.
+    required: true
+  result:
+    description: "Semver result: success or failure."
+    required: true
+  baseline_ref:
+    description: Baseline git ref or tag used by the semver check.
+    required: true
+  log_path:
+    description: Path to raw semver output log.
+    required: true
+  latest_release_tag:
+    description: Latest release tag, for blocking release-baseline checks.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Stage artifact files
+      shell: bash
+      env:
+        ARTIFACT_DIR: ${{ inputs.artifact_dir }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        RESULT: ${{ inputs.result }}
+        BASELINE_REF: ${{ inputs.baseline_ref }}
+        LOG_PATH: ${{ inputs.log_path }}
+        LATEST_RELEASE_TAG: ${{ inputs.latest_release_tag }}
+      run: |
+        mkdir -p "$ARTIFACT_DIR"
+        echo "$PR_NUMBER" > "$ARTIFACT_DIR/pr_number"
+        echo "$RESULT" > "$ARTIFACT_DIR/result"
+        echo "$BASELINE_REF" > "$ARTIFACT_DIR/baseline_ref"
+        if [ -n "$LATEST_RELEASE_TAG" ]; then
+          echo "$LATEST_RELEASE_TAG" > "$ARTIFACT_DIR/latest_release_tag"
+        fi
+        if [ -f "$LOG_PATH" ]; then
+          sed 's/\x1b\[[0-9;]*m//g' "$LOG_PATH" > "$ARTIFACT_DIR/logs"
+        else
+          : > "$ARTIFACT_DIR/logs"
+        fi

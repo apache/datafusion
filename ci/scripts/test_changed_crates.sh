@@ -55,6 +55,15 @@ assert_eq() {
   fi
 }
 
+tag_repo() {
+  local repo_dir=$1
+  shift
+
+  for tag in "$@"; do
+    git -C "$repo_dir" tag "$tag"
+  done
+}
+
 assert_latest_release_tag() {
   local test_name=$1
   local expected=$2
@@ -62,14 +71,26 @@ assert_latest_release_tag() {
 
   local repo_dir
   repo_dir=$(new_git_repo)
-
-  for tag in "$@"; do
-    git -C "$repo_dir" tag "$tag"
-  done
+  tag_repo "$repo_dir" "$@"
 
   local actual
   actual=$(run_latest_release_tag "$repo_dir")
   assert_eq "$expected" "$actual" "$test_name"
+}
+
+assert_latest_release_tag_fails() {
+  local test_name=$1
+  shift
+
+  local repo_dir
+  repo_dir=$(new_git_repo)
+  tag_repo "$repo_dir" "$@"
+
+  if run_latest_release_tag "$repo_dir" >"$TMP_ROOT/out" 2>"$TMP_ROOT/err"; then
+    echo "FAIL: $test_name" >&2
+    exit 1
+  fi
+  assert_eq "No stable release tags found" "$(cat "$TMP_ROOT/err")" "$test_name"
 }
 
 assert_latest_release_tag "stable tag wins over newer RC" \
@@ -84,20 +105,9 @@ assert_latest_release_tag "malformed and namespaced tags are ignored" \
   "2.0.0" \
   "ballista-9.0.0" "python-99.0.0" "2.0" "2.0.0" "3.0.0-alpha1"
 
-no_tags_repo=$(new_git_repo)
-if run_latest_release_tag "$no_tags_repo" >"$TMP_ROOT/out" 2>"$TMP_ROOT/err"; then
-  echo "FAIL: no tags should fail" >&2
-  exit 1
-fi
-assert_eq "No stable release tags found" "$(cat "$TMP_ROOT/err")" "no tags error"
+assert_latest_release_tag_fails "no tags error"
 
-only_rc_repo=$(new_git_repo)
-git -C "$only_rc_repo" tag "53.1.0-rc1"
-git -C "$only_rc_repo" tag "54.0.0-rc1"
-if run_latest_release_tag "$only_rc_repo" >"$TMP_ROOT/out" 2>"$TMP_ROOT/err"; then
-  echo "FAIL: only RC tags should fail" >&2
-  exit 1
-fi
-assert_eq "No stable release tags found" "$(cat "$TMP_ROOT/err")" "only RC tags error"
+assert_latest_release_tag_fails "only RC tags error" \
+  "53.1.0-rc1" "54.0.0-rc1"
 
 echo "changed_crates.sh tests passed"
