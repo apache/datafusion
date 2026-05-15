@@ -22,6 +22,7 @@ use std::sync::Arc;
 use crate::{
     PhysicalExpr,
     expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
+    scalar_function::ScalarFunctionExpr,
 };
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
@@ -56,6 +57,12 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
         check_support(cast.expr(), schema)
     } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
         check_support(negative.arg(), schema)
+    } else if let Some(scalar_fn) = expr.downcast_ref::<ScalarFunctionExpr>() {
+        is_datatype_supported(scalar_fn.return_type())
+            && scalar_fn
+                .args()
+                .iter()
+                .all(|arg| check_support(arg, schema))
     } else {
         false
     }
@@ -191,5 +198,111 @@ fn interval_dt_to_duration_ms(dt: &IntervalDayTime) -> Result<i64> {
         internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::{Column, Literal};
+    use crate::scalar_function::ScalarFunctionExpr;
+    use arrow::datatypes::{Field, Schema};
+    use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
+
+    fn f64_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, false)]))
+    }
+
+    fn utf8_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]))
+    }
+
+    fn col_x() -> Arc<dyn PhysicalExpr> {
+        Arc::new(Column::new("x", 0))
+    }
+
+    fn lit_f64(v: f64) -> Arc<dyn PhysicalExpr> {
+        Arc::new(Literal::new(ScalarValue::Float64(Some(v))))
+    }
+
+    fn scalar_fn_expr(
+        udf: Arc<datafusion_expr::ScalarUDF>,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        return_type: DataType,
+    ) -> Arc<dyn PhysicalExpr> {
+        let name = udf.name().to_string();
+        Arc::new(ScalarFunctionExpr::new(
+            &name,
+            udf,
+            args,
+            Field::new("result", return_type, true).into(),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_supported_return_type() {
+        // ceil(x) returns Float64 — both return type and child are supported
+        let schema = f64_schema();
+        let expr = scalar_fn_expr(
+            datafusion_functions::math::ceil(),
+            vec![col_x()],
+            DataType::Float64,
+        );
+        assert!(check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_unsupported_return_type() {
+        // A UDF that returns Utf8 — not in is_datatype_supported
+        let schema = f64_schema();
+        let expr = scalar_fn_expr(
+            datafusion_functions::math::ceil(),
+            vec![col_x()],
+            DataType::Utf8,
+        );
+        assert!(!check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_unsupported_child() {
+        // ceil applied to a Utf8 column — child fails is_datatype_supported
+        let schema = utf8_schema();
+        let col_s = Arc::new(Column::new("s", 0)) as Arc<dyn PhysicalExpr>;
+        let expr = scalar_fn_expr(
+            datafusion_functions::math::ceil(),
+            vec![col_s],
+            DataType::Float64,
+        );
+        assert!(!check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_in_binary_expr() {
+        // ceil(x) > 5.0 — the main use case: ScalarFunctionExpr inside a BinaryExpr
+        let schema = f64_schema();
+        let ceil_x = scalar_fn_expr(
+            datafusion_functions::math::ceil(),
+            vec![col_x()],
+            DataType::Float64,
+        );
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(ceil_x, Operator::Gt, lit_f64(5.0)));
+        assert!(check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_in_binary_expr_unsupported_return() {
+        // f(x) > 5.0 where f returns Utf8 — should be false
+        let schema = f64_schema();
+        let fn_expr = scalar_fn_expr(
+            datafusion_functions::math::ceil(),
+            vec![col_x()],
+            DataType::Utf8,
+        );
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(fn_expr, Operator::Gt, lit_f64(5.0)));
+        assert!(!check_support(&expr, &schema));
     }
 }
