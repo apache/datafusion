@@ -87,8 +87,6 @@ pub struct HigherOrderSignature {
     pub type_signature: HigherOrderTypeSignature,
     /// The volatility of the function. See [Volatility] for more information.
     pub volatility: Volatility,
-    /// Whether [HigherOrderUDF::coerce_values_for_lambdas] should be called
-    pub coerce_values_for_lambdas: bool,
     /// The max number of times to call [HigherOrderUDF::lambda_parameters] before raising an error.
     /// Used to guard against implementations that causes an infinite loop by endlessly returning
     /// [LambdaParametersProgress::Partial]. Defaults to 256
@@ -103,7 +101,6 @@ impl HigherOrderSignature {
         HigherOrderSignature {
             type_signature,
             volatility,
-            coerce_values_for_lambdas: false,
             lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
         }
     }
@@ -113,7 +110,6 @@ impl HigherOrderSignature {
         Self {
             type_signature: HigherOrderTypeSignature::UserDefined,
             volatility,
-            coerce_values_for_lambdas: false,
             lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
         }
     }
@@ -123,7 +119,6 @@ impl HigherOrderSignature {
         Self {
             type_signature: HigherOrderTypeSignature::VariadicAny,
             volatility,
-            coerce_values_for_lambdas: false,
             lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
         }
     }
@@ -133,17 +128,8 @@ impl HigherOrderSignature {
         Self {
             type_signature: HigherOrderTypeSignature::Any(arg_count),
             volatility,
-            coerce_values_for_lambdas: false,
             lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
         }
-    }
-
-    /// Set [Self::coerce_values_for_lambdas] to true to indicate that [HigherOrderUDF::coerce_values_for_lambdas]
-    /// should be called
-    pub fn with_coerce_values_for_lambdas(mut self) -> Self {
-        self.coerce_values_for_lambdas = true;
-
-        self
     }
 }
 
@@ -621,12 +607,12 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// assert_eq!(
     ///     coerce_to,
-    ///     vec![
+    ///     Some(vec![
     ///         // return the same type for the array being reduced
     ///         DataType::new_list(DataType::Float32, true),
     ///         // coerce the initial value to the output of the merge lambda
     ///         DataType::Float32,
-    ///     ]
+    ///     ])
     /// );
     ///
     /// ```
@@ -636,7 +622,7 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// The implementation can assume that some other part of the code has coerced
     /// the actual argument types to match [`Self::signature`], except the coercion defined by
-    /// [Self::coerce_values_for_lambdas], if applicable.
+    /// [Self::coerce_values_for_lambdas].
     ///
     /// [`HigherOrderFunction`]: crate::expr::HigherOrderFunction
     /// [`HigherOrderFunction::lambda_parameters`]: crate::expr::HigherOrderFunction::lambda_parameters
@@ -649,8 +635,7 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Coerce value arguments of a function call to types that the function can evaluate also taking into
     /// account the *output type of it's lambdas*. This differs from [HigherOrderUDF::coerce_value_types]
     /// that only has access to the type of it's value arguments because it's called before the output type
-    /// of lambdas are known. So that this method is called, the function must have it's
-    /// [HigherOrderSignature::coerce_values_for_lambdas] set to true
+    /// of lambdas are known.
     ///
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
@@ -659,29 +644,27 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     /// * `fields`: The argument types of the value arguments of this function, or the output type of lambdas
     ///
     /// # Return value
-    /// A Vec with the same number of [ValueOrLambda::Value] in `fields`. DataFusion will `CAST` the
-    /// function call arguments to these specific types.
+    /// If `Some`, contains a Vec with the same number of [ValueOrLambda::Value] in `fields`.
+    /// DataFusion will `CAST` the function call arguments to these specific types. If `None`, no
+    /// coercion will be applied beyond the one defined by the function signature.
     ///
     /// For example, a flexible array_reduce implementation (see [Self::lambda_parameters] docs), when working
     /// with the expression below, may want to coerce it's initial value argument, the *integer* `0`,
-    /// to match the output it's merge function, which is a *float*:
+    /// to match the output of it's merge function, which is a *float*:
     ///
     /// `array_reduce([1.2, 2.1], 0, (acc, v) -> acc + v + 1.5, v -> v > 2.0)`
     fn coerce_values_for_lambdas(
         &self,
         _fields: &[ValueOrLambda<DataType, DataType>],
-    ) -> Result<Vec<DataType>> {
-        not_impl_err!(
-            "{} coerce_values_for_lambdas is not implemented",
-            self.name()
-        )
+    ) -> Result<Option<Vec<DataType>>> {
+        Ok(None)
     }
 
     /// What type will be returned by this function, given the arguments?
     ///
     /// The implementation can assume that some other part of the code has coerced
     /// the actual argument types to match [`Self::signature`], including the coercion
-    /// defined by [Self::coerce_values_for_lambdas], if applicable.
+    /// defined by [Self::coerce_values_for_lambdas].
     ///
     /// # Example creating `Field`
     ///
