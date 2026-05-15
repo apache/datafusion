@@ -285,8 +285,15 @@ fn test_exact_prefix_match_same_direction() {
 }
 
 #[test]
-fn test_no_prefix_match_longer_than_source() {
-    // Test that prefix matching does NOT work if requested is longer than source
+fn test_inexact_pushdown_when_prefix_longer_than_source() {
+    // Source has [a DESC] ordering, request is [a ASC, b DESC] — longer
+    // than the source ordering so the prefix can't be matched. The
+    // primary sort column 'a' is still in the file schema though, so the
+    // sort pushdown rule returns `Inexact` with `sort_order_for_reorder`
+    // set on the leading column, drops the source's `output_ordering`
+    // (since the source no longer guarantees it after stats-based RG
+    // reorder), and leaves the outer `SortExec` in place to enforce the
+    // full requested ordering.
     let schema = schema();
 
     // Source has [a DESC] ordering (single column)
@@ -310,7 +317,7 @@ fn test_no_prefix_match_longer_than_source() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST], file_type=parquet
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
 }
@@ -530,8 +537,14 @@ fn test_no_pushdown_for_unordered_source() {
 }
 
 #[test]
-fn test_no_pushdown_for_non_reverse_sort() {
-    // Verify pushdown does NOT happen when sort doesn't reverse source ordering
+fn test_inexact_pushdown_when_request_doesnt_match_source_ordering() {
+    // The requested sort column ('b') doesn't match the source's natural
+    // ordering ('a' ASC). Neither natural nor reversed satisfies the
+    // request, but 'b' is in the file schema — so the sort pushdown rule
+    // returns `Inexact` with `sort_order_for_reorder` set, dropping the
+    // source's claimed `output_ordering` (the source no longer guarantees
+    // it after the runtime row-group reorder) but keeping the surrounding
+    // `SortExec` on top for correctness.
     let schema = schema();
 
     // Source sorted by 'a' ASC
@@ -554,7 +567,7 @@ fn test_no_pushdown_for_non_reverse_sort() {
       output:
         Ok:
           - SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
 }

@@ -46,7 +46,6 @@ use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -1133,72 +1132,29 @@ impl RowGroupsPrunedParquetOpen {
         //
         // For sorted data: reorder is a no-op, reverse gives perfect DESC.
         // For unsorted data: reorder fixes the order, reverse flips for DESC.
+        //
+        // Both inputs come from the sort-pushdown channel:
+        // `ParquetSource::try_pushdown_sort` sets `sort_order_for_reorder`
+        // (and `reverse_row_groups` when the request is DESC) — there is no
+        // separate "scrape from `DynamicFilterPhysicalExpr`" fallback path,
+        // because the dynamic filter is for runtime threshold pruning and
+        // not the natural place for plan-time sort metadata.
         let reorder_optimizer: Option<
             Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
-        > = if let Some(sort_order) = &prepared.sort_order_for_reorder {
-            Some(
-                Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
-                    sort_order.clone(),
-                ))
-                    as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
-            )
-        } else if let Some(predicate) = &prepared.predicate
-            && let Some(df) = find_dynamic_filter(predicate)
-            && let Some(sort_options) = df.sort_options()
-            && !sort_options.is_empty()
-        {
-            // Build a sort order from DynamicFilter for non-sort-pushdown TopK.
-            // Quick bail: check if the sort column exists in file schema.
-            let children = df.children();
-            if !children.is_empty() {
-                let col = find_column_in_expr(children[0]);
-                if let Some(c) = col
-                    && prepared
-                        .physical_file_schema
-                        .field_with_name(c.name())
-                        .is_ok()
-                {
-                    // Use the unwrapped Column (not the original expr which
-                    // may be wrapped in Cast etc.) so reorder_by_statistics
-                    // can extract the column name for StatisticsConverter.
-                    let sort_expr =
-                        datafusion_physical_expr_common::sort_expr::PhysicalSortExpr {
-                            expr: Arc::new(c.clone()),
-                            options: arrow::compute::SortOptions {
-                                descending: false,
-                                nulls_first: sort_options[0].nulls_first,
-                            },
-                        };
-                    LexOrdering::new(vec![sort_expr]).map(|order| {
-                        Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
-                            order,
-                        ))
-                            as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        > = prepared.sort_order_for_reorder.as_ref().map(|sort_order| {
+            Box::new(crate::access_plan_optimizer::ReorderByStatistics::new(
+                sort_order.clone(),
+            )) as Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>
+        });
 
-        // Reverse for DESC queries. Only when reorder is active (the sort
-        // column exists in parquet stats). Without reorder, reversing RGs
-        // randomly changes I/O patterns with no benefit.
-        let is_descending = prepared.reverse_row_groups
-            || (reorder_optimizer.is_some()
-                && prepared
-                    .predicate
-                    .as_ref()
-                    .and_then(find_dynamic_filter)
-                    .and_then(|df| df.sort_options().map(|opts| opts[0].descending))
-                    .unwrap_or(false));
+        // Reverse for DESC queries. `reverse_row_groups` is set explicitly
+        // by `ParquetSource::try_pushdown_sort` whenever the requested
+        // ordering is DESC (either because the source's natural ordering
+        // is the reverse of the request, or because the request is DESC on
+        // a column present in the file schema).
         let reverse_optimizer: Option<
             Box<dyn crate::access_plan_optimizer::AccessPlanOptimizer>,
-        > = if is_descending {
+        > = if prepared.reverse_row_groups {
             Some(Box::new(crate::access_plan_optimizer::ReverseRowGroups))
         } else {
             None
@@ -1880,39 +1836,6 @@ async fn load_page_index<T: AsyncFileReader>(
     } else {
         // No need to load the page index again, just return the existing metadata
         Ok(reader_metadata)
-    }
-}
-
-/// Find a `DynamicFilterPhysicalExpr` in the expression tree.
-fn find_dynamic_filter(
-    expr: &Arc<dyn PhysicalExpr>,
-) -> Option<&DynamicFilterPhysicalExpr> {
-    if let Some(df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
-        return Some(df);
-    }
-    for child in expr.children() {
-        if let Some(df) = find_dynamic_filter(child) {
-            return Some(df);
-        }
-    }
-    None
-}
-
-/// Find a `Column` expression in the tree, unwrapping single-child wrappers
-/// like CastExpr. Returns None if the expression is not a simple column ref.
-fn find_column_in_expr(
-    expr: &Arc<dyn PhysicalExpr>,
-) -> Option<&datafusion_physical_expr::expressions::Column> {
-    if let Some(col) =
-        expr.downcast_ref::<datafusion_physical_expr::expressions::Column>()
-    {
-        return Some(col);
-    }
-    let children = expr.children();
-    if children.len() == 1 {
-        find_column_in_expr(children[0])
-    } else {
-        None
     }
 }
 

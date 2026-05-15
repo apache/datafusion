@@ -486,62 +486,20 @@ impl ParquetSource {
         self.reverse_row_groups
     }
 
-    /// Extract TopK sort column name and direction from available sources.
+    /// Extract the (column name, descending) tuple used by file-level
+    /// reordering. Driven entirely from the sort-pushdown channel
+    /// (`sort_order_for_reorder` + `reverse_row_groups`) — set by
+    /// `try_pushdown_sort`. We do not consult any dynamic-filter
+    /// metadata here: `DynamicFilterPhysicalExpr` is for runtime
+    /// threshold pruning, not for telling the source how to schedule
+    /// reads.
     fn extract_topk_sort_info(&self) -> Option<(String, bool)> {
-        // Try from predicate's DynamicFilterPhysicalExpr
-        if let Some(predicate) = &self.predicate
-            && let Some(info) = Self::sort_info_from_dynamic_filter(predicate)
-        {
-            return Some(info);
-        }
-
-        // Fallback to sort_order_for_reorder (Inexact sort pushdown path)
-        if let Some(sort_order) = &self.sort_order_for_reorder
-            && !sort_order.is_empty()
-        {
-            let first = sort_order.first();
-            if let Some(col) = first
-                .expr
-                .downcast_ref::<datafusion_physical_expr::expressions::Column>()
-            {
-                return Some((col.name().to_string(), self.reverse_row_groups));
-            }
-        }
-
-        None
-    }
-
-    /// Try to extract sort column name and direction from a DynamicFilterPhysicalExpr.
-    fn sort_info_from_dynamic_filter(
-        expr: &Arc<dyn PhysicalExpr>,
-    ) -> Option<(String, bool)> {
-        let cloned = Arc::clone(expr);
-        let any_arc: Arc<dyn std::any::Any + Send + Sync> = cloned;
-        if let Ok(df) = Arc::downcast::<
-            datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr,
-        >(any_arc)
-        {
-            let sort_options = df.sort_options()?;
-            if sort_options.is_empty() {
-                return None;
-            }
-            let children = df.children();
-            if children.is_empty() {
-                return None;
-            }
-            let col = children[0]
-                .downcast_ref::<datafusion_physical_expr::expressions::Column>()?;
-            return Some((col.name().to_string(), sort_options[0].descending));
-        }
-
-        // Recursively check children (e.g., AND(DynamicFilter, WhereFilter))
-        for child in expr.children() {
-            if let Some(info) = Self::sort_info_from_dynamic_filter(child) {
-                return Some(info);
-            }
-        }
-
-        None
+        let sort_order = self.sort_order_for_reorder.as_ref()?;
+        let first = sort_order.first();
+        let col = first
+            .expr
+            .downcast_ref::<datafusion_physical_expr::expressions::Column>()?;
+        Some((col.name().to_string(), self.reverse_row_groups))
     }
 
     /// Extract the sort key from a file's statistics for reordering.
@@ -1017,19 +975,53 @@ impl FileSource for ParquetSource {
             new
         };
 
-        // Check if the reversed ordering satisfies the requested ordering
-        if !reversed_eq_properties.ordering_satisfy(order.iter().cloned())? {
-            return Ok(SortOrderPushdownResult::Unsupported);
+        // Check if the reversed ordering satisfies the requested ordering.
+        // If yes, this is the "Inexact via row-group reversal" case: source
+        // declares ASC ordering, request is DESC (or vice versa), so iterating
+        // RGs in reverse approximates the requested order.
+        if reversed_eq_properties.ordering_satisfy(order.iter().cloned())? {
+            let sort_order = LexOrdering::new(order.iter().cloned());
+            let mut new_source = self.clone().with_reverse_row_groups(true);
+            new_source.sort_order_for_reorder = sort_order;
+            return Ok(SortOrderPushdownResult::Inexact {
+                inner: Arc::new(new_source) as Arc<dyn FileSource>,
+            });
         }
 
-        // Return Inexact because we're only reversing row group order,
-        // not guaranteeing perfect row-level ordering
-        let sort_order = LexOrdering::new(order.iter().cloned());
-        let mut new_source = self.clone().with_reverse_row_groups(true);
-        new_source.sort_order_for_reorder = sort_order;
-        Ok(SortOrderPushdownResult::Inexact {
-            inner: Arc::new(new_source) as Arc<dyn FileSource>,
-        })
+        // Inexact via stats-based row-group reorder. Even when neither natural
+        // nor reversed ordering matches (e.g. the table has no declared ordering),
+        // if the sort column is a plain column present in the file schema, the
+        // source can still reorder row groups by their min/max statistics at
+        // runtime. This helps any `ORDER BY` on a sorted source, not just TopK
+        // — the optimization is no longer tied to the dynamic filter path.
+        if let Some(sort_order) = LexOrdering::new(order.iter().cloned()) {
+            let first = sort_order.first();
+            let is_descending = first.options.descending;
+            let column_in_file_schema = first
+                .expr
+                .downcast_ref::<datafusion_physical_expr::expressions::Column>()
+                .is_some_and(|col| {
+                    self.table_schema
+                        .file_schema()
+                        .field_with_name(col.name())
+                        .is_ok()
+                });
+            if column_in_file_schema {
+                let mut new_source = self.clone();
+                new_source.sort_order_for_reorder = Some(sort_order);
+                // For DESC requests, also set `reverse_row_groups` so the
+                // opener's reverse pass flips RG iteration order after the
+                // stats-based reorder.
+                if is_descending {
+                    new_source.reverse_row_groups = true;
+                }
+                return Ok(SortOrderPushdownResult::Inexact {
+                    inner: Arc::new(new_source) as Arc<dyn FileSource>,
+                });
+            }
+        }
+
+        Ok(SortOrderPushdownResult::Unsupported)
     }
 
     fn apply_expressions(
@@ -1239,5 +1231,175 @@ mod tests {
 
         assert!(source.reverse_row_groups());
         assert!(source.filter().is_some());
+    }
+
+    /// Helpers for the `try_pushdown_sort` regression tests below.
+    mod pushdown_sort_helpers {
+        use super::*;
+        use arrow::compute::SortOptions;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_physical_expr::expressions::Column;
+        use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+        pub(super) fn schema_with_a_int() -> Arc<Schema> {
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]))
+        }
+
+        pub(super) fn sort_expr_on(
+            schema: &Arc<Schema>,
+            name: &str,
+            descending: bool,
+        ) -> PhysicalSortExpr {
+            let idx = schema.index_of(name).unwrap();
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new(name, idx)),
+                options: SortOptions {
+                    descending,
+                    nulls_first: true,
+                },
+            }
+        }
+    }
+
+    /// New `Inexact` branch in `try_pushdown_sort` (the one this refactor
+    /// exists for): when neither natural nor reversed ordering matches
+    /// the request, but the sort column is a plain `Column` present in
+    /// the file schema, the source should still return `Inexact` with
+    /// `sort_order_for_reorder` set so the opener can reorder row
+    /// groups by min/max statistics at runtime.
+    #[test]
+    fn try_pushdown_sort_returns_inexact_when_column_in_schema_asc() {
+        use datafusion_physical_expr::EquivalenceProperties;
+        use pushdown_sort_helpers::*;
+
+        let schema = schema_with_a_int();
+        let source = ParquetSource::new(Arc::clone(&schema));
+        let order = vec![sort_expr_on(&schema, "a", false)];
+        // No declared natural ordering on the source.
+        let eq = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("expected Inexact, got a different variant");
+        };
+        // Downcast back to `ParquetSource` to inspect the fields the
+        // opener now reads.
+        let inner_parquet = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        let sort_order = inner_parquet
+            .sort_order_for_reorder
+            .as_ref()
+            .expect("sort_order_for_reorder must be set so the opener can reorder");
+        assert_eq!(sort_order.first().expr.to_string(), "a@0");
+        // ASC request must not flip RG iteration order.
+        assert!(
+            !inner_parquet.reverse_row_groups(),
+            "ASC request must not set reverse_row_groups",
+        );
+    }
+
+    /// Same as above but for DESC. In addition to setting
+    /// `sort_order_for_reorder`, `reverse_row_groups` must be `true`
+    /// so the opener flips RG iteration after the stats-based reorder.
+    #[test]
+    fn try_pushdown_sort_returns_inexact_when_column_in_schema_desc() {
+        use datafusion_physical_expr::EquivalenceProperties;
+        use pushdown_sort_helpers::*;
+
+        let schema = schema_with_a_int();
+        let source = ParquetSource::new(Arc::clone(&schema));
+        let order = vec![sort_expr_on(&schema, "a", true)];
+        let eq = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("expected Inexact, got a different variant");
+        };
+        let inner_parquet = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(inner_parquet.sort_order_for_reorder.is_some());
+        assert!(
+            inner_parquet.reverse_row_groups(),
+            "DESC request must set reverse_row_groups so the opener's reverse \
+             pass runs after the stats-based reorder",
+        );
+    }
+
+    /// Boundary case: when the sort expression is not a plain `Column`
+    /// (e.g. a function call like `date_trunc('hour', ts)`), the new
+    /// `Inexact` branch must NOT fire — the parquet `StatisticsConverter`
+    /// needs a plain column name to look up min/max, so non-column
+    /// expressions can't drive stats-based reorder. The result is
+    /// `Unsupported` so the optimizer keeps the `SortExec` and does
+    /// not attach a meaningless reorder hint.
+    #[test]
+    fn try_pushdown_sort_returns_unsupported_for_non_column_sort_expr() {
+        use arrow::compute::SortOptions;
+        use datafusion_physical_expr::EquivalenceProperties;
+        use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
+        use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+        use pushdown_sort_helpers::*;
+
+        let schema = schema_with_a_int();
+        let source = ParquetSource::new(Arc::clone(&schema));
+
+        // `a + 1` — not a plain Column.
+        let order = vec![PhysicalSortExpr {
+            expr: Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                datafusion_expr::Operator::Plus,
+                lit(1i32),
+            )),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }];
+        let eq = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+        assert!(
+            matches!(result, SortOrderPushdownResult::Unsupported),
+            "non-Column sort expression must yield Unsupported",
+        );
+    }
+
+    /// Boundary case: when the requested sort column is **not** in the
+    /// file schema (e.g. an aggregated alias only present after a
+    /// projection), the new `Inexact` branch must NOT fire either —
+    /// the parquet file has no min/max for that column to reorder by.
+    /// Result is `Unsupported`.
+    #[test]
+    fn try_pushdown_sort_returns_unsupported_when_column_not_in_file_schema() {
+        use arrow::compute::SortOptions;
+        use datafusion_physical_expr::EquivalenceProperties;
+        use datafusion_physical_expr::expressions::Column;
+        use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+        use pushdown_sort_helpers::*;
+
+        let schema = schema_with_a_int();
+        let source = ParquetSource::new(Arc::clone(&schema));
+
+        // Reference a column ("b") that does not exist in the file
+        // schema (which only has "a"). The Column expression itself is
+        // well-formed; only its name is unknown to the file.
+        let order = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("b", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }];
+        let eq = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+        assert!(
+            matches!(result, SortOrderPushdownResult::Unsupported),
+            "column not in file schema must yield Unsupported",
+        );
     }
 }
