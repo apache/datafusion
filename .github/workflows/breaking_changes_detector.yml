@@ -148,3 +148,26 @@ jobs:
           name: semver-blocking-check-result
           path: semver-blocking-artifact/
           retention-days: 1
+
+      # workflow_run workflows execute from the default branch. While this PR is
+      # under review, the default-branch comment workflow still expects the old
+      # single-artifact contract. Upload a legacy-compatible copy sourced from
+      # the blocking latest-release signal so in-flight PR checks keep working.
+      - name: Stage legacy artifact for default-branch comment workflow
+        if: always()
+        uses: ./.github/actions/stage-semver-artifact
+        with:
+          artifact_dir: semver-artifact
+          pr_number: ${{ github.event.pull_request.number }}
+          result: ${{ steps.check_semver.outputs.result || 'success' }}
+          baseline_ref: ${{ steps.latest_release.outputs.tag }}
+          latest_release_tag: ${{ steps.latest_release.outputs.tag }}
+          log_path: /tmp/blocking-semver-output.txt
+
+      - name: Upload legacy artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: semver-check-result
+          path: semver-artifact/
+          retention-days: 1
