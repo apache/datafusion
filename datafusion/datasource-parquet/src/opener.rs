@@ -19,9 +19,8 @@
 
 use crate::access_plan::PreparedAccessPlan;
 use crate::page_filter::PagePruningAccessPlanFilter;
-use crate::row_filter::{
-    ParquetReadPlan, RowFilterGenerator, build_projection_read_plan,
-};
+use crate::push_decoder::DecoderBuilderConfig;
+use crate::row_filter::{RowFilterGenerator, build_projection_read_plan};
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
@@ -71,12 +70,10 @@ use log::debug;
 use parquet::DecodeResult;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, RowSelectionPolicy,
-};
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
-use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use parquet::arrow::push_decoder::ParquetPushDecoder;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
@@ -1268,44 +1265,6 @@ impl RowGroupsPrunedParquetOpen {
         } else {
             Ok(stream.boxed())
         }
-    }
-}
-
-/// State shared while building [`ParquetPushDecoder`]s for one file scan.
-///
-/// A scan can be split into multiple decoder runs when row groups have
-/// different filtering requirements. This config holds the options that apply
-/// to every [`ParquetPushDecoderBuilder`], while each run supplies its own
-/// [`PreparedAccessPlan`] and optional row filter.
-struct DecoderBuilderConfig<'a> {
-    read_plan: &'a ParquetReadPlan,
-    batch_size: usize,
-    arrow_reader_metrics: &'a ArrowReaderMetrics,
-    force_filter_selections: bool,
-    decoder_limit: Option<usize>,
-}
-
-impl DecoderBuilderConfig<'_> {
-    fn build(
-        &self,
-        prepared_access_plan: PreparedAccessPlan,
-        metadata: ArrowReaderMetadata,
-    ) -> ParquetPushDecoderBuilder {
-        let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
-            .with_projection(self.read_plan.projection_mask.clone())
-            .with_batch_size(self.batch_size)
-            .with_metrics(self.arrow_reader_metrics.clone());
-        if self.force_filter_selections {
-            builder = builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
-        }
-        if let Some(row_selection) = prepared_access_plan.row_selection {
-            builder = builder.with_row_selection(row_selection);
-        }
-        builder = builder.with_row_groups(prepared_access_plan.row_group_indexes);
-        if let Some(limit) = self.decoder_limit {
-            builder = builder.with_limit(limit);
-        }
-        builder
     }
 }
 
