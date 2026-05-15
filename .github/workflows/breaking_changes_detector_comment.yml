@@ -181,15 +181,25 @@ jobs:
 
             [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported semver compatibility warnings for changed published crates.
 
-            ## Blocking latest-release signal
+            DataFusion runs two SemVer checks:
+
+            - **Latest release compatibility** compares this PR with the latest stable release tag. This is the blocking user-facing compatibility signal and applies the `${{ env.BREAKING_CHANGE_LABEL }}` label when it fails.
+            - **Base branch compatibility** compares this PR with its base branch. This is advisory reviewer information for API churn on unreleased `main`.
+
+            Interpretation guide:
+
+            - **Base branch warning, latest release passes**: advisory only. The PR changes API that exists on unreleased `main`, but not in the latest release. Reviewers should confirm the unreleased API change is intentional.
+            - **Latest release warning, base branch passes**: blocking. The base branch may already contain an unreleased breaking API change, but users upgrading from the latest release can still be affected.
+
+            ## Latest release compatibility — blocking
 
             Result: `${{ steps.read.outputs.blocking_result }}`
             Latest release tag: `${{ steps.read.outputs.latest_release_tag }}`
 
-            If this result is `failure`, the pull request contains API changes that are not SemVer-compatible with the latest stable release tag. This is the blocking semver warning signal and applies the `${{ env.BREAKING_CHANGE_LABEL }}` label.
+            A `failure` here means changed published crates are not SemVer-compatible with the latest stable release tag.
 
             <details>
-            <summary>Blocking latest-release details</summary>
+            <summary>Latest release compatibility details</summary>
 
             ```
             ${{ steps.read.outputs.blocking_logs }}
@@ -197,15 +207,15 @@ jobs:
 
             </details>
 
-            ## Advisory PR-local signal
+            ## Base branch compatibility — advisory
 
             Result: `${{ steps.read.outputs.advisory_result }}`
             Baseline: `${{ steps.read.outputs.advisory_baseline }}`
 
-            If this result is `failure`, the pull request contains API changes that are not SemVer-compatible with its base branch. This is advisory review information only.
+            A `failure` here means changed published crates are not SemVer-compatible with the PR base branch. This is advisory review information only.
 
             <details>
-            <summary>Advisory PR-local details</summary>
+            <summary>Base branch compatibility details</summary>
 
             ```
             ${{ steps.read.outputs.advisory_logs }}
