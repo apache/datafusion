@@ -76,18 +76,19 @@ in multiple phases.
 | 5     | `FilterPushdown`               | pre-optimization phase  | Pushes supported physical filters down toward data sources before distribution and sorting are enforced.     |
 | 6     | `EnforceDistribution`          | -                       | Adds repartitioning only where needed to satisfy physical distribution requirements.                         |
 | 7     | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.             |
-| 8     | `EnforceSorting`               | -                       | Adds or removes local sorts to satisfy required input orderings.                                             |
-| 9     | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                     |
-| 10    | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution.                   |
-| 11    | `ProjectionPushdown`           | early pass              | Pushes projections toward inputs before later physical rewrites add more limit and TopK structure.           |
-| 12    | `OutputRequirements`           | remove phase            | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.          |
-| 13    | `LimitAggregation`             | -                       | Passes a limit hint into eligible aggregations so they can keep fewer accumulator buckets.                   |
-| 14    | `LimitPushPastWindows`         | -                       | Pushes fetch limits through bounded window operators when doing so keeps the result correct.                 |
-| 15    | `HashJoinBuffering`            | -                       | Adds buffering on the probe side of hash joins so probing can start before build completion.                 |
-| 16    | `LimitPushdown`                | -                       | Moves physical limits into child operators or fetch-enabled variants to cut data early.                      |
-| 17    | `TopKRepartition`              | -                       | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.                       |
-| 18    | `ProjectionPushdown`           | late pass               | Runs projection pushdown again after limit and TopK rewrites expose new pruning opportunities.               |
-| 19    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                            |
-| 20    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                         |
-| 21    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                        |
-| 22    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements. |
+| 8     | `group_join`                   | -                       | Fuses eligible aggregate-over-hash-join plans when grouping keys match join keys.                            |
+| 9     | `EnforceSorting`               | -                       | Adds or removes local sorts to satisfy required input orderings.                                             |
+| 10    | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                     |
+| 11    | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution.                   |
+| 12    | `ProjectionPushdown`           | early pass              | Pushes projections toward inputs before later physical rewrites add more limit and TopK structure.           |
+| 13    | `OutputRequirements`           | remove phase            | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.          |
+| 14    | `LimitAggregation`             | -                       | Passes a limit hint into eligible aggregations so they can keep fewer accumulator buckets.                   |
+| 15    | `LimitPushPastWindows`         | -                       | Pushes fetch limits through bounded window operators when doing so keeps the result correct.                 |
+| 16    | `HashJoinBuffering`            | -                       | Adds buffering on the probe side of hash joins so probing can start before build completion.                 |
+| 17    | `LimitPushdown`                | -                       | Moves physical limits into child operators or fetch-enabled variants to cut data early.                      |
+| 18    | `TopKRepartition`              | -                       | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.                       |
+| 19    | `ProjectionPushdown`           | late pass               | Runs projection pushdown again after limit and TopK rewrites expose new pruning opportunities.               |
+| 20    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                            |
+| 21    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                         |
+| 22    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                        |
+| 23    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements. |

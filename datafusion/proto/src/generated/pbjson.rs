@@ -8710,6 +8710,241 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
         deserializer.deserialize_struct("datafusion.GlobalLimitExecNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for GroupJoinExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.left.is_some() {
+            len += 1;
+        }
+        if self.right.is_some() {
+            len += 1;
+        }
+        if !self.on.is_empty() {
+            len += 1;
+        }
+        if self.join_type != 0 {
+            len += 1;
+        }
+        if !self.group_expr.is_empty() {
+            len += 1;
+        }
+        if !self.group_expr_name.is_empty() {
+            len += 1;
+        }
+        if !self.aggr_expr.is_empty() {
+            len += 1;
+        }
+        if !self.aggr_expr_name.is_empty() {
+            len += 1;
+        }
+        if self.input_schema.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.GroupJoinExecNode", len)?;
+        if let Some(v) = self.left.as_ref() {
+            struct_ser.serialize_field("left", v)?;
+        }
+        if let Some(v) = self.right.as_ref() {
+            struct_ser.serialize_field("right", v)?;
+        }
+        if !self.on.is_empty() {
+            struct_ser.serialize_field("on", &self.on)?;
+        }
+        if self.join_type != 0 {
+            let v = super::datafusion_common::JoinType::try_from(self.join_type)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.join_type)))?;
+            struct_ser.serialize_field("joinType", &v)?;
+        }
+        if !self.group_expr.is_empty() {
+            struct_ser.serialize_field("groupExpr", &self.group_expr)?;
+        }
+        if !self.group_expr_name.is_empty() {
+            struct_ser.serialize_field("groupExprName", &self.group_expr_name)?;
+        }
+        if !self.aggr_expr.is_empty() {
+            struct_ser.serialize_field("aggrExpr", &self.aggr_expr)?;
+        }
+        if !self.aggr_expr_name.is_empty() {
+            struct_ser.serialize_field("aggrExprName", &self.aggr_expr_name)?;
+        }
+        if let Some(v) = self.input_schema.as_ref() {
+            struct_ser.serialize_field("inputSchema", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GroupJoinExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "left",
+            "right",
+            "on",
+            "join_type",
+            "joinType",
+            "group_expr",
+            "groupExpr",
+            "group_expr_name",
+            "groupExprName",
+            "aggr_expr",
+            "aggrExpr",
+            "aggr_expr_name",
+            "aggrExprName",
+            "input_schema",
+            "inputSchema",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Left,
+            Right,
+            On,
+            JoinType,
+            GroupExpr,
+            GroupExprName,
+            AggrExpr,
+            AggrExprName,
+            InputSchema,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "left" => Ok(GeneratedField::Left),
+                            "right" => Ok(GeneratedField::Right),
+                            "on" => Ok(GeneratedField::On),
+                            "joinType" | "join_type" => Ok(GeneratedField::JoinType),
+                            "groupExpr" | "group_expr" => Ok(GeneratedField::GroupExpr),
+                            "groupExprName" | "group_expr_name" => Ok(GeneratedField::GroupExprName),
+                            "aggrExpr" | "aggr_expr" => Ok(GeneratedField::AggrExpr),
+                            "aggrExprName" | "aggr_expr_name" => Ok(GeneratedField::AggrExprName),
+                            "inputSchema" | "input_schema" => Ok(GeneratedField::InputSchema),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GroupJoinExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.GroupJoinExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GroupJoinExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut left__ = None;
+                let mut right__ = None;
+                let mut on__ = None;
+                let mut join_type__ = None;
+                let mut group_expr__ = None;
+                let mut group_expr_name__ = None;
+                let mut aggr_expr__ = None;
+                let mut aggr_expr_name__ = None;
+                let mut input_schema__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Left => {
+                            if left__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("left"));
+                            }
+                            left__ = map_.next_value()?;
+                        }
+                        GeneratedField::Right => {
+                            if right__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("right"));
+                            }
+                            right__ = map_.next_value()?;
+                        }
+                        GeneratedField::On => {
+                            if on__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("on"));
+                            }
+                            on__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::JoinType => {
+                            if join_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("joinType"));
+                            }
+                            join_type__ = Some(map_.next_value::<super::datafusion_common::JoinType>()? as i32);
+                        }
+                        GeneratedField::GroupExpr => {
+                            if group_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("groupExpr"));
+                            }
+                            group_expr__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::GroupExprName => {
+                            if group_expr_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("groupExprName"));
+                            }
+                            group_expr_name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::AggrExpr => {
+                            if aggr_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("aggrExpr"));
+                            }
+                            aggr_expr__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::AggrExprName => {
+                            if aggr_expr_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("aggrExprName"));
+                            }
+                            aggr_expr_name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::InputSchema => {
+                            if input_schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inputSchema"));
+                            }
+                            input_schema__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(GroupJoinExecNode {
+                    left: left__,
+                    right: right__,
+                    on: on__.unwrap_or_default(),
+                    join_type: join_type__.unwrap_or_default(),
+                    group_expr: group_expr__.unwrap_or_default(),
+                    group_expr_name: group_expr_name__.unwrap_or_default(),
+                    aggr_expr: aggr_expr__.unwrap_or_default(),
+                    aggr_expr_name: aggr_expr_name__.unwrap_or_default(),
+                    input_schema: input_schema__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.GroupJoinExecNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for GroupingSetNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -18508,6 +18743,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::ScalarSubquery(v) => {
                     struct_ser.serialize_field("scalarSubquery", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::GroupJoin(v) => {
+                    struct_ser.serialize_field("groupJoin", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -18580,6 +18818,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "arrowScan",
             "scalar_subquery",
             "scalarSubquery",
+            "group_join",
+            "groupJoin",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -18622,6 +18862,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             Buffer,
             ArrowScan,
             ScalarSubquery,
+            GroupJoin,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18681,6 +18922,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "buffer" => Ok(GeneratedField::Buffer),
                             "arrowScan" | "arrow_scan" => Ok(GeneratedField::ArrowScan),
                             "scalarSubquery" | "scalar_subquery" => Ok(GeneratedField::ScalarSubquery),
+                            "groupJoin" | "group_join" => Ok(GeneratedField::GroupJoin),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -18967,6 +19209,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("scalarSubquery"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::ScalarSubquery)
+;
+                        }
+                        GeneratedField::GroupJoin => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("groupJoin"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::GroupJoin)
 ;
                         }
                     }
