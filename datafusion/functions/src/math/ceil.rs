@@ -422,9 +422,7 @@ mod tests {
         // → intersect returns None → Ok(None) (branch pruned)
         let output = f64_interval(20.0, 30.0);
         let input = f64_interval(5.0, 7.0);
-        let result = ceil()
-            .propagate_constraints(&output, &[&input])
-            .unwrap();
+        let result = ceil().propagate_constraints(&output, &[&input]).unwrap();
         assert!(result.is_none());
     }
 }
