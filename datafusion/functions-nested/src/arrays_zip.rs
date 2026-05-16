@@ -481,11 +481,9 @@ mod tests {
 
     #[test]
     fn test_arrays_zip_fast_path_perfect_alignment() -> Result<()> {
-        let values1 =
-            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let values1 = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
 
-        let values2 =
-            Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef;
+        let values2 = Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef;
 
         let offsets = OffsetBuffer::new(vec![0, 2, 3].into());
 
@@ -503,10 +501,7 @@ mod tests {
             None,
         )?;
 
-        let result = arrays_zip_inner(&[
-            Arc::new(list1),
-            Arc::new(list2),
-        ])?;
+        let result = arrays_zip_inner(&[Arc::new(list1), Arc::new(list2)])?;
 
         assert_eq!(result.len(), 2);
 
