@@ -28,6 +28,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue, cast::as_boolean_array, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::interval_arithmetic::Interval;
+#[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{self, Bernoulli};
 
 /// Not expression
@@ -126,6 +127,7 @@ impl PhysicalExpr for NotExpr {
             .map(|result| vec![result]))
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         match children[0] {
             Bernoulli(b) => {
@@ -141,6 +143,7 @@ impl PhysicalExpr for NotExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn propagate_statistics(
         &self,
         parent: &Distribution,
@@ -253,6 +256,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics() -> Result<()> {
         let _schema = &Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
