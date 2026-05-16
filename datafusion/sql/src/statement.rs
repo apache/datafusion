@@ -886,15 +886,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Execute statement with DEFAULT is not supported"
                     );
                 }
+                let name = name.ok_or_else(|| {
+                    plan_datafusion_err!("EXECUTE statement requires a name")
+                })?;
+
                 let empty_schema = DFSchema::empty();
                 let parameters = parameters
                     .into_iter()
                     .map(|expr| self.sql_to_expr(expr, &empty_schema, planner_context))
                     .collect::<Result<Vec<Expr>>>()?;
-
-                let name = name.ok_or_else(|| {
-                    plan_datafusion_err!("EXECUTE statement requires a name")
-                })?;
 
                 Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
                     name: object_name_to_string(&name),

@@ -64,6 +64,9 @@ statement error EXECUTE statement requires a name
 EXEC('any-string');
 
 statement error EXECUTE statement requires a name
+EXEC(unknown_column);
+
+statement error EXECUTE statement requires a name
 EXECUTE();
 
 statement error EXECUTE statement requires a name
