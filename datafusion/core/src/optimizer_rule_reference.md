@@ -72,7 +72,7 @@ in multiple phases.
 | 1     | `OutputRequirements`           | add phase               | Adds helper nodes so output requirements survive later physical rewrites.                                    |
 | 2     | `aggregate_statistics`         | -                       | Uses exact source statistics to answer some aggregates without scanning data.                                |
 | 3     | `join_selection`               | -                       | Chooses join implementation, build side, and partition mode from statistics and stream properties.           |
-| 4     | `EagerAggregation`             | -                       | Pushes partial aggregations below joins when pre-aggregating by the join key reduces row count.             |
+| 4     | `EagerAggregation`             | -                       | Pushes partial aggregations below joins when pre-aggregating by the join key reduces row count.              |
 | 5     | `LimitedDistinctAggregation`   | -                       | Pushes limit hints into grouped distinct-style aggregations when only a small result is needed.              |
 | 6     | `FilterPushdown`               | pre-optimization phase  | Pushes supported physical filters down toward data sources before distribution and sorting are enforced.     |
 | 7     | `EnforceDistribution`          | -                       | Adds repartitioning only where needed to satisfy physical distribution requirements.                         |
