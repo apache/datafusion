@@ -556,6 +556,13 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
+            // Adaptive selectivity tracker knobs are not yet plumbed
+            // through the proto schema; fall back to config-side defaults.
+            filter_pushdown_min_bytes_per_sec: ParquetOptions::default()
+                .filter_pushdown_min_bytes_per_sec,
+            filter_collecting_byte_ratio_threshold: ParquetOptions::default()
+                .filter_collecting_byte_ratio_threshold,
+            filter_confidence_z: ParquetOptions::default().filter_confidence_z,
             use_content_defined_chunking: proto.content_defined_chunking.map(|cdc| {
                 let defaults = CdcOptions::default();
                 CdcOptions {

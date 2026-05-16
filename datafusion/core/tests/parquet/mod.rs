@@ -305,6 +305,17 @@ impl ContextWithParquet {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
                 config.options_mut().execution.parquet.pushdown_filters = true;
+                // Force the adaptive selectivity tracker to promote
+                // every filter to row-level on first encounter; otherwise
+                // the row-group / bloom-filter pruning these tests assert
+                // on never runs (filters default to post-scan and only
+                // promote once enough bytes-saved-per-sec evidence
+                // accumulates — by which point the test has finished).
+                config
+                    .options_mut()
+                    .execution
+                    .parquet
+                    .filter_pushdown_min_bytes_per_sec = 0.0;
                 make_test_file_rg(scenario, row_per_group, custom_schema, custom_batches)
                     .await
             }

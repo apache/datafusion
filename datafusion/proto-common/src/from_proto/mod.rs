@@ -1127,6 +1127,14 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
             }).unwrap_or(None),
+            // Adaptive selectivity tracker knobs are not yet plumbed
+            // through the proto schema; restore their config-side defaults
+            // so a proto round-trip preserves the default behavior.
+            filter_pushdown_min_bytes_per_sec: ParquetOptions::default()
+                .filter_pushdown_min_bytes_per_sec,
+            filter_collecting_byte_ratio_threshold: ParquetOptions::default()
+                .filter_collecting_byte_ratio_threshold,
+            filter_confidence_z: ParquetOptions::default().filter_confidence_z,
             use_content_defined_chunking: value.content_defined_chunking.map(|cdc| {
                 let defaults = CdcOptions::default();
                 CdcOptions {
