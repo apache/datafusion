@@ -49,6 +49,11 @@ SELECT arrow_cast('22:00', 'Time64(Nanosecond)') + interval '3 hours'
 ----
 01:00:00
 
+query D
+SELECT arrow_cast('00:00:00', 'Time32(Second)') - interval '500 milliseconds'
+----
+23:59:59
+
 # postgresql behavior
 #
 # time - interval → time

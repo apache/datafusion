@@ -278,14 +278,13 @@ fn wrap_time_value(
 ) -> i64 {
     // Month and day interval fields are whole-day-or-larger components, so
     // they have no effect after wrapping to a 24-hour time-of-day value.
-    let delta = (interval.nanoseconds / nanos_per_unit).rem_euclid(units_per_day);
-    let signed_delta = if subtract {
-        -(delta as i128)
-    } else {
-        delta as i128
-    };
+    let nanos_per_unit = nanos_per_unit as i128;
+    let nanos_per_day = units_per_day as i128 * nanos_per_unit;
+    let delta = (interval.nanoseconds as i128).rem_euclid(nanos_per_day);
+    let signed_delta = if subtract { -delta } else { delta };
 
-    (time_value as i128 + signed_delta).rem_euclid(units_per_day as i128) as i64
+    ((time_value as i128 * nanos_per_unit + signed_delta).rem_euclid(nanos_per_day)
+        / nanos_per_unit) as i64
 }
 
 /// Computes the difference between two dates and returns the result as Int64 (days)
