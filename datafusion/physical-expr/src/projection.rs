@@ -714,7 +714,6 @@ impl ProjectionExprs {
                     }
                 }
             } else {
-                // Propagate min/max statistics through CAST expressions.
                 project_column_statistics_through_expr(
                     expr.as_ref(),
                     &stats.column_statistics,
@@ -728,14 +727,10 @@ impl ProjectionExprs {
     }
 }
 
-/// Propagate column statistics through expressions that preserve min/max.
-///
-/// Currently handles only [`CastExpr`] (recursively), casting the inner
-/// column's min/max to the target type. Other expressions return unknown
-/// statistics. Kept narrow on purpose: generalizing via
-/// [`PhysicalExpr::evaluate_bounds`] is unsafe in aggregate folding because
-/// many `evaluate_bounds` impls return an envelope (e.g. `sin(x)` always
-/// returns `[-1, 1]`) rather than tight bounds on the actual input values.
+/// Propagate column statistics through CAST projections. Other expressions
+/// return unknown — generalizing via [`PhysicalExpr::evaluate_bounds`] is
+/// unsafe for aggregate folding since many impls (e.g. `sin`) return a fixed
+/// envelope rather than tight bounds on the actual inputs.
 fn project_column_statistics_through_expr(
     expr: &dyn PhysicalExpr,
     column_stats: &[ColumnStatistics],
@@ -760,7 +755,6 @@ fn project_column_statistics_through_expr(
             .unwrap_or(Precision::Absent),
         null_count: inner_stats.null_count,
         distinct_count: inner_stats.distinct_count,
-        // Sum and byte size change under CAST, don't propagate
         sum_value: Precision::Absent,
         byte_size: Precision::Absent,
     }
@@ -2836,7 +2830,7 @@ pub(crate) mod tests {
         let input_stats = get_stats();
         let input_schema = get_schema();
 
-        // Projection with CAST: SELECT CAST(col0 AS Int32) AS casted
+        // SELECT CAST(col0 AS Int32) AS casted
         let projection = ProjectionExprs::new(vec![ProjectionExpr {
             expr: Arc::new(CastExpr::new(
                 Arc::new(Column::new("col0", 0)),
@@ -2851,7 +2845,6 @@ pub(crate) mod tests {
             &projection.project_schema(&input_schema)?,
         )?;
 
-        // CAST should propagate min/max cast to the target type.
         assert_eq!(
             output_stats.column_statistics[0].min_value,
             Precision::Exact(ScalarValue::Int32(Some(-4)))

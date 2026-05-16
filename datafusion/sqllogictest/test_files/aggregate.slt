@@ -8978,12 +8978,10 @@ GROUP BY id ORDER BY id;
 statement ok
 DROP TABLE first_last_value_str_tests;
 
-# Regression test for incorrect MIN/MAX folding from projected expression
-# statistics. Interval arithmetic over multi-column expressions combines the
-# independent min/max of each column, which may come from different rows, so
-# the resulting interval is not a valid min/max of the expression over the
-# data. This query must execute against the actual rows rather than the
-# per-column Parquet envelopes.
+# MIN/MAX over a CAST projection folds from parquet statistics via the
+# aggregate-statistics optimizer. Non-CAST projections (multi-column or
+# self-referenced expressions) must keep returning correct results — guard
+# against future regressions if the optimizer is broadened.
 statement ok
 SET datafusion.execution.target_partitions = 1;
 
@@ -8991,6 +8989,11 @@ statement ok
 CREATE EXTERNAL TABLE hits_raw
 STORED AS PARQUET
 LOCATION '../core/tests/data/clickbench_hits_10.parquet';
+
+query II
+SELECT MIN(CAST("EventDate" AS BIGINT)), MAX(CAST("EventDate" AS BIGINT)) FROM hits_raw;
+----
+15901 15901
 
 query II
 SELECT MIN(delta), MAX(delta)
@@ -9001,10 +9004,6 @@ FROM (
 ----
 -2461439044872611287 7418527518698834918
 
-# Same class of bug with a single column referenced more than once. Interval
-# arithmetic treats the two occurrences of `UserID` as independent values, so
-# it would report `min(UserID) - max(UserID)` / `max(UserID) - min(UserID)`
-# instead of the correct 0 / 0.
 query II
 SELECT MIN(zero), MAX(zero)
 FROM (
@@ -9013,14 +9012,6 @@ FROM (
 );
 ----
 0 0
-
-# MIN/MAX over a CAST projection should fold from parquet statistics via the
-# aggregate-statistics optimizer and return the same values as computing
-# MIN/MAX on the raw column and then casting.
-query II
-SELECT MIN(CAST("EventDate" AS BIGINT)), MAX(CAST("EventDate" AS BIGINT)) FROM hits_raw;
-----
-15901 15901
 
 statement ok
 SET datafusion.execution.target_partitions = 4;

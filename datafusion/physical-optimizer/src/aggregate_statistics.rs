@@ -108,23 +108,13 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     }
 }
 
-/// Returns an `AggregateExec` whose statistics can be used to replace the
-/// entire aggregate with literal values, if the plan is eligible.
-///
-/// Two patterns are recognized:
-///
-/// 1. **Final wrapping Partial** (multi-partition): A final `AggregateExec`
-///    (input mode = `Partial`) with no GROUP BY whose descendant is a partial
-///    `AggregateExec` (input mode = `Raw`) with no GROUP BY and no filters.
-///    Returns the inner partial aggregate.
-///
-/// 2. **Single / SinglePartitioned** (single-partition): A `Single` or
-///    `SinglePartitioned` `AggregateExec` with no GROUP BY and no filters.
-///    Returns the aggregate itself.
+/// Returns an `AggregateExec` whose statistics can replace the aggregate with
+/// literal values: either a `Single`/`SinglePartitioned` aggregate, or a
+/// `Final` aggregate wrapping a `Partial`. Must have no GROUP BY and no
+/// filters.
 fn take_optimizable(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
     let agg_exec = plan.downcast_ref::<AggregateExec>()?;
 
-    // Case 1: Single-mode aggregate — processes raw input, produces final output
     if matches!(
         agg_exec.mode(),
         AggregateMode::Single | AggregateMode::SinglePartitioned
@@ -134,7 +124,6 @@ fn take_optimizable(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPl
         return Some(Arc::clone(plan));
     }
 
-    // Case 2: Final aggregate wrapping a Partial aggregate
     if agg_exec.mode().input_mode() == AggregateInputMode::Partial
         && agg_exec.group_expr().is_empty()
     {
