@@ -36,7 +36,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::hash::Hash;
-use std::ops::{Neg, Range};
+use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
 get_or_init_udwf!(
@@ -113,10 +113,18 @@ impl WindowShiftKind {
     /// In [`WindowShiftEvaluator`] a positive offset is used to signal
     /// computation of `lag()`. So here we negate the input offset
     /// value when computing `lead()`.
-    fn shift_offset(&self, value: Option<i64>) -> i64 {
+    fn shift_offset(&self, value: Option<i64>) -> Result<i64> {
         match self {
-            WindowShiftKind::Lag => value.unwrap_or(1),
-            WindowShiftKind::Lead => value.map(|v| v.neg()).unwrap_or(-1),
+            WindowShiftKind::Lag => Ok(value.unwrap_or(1)),
+            WindowShiftKind::Lead => value.map_or(Ok(-1), |v| {
+                v.checked_neg().ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "{} offset cannot be {}",
+                        self.name(),
+                        i64::MIN
+                    ))
+                })
+            }),
         }
     }
 }
@@ -263,7 +271,7 @@ impl WindowUDFImpl for WindowShift {
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
                 .map(|v| get_signed_integer(&v))
                 .map_or(Ok(None), |v| v.map(Some))
-                .map(|n| self.kind.shift_offset(n))
+                .and_then(|n| self.kind.shift_offset(n))
                 .map(|offset| {
                     if partition_evaluator_args.is_reversed() {
                         -offset
@@ -546,13 +554,18 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 
         // LAG mode
         let i = if self.is_lag() {
-            (range.end as i64 - self.shift_offset - 1) as usize
+            range
+                .end
+                .checked_sub(1)
+                .and_then(|end| (end as i64).checked_sub(self.shift_offset))
+                .and_then(|value| usize::try_from(value).ok())
         } else {
             // LEAD mode
-            (range.start as i64 - self.shift_offset) as usize
+            (range.start as i64)
+                .checked_sub(self.shift_offset)
+                .and_then(|value| usize::try_from(value).ok())
         };
-
-        let mut idx: Option<usize> = if i < len { Some(i) } else { None };
+        let mut idx: Option<usize> = i.filter(|i| *i < len);
 
         // LAG with IGNORE NULLS calculated as the current row index - offset, but only for non-NULL rows
         // If current row index points to NULL value the row is NOT counted
@@ -821,5 +834,48 @@ mod tests {
             .iter()
             .collect::<Int32Array>(),
         )
+    }
+
+    #[test]
+    fn test_lead_i64_min_offset_returns_error() {
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let shift_offset = Arc::new(Literal::new(ScalarValue::Int64(Some(i64::MIN))))
+            as Arc<dyn PhysicalExpr>;
+        let input_exprs = &[expr, shift_offset];
+        let input_fields = [DataType::Int32, DataType::Int64]
+            .into_iter()
+            .map(|d| Field::new("f", d, true))
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+
+        let err = WindowShift::lead()
+            .partition_evaluator(PartitionEvaluatorArgs::new(
+                input_exprs,
+                &input_fields,
+                false,
+                false,
+            ))
+            .expect_err("lead(i64::MIN) should fail");
+
+        assert!(
+            err.to_string()
+                .contains("lead offset cannot be -9223372036854775808")
+        );
+    }
+
+    #[test]
+    fn test_lead_i64_max_offset_evaluate_returns_default() -> Result<()> {
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let mut evaluator = WindowShiftEvaluator {
+            shift_offset: -i64::MAX,
+            default_value: ScalarValue::Int32(None),
+            ignore_nulls: false,
+            non_null_offsets: Default::default(),
+        };
+
+        let result = evaluator.evaluate(&[array], &Range { start: 0, end: 1 })?;
+        assert_eq!(result, ScalarValue::Int32(None));
+
+        Ok(())
     }
 }
