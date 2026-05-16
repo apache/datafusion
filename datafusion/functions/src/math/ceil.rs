@@ -414,4 +414,17 @@ mod tests {
             .unwrap();
         assert_eq!(result[0], f64_interval(-4.0, -1.0));
     }
+
+    #[test]
+    fn test_propagate_constraints_empty_intersection() {
+        // x ∈ [5.0, 7.0], constraint ceil(x) ∈ [20.0, 30.0]
+        // mapped input constraint: [19.0, 30.0] — no overlap with [5.0, 7.0]
+        // → intersect returns None → Ok(None) (branch pruned)
+        let output = f64_interval(20.0, 30.0);
+        let input = f64_interval(5.0, 7.0);
+        let result = ceil()
+            .propagate_constraints(&output, &[&input])
+            .unwrap();
+        assert!(result.is_none());
+    }
 }
