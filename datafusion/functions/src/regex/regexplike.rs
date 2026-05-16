@@ -604,6 +604,21 @@ mod tests {
     }
 
     #[test]
+    fn test_multiline_flag_regexp_like_utf8() {
+        let values = StringArray::from(vec!["a\nb"]);
+        let patterns = StringArray::from(vec!["^b"]);
+        let flags = StringArray::from(vec!["m"]);
+        let mut expected_builder = BooleanBuilder::new();
+        expected_builder.append_value(true);
+        let expected = expected_builder.finish();
+
+        let re = regexp_like(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+            .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
     fn test_unsupported_global_flag_regexp_like() {
         let values = StringArray::from(vec!["abc"]);
         let patterns = StringArray::from(vec!["^(a)"]);
@@ -643,6 +658,41 @@ mod tests {
         let mut expected_builder = BooleanBuilder::new();
         expected_builder.append_value(true);
         expected_builder.append_value(false);
+        let expected = expected_builder.finish();
+        match result {
+            ColumnarValue::Array(array) => {
+                assert_eq!(array.as_ref(), &expected);
+            }
+            other => panic!("Unexpected result {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_regexp_like_scalar_multiline_flag_invoke() {
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("a\nb".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("^b".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("m".to_string()))),
+        ];
+        let result = invoke_regexp_like(args).unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {}
+            other => panic!("Unexpected result {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_regexp_like_array_scalar_multiline_flag_invoke() {
+        let values = Arc::new(StringArray::from(vec!["a\nb", "a\nb"]));
+        let args = vec![
+            ColumnarValue::Array(values),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("^b".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("m".to_string()))),
+        ];
+        let result = invoke_regexp_like(args).unwrap();
+        let mut expected_builder = BooleanBuilder::new();
+        expected_builder.append_value(true);
+        expected_builder.append_value(true);
         let expected = expected_builder.finish();
         match result {
             ColumnarValue::Array(array) => {
