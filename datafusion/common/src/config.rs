@@ -919,6 +919,29 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
+        /// (reading) Minimum throughput, in bytes per second, that an adaptive
+        /// row-level filter must sustain to remain at row-level. Filters that
+        /// drop below this threshold (with statistical confidence — see
+        /// `filter_confidence_z`) are demoted to post-scan, or dropped entirely
+        /// if they were optional (e.g. a hash-join build-side dynamic filter).
+        /// Set to `0` to force every filter to row-level (skip the threshold
+        /// check); set to `f64::INFINITY` to keep every filter post-scan.
+        pub filter_pushdown_min_bytes_per_sec: f64, default = 100.0 * 1024.0 * 1024.0
+
+        /// (reading) Initial-placement heuristic for adaptive filters: when a
+        /// filter is first observed, place it at row-level if its column bytes
+        /// are this fraction or less of the total projection's column bytes.
+        /// Above this ratio, the filter starts as post-scan and only gets
+        /// promoted later if measured throughput crosses
+        /// `filter_pushdown_min_bytes_per_sec`.
+        pub filter_collecting_byte_ratio_threshold: f64, default = 0.20
+
+        /// (reading) Z-score for the one-sided confidence interval the adaptive
+        /// filter scheduler uses when promoting / demoting / dropping filters.
+        /// Default `2.0` (≈ 97.5%) keeps strategy moves conservative; lower the
+        /// value for snappier adaptation, raise it for more stable placements.
+        pub filter_confidence_z: f64, default = 2.0
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 

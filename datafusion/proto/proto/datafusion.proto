@@ -936,6 +936,8 @@ message PhysicalExprNode {
     PhysicalScalarSubqueryExprNode scalar_subquery = 22;
 
     PhysicalDynamicFilterNode dynamic_filter = 23;
+
+    PhysicalOptionalFilterNode optional_filter = 24;
   }
 }
 
@@ -945,6 +947,10 @@ message PhysicalDynamicFilterNode {
   uint64 generation = 3;
   PhysicalExprNode inner_expr = 4;
   bool is_complete = 5;
+}
+
+message PhysicalOptionalFilterNode {
+  PhysicalExprNode inner = 1;
 }
 
 message PhysicalScalarUdfNode {

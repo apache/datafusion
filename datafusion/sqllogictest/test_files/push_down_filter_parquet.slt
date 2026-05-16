@@ -24,6 +24,13 @@ set datafusion.explain.physical_plan_only = true;
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
+# Force every conjunct onto the row-filter path so the
+# `pushdown_rows_*` and `predicate_cache_*` metrics this file asserts on are
+# populated. The default of 100 MB/s keeps small test files post-scan,
+# where the row-filter metrics are zero.
+statement ok
+set datafusion.execution.parquet.filter_pushdown_min_bytes_per_sec = 0;
+
 # this one is also required to make DF skip second file due to "sufficient" amount of rows
 statement ok
 set datafusion.execution.collect_statistics = true;
@@ -1029,6 +1036,9 @@ RESET datafusion.explain.physical_plan_only;
 
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+RESET datafusion.execution.parquet.filter_pushdown_min_bytes_per_sec;
 
 statement ok
 drop table t;

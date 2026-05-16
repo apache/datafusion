@@ -166,13 +166,19 @@ mod tests {
                 source = source.with_predicate(predicate);
             }
 
+            // The adaptive selectivity tracker subsumes the static
+            // `reorder_filters` flag. To keep these row-filter-pushdown
+            // assertions deterministic regardless of the byte-ratio
+            // heuristic, force every filter to row-level by setting
+            // `filter_pushdown_min_bytes_per_sec = 0` (the
+            // "always-row-level" sentinel). The promote/demote behavior
+            // exercised by other tests is irrelevant here.
             if self.pushdown_predicate {
-                source = source
-                    .with_pushdown_filters(true)
-                    .with_reorder_filters(true);
-            } else {
-                source = source.with_pushdown_filters(false);
+                let mut opts = TableParquetOptions::default();
+                opts.global.filter_pushdown_min_bytes_per_sec = 0.0;
+                source = source.with_table_parquet_options(opts);
             }
+            source = source.with_pushdown_filters(self.pushdown_predicate);
 
             if self.page_index_predicate {
                 source = source.with_enable_page_index(true);

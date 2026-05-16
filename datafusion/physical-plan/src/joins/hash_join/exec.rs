@@ -90,7 +90,9 @@ use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use datafusion_common::hash_utils::RandomState;
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
+use datafusion_physical_expr_common::physical_expr::{
+    OptionalFilterPhysicalExpr, fmt_sql,
+};
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
@@ -1644,9 +1646,16 @@ impl ExecutionPlan for HashJoinExec {
         if phase == FilterPushdownPhase::Post
             && self.allow_join_dynamic_filter_pushdown(config)
         {
-            // Add actual dynamic filter to right side (probe side)
+            // Add actual dynamic filter to right side (probe side). Wrap
+            // it in `OptionalFilterPhysicalExpr` so the parquet adaptive
+            // scheduler can drop it entirely when measured selectivity is
+            // too low to justify the per-batch evaluation cost. Join
+            // correctness does not depend on this filter — it's purely a
+            // scan-time pruning optimization — so dropping it is safe.
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
-            right_child = right_child.with_self_filter(dynamic_filter);
+            let pushdown_filter: Arc<dyn PhysicalExpr> =
+                Arc::new(OptionalFilterPhysicalExpr::new(dynamic_filter));
+            right_child = right_child.with_self_filter(pushdown_filter);
         }
 
         Ok(FilterDescription::new()
@@ -1667,7 +1676,19 @@ impl ExecutionPlan for HashJoinExec {
         if let Some(filter) = right_child_self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
-            let predicate = Arc::clone(&filter.predicate);
+            // We wrap the dynamic filter in `OptionalFilterPhysicalExpr` at
+            // `gather_filters_for_pushdown`; unwrap it here so we can recover
+            // the inner `Arc<DynamicFilterPhysicalExpr>` the join holds onto
+            // for `.update()` / `.mark_complete()`.
+            let predicate: Arc<dyn PhysicalExpr> = if let Some(opt) =
+                filter
+                    .predicate
+                    .downcast_ref::<OptionalFilterPhysicalExpr>()
+            {
+                opt.inner()
+            } else {
+                Arc::clone(&filter.predicate)
+            };
             if let Ok(dynamic_filter) =
                 Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
             {

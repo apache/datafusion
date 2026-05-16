@@ -204,6 +204,34 @@ url = "2.5.7"
 uuid = "1.23"
 zstd = { version = "0.13", default-features = false }
 
+# Override arrow / parquet to the `adaptive-strategy-swap` branch on
+# pydantic's fork of arrow-rs, which adds the `swap_strategy` API on
+# `ParquetPushDecoder` that the in-decoder adaptive filter scheduling
+# depends on.
+#
+# The full set of arrow-rs workspace crates is listed so transitive
+# deps (e.g. `arrow-cast` pulled in via `arrow`) resolve to the patched
+# version and we don't link two copies into one binary.
+#
+# Branch: https://github.com/pydantic/arrow-rs/tree/adaptive-strategy-swap
+[patch.crates-io]
+arrow = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-arith = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-array = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-buffer = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-cast = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-csv = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-data = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-flight = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-ipc = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-json = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-ord = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-row = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-schema = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-select = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+arrow-string = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+parquet = { git = "https://github.com/pydantic/arrow-rs.git", branch = "adaptive-strategy-swap" }
+
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
