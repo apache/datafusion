@@ -21,7 +21,9 @@ use crate::scalar_subquery::ScalarSubqueryExpr;
 use crate::{HigherOrderFunctionExpr, ScalarFunctionExpr};
 use crate::{
     PhysicalExpr,
-    expressions::{self, Column, Literal, binary, like, similar_to},
+    expressions::{
+        self, Column, Literal, binary, like, similar_to, translate_similar_to_pattern,
+    },
 };
 
 use arrow::datatypes::Schema;
@@ -253,8 +255,41 @@ pub fn create_physical_expr(
             }
             let physical_expr =
                 create_physical_expr(expr, input_dfschema, execution_props)?;
+            // SIMILAR TO uses SQL wildcards (`%`, `_`) layered on POSIX regex and
+            // requires a whole-string match. Translate literal patterns to an
+            // equivalent regex so the existing regex-match operator returns
+            // PostgreSQL-compatible results.
+            let translated_pattern = match pattern.as_ref() {
+                Expr::Literal(ScalarValue::Utf8(Some(s)), m) => Expr::Literal(
+                    ScalarValue::Utf8(Some(translate_similar_to_pattern(s))),
+                    m.clone(),
+                ),
+                Expr::Literal(ScalarValue::LargeUtf8(Some(s)), m) => Expr::Literal(
+                    ScalarValue::LargeUtf8(Some(translate_similar_to_pattern(s))),
+                    m.clone(),
+                ),
+                Expr::Literal(ScalarValue::Utf8View(Some(s)), m) => Expr::Literal(
+                    ScalarValue::Utf8View(Some(translate_similar_to_pattern(s))),
+                    m.clone(),
+                ),
+                // NULL pattern: regex match against NULL returns NULL. Use a
+                // typed Utf8 null so the regex kernel can handle it.
+                Expr::Literal(
+                    ScalarValue::Utf8(None)
+                    | ScalarValue::LargeUtf8(None)
+                    | ScalarValue::Utf8View(None)
+                    | ScalarValue::Null,
+                    m,
+                ) => Expr::Literal(ScalarValue::Utf8(None), m.clone()),
+                _ => {
+                    return not_impl_err!(
+                        "SIMILAR TO with a non-literal pattern is not yet supported"
+                    );
+                }
+            };
+            let pattern_expr = &translated_pattern;
             let physical_pattern =
-                create_physical_expr(pattern, input_dfschema, execution_props)?;
+                create_physical_expr(pattern_expr, input_dfschema, execution_props)?;
             similar_to(*negated, *case_insensitive, physical_expr, physical_pattern)
         }
         Expr::Case(case) => {

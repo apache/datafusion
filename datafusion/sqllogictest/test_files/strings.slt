@@ -72,8 +72,9 @@ p2e1
 p2m1e1
 
 # SIMILAR TO
+# Uses SQL wildcards (`%`) layered on POSIX regex with whole-string matching.
 query T rowsort
-SELECT s FROM test WHERE s SIMILAR TO 'p[12].*';
+SELECT s FROM test WHERE s SIMILAR TO 'p[12]%';
 ----
 p1
 p1e1
@@ -84,12 +85,63 @@ p2m1e1
 
 # NOT SIMILAR TO
 query T rowsort
-SELECT s FROM test WHERE s NOT SIMILAR TO 'p[12].*';
+SELECT s FROM test WHERE s NOT SIMILAR TO 'p[12]%';
 ----
 P1
 P1e1
 P1m1e1
 e1
+
+# Regression for https://github.com/apache/datafusion/issues/22263:
+# `%` must be treated as the SQL wildcard, not a literal.
+query B
+SELECT 'abc' SIMILAR TO 'a%';
+----
+true
+
+# `_` matches exactly one character.
+query BB
+SELECT 'abc' SIMILAR TO 'a_c', 'abc' SIMILAR TO 'a_';
+----
+true false
+
+# SIMILAR TO is anchored to the whole string, unlike regex `~`.
+query BB
+SELECT 'abc' SIMILAR TO 'b', 'abc' SIMILAR TO 'abc';
+----
+false true
+
+# `.`, `^`, `$` are literal in SIMILAR TO, not regex metacharacters.
+query BBB
+SELECT 'a.b' SIMILAR TO 'a.b',
+       'axb' SIMILAR TO 'a.b',
+       '^abc$' SIMILAR TO '^abc$';
+----
+true false true
+
+# POSIX regex metacharacters keep their meaning.
+query BBB
+SELECT 'foo' SIMILAR TO '(foo|bar)',
+       'aaaa' SIMILAR TO 'a{2,4}',
+       'abc' SIMILAR TO 'ab+c';
+----
+true true true
+
+# Backslash escapes the SQL wildcards.
+query BB
+SELECT '100%' SIMILAR TO '100\%', 'a_b' SIMILAR TO 'a\_b';
+----
+true true
+
+# NULL pattern yields NULL.
+query B
+SELECT 'abc' SIMILAR TO NULL;
+----
+NULL
+
+# Non-literal patterns are not yet supported (better an error than a wrong answer).
+statement error SIMILAR TO with a non-literal pattern is not yet supported
+SELECT s FROM test WHERE s SIMILAR TO s;
 
 # NOT LIKE
 query T rowsort
