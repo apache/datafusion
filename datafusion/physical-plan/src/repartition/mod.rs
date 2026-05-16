@@ -1645,7 +1645,7 @@ impl RepartitionExec {
                     for batch in output_channel.coalesce(batch)? {
                         if output_channel.send(batch).await.is_err() {
                             // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                            // Only shrink memory if it was a memory batch
+                            // so ignore this channel from now on.
                             output_channels.remove(&partition);
                             break;
                         }
