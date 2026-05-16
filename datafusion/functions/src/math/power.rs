@@ -38,6 +38,17 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use num_traits::{NumCast, ToPrimitive};
 
+/// Matches PostgreSQL: `power(0::float8, negative)` is undefined (IEEE 754 would yield infinity).
+#[inline]
+fn float64_power_checked(base: f64, exp: f64) -> Result<f64, ArrowError> {
+    if base == 0.0 && exp < 0.0 {
+        return Err(ArrowError::ComputeError(
+            "zero raised to a negative power is undefined".to_string(),
+        ));
+    }
+    Ok(base.powf(exp))
+}
+
 #[user_doc(
     doc_section(label = "Math Functions"),
     description = "Returns a base expression raised to the power of an exponent.",
@@ -203,7 +214,7 @@ fn compute_pow_f64_result(
     scale: i8,
     exp: f64,
 ) -> Result<i128, ArrowError> {
-    let result_f64 = base_f64.powf(exp);
+    let result_f64 = float64_power_checked(base_f64, exp)?;
 
     if !result_f64.is_finite() {
         return Err(ArrowError::ArithmeticOverflow(format!(
@@ -382,7 +393,7 @@ fn pow_decimal_with_float_fallback(
     let result_f64 = calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
         &base_f64,
         &ColumnarValue::Array(exp_f64),
-        |b, e| Ok(f64::powf(b, e)),
+        float64_power_checked,
     )?;
 
     let result = cast(result_f64.as_ref(), &original_type)?;
@@ -436,7 +447,7 @@ impl ScalarUDFImpl for PowerFunc {
                 calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
                     &base,
                     exponent,
-                    |b, e| Ok(f64::powf(b, e)),
+                    float64_power_checked,
                 )?
             }
             (DataType::Decimal32(precision, scale), DataType::Int64) => {
@@ -657,5 +668,18 @@ mod tests {
         // Test non-finite exponent returns error
         assert!(pow_decimal_float(100i128, 2, f64::NAN).is_err());
         assert!(pow_decimal_float(100i128, 2, f64::INFINITY).is_err());
+
+        // PostgreSQL: zero to a negative power is undefined
+        assert!(pow_decimal_float(0i128, 2, -1.0).is_err());
+    }
+
+    #[test]
+    fn test_float64_power_checked_zero_negative_exp() {
+        assert_eq!(float64_power_checked(0.0, 1.0).unwrap(), 0.0);
+        assert_eq!(float64_power_checked(2.0, -1.0).unwrap(), 0.5);
+        for base in [0.0f64, -0.0] {
+            assert!(float64_power_checked(base, -1.0).is_err());
+            assert!(float64_power_checked(base, -0.5).is_err());
+        }
     }
 }

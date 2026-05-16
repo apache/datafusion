@@ -742,11 +742,13 @@ SELECT pow(-2, -0.5)
 ----
 NaN
 
-# pow() with zero base and negative exponent (returns Infinity)
-query R
+# pow() with zero base and negative exponent (PostgreSQL: domain error)
+query error DataFusion error: Arrow error: Compute error: zero raised to a negative power is undefined
 SELECT pow(0, -0.5)
-----
-Infinity
+
+# power(0::float8, negative::float8) - issue #22272
+query error DataFusion error: Arrow error: Compute error: zero raised to a negative power is undefined
+SELECT power(0.0::float8, -1.0::float8)
 
 # pow() with integer base of 1 and negative exponent
 query R
