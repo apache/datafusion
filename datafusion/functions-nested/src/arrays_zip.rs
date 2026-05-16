@@ -332,6 +332,9 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
+/// Fast path for regular List inputs whose existing buffers already match the
+/// zipped output: all offsets and values lengths match, and null rows cover no
+/// values. This lets us reuse offsets and child values instead of rebuilding.
 fn try_perfect_list_zip(args: &[ArrayRef]) -> Result<Option<ArrayRef>> {
     let mut list_arrays = Vec::with_capacity(args.len());
     let mut struct_fields = Vec::with_capacity(args.len());
