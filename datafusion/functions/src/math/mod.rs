@@ -31,6 +31,7 @@ pub mod floor;
 pub mod gcd;
 pub mod iszero;
 pub mod lcm;
+pub mod ln;
 pub mod log;
 pub mod monotonicity;
 pub mod nans;
@@ -148,14 +149,7 @@ make_udf_function!(gcd::GcdFunc, gcd);
 make_udf_function!(nans::IsNanFunc, isnan);
 make_udf_function!(iszero::IsZeroFunc, iszero);
 make_udf_function!(lcm::LcmFunc, lcm);
-make_math_unary_udf!(
-    LnFunc,
-    ln,
-    ln,
-    super::ln_order,
-    super::bounds::unbounded_bounds,
-    super::get_ln_doc
-);
+make_udf_function!(ln::LnFunc, ln);
 make_math_unary_udf!(
     Log2Func,
     log2,
