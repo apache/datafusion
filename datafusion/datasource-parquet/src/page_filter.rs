@@ -160,18 +160,18 @@ impl PagePruningAccessPlanFilter {
         parquet_schema: &SchemaDescriptor,
         parquet_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
-    ) -> ParquetAccessPlan {
+    ) -> (ParquetAccessPlan, usize) {
         // scoped timer updates on drop
         let _timer_guard = file_metrics.page_index_eval_time.timer();
         if self.predicates.is_empty() {
-            return access_plan;
+            return (access_plan, 0);
         }
 
         let page_index_predicates = &self.predicates;
         let groups = parquet_metadata.row_groups();
 
         if groups.is_empty() {
-            return access_plan;
+            return (access_plan, 0);
         }
 
         if parquet_metadata.offset_index().is_none()
@@ -182,7 +182,7 @@ impl PagePruningAccessPlanFilter {
                 parquet_metadata.offset_index().is_some(),
                 parquet_metadata.column_index().is_some()
             );
-            return access_plan;
+            return (access_plan, 0);
         };
 
         // track the total number of rows that should be skipped
@@ -193,10 +193,22 @@ impl PagePruningAccessPlanFilter {
         let mut total_pages_skip = 0;
         // track the total number of pages that should not be skipped
         let mut total_pages_select = 0;
+        // track pages for which page-index pruning was skipped because the
+        // containing row group was already proven fully matched by statistics
+        let mut total_pages_skipped_by_fully_matched = 0;
 
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
         for row_group_index in row_group_indexes {
+            // Skip page pruning for fully matched row groups: all rows are
+            // known to satisfy the predicate, so page-level pruning is wasted work.
+            if access_plan.is_fully_matched(row_group_index) {
+                let page_count =
+                    fully_matched_page_count(row_group_index, parquet_metadata);
+                total_pages_skipped_by_fully_matched += page_count;
+
+                continue;
+            }
             // The selection for this particular row group
             let mut overall_selection = None;
 
@@ -211,10 +223,13 @@ impl PagePruningAccessPlanFilter {
                 HashSet::from_iter(0..total_pages_in_group);
 
             for predicate in page_index_predicates {
-                let column = predicate
-                    .required_columns()
-                    .single_column()
-                    .expect("Page pruning requires single column predicates");
+                let Some(column) = predicate.required_columns().single_column() else {
+                    debug!(
+                        "Ignoring multi-column page pruning predicate: {:?}",
+                        predicate.predicate_expr()
+                    );
+                    continue;
+                };
 
                 let converter = StatisticsConverter::try_new(
                     column.name(),
@@ -314,7 +329,7 @@ impl PagePruningAccessPlanFilter {
         file_metrics
             .page_index_pages_pruned
             .add_matched(total_pages_select);
-        access_plan
+        (access_plan, total_pages_skipped_by_fully_matched)
     }
 
     /// Returns the number of filters in the [`PagePruningAccessPlanFilter`]
@@ -331,6 +346,19 @@ fn update_selection(
         None => Some(row_selection),
         Some(current_selection) => Some(current_selection.intersection(&row_selection)),
     }
+}
+
+/// Returns the number of pages for which page-index pruning is skipped because
+/// the containing row group is fully matched by row-group statistics.
+fn fully_matched_page_count(
+    row_group_index: usize,
+    parquet_metadata: &ParquetMetaData,
+) -> usize {
+    parquet_metadata.offset_index().map_or(0, |offset_index| {
+        offset_index[row_group_index]
+            .first()
+            .map_or(0, |column| column.page_locations.len())
+    })
 }
 
 /// Returns a [`RowSelection`] for the rows in this row group to scan, in addition to a vec of

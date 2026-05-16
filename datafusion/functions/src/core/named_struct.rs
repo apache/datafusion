@@ -137,7 +137,7 @@ impl ScalarUDFImpl for NamedStructFunc {
 
         let return_fields = names
             .into_iter()
-            .zip(types.into_iter())
+            .zip(types)
             .map(|(name, data_type)| Ok(Field::new(name, data_type.to_owned(), true)))
             .collect::<Result<Vec<Field>>>()?;
 

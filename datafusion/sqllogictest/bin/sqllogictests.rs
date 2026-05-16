@@ -589,29 +589,16 @@ fn get_record_count(path: &PathBuf, label: String) -> u64 {
     let mut count: u64 = 0;
 
     records.iter().for_each(|rec| match rec {
-        Record::Query { conditions, .. } => {
+        Record::Query { conditions, .. } | Record::Statement { conditions, .. }
             if conditions.is_empty()
                 || !conditions.contains(&Condition::SkipIf {
                     label: label.clone(),
                 })
                 || conditions.contains(&Condition::OnlyIf {
                     label: label.clone(),
-                })
-            {
-                count += 1;
-            }
-        }
-        Record::Statement { conditions, .. } => {
-            if conditions.is_empty()
-                || !conditions.contains(&Condition::SkipIf {
-                    label: label.clone(),
-                })
-                || conditions.contains(&Condition::OnlyIf {
-                    label: label.clone(),
-                })
-            {
-                count += 1;
-            }
+                }) =>
+        {
+            count += 1;
         }
         _ => {}
     });

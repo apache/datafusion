@@ -809,11 +809,8 @@ impl StatisticsProvider for JoinStatisticsProvider {
                     _ => return left_rows.saturating_mul(right_rows),
                 }
             }
-            if ndv_divisor > 0 {
-                left_rows.saturating_mul(right_rows) / ndv_divisor
-            } else {
-                left_rows.saturating_mul(right_rows)
-            }
+            let max_rows = left_rows.saturating_mul(right_rows);
+            max_rows.checked_div(ndv_divisor).unwrap_or(max_rows)
         }
 
         let (inner_estimate, is_exact_cartesian, join_type) = if let Some(hash_join) =

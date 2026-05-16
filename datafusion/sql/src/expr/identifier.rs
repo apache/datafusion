@@ -182,8 +182,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 None => {
                     // Return default where use all identifiers to not have a nested field
-                    // this len check is because at 5 identifiers will have to have a nested field
-                    if ids.len() == 5 {
+                    // this len check is because at 5 or more identifiers will have to have a nested field
+                    if ids.len() >= 5 {
                         not_impl_err!("compound identifier: {ids:?}")
                     } else {
                         // Check the outer_query_schema and try to find a match

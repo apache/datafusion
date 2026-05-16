@@ -1803,6 +1803,19 @@ physical_plan
 07)│     PlaceholderRowExec    │
 08)└───────────────────────────┘
 
+query TT
+EXPLAIN select count(*) from (values ('a', 'b'), ('c', 'd')) as t (c1, c2) order by 1 limit 10
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        count(*): 2        │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│     PlaceholderRowExec    │
+08)└───────────────────────────┘
+
 
 # Test explain for large plans
 

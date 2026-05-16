@@ -841,6 +841,12 @@ SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random()+1 r1, random()+1 
 ----
 false
 
+# Verify that rand() is accepted as an alias for random()
+query TB
+SELECT arrow_typeof(rand()), rand() >= 0 AND rand() < 1
+----
+Float64 true
+
 #######
 # verify that random() returns a different value for each row
 #######

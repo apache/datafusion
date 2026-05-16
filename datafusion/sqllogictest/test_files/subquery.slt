@@ -2187,3 +2187,87 @@ ORDER BY column1;
 
 statement ok
 DROP TABLE subquery_partitioned;
+
+# Regression test: a `count(*)` aggregate wrapping a query whose filter
+# contains an uncorrelated scalar subquery used to be folded to a literal
+# `0` by the `AggregateStatistics` physical-optimizer rule.
+#
+# The chain that triggered it requires Exact source statistics (parquet),
+# a filter the interval analyzer cannot reason about (the scalar subquery)
+# so a small default-selectivity Inexact upper-bound flows out, and a
+# LeftAnti join whose semi-join estimate matches the outer estimate.
+# `Statistics::with_fetch` then incorrectly promoted the resulting
+# `Inexact(0)` to `Exact(0)`, which the count statistics fast-path
+# trusted.
+query I
+COPY (SELECT column1 AS c_custkey,
+             column2 AS c_phone,
+             arrow_cast(column3, 'Decimal128(15, 2)') AS c_acctbal
+      FROM (VALUES (1::BIGINT, '13-a', 10.0),
+                   (2::BIGINT, '17-b', 20.0),
+                   (3::BIGINT, '18-c', 30.0),
+                   (4::BIGINT, '23-d',  5.0),
+                   (5::BIGINT, '29-e', 40.0)))
+TO 'test_files/scratch/subquery/count_scalar_sq/customer.parquet';
+----
+5
+
+query I
+COPY (SELECT column1 AS o_custkey FROM (VALUES (1::BIGINT), (4::BIGINT)))
+TO 'test_files/scratch/subquery/count_scalar_sq/orders.parquet';
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE sq_count_customer
+STORED AS PARQUET
+LOCATION 'test_files/scratch/subquery/count_scalar_sq/customer.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE sq_count_orders
+STORED AS PARQUET
+LOCATION 'test_files/scratch/subquery/count_scalar_sq/orders.parquet';
+
+# Inner query result: 2 distinct cntrycodes survive the filters/anti-join.
+query TIR
+select cntrycode, count(*) as numcust, sum(c_acctbal) as totacctbal
+from (
+    select substring(c_phone from 1 for 2) as cntrycode, c_acctbal
+    from sq_count_customer
+    where c_acctbal > (
+        select avg(c_acctbal) from sq_count_customer where c_acctbal > 0.00
+    )
+      and not exists (
+        select * from sq_count_orders where o_custkey = c_custkey
+      )
+) as custsale
+group by cntrycode
+order by cntrycode;
+----
+18 1 30
+29 1 40
+
+# `count(*)` over the same query must agree with the row count above.
+query I
+select count(*) from (
+    select cntrycode, count(*) as numcust, sum(c_acctbal) as totacctbal
+    from (
+        select substring(c_phone from 1 for 2) as cntrycode, c_acctbal
+        from sq_count_customer
+        where c_acctbal > (
+            select avg(c_acctbal) from sq_count_customer where c_acctbal > 0.00
+        )
+          and not exists (
+            select * from sq_count_orders where o_custkey = c_custkey
+          )
+    ) as custsale
+    group by cntrycode
+) as q;
+----
+2
+
+statement ok
+DROP TABLE sq_count_customer;
+
+statement ok
+DROP TABLE sq_count_orders;

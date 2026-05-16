@@ -2062,6 +2062,16 @@ fn select_where_compound_identifiers() {
 }
 
 #[test]
+fn select_unknown_deep_compound_identifier_returns_error() {
+    let err = logical_plan("SELECT a.b.c.d.e.f")
+        .expect_err("six-part compound identifier should be unsupported");
+    assert_contains!(
+        err.to_string(),
+        "This feature is not implemented: compound identifier: [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"]"
+    );
+}
+
+#[test]
 fn select_order_by_index() {
     let sql = "SELECT id FROM person ORDER BY 1";
     let plan = logical_plan(sql).unwrap();

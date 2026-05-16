@@ -592,38 +592,39 @@ impl PartialOrd for ScalarValue {
         // any newly added enum variant will require editing this list
         // or else face a compile error
         match (self, other) {
-            (Decimal32(v1, p1, s1), Decimal32(v2, p2, s2)) => {
-                if p1.eq(p2) && s1.eq(s2) {
+            (Decimal32(v1, _, s1), Decimal32(v2, _, s2)) => {
+                if s1.eq(s2) {
+                    // Same scale means the underlying integer values share
+                    // a common interpretation regardless of declared
+                    // precision (arithmetic such as `add_checked` widens
+                    // precision by 1 but does not change the numeric
+                    // meaning).
                     v1.partial_cmp(v2)
                 } else {
-                    // Two decimal values can be compared if they have the same precision and scale.
                     None
                 }
             }
             (Decimal32(_, _, _), _) => None,
-            (Decimal64(v1, p1, s1), Decimal64(v2, p2, s2)) => {
-                if p1.eq(p2) && s1.eq(s2) {
+            (Decimal64(v1, _, s1), Decimal64(v2, _, s2)) => {
+                if s1.eq(s2) {
                     v1.partial_cmp(v2)
                 } else {
-                    // Two decimal values can be compared if they have the same precision and scale.
                     None
                 }
             }
             (Decimal64(_, _, _), _) => None,
-            (Decimal128(v1, p1, s1), Decimal128(v2, p2, s2)) => {
-                if p1.eq(p2) && s1.eq(s2) {
+            (Decimal128(v1, _, s1), Decimal128(v2, _, s2)) => {
+                if s1.eq(s2) {
                     v1.partial_cmp(v2)
                 } else {
-                    // Two decimal values can be compared if they have the same precision and scale.
                     None
                 }
             }
             (Decimal128(_, _, _), _) => None,
-            (Decimal256(v1, p1, s1), Decimal256(v2, p2, s2)) => {
-                if p1.eq(p2) && s1.eq(s2) {
+            (Decimal256(v1, _, s1), Decimal256(v2, _, s2)) => {
+                if s1.eq(s2) {
                     v1.partial_cmp(v2)
                 } else {
-                    // Two decimal values can be compared if they have the same precision and scale.
                     None
                 }
             }

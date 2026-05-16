@@ -252,15 +252,14 @@ impl WindowFrame {
             // one column. However, an ORDER BY clause may be absent or have
             // more than one column when the start/end bounds are UNBOUNDED or
             // CURRENT ROW.
-            WindowFrameUnits::Range if self.free_range() => {
+            WindowFrameUnits::Range if self.free_range() && order_by.is_empty() => {
                 // If an ORDER BY clause is absent, it is equivalent to an
                 // ORDER BY clause with constant value as sort key. If an
                 // ORDER BY clause is present but has more than one column,
                 // it is unchanged. Note that this follows PostgreSQL behavior.
-                if order_by.is_empty() {
-                    order_by.push(lit(1u64).sort(true, false));
-                }
+                order_by.push(lit(1u64).sort(true, false));
             }
+            WindowFrameUnits::Range if self.free_range() => {}
             WindowFrameUnits::Range if order_by.len() != 1 => {
                 return plan_err!("RANGE requires exactly one ORDER BY column");
             }

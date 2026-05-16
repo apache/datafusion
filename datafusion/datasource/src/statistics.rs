@@ -261,7 +261,7 @@ impl MinMaxStatistics {
     /// Return a sorted list of the min statistics together with the original indices
     pub fn min_values_sorted(&self) -> Vec<(usize, Row<'_>)> {
         let mut sort: Vec<_> = self.min_by_sort_order.iter().enumerate().collect();
-        sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+        sort.sort_unstable_by_key(|(_, row)| *row);
         sort
     }
 

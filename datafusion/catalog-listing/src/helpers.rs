@@ -267,14 +267,15 @@ fn populate_partition_values<'a>(
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(Column { name, .. }), Expr::Literal(val, _))
-                | (Expr::Literal(val, _), Expr::Column(Column { name, .. })) => {
+                | (Expr::Literal(val, _), Expr::Column(Column { name, .. }))
                     if partition_values
                         .insert(name, PartitionValue::Single(val.to_string()))
-                        .is_some()
-                    {
-                        partition_values.insert(name, PartitionValue::Multi);
-                    }
+                        .is_some() =>
+                {
+                    partition_values.insert(name, PartitionValue::Multi);
                 }
+                (Expr::Column(Column { .. }), Expr::Literal(_, _))
+                | (Expr::Literal(_, _), Expr::Column(Column { .. })) => {}
                 _ => {}
             },
             Operator::And => {

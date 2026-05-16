@@ -877,7 +877,7 @@ where
         } else {
             let averages: Vec<T::Native> = sums
                 .into_iter()
-                .zip(counts.into_iter())
+                .zip(counts)
                 .map(|(sum, count)| (self.avg_fn)(sum, count))
                 .collect::<Result<Vec<_>>>()?;
             PrimitiveArray::new(averages.into(), nulls) // no copy

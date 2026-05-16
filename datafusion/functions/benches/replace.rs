@@ -162,6 +162,36 @@ fn criterion_benchmark(c: &mut Criterion) {
             }
         }
 
+        // Empty-`from` path: insert `to` between every char of the input and at
+        // both ends.
+        if size == 1024 {
+            for &str_len in &[32_usize, 128] {
+                let args = create_args::<i32>(size, str_len, false, 0, 3, 0.0);
+                group.bench_function(
+                    format!("replace_string_empty_from [size={size}, str_len={str_len}]"),
+                    |b| {
+                        b.iter(|| {
+                            let args_cloned = args.clone();
+                            black_box(invoke_replace_with_args(args_cloned, size))
+                        })
+                    },
+                );
+
+                let args = create_args::<i32>(size, str_len, true, 0, 3, 0.0);
+                group.bench_function(
+                    format!(
+                        "replace_string_view_empty_from [size={size}, str_len={str_len}]"
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            let args_cloned = args.clone();
+                            black_box(invoke_replace_with_args(args_cloned, size))
+                        })
+                    },
+                );
+            }
+        }
+
         group.finish();
     }
 }

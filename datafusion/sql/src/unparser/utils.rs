@@ -54,7 +54,12 @@ pub(crate) fn find_agg_node_within_select(
     // Agg nodes explicitly return immediately with a single node
     if let LogicalPlan::Aggregate(agg) = input {
         Some(agg)
-    } else if let LogicalPlan::TableScan(_) = input {
+    } else if matches!(
+        input,
+        LogicalPlan::TableScan(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+    ) {
         None
     } else if let LogicalPlan::Projection(_) = input {
         if already_projected {

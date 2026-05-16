@@ -509,7 +509,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .equal_to_group_indices
             .clear();
 
-        let mut group_values_len = self.group_values[0].len();
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self
                 .map
@@ -518,7 +517,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             let Some((_, group_index_view)) = entry else {
                 // 1. Bucket not found case
                 // Build `new inlined group index view`
-                let current_group_idx = group_values_len;
+                let current_group_idx = self.group_values[0].len()
+                    + self.vectorized_operation_buffers.append_row_indices.len();
                 let group_index_view =
                     GroupIndexView::new_inlined(current_group_idx as u64);
 
@@ -538,7 +538,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 // Set group index to row in `groups`
                 groups[row] = current_group_idx;
 
-                group_values_len += 1;
                 continue;
             };
 

@@ -305,7 +305,7 @@ pub(crate) fn to_substrait_literal(
 
                 let key_values = keys
                     .into_iter()
-                    .zip(values.into_iter())
+                    .zip(values)
                     .map(|(k, v)| {
                         Ok(KeyValue {
                             key: Some(k),

@@ -1554,7 +1554,7 @@ mod tests {
             (Some(true), Some(true)),
             (Some(true), Some(false)),
         ];
-        for (sql, (asc, nulls_first)) in sqls.iter().zip(expected.into_iter()) {
+        for (sql, (asc, nulls_first)) in sqls.iter().zip(expected) {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
                 name: name.clone(),
                 columns: vec![make_column_def("c1", DataType::Int(None))],

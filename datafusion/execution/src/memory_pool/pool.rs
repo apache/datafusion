@@ -500,7 +500,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
                 )
             })
             .collect::<Vec<_>>();
-        consumers.sort_by(|a, b| b.1.cmp(&a.1)); // inverse ordering
+        consumers.sort_by_key(|consumer| std::cmp::Reverse(consumer.1));
 
         consumers[0..std::cmp::min(top, consumers.len())]
             .iter()

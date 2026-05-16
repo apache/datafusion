@@ -467,10 +467,7 @@ fn merges_local_limit_with_local_limit() -> Result<()> {
     let optimized = format_plan(&after_optimize);
     insta::assert_snapshot!(
         optimized,
-        @r"
-    GlobalLimitExec: skip=0, fetch=10
-      EmptyExec
-    "
+        @"EmptyExec"
     );
 
     Ok(())

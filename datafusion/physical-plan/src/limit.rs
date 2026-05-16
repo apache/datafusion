@@ -791,9 +791,12 @@ mod tests {
             row_number_inexact_statistics_for_global_limit(5, Some(10)).await?;
         assert_eq!(row_count, Precision::Inexact(10));
 
+        // Input was Inexact, so an `nr <= skip` outcome must remain Inexact:
+        // the inexact estimate could be wrong, so we cannot promote 0 to
+        // Exact.
         let row_count =
             row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
-        assert_eq!(row_count, Precision::Exact(0));
+        assert_eq!(row_count, Precision::Inexact(0));
 
         let row_count =
             row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;

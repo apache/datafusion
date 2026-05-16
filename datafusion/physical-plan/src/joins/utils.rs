@@ -1451,7 +1451,7 @@ fn append_probe_indices_in_order(
     for (build_index, probe_index) in build_indices
         .values()
         .into_iter()
-        .zip(probe_indices.values().into_iter())
+        .zip(probe_indices.values())
     {
         // Append values between previous and current probe index with null build index:
         for value in prev_index..*probe_index {

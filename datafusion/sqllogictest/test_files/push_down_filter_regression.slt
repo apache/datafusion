@@ -393,7 +393,7 @@ STORED AS PARQUET;
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (3, 6, 90), (8, 12, 110)) AS v(a, b, c)
+  SELECT * FROM (VALUES (1, 6, 90), (8, 12, 110)) AS v(a, b, c)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet'
 STORED AS PARQUET;
 

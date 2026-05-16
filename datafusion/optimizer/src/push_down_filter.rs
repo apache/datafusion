@@ -1248,7 +1248,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for (push, expr) in predicate_push_or_keep
                     .into_iter()
-                    .zip(split_conjunction_owned(filter.predicate).into_iter())
+                    .zip(split_conjunction_owned(filter.predicate))
                 {
                     if !push {
                         keep_predicates.push(expr);

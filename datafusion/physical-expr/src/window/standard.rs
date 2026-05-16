@@ -242,7 +242,7 @@ impl WindowExpr for StandardWindowExpr {
                 // fast path when the result only has a single row
                 row_wise_results[0].to_array()?
             } else {
-                ScalarValue::iter_to_array(row_wise_results.into_iter())?
+                ScalarValue::iter_to_array(row_wise_results)?
             };
 
             state.update(&out_col, partition_batch_state)?;

@@ -59,6 +59,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 - [pow](#pow)
 - [power](#power)
 - [radians](#radians)
+- [rand](#rand)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
@@ -739,6 +740,10 @@ radians(numeric_expression)
 +----------------+
 ```
 
+### `rand`
+
+_Alias of [random](#random)._
+
 ### `random`
 
 Returns a random float value in the range [0, 1).
@@ -758,6 +763,10 @@ random()
 | 0.7389238902938  |
 +------------------+
 ```
+
+#### Aliases
+
+- rand
 
 ### `round`
 

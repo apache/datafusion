@@ -790,7 +790,7 @@ impl DataSink for MemSink {
         }
 
         // write the outputs into the batches
-        for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
+        for (target, mut batches) in self.batches.iter().zip(new_batches) {
             // Append all the new batches in one go to minimize locking overhead
             target.write().await.append(&mut batches);
         }

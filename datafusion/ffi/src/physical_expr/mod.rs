@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub(crate) mod metrics;
 pub(crate) mod partitioning;
 pub(crate) mod sort;
 
