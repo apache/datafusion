@@ -1210,6 +1210,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_filter_statistics_ceil_scalar_fn() -> Result<()> {
+        // Table: x Float64, min=8.0, max=16.0, 100 rows.
+        // Filter: ceil(x) > 12.0
+        //
+        // The range [8.0, 16.0] lies within a single IEEE-754 binade so
+        // Float64 cardinality is proportional to the value range, making
+        // the selectivity estimate predictable.
+        //
+        // With check_support recognising ScalarFunctionExpr and CeilFunc
+        // implementing evaluate_bounds/propagate_constraints the solver
+        // narrows x to roughly [11.0, 16.0]:
+        //   ceil(x) > 12 → x ∈ (11, 16] → conservative [11, 16]
+        //   selectivity ≈ (16−11)/(16−8) = 5/8 = 0.625 → ~62 rows
+        //
+        // Without the fix the estimate stays at 100 (no interval analysis).
+        let schema = Schema::new(vec![Field::new("x", DataType::Float64, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Float64(Some(8.0))),
+                    max_value: Precision::Inexact(ScalarValue::Float64(Some(16.0))),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let x = col("x", &schema)?;
+        let ceil_udf = datafusion_functions::math::ceil();
+        let config = Arc::new(ConfigOptions::new());
+        let ceil_x: Arc<dyn PhysicalExpr> =
+            Arc::new(datafusion_physical_expr::ScalarFunctionExpr::try_new(
+                Arc::clone(&ceil_udf),
+                vec![x],
+                &schema,
+                config,
+            )?);
+        let predicate = binary(ceil_x, Operator::Gt, lit(12.0f64), &schema)?;
+
+        let filter = Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+
+        let num_rows = statistics.num_rows.get_value().copied().unwrap_or(100);
+        // Interval analysis must narrow the estimate below the full 100-row input.
+        assert!(
+            num_rows < 100,
+            "expected interval analysis to narrow row estimate, got {num_rows}"
+        );
+        // The conservative bound is x ∈ [11, 16] out of [8, 16] → ~62 rows.
+        // Allow a generous range to be robust to float-cardinality rounding.
+        assert!(
+            num_rows >= 50,
+            "expected at least 50 rows after ceil(x) > 12.0 on [8,16], got {num_rows}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_filter_statistics_basic_expr() -> Result<()> {
         // Table:
         //      a: min=1, max=100

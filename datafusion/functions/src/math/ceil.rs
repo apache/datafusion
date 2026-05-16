@@ -191,11 +191,66 @@ impl ScalarUDFImpl for CeilFunc {
     }
 
     fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
-        let data_type = inputs[0].data_type();
-        Interval::make_unbounded(&data_type)
+        let [input] = inputs else {
+            return Interval::make_unbounded(&DataType::Float64);
+        };
+        let data_type = input.data_type();
+        match (ceil_scalar(input.lower()), ceil_scalar(input.upper())) {
+            (Some(lo), Some(hi)) => Interval::try_new(lo, hi)
+                .or_else(|_| Interval::make_unbounded(&data_type)),
+            _ => Interval::make_unbounded(&data_type),
+        }
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        let [input_interval] = inputs else {
+            return Ok(Some(vec![]));
+        };
+        // ceil(x) ∈ [N, M] → x ∈ (N−1, M] — conservative closed: [N−1, M]
+        let lo = match interval.lower() {
+            ScalarValue::Float64(Some(n)) if n.is_finite() => {
+                Some(ScalarValue::Float64(Some(n - 1.0)))
+            }
+            ScalarValue::Float32(Some(n)) if n.is_finite() => {
+                Some(ScalarValue::Float32(Some(n - 1.0)))
+            }
+            _ => None,
+        };
+        let hi = match interval.upper() {
+            ScalarValue::Float64(Some(n)) if n.is_finite() => {
+                Some(ScalarValue::Float64(Some(*n)))
+            }
+            ScalarValue::Float32(Some(n)) if n.is_finite() => {
+                Some(ScalarValue::Float32(Some(*n)))
+            }
+            _ => None,
+        };
+        match (lo, hi) {
+            (Some(lo), Some(hi)) => {
+                let constraint = Interval::try_new(lo, hi)?;
+                Ok(input_interval.intersect(constraint)?.map(|r| vec![r]))
+            }
+            _ => Ok(Some(vec![])),
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn ceil_scalar(v: &ScalarValue) -> Option<ScalarValue> {
+    match v {
+        ScalarValue::Float64(Some(f)) if f.is_finite() => {
+            Some(ScalarValue::Float64(Some(f.ceil())))
+        }
+        ScalarValue::Float32(Some(f)) if f.is_finite() => {
+            Some(ScalarValue::Float32(Some(f.ceil())))
+        }
+        _ => None,
     }
 }
