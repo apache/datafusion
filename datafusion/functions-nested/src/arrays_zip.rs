@@ -340,7 +340,7 @@ fn try_perfect_list_zip(args: &[ArrayRef]) -> Result<Option<ArrayRef>> {
         let arr = match arg.data_type() {
             List(field) => {
                 struct_fields.push(Field::new(
-                    format!("{}", i + 1),
+                    (i + 1).to_string(),
                     field.data_type().clone(),
                     true,
                 ));
