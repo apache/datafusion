@@ -282,6 +282,9 @@ impl Stream for ReplayableSpillStream {
             }
             // The stream is exhausted, give the inner state ownership back to `ReplayableStreamSource`
             Poll::Ready(None) => {
+                // Release the input pipeline's resources.
+                let inner_schema = this.inner.schema();
+                this.inner = Box::pin(EmptyRecordBatchStream::new(inner_schema));
                 if let Some(spill_file) = this.spill_file.as_mut() {
                     match spill_file.finish() {
                         Ok(file) => {
