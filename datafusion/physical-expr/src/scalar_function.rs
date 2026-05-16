@@ -302,7 +302,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        self.fun.evaluate_bounds(children)
+        let result = self.fun.evaluate_bounds(children)?;
+        if result.data_type() == DataType::Null {
+            Interval::make_unbounded(self.return_type())
+        } else {
+            Ok(result)
+        }
     }
 
     fn propagate_constraints(
