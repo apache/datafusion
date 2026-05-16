@@ -268,12 +268,9 @@ fn apply_replace<B: BulkNullStringArrayBuilder>(
     }
 
     if from.is_empty() {
-        // Empty `from`: insert `to` before each character and at both ends.
         builder.append_with(|w| {
-            w.write_str(to);
             for ch in string.chars() {
                 w.write_char(ch);
-                w.write_str(to);
             }
         });
         return;
@@ -319,6 +316,19 @@ mod tests {
         test_function!(
             ReplaceFunc::new(),
             vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abc")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::new()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("x")))),
+            ],
+            Ok(Some("abc")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        test_function!(
+            ReplaceFunc::new(),
+            vec![
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
                     "aabbb"
                 )))),
@@ -334,6 +344,19 @@ mod tests {
         test_function!(
             ReplaceFunc::new(),
             vec![
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("abc")))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::new()))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("x")))),
+            ],
+            Ok(Some("abc")),
+            &str,
+            LargeUtf8,
+            LargeStringArray
+        );
+
+        test_function!(
+            ReplaceFunc::new(),
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "aabbbcw"
                 )))),
@@ -341,6 +364,19 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("cc")))),
             ],
             Ok(Some("aaccbcw")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        test_function!(
+            ReplaceFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("abc")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::new()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("x")))),
+            ],
+            Ok(Some("abc")),
             &str,
             Utf8,
             StringArray
