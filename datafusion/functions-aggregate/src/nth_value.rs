@@ -366,7 +366,7 @@ impl NthValueAccumulator {
             let array = if column_values.is_empty() {
                 new_empty_array(fields[i].data_type())
             } else {
-                ScalarValue::iter_to_array(column_values.into_iter())?
+                ScalarValue::iter_to_array(column_values)?
             };
             column_wise_ordering_values.push(array);
         }

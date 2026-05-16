@@ -569,7 +569,7 @@ mod tests {
             .iter()
             .map(|range| evaluator.evaluate(&values, range))
             .collect::<Result<Vec<ScalarValue>>>()?;
-        let result = ScalarValue::iter_to_array(result.into_iter())?;
+        let result = ScalarValue::iter_to_array(result)?;
         let result = as_int32_array(&result)?;
         assert_eq!(expected, *result);
         Ok(())

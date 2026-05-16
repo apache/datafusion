@@ -23,6 +23,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr_common::metrics::MetricsSet;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -32,6 +33,7 @@ use tokio::runtime::Handle;
 
 use crate::config::FFI_ConfigOptions;
 use crate::execution::FFI_TaskContext;
+use crate::physical_expr::metrics::FFI_MetricsSet;
 use crate::plan_properties::FFI_PlanProperties;
 use crate::record_batch_stream::FFI_RecordBatchStream;
 use crate::util::{FFI_Option, FFI_Result};
@@ -67,6 +69,10 @@ pub struct FFI_ExecutionPlan {
         config: FFI_ConfigOptions,
     )
         -> FFI_Result<FFI_Option<FFI_ExecutionPlan>>,
+
+    /// Snapshot the plan's execution metrics. Returns `None` when the
+    /// underlying [`ExecutionPlan::metrics`] returned `None`.
+    pub metrics: unsafe extern "C" fn(plan: &Self) -> FFI_Option<FFI_MetricsSet>,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -179,6 +185,16 @@ unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> SString {
     plan.inner().name().into()
 }
 
+unsafe extern "C" fn metrics_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> FFI_Option<FFI_MetricsSet> {
+    plan.inner()
+        .metrics()
+        .as_ref()
+        .map(FFI_MetricsSet::from)
+        .into()
+}
+
 unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
     unsafe {
         debug_assert!(!plan.private_data.is_null());
@@ -270,6 +286,7 @@ impl FFI_ExecutionPlan {
             name: name_fn_wrapper,
             execute: execute_fn_wrapper,
             repartitioned: repartitioned_fn_wrapper,
+            metrics: metrics_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -431,6 +448,12 @@ impl ExecutionPlan for ForeignExecutionPlan {
             .map(|plan| <Arc<dyn ExecutionPlan>>::try_from(&plan))
             .transpose()
     }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        let ffi: Option<FFI_MetricsSet> =
+            unsafe { (self.plan.metrics)(&self.plan) }.into();
+        ffi.map(MetricsSet::from)
+    }
 }
 
 #[cfg(any(test, feature = "integration-tests"))]
@@ -444,6 +467,7 @@ pub mod tests {
     pub struct EmptyExec {
         props: Arc<PlanProperties>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        metrics: Option<MetricsSet>,
     }
 
     impl EmptyExec {
@@ -456,7 +480,13 @@ pub mod tests {
                     Boundedness::Bounded,
                 )),
                 children: Vec::default(),
+                metrics: None,
             }
+        }
+
+        pub fn with_metrics(mut self, metrics: MetricsSet) -> Self {
+            self.metrics = Some(metrics);
+            self
         }
     }
 
@@ -490,6 +520,7 @@ pub mod tests {
             Ok(Arc::new(EmptyExec {
                 props: Arc::clone(&self.props),
                 children,
+                metrics: self.metrics.clone(),
             }))
         }
 
@@ -499,6 +530,10 @@ pub mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+
+        fn metrics(&self) -> Option<MetricsSet> {
+            self.metrics.clone()
         }
 
         fn apply_expressions(
@@ -583,6 +618,43 @@ pub mod tests {
         let parent_foreign = <Arc<dyn ExecutionPlan>>::try_from(&parent_local)?;
 
         assert_eq!(parent_foreign.children().len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_metrics_round_trip() -> Result<()> {
+        use datafusion_physical_expr_common::metrics::{Count, Metric, MetricValue};
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Float32, false),
+        ]));
+
+        // Plans without metrics still return None across the boundary.
+        let bare_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let mut bare_local = FFI_ExecutionPlan::new(bare_plan, None);
+        bare_local.library_marker_id = crate::mock_foreign_marker_id;
+        let bare_foreign: Arc<dyn ExecutionPlan> = (&bare_local).try_into()?;
+        assert!(bare_foreign.metrics().is_none());
+
+        // Plans with metrics produce equivalent MetricsSets after a round trip.
+        let mut original_metrics = MetricsSet::new();
+        let c0 = Count::new();
+        c0.add(11);
+        original_metrics
+            .push(Arc::new(Metric::new(MetricValue::OutputRows(c0), Some(0))));
+        let c1 = Count::new();
+        c1.add(31);
+        original_metrics
+            .push(Arc::new(Metric::new(MetricValue::OutputRows(c1), Some(1))));
+
+        let metric_plan = Arc::new(EmptyExec::new(schema).with_metrics(original_metrics));
+        let mut metric_local = FFI_ExecutionPlan::new(metric_plan, None);
+        metric_local.library_marker_id = crate::mock_foreign_marker_id;
+        let metric_foreign: Arc<dyn ExecutionPlan> = (&metric_local).try_into()?;
+
+        let observed = metric_foreign.metrics().expect("metrics should be present");
+        assert_eq!(observed.output_rows(), Some(42));
 
         Ok(())
     }
