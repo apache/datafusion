@@ -1268,6 +1268,11 @@ config_namespace! {
         /// operator's built-in `partition_statistics`.
         pub use_statistics_registry: bool, default = false
 
+        /// When set to true, the physical plan optimizer will attempt to push
+        /// partial aggregations below joins when this reduces the number of
+        /// rows flowing into the join (eager aggregation).
+        pub eager_aggregation: bool, default = true
+
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         pub prefer_hash_join: bool, default = true

@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
+use crate::eager_aggregation::EagerAggregation;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
 use crate::ensure_coop::EnsureCooperative;
@@ -160,6 +161,11 @@ impl PhysicalOptimizer {
             // repartitioning and local sorting steps to meet distribution and ordering requirements.
             // Therefore, it should run before EnforceDistribution and EnforceSorting.
             Arc::new(JoinSelection::new()),
+            // The EagerAggregation rule pushes partial aggregations below joins when the
+            // aggregate's fact-side input can be significantly reduced by pre-aggregating
+            // on the join key. Must run after JoinSelection (join types finalized) and
+            // before EnforceDistribution (which adds repartitioning).
+            Arc::new(EagerAggregation::new()),
             // The LimitedDistinctAggregation rule should be applied before the EnforceDistribution rule,
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.

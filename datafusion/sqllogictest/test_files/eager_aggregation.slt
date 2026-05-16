@@ -1,0 +1,114 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for the EagerAggregation physical optimizer rule
+
+# Create test tables simulating a star schema (fact + dimension)
+statement ok
+CREATE TABLE fact_table (
+    dim_key INT,
+    measure1 INT,
+    measure2 DOUBLE
+) AS VALUES
+(1, 10, 1.0), (1, 20, 2.0), (1, 30, 3.0),
+(2, 40, 4.0), (2, 50, 5.0),
+(3, 60, 6.0), (3, 70, 7.0), (3, 80, 8.0), (3, 90, 9.0);
+
+statement ok
+CREATE TABLE dim_table (
+    id INT,
+    name VARCHAR,
+    category VARCHAR
+) AS VALUES
+(1, 'alpha', 'A'),
+(2, 'beta', 'B'),
+(3, 'gamma', 'A');
+
+# Basic test: SUM aggregate over inner join with GROUP BY on dimension columns
+query TIR rowsort
+SELECT d.name, SUM(f.measure1), SUM(f.measure2)
+FROM fact_table f
+INNER JOIN dim_table d ON f.dim_key = d.id
+GROUP BY d.name;
+----
+alpha 60 6
+beta 90 9
+gamma 300 30
+
+# Test: COUNT aggregate
+query TI rowsort
+SELECT d.category, COUNT(f.measure1)
+FROM fact_table f
+INNER JOIN dim_table d ON f.dim_key = d.id
+GROUP BY d.category;
+----
+A 7
+B 2
+
+# Test: MIN/MAX aggregates
+query TIIR rowsort
+SELECT d.name, MIN(f.measure1), MAX(f.measure1), MAX(f.measure2)
+FROM fact_table f
+INNER JOIN dim_table d ON f.dim_key = d.id
+GROUP BY d.name;
+----
+alpha 10 30 3
+beta 40 50 5
+gamma 60 90 9
+
+# Test: Multiple aggregates combined
+query TIIRI rowsort
+SELECT d.category, SUM(f.measure1), MIN(f.measure1), MAX(f.measure2), COUNT(*)
+FROM fact_table f
+INNER JOIN dim_table d ON f.dim_key = d.id
+GROUP BY d.category;
+----
+A 360 10 9 7
+B 90 40 5 2
+
+# Test: Verify optimization is disabled for DISTINCT (should still produce correct results)
+query TI rowsort
+SELECT d.name, COUNT(DISTINCT f.measure1)
+FROM fact_table f
+INNER JOIN dim_table d ON f.dim_key = d.id
+GROUP BY d.name;
+----
+alpha 3
+beta 2
+gamma 4
+
+# Test: Verify LEFT JOIN does NOT trigger optimization (correct results still)
+query TIR rowsort
+SELECT d.name, SUM(f.measure1), SUM(f.measure2)
+FROM dim_table d
+LEFT JOIN fact_table f ON d.id = f.dim_key
+GROUP BY d.name;
+----
+alpha 60 6
+beta 90 9
+gamma 300 30
+
+# Test: Verify optimization works with WHERE clause on dimension
+query TIR rowsort
+SELECT d.name, SUM(f.measure1), SUM(f.measure2)
+FROM fact_table f
+INNER JOIN dim_table d ON f.dim_key = d.id
+WHERE d.category = 'A'
+GROUP BY d.name;
+----
+alpha 60 6
+gamma 300 30
