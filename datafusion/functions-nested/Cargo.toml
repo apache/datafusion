@@ -80,10 +80,6 @@ name = "array_min_max"
 
 [[bench]]
 harness = false
-name = "array_expression"
-
-[[bench]]
-harness = false
 name = "arrays_zip"
 
 [[bench]]
@@ -105,6 +101,10 @@ name = "map"
 [[bench]]
 harness = false
 name = "array_remove"
+
+[[bench]]
+harness = false
+name = "array_replace"
 
 [[bench]]
 harness = false
@@ -133,3 +133,7 @@ name = "string_to_array"
 [[bench]]
 harness = false
 name = "array_resize"
+
+[[bench]]
+harness = false
+name = "array_range"

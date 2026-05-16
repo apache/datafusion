@@ -21,6 +21,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::{
+    ScalarFunctionExpr,
     expressions::{Column, LambdaVariable},
     physical_expr::PhysicalExpr,
 };
@@ -61,11 +62,16 @@ impl Hash for LambdaExpr {
 impl LambdaExpr {
     /// Create a new lambda expression with the given parameters and body
     pub fn try_new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Result<Self> {
-        if all_unique(&params) {
-            Ok(Self::new(params, body))
-        } else {
-            plan_err!("lambda params must be unique, got ({})", params.join(", "))
+        if !all_unique(&params) {
+            return plan_err!(
+                "lambda params must be unique, got ({})",
+                params.join(", ")
+            );
         }
+
+        check_async_udf(&body)?;
+
+        Ok(Self::new(params, body))
     }
 
     fn new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Self {
@@ -179,6 +185,8 @@ impl PhysicalExpr for LambdaExpr {
             );
         };
 
+        check_async_udf(body)?;
+
         Ok(Arc::new(Self::new(self.params.clone(), Arc::clone(body))))
     }
 
@@ -208,6 +216,20 @@ fn all_unique(params: &[String]) -> bool {
             params.iter().all(|p| set.insert(p.as_str()))
         }
     }
+}
+
+fn check_async_udf(body: &Arc<dyn PhysicalExpr>) -> Result<()> {
+    if body.exists(|expr| {
+        Ok(expr
+            .downcast_ref::<ScalarFunctionExpr>()
+            .is_some_and(|udf| udf.fun().as_async().is_some()))
+    })? {
+        return plan_err!(
+            "Async functions in lambdas aren't supported, see https://github.com/apache/datafusion/issues/22091"
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
