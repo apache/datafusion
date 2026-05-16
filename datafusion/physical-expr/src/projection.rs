@@ -2785,15 +2785,15 @@ pub(crate) mod tests {
         let input_stats = get_stats();
         let input_schema = get_schema();
 
-        // Projection with expression: SELECT CAST(col0 AS Int32) AS casted, col1 AS text
+        // Projection with expression: SELECT col0 + 1 AS incremented, col1 AS text
         let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
-                expr: Arc::new(CastExpr::new(
+                expr: Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("col0", 0)),
-                    DataType::Int32,
-                    None,
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
                 )),
-                alias: "casted".to_string(),
+                alias: "incremented".to_string(),
             },
             ProjectionExpr {
                 expr: Arc::new(Column::new("col1", 1)),
@@ -2812,19 +2812,14 @@ pub(crate) mod tests {
         // Should have 2 column statistics
         assert_eq!(output_stats.column_statistics.len(), 2);
 
-        // First column (CAST(col0 AS Int32)) should propagate min/max
-        // cast to the target type.
+        // First column (expression) should have unknown statistics
         assert_eq!(
-            output_stats.column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(-4)))
+            output_stats.column_statistics[0].distinct_count,
+            Precision::Absent
         );
         assert_eq!(
             output_stats.column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(21)))
-        );
-        assert_eq!(
-            output_stats.column_statistics[0].distinct_count,
-            Precision::Exact(5)
+            Precision::Absent
         );
 
         // Second column (col1) should preserve statistics
@@ -2837,23 +2832,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_project_statistics_non_cast_expr_returns_unknown() -> Result<()> {
-        // Non-CAST expressions are not handled; statistics fall back to unknown.
+    fn test_project_statistics_with_cast() -> Result<()> {
         let input_stats = get_stats();
         let input_schema = get_schema();
 
-        // SELECT col0 - CAST(col2 AS Int64) AS delta
+        // Projection with CAST: SELECT CAST(col0 AS Int32) AS casted
         let projection = ProjectionExprs::new(vec![ProjectionExpr {
-            expr: Arc::new(BinaryExpr::new(
+            expr: Arc::new(CastExpr::new(
                 Arc::new(Column::new("col0", 0)),
-                Operator::Minus,
-                Arc::new(CastExpr::new(
-                    Arc::new(Column::new("col2", 2)),
-                    DataType::Int64,
-                    None,
-                )),
+                DataType::Int32,
+                None,
             )),
-            alias: "delta".to_string(),
+            alias: "casted".to_string(),
         }]);
 
         let output_stats = projection.project_statistics(
@@ -2861,13 +2851,14 @@ pub(crate) mod tests {
             &projection.project_schema(&input_schema)?,
         )?;
 
+        // CAST should propagate min/max cast to the target type.
         assert_eq!(
             output_stats.column_statistics[0].min_value,
-            Precision::Absent
+            Precision::Exact(ScalarValue::Int32(Some(-4)))
         );
         assert_eq!(
             output_stats.column_statistics[0].max_value,
-            Precision::Absent
+            Precision::Exact(ScalarValue::Int32(Some(21)))
         );
 
         Ok(())
