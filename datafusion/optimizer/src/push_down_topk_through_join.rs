@@ -58,7 +58,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::utils::{has_all_column_refs, schema_columns};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, Result, internal_err};
 use datafusion_expr::logical_plan::{
     JoinType, LogicalPlan, Projection, Sort as SortPlan, SubqueryAlias,
 };
@@ -73,7 +73,7 @@ use datafusion_expr::{Expr, SortExpr};
 pub struct PushDownTopKThroughJoin;
 
 impl PushDownTopKThroughJoin {
-    #[expect(missing_docs)]
+    /// Create a new `PushDownTopKThroughJoin` rule.
     pub fn new() -> Self {
         Self {}
     }
@@ -156,7 +156,12 @@ impl OptimizerRule for PushDownTopKThroughJoin {
                         sq,
                     )?;
                 }
-                _ => unreachable!(),
+                _ => {
+                    return internal_err!(
+                        "PushDownTopKThroughJoin: unexpected intermediate node: {}",
+                        node.display()
+                    );
+                }
             }
         }
 
@@ -249,7 +254,11 @@ impl OptimizerRule for PushDownTopKThroughJoin {
             if same_exprs {
                 // Tighten existing Sort in-place by rebuilding the path
                 // from preserved child down to the Sort.
-                rebuild_with_tightened_sort(preserved_child.as_ref(), child_sort, fetch)?
+                rebuild_with_tightened_sort(
+                    preserved_child.as_ref(),
+                    &deep_resolved_exprs,
+                    fetch,
+                )?
             } else {
                 // Different exprs — insert new Sort above the preserved child.
                 // If the inner Sort has no fetch, our pushed Sort is the only
@@ -290,7 +299,12 @@ impl OptimizerRule for PushDownTopKThroughJoin {
                 LogicalPlan::SubqueryAlias(sq) => LogicalPlan::SubqueryAlias(
                     SubqueryAlias::try_new(new_sort_input, sq.alias.clone())?,
                 ),
-                _ => unreachable!(),
+                _ => {
+                    return internal_err!(
+                        "PushDownTopKThroughJoin: unexpected intermediate node: {}",
+                        node.display()
+                    );
+                }
             });
         }
 
@@ -310,30 +324,6 @@ impl OptimizerRule for PushDownTopKThroughJoin {
     }
 }
 
-/// Resolve sort expressions through a projection by replacing column
-/// references with the underlying projection expressions.
-///
-/// For example, if sort expr is `b ASC` and projection has `-t1.b AS b`,
-/// the resolved sort expr becomes `-t1.b ASC`.
-///
-/// Before:
-/// ```text
-/// Sort: b ASC, fetch=3
-///   Projection: -t1.b AS b
-///     Join
-///       t1
-///       t2
-/// ```
-///
-/// After resolving, the pushed Sort uses pre-projection expressions:
-/// ```text
-/// Sort: b ASC, fetch=3
-///   Projection: -t1.b AS b
-///     Join
-///       Sort: -t1.b ASC, fetch=3  ← resolved through projection
-///         t1
-///       t2
-/// ```
 /// Replace column references in sort expressions using a name→expr map.
 /// Uses `transform()` for deep replacement (handles nested expressions
 /// like `-t1.b` where the column is inside a Negative wrapper).
@@ -433,9 +423,9 @@ fn resolve_sort_exprs_through_subquery_alias(
     replace_columns_in_sort_exprs(sort_exprs, &replace_map)
 }
 
-/// Rebuild the tree from `root` down to an existing Sort, tightening the
-/// Sort's fetch to `new_fetch`. The path from `root` to the target Sort
-/// may contain Projections and SubqueryAliases.
+/// Rebuild the tree from `root` down to an existing Sort whose expressions
+/// match `target_exprs`, tightening its fetch to `new_fetch`. The path from
+/// `root` to the target Sort may contain Projections and SubqueryAliases.
 ///
 /// Before (new_fetch=2):
 /// ```text
@@ -454,11 +444,11 @@ fn resolve_sort_exprs_through_subquery_alias(
 /// ```
 fn rebuild_with_tightened_sort(
     root: &LogicalPlan,
-    target_sort: &SortPlan,
+    target_exprs: &[SortExpr],
     new_fetch: usize,
 ) -> Result<Arc<LogicalPlan>> {
     match root {
-        LogicalPlan::Sort(s) if std::ptr::eq(s, target_sort) => {
+        LogicalPlan::Sort(s) if sort_exprs_equal(&s.expr, target_exprs) => {
             Ok(Arc::new(LogicalPlan::Sort(SortPlan {
                 expr: s.expr.clone(),
                 input: Arc::clone(&s.input),
@@ -466,20 +456,26 @@ fn rebuild_with_tightened_sort(
             })))
         }
         LogicalPlan::Projection(proj) => {
-            let new_input =
-                rebuild_with_tightened_sort(proj.input.as_ref(), target_sort, new_fetch)?;
+            let new_input = rebuild_with_tightened_sort(
+                proj.input.as_ref(),
+                target_exprs,
+                new_fetch,
+            )?;
             let mut new_proj = proj.clone();
             new_proj.input = new_input;
             Ok(Arc::new(LogicalPlan::Projection(new_proj)))
         }
         LogicalPlan::SubqueryAlias(sq) => {
             let new_input =
-                rebuild_with_tightened_sort(sq.input.as_ref(), target_sort, new_fetch)?;
+                rebuild_with_tightened_sort(sq.input.as_ref(), target_exprs, new_fetch)?;
             Ok(Arc::new(LogicalPlan::SubqueryAlias(
                 SubqueryAlias::try_new(new_input, sq.alias.clone())?,
             )))
         }
-        _ => unreachable!("rebuild_with_tightened_sort: unexpected node"),
+        _ => internal_err!(
+            "rebuild_with_tightened_sort: unexpected node: {}",
+            root.display()
+        ),
     }
 }
 
