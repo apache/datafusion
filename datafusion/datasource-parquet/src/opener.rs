@@ -77,9 +77,7 @@ use parquet::arrow::parquet_column;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
-};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 
 /// Stateless Parquet morselizer implementation.
 ///
@@ -1186,12 +1184,7 @@ impl RowGroupsPrunedParquetOpen {
             // Build a decoder per run.
             let mut decoders = VecDeque::with_capacity(runs.len());
             for run in runs {
-                let prepared_access_plan = prepare_access_plan(
-                    run.access_plan,
-                    rg_metadata,
-                    file_metadata.as_ref(),
-                    prepared.reverse_row_groups,
-                )?;
+                let prepared_access_plan = prepare_access_plan(run.access_plan)?;
                 let mut builder =
                     decoder_config.build(prepared_access_plan, reader_metadata.clone());
                 if run.needs_filter {
@@ -1329,19 +1322,6 @@ impl<'a> RowFilterGenerator<'a> {
             }
         }
     }
-}
-
-fn prepare_access_plan(
-    plan: ParquetAccessPlan,
-    rg_metadata: &[RowGroupMetaData],
-    file_metadata: &ParquetMetaData,
-    reverse_row_groups: bool,
-) -> Result<PreparedAccessPlan> {
-    let mut prepared_access_plan = plan.prepare(rg_metadata)?;
-    if reverse_row_groups {
-        prepared_access_plan = prepared_access_plan.reverse(file_metadata)?;
-    }
-    Ok(prepared_access_plan)
 }
 
 /// State shared while building [`ParquetPushDecoder`]s for one file scan.

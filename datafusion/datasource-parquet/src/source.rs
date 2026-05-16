@@ -486,36 +486,6 @@ impl ParquetSource {
     pub(crate) fn reverse_row_groups(&self) -> bool {
         self.reverse_row_groups
     }
-
-    /// Extract the `(column name, descending)` tuple used by file-level
-    /// reordering, derived from `sort_order_for_reorder` and
-    /// `reverse_row_groups` (both populated by `try_pushdown_sort`).
-    fn extract_topk_sort_info(&self) -> Option<(String, bool)> {
-        let sort_order = self.sort_order_for_reorder.as_ref()?;
-        let first = sort_order.first();
-        let col = first
-            .expr
-            .downcast_ref::<datafusion_physical_expr::expressions::Column>()?;
-        Some((col.name().to_string(), self.reverse_row_groups))
-    }
-
-    /// File's per-column `min` for the reorder key, matching the
-    /// row-group-level `reorder_by_statistics` which also keys off
-    /// `min`. Direction is applied by `reorder_files`'s comparator,
-    /// not by switching to `max` for ASC — see that method for the
-    /// rationale.
-    fn sort_key_for_file(
-        file: &datafusion_datasource::PartitionedFile,
-        col_idx: usize,
-    ) -> Option<datafusion_common::ScalarValue> {
-        let stats = file.statistics.as_ref()?;
-        stats
-            .column_statistics
-            .get(col_idx)?
-            .min_value
-            .get_value()
-            .cloned()
-    }
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
@@ -619,57 +589,16 @@ impl FileSource for ParquetSource {
         }))
     }
 
-    /// Reorder the files in the shared work queue so the most
-    /// "promising" files are read first, matching the strategy of
-    /// `PreparedAccessPlan::reorder_by_statistics` at the row-group
-    /// level: key off the file's `min`, and let the sort direction
-    /// follow the request (ASC by `min` for ASC requests, DESC by
-    /// `min` for DESC requests).
-    ///
-    /// Keeping both layers consistent matters because they share the
-    /// same convergence story for TopK's dynamic filter: file `i`'s
-    /// `min` is a lower bound on every row group inside it, so the
-    /// order chosen here is a natural prefix of the order
-    /// `reorder_by_statistics` will produce within each file.
-    ///
-    /// Files missing statistics sort to the end so present-stats
-    /// files run first.
     fn reorder_files(
         &self,
-        mut files: Vec<datafusion_datasource::PartitionedFile>,
+        files: Vec<datafusion_datasource::PartitionedFile>,
     ) -> Vec<datafusion_datasource::PartitionedFile> {
-        let (col_name, descending) = match self.extract_topk_sort_info() {
-            Some(info) => info,
-            None => return files,
-        };
-
-        let col_idx = match self.table_schema.table_schema().index_of(&col_name) {
-            Ok(idx) => idx,
-            Err(_) => return files,
-        };
-
-        files.sort_by(|a, b| {
-            let key_a = Self::sort_key_for_file(a, col_idx);
-            let key_b = Self::sort_key_for_file(b, col_idx);
-            match (key_a, key_b) {
-                (Some(va), Some(vb)) => {
-                    let cmp = va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal);
-                    if descending { cmp.reverse() } else { cmp }
-                }
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-        });
-
-        log::debug!(
-            "Reordered {} files by min({}) {} for TopK optimization",
-            files.len(),
-            col_name,
-            if descending { "DESC" } else { "ASC" }
-        );
-
-        files
+        crate::sort::reorder_files_by_min_statistics(
+            files,
+            self.sort_order_for_reorder.as_ref(),
+            self.reverse_row_groups,
+            self.table_schema.table_schema(),
+        )
     }
 
     fn table_schema(&self) -> &TableSchema {
