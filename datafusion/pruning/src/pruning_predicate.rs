@@ -1155,8 +1155,16 @@ fn rewrite_expr_to_prunable(
         Ok((left, reverse_operator(op)?, right))
     } else if let Some(not) = column_expr.downcast_ref::<phys_expr::NotExpr>() {
         // `!col = true` --> `col = !true`
-        if op != Operator::Eq && op != Operator::NotEq {
-            return plan_err!("Not with operator other than Eq / NotEq is not supported");
+        if !matches!(
+            op,
+            Operator::Eq
+                | Operator::NotEq
+                | Operator::IsDistinctFrom
+                | Operator::IsNotDistinctFrom
+        ) {
+            return plan_err!(
+                "Not with operator other than Eq / NotEq / IsDistinctFrom / IsNotDistinctFrom is not supported"
+            );
         }
         if not.arg().downcast_ref::<phys_expr::Column>().is_some() {
             let left = Arc::clone(not.arg());
@@ -1193,6 +1201,8 @@ fn is_compare_op(op: Operator) -> bool {
             | Operator::LtEq
             | Operator::Gt
             | Operator::GtEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
             | Operator::LikeMatch
             | Operator::NotLikeMatch
     )
@@ -1616,45 +1626,14 @@ fn build_statistics_expr(
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let statistics_expr: Arc<dyn PhysicalExpr> = match expr_builder.op() {
-        Operator::NotEq => {
-            // column != literal => (min, max) = literal =>
-            // !(min != literal && max != literal) ==>
-            // min != literal || literal != max
-            let min_column_expr = expr_builder.min_column_expr()?;
-            let max_column_expr = expr_builder.max_column_expr()?;
-            Arc::new(phys_expr::BinaryExpr::new(
-                Arc::new(phys_expr::BinaryExpr::new(
-                    min_column_expr,
-                    Operator::NotEq,
-                    Arc::clone(expr_builder.scalar_expr()),
-                )),
-                Operator::Or,
-                Arc::new(phys_expr::BinaryExpr::new(
-                    Arc::clone(expr_builder.scalar_expr()),
-                    Operator::NotEq,
-                    max_column_expr,
-                )),
-            ))
-        }
+        Operator::NotEq => build_ne_statistics_expr(expr_builder)?,
         Operator::Eq => {
             // column = literal => (min, max) = literal => min <= literal && literal <= max
             // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
-            let min_column_expr = expr_builder.min_column_expr()?;
-            let max_column_expr = expr_builder.max_column_expr()?;
-            Arc::new(phys_expr::BinaryExpr::new(
-                Arc::new(phys_expr::BinaryExpr::new(
-                    min_column_expr,
-                    Operator::LtEq,
-                    Arc::clone(expr_builder.scalar_expr()),
-                )),
-                Operator::And,
-                Arc::new(phys_expr::BinaryExpr::new(
-                    Arc::clone(expr_builder.scalar_expr()),
-                    Operator::LtEq,
-                    max_column_expr,
-                )),
-            ))
+            build_eq_statistics_expr(expr_builder)?
         }
+        Operator::IsDistinctFrom => return build_is_distinct_from(expr_builder),
+        Operator::IsNotDistinctFrom => return build_is_not_distinct_from(expr_builder),
         Operator::NotLikeMatch => build_not_like_match(expr_builder)?,
         Operator::LikeMatch => build_like_match(expr_builder).ok_or_else(|| {
             plan_datafusion_err!(
@@ -1702,6 +1681,126 @@ fn build_statistics_expr(
     };
     let statistics_expr = wrap_null_count_check_expr(statistics_expr, expr_builder)?;
     Ok(statistics_expr)
+}
+
+fn binary_expr(
+    left: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    right: Arc<dyn PhysicalExpr>,
+) -> Arc<dyn PhysicalExpr> {
+    Arc::new(phys_expr::BinaryExpr::new(left, op, right))
+}
+
+fn and_expr(
+    left: Arc<dyn PhysicalExpr>,
+    right: Arc<dyn PhysicalExpr>,
+) -> Arc<dyn PhysicalExpr> {
+    binary_expr(left, Operator::And, right)
+}
+
+fn or_expr(
+    left: Arc<dyn PhysicalExpr>,
+    right: Arc<dyn PhysicalExpr>,
+) -> Arc<dyn PhysicalExpr> {
+    binary_expr(left, Operator::Or, right)
+}
+
+fn build_eq_statistics_expr(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let min_column_expr = expr_builder.min_column_expr()?;
+    let max_column_expr = expr_builder.max_column_expr()?;
+    Ok(and_expr(
+        binary_expr(
+            min_column_expr,
+            Operator::LtEq,
+            Arc::clone(expr_builder.scalar_expr()),
+        ),
+        binary_expr(
+            Arc::clone(expr_builder.scalar_expr()),
+            Operator::LtEq,
+            max_column_expr,
+        ),
+    ))
+}
+
+fn build_ne_statistics_expr(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let min_column_expr = expr_builder.min_column_expr()?;
+    let max_column_expr = expr_builder.max_column_expr()?;
+    Ok(or_expr(
+        binary_expr(
+            min_column_expr,
+            Operator::NotEq,
+            Arc::clone(expr_builder.scalar_expr()),
+        ),
+        binary_expr(
+            Arc::clone(expr_builder.scalar_expr()),
+            Operator::NotEq,
+            max_column_expr,
+        ),
+    ))
+}
+
+fn column_has_nulls_expr(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(binary_expr(
+        expr_builder.null_count_column_expr()?,
+        Operator::Gt,
+        Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
+    ))
+}
+
+fn column_has_non_nulls_expr(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(binary_expr(
+        expr_builder.null_count_column_expr()?,
+        Operator::NotEq,
+        expr_builder.row_count_column_expr()?,
+    ))
+}
+
+fn build_is_distinct_from(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let scalar_expr = Arc::clone(expr_builder.scalar_expr());
+
+    Ok(or_expr(
+        and_expr(
+            Arc::new(phys_expr::IsNullExpr::new(Arc::clone(&scalar_expr))),
+            column_has_non_nulls_expr(expr_builder)?,
+        ),
+        and_expr(
+            Arc::new(phys_expr::IsNotNullExpr::new(scalar_expr)),
+            or_expr(
+                column_has_nulls_expr(expr_builder)?,
+                build_ne_statistics_expr(expr_builder)?,
+            ),
+        ),
+    ))
+}
+
+fn build_is_not_distinct_from(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let scalar_expr = Arc::clone(expr_builder.scalar_expr());
+
+    Ok(or_expr(
+        and_expr(
+            Arc::new(phys_expr::IsNullExpr::new(Arc::clone(&scalar_expr))),
+            column_has_nulls_expr(expr_builder)?,
+        ),
+        and_expr(
+            Arc::new(phys_expr::IsNotNullExpr::new(scalar_expr)),
+            and_expr(
+                column_has_non_nulls_expr(expr_builder)?,
+                build_eq_statistics_expr(expr_builder)?,
+            ),
+        ),
+    ))
 }
 
 /// returns the string literal of the scalar value if it is a string
@@ -1920,19 +2019,11 @@ fn wrap_null_count_check_expr(
     statistics_expr: Arc<dyn PhysicalExpr>,
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // x_null_count != x_row_count
-    let not_when_null_count_eq_row_count = Arc::new(phys_expr::BinaryExpr::new(
-        expr_builder.null_count_column_expr()?,
-        Operator::NotEq,
-        expr_builder.row_count_column_expr()?,
-    ));
-
     // (x_null_count != x_row_count) AND (<statistics_expr>)
-    Ok(Arc::new(phys_expr::BinaryExpr::new(
-        not_when_null_count_eq_row_count,
-        Operator::And,
+    Ok(and_expr(
+        column_has_non_nulls_expr(expr_builder)?,
         statistics_expr,
-    )))
+    ))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -1960,7 +2051,7 @@ mod tests {
         datatypes::TimeUnit,
     };
     use datafusion_expr::expr::InList;
-    use datafusion_expr::{Expr, cast, is_null, try_cast};
+    use datafusion_expr::{BinaryExpr, Expr, cast, is_null, try_cast};
     use datafusion_functions_nested::expr_fn::{array_has, make_array};
     use datafusion_physical_expr::expressions::{
         self as phys_expr, DynamicFilterPhysicalExpr,
@@ -3993,6 +4084,90 @@ mod tests {
     }
 
     #[test]
+    fn prune_int32_col_is_not_distinct_from() {
+        let (schema, statistics) = int32_setup();
+
+        // Without null counts, IS NOT DISTINCT FROM a non-null literal can
+        // still use min/max ranges, but unknown all-null containers must be kept.
+        let expected_ret = &[true, false, false, true, false];
+
+        prune_with_expr(
+            is_not_distinct_from(col("i"), lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // The operator is symmetric, so the scalar-left form should prune the
+        // same row groups.
+        prune_with_expr(
+            is_not_distinct_from(lit(0), col("i")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        let statistics = statistics
+            .with_row_counts("i", vec![Some(10), Some(9), None, Some(4), Some(10)])
+            .with_null_counts("i", vec![Some(0), Some(1), None, Some(4), Some(0)]);
+
+        let expected_ret = &[true, false, false, false, false];
+        prune_with_expr(
+            is_not_distinct_from(col("i"), lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        let expected_ret = &[false, true, true, true, false];
+        prune_with_expr(
+            is_not_distinct_from(col("i"), lit(ScalarValue::Int32(None))),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    #[test]
+    fn prune_int32_col_is_distinct_from() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let statistics = TestStatistics::new().with(
+            "i",
+            ContainerStats::new_i32(
+                vec![Some(0), Some(0), Some(5), None],
+                vec![Some(0), Some(2), Some(5), None],
+            )
+            .with_row_counts(vec![Some(2), Some(2), Some(2), Some(2)])
+            .with_null_counts(vec![Some(0), Some(0), Some(0), Some(2)]),
+        );
+
+        let expected_ret = &[false, true, true, true];
+        prune_with_expr(
+            is_distinct_from(col("i"), lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // The operator is symmetric, so the scalar-left form should prune the
+        // same row groups.
+        prune_with_expr(
+            is_distinct_from(lit(0), col("i")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        let expected_ret = &[true, true, true, false];
+        prune_with_expr(
+            is_distinct_from(col("i"), lit(ScalarValue::Int32(None))),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    #[test]
     fn prune_int32_col_eq_zero_cast() {
         let (schema, statistics) = int32_setup();
 
@@ -5379,6 +5554,22 @@ mod tests {
         let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
+    }
+
+    fn is_not_distinct_from(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::IsNotDistinctFrom,
+            Box::new(right),
+        ))
+    }
+
+    fn is_distinct_from(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::IsDistinctFrom,
+            Box::new(right),
+        ))
     }
 
     fn test_build_predicate_expression(

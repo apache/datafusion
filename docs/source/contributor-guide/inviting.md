@@ -95,7 +95,7 @@ Your Name
 [1] LINK TO DISCUSSION THREAD (e.g. https://lists.apache.org/thread/7rocc026wckknrjt9j6bsqk3z4c0g5yf)
 ```
 
-If the vote passes (requires 3 `+1`, and no `-1` voites) , send a result email
+If the vote passes (requires 3 `+1`, and no `-1` votes) , send a result email
 like the following (substitute `N` with the number of `+1` votes)
 
 ```
@@ -296,14 +296,14 @@ Subject: [DISCUSS] $NEW_PMC_MEMBER for PMC
 
 I would like to propose adding $NEW_PMC_MEMBER[1] to the DataFusion PMC.
 
-$NEW_PMC_MEMBMER has been a committer since $COMMITTER_MONTH [2], has a
+$NEW_PMC_MEMBER has been a committer since $COMMITTER_MONTH [2], has a
 strong and sustained contribution record for more than a year, and focused on
 helping the community and the project grow[3].
 
 Are there any thoughts about inviting $NEW_PMC_MEMBER to become a PMC member?
 
 [1] https://github.com/$NEW_PMC_MEMBERS_GITHUB_ACCOUNT
-[2] LINK TO COMMMITER VOTE RESULT THREAD (e.g. https://lists.apache.org/thread/ovgp8z97l1vh0wzjkgn0ktktggomxq9t)
+[2] LINK TO COMMITTER VOTE RESULT THREAD (e.g. https://lists.apache.org/thread/ovgp8z97l1vh0wzjkgn0ktktggomxq9t)
 [3]: https://github.com/apache/datafusion/pulls?q=commenter%3A<$NEW_PMC_MEMBERS_GITHUB_ACCOUNT>+
 
 Thanks,

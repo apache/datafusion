@@ -18,6 +18,7 @@
 //! Defines the spilling functions
 
 pub(crate) mod in_progress_spill_file;
+pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
 
@@ -47,9 +48,10 @@ use arrow::ipc::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow_data::ArrayDataBuilder;
+use arrow_ipc::CompressionType;
 
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::RecordBatchStream;
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -121,6 +123,7 @@ impl SpillReaderStream {
                     unreachable!()
                 };
 
+                let expected_schema = Arc::clone(&self.schema);
                 let task = SpawnedTask::spawn_blocking(move || {
                     let file = BufReader::new(File::open(spill_file.path())?);
                     // SAFETY: DataFusion's spill writer strictly follows Arrow IPC specifications
@@ -130,6 +133,21 @@ impl SpillReaderStream {
                         StreamReader::try_new(file, None)?.with_skip_validation(true)
                     };
 
+                    // Validate the schema read from Arrow IPC file is the same as the
+                    // schema of the current `SpillManager`
+                    let actual_schema = reader.schema();
+
+                    if actual_schema != expected_schema {
+                        return exec_err!(
+                            "Spill file schema mismatch: expected {}, got {}. \
+                            The caller must use the same SpillManager that created the spill file to read it.",
+                            expected_schema,
+                            actual_schema
+                        );
+                    }
+
+                    // TODO: Same-schema reads from a different SpillManager still pass today.
+                    // Add a SpillManager UID to IPC metadata and validate it here as well.
                     let next_batch = reader.next().transpose()?;
 
                     Ok((reader, next_batch))
@@ -273,10 +291,21 @@ struct IPCStreamWriter {
 
 impl IPCStreamWriter {
     /// Create new writer
+    ///
+    /// # Codec contract
+    ///
+    /// `arrow-ipc` must be compiled with the `lz4` and `zstd` features
+    /// (declared explicitly in `datafusion-physical-plan/Cargo.toml`). If
+    /// those features are absent, `try_with_compression` will return an
+    /// error at runtime for [`SpillCompression::Lz4Frame`] and
+    /// [`SpillCompression::Zstd`] variants. The Cargo dependency keeps this
+    /// contract local and build-visible during Cargo feature resolution,
+    /// rather than relying solely on workspace-level feature unification;
+    /// see #21917.
     pub fn new(
         path: &Path,
         schema: &Schema,
-        compression_type: SpillCompression,
+        spill_compression: SpillCompression,
     ) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
             exec_datafusion_err!("(Hint: you may increase the file descriptor limit with shell command 'ulimit -n 4096') Failed to create partition file at {path:?}: {e:?}")
@@ -291,7 +320,8 @@ impl IPCStreamWriter {
         let alignment = get_max_alignment_for_schema(schema);
         let mut write_options =
             IpcWriteOptions::try_new(alignment, false, metadata_version)?;
-        write_options = write_options.try_with_compression(compression_type.into())?;
+        let compression_type = Option::<CompressionType>::from(spill_compression);
+        write_options = write_options.try_with_compression(compression_type)?;
 
         let writer = StreamWriter::try_new_with_options(file, schema, write_options)?;
         Ok(Self {

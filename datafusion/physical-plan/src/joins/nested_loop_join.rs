@@ -79,7 +79,7 @@ use log::debug;
 use parking_lot::Mutex;
 
 use crate::metrics::SpillMetrics;
-use crate::spill::in_progress_spill_file::InProgressSpillFile;
+use crate::spill::replayable_spill_input::ReplayableStreamSource;
 use crate::spill::spill_manager::SpillManager;
 
 #[expect(rustdoc::private_intra_doc_links)]
@@ -177,9 +177,11 @@ use crate::spill::spill_manager::SpillManager;
 /// output partition independently re-executes the left child and manages
 /// its own spill state.
 ///
-/// Currently supports INNER, LEFT, LEFT SEMI, LEFT ANTI, and LEFT MARK
-/// join types. RIGHT/FULL joins require a global right-side bitmap across
-/// all left chunks, which is not yet implemented.
+/// All join types are supported. For RIGHT/FULL/RIGHT SEMI/RIGHT ANTI/
+/// RIGHT MARK joins, a global right-side bitmap (indexed by right batch
+/// sequence number) accumulates matches across all left chunks. After the
+/// last left chunk is processed, the right side is replayed one more time
+/// to emit unmatched right rows using the accumulated bitmap.
 ///
 /// Tracking issue: <https://github.com/apache/datafusion/issues/15760>
 ///
@@ -655,11 +657,23 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
         // Determine if OOM fallback to memory-limited mode is possible.
         // Conditions:
-        // 1. Disk manager supports temp files (needed for right-side spilling)
-        // 2. Join type does not require tracking right-side matched state
-        //    across multiple left chunks (RIGHT/FULL joins not yet supported)
+        // 1. Disk manager supports temp files (needed for spilling).
+        // 2. FULL join with multiple right partitions is not yet supported
+        //    in the fallback path. FULL join needs to track BOTH left-side
+        //    matches (for unmatched left rows) AND right-side matches (for
+        //    unmatched right rows). The fallback path builds a per-partition
+        //    `JoinLeftData` with `probe_threads_counter == 1`, so each
+        //    partition emits unmatched left rows based only on its own
+        //    right-side matches, producing incorrect duplicate output for
+        //    left rows that match in another partition. Other join types
+        //    that need only one-sided final emission (LEFT, LEFT SEMI,
+        //    LEFT ANTI, LEFT MARK) have a similar latent issue in the
+        //    fallback path which predates this change; tracking is out of
+        //    scope for this PR.
+        let full_join_multi_partition =
+            matches!(self.join_type, JoinType::Full) && right_partition_count > 1;
         let spill_state = if context.runtime_env().disk_manager.tmp_files_enabled()
-            && !need_produce_right_in_final(self.join_type)
+            && !full_join_multi_partition
         {
             SpillState::Pending {
                 left_plan: Arc::clone(&self.left),
@@ -871,6 +885,11 @@ enum NLJState {
     ProbeRight,
     EmitRightUnmatched,
     EmitLeftUnmatched,
+    /// Emit unmatched right rows using the global bitmap accumulated across
+    /// all left chunks. Only used in memory-limited mode for join types that
+    /// require tracking right-side matches in the final output (RIGHT, FULL,
+    /// RIGHT SEMI, RIGHT ANTI, RIGHT MARK).
+    EmitGlobalRightUnmatched,
     Done,
 }
 /// Shared data for the left-side spill fallback.
@@ -931,16 +950,49 @@ pub(crate) struct SpillStateActive {
     reservation: MemoryReservation,
     /// Accumulated left batches for the current chunk
     pending_batches: Vec<RecordBatch>,
-    /// SpillManager for right-side spilling
-    right_spill_manager: SpillManager,
-    /// In-progress spill file for writing right batches during first pass
-    right_spill_in_progress: Option<InProgressSpillFile>,
-    /// Completed right-side spill file (available after first pass)
-    right_spill_file: Option<RefCountedTempFile>,
-    /// Max right batch memory size (for read_spill_as_stream)
-    right_max_batch_memory: usize,
-    /// Whether this is the first right-side pass (need to spill while reading)
-    is_first_right_pass: bool,
+    /// Right input that spills on the first pass and replays from spill later.
+    right_input: ReplayableStreamSource,
+    /// Per-batch accumulated right bitmaps across all left chunks.
+    /// Index = right batch sequence number (0-based, non-empty batches only).
+    /// Only populated when `should_track_unmatched_right` is true.
+    global_right_bitmaps: Vec<BooleanBuffer>,
+    /// Separate reservation for `global_right_bitmaps`. These buffers live
+    /// for the full operator lifetime (not per-chunk), so they must be
+    /// tracked separately from `reservation`, which gets `resize(0)`-ed
+    /// between chunks.
+    global_right_bitmaps_reservation: MemoryReservation,
+    /// Current right batch sequence index within the current pass.
+    right_batch_index: usize,
+}
+
+impl SpillStateActive {
+    /// Merge a per-pass right bitmap into the global accumulator at the
+    /// given batch index, growing the dedicated reservation when seeing
+    /// a batch index for the first time.
+    ///
+    /// On first encounter of `idx`, the bitmap is stored as-is and its
+    /// size is reserved. On subsequent encounters (later left chunk
+    /// passes over the same right batch), the existing entry is OR-merged
+    /// with `values`. Because `bitor` produces a buffer of the same bit
+    /// length, the reservation does not need to be adjusted on merge.
+    fn merge_current_right_bitmap(&mut self, idx: usize, values: BooleanBuffer) {
+        if idx >= self.global_right_bitmaps.len() {
+            // First encounter of this right batch — account memory and store.
+            // The bitmap has one bit per right row, so for very large right
+            // inputs the accumulated size can be non-negligible (e.g.,
+            // 1M rows ≈ 125 KB per batch).
+            // Use infallible `grow` because we must accept the bitmap to
+            // preserve correctness — the fallback path has no other recourse.
+            let bytes = values.len().div_ceil(8);
+            self.global_right_bitmaps_reservation.grow(bytes);
+            self.global_right_bitmaps.push(values);
+        } else {
+            // Subsequent left chunk pass — OR merge. Same bit length, so
+            // no reservation adjustment is needed.
+            self.global_right_bitmaps[idx] =
+                self.global_right_bitmaps[idx].bitor(&values);
+        }
+    }
 }
 
 pub(crate) struct NestedLoopJoinStream {
@@ -960,7 +1012,8 @@ pub(crate) struct NestedLoopJoinStream {
     /// type of the join
     pub(crate) join_type: JoinType,
     /// the probe-side(right) table data of the nested loop join
-    pub(crate) right_data: SendableRecordBatchStream,
+    /// `Option` is used because memory-limited path requires resetting it.
+    pub(crate) right_data: Option<SendableRecordBatchStream>,
     /// the build-side table data of the nested loop join
     pub(crate) left_data: OnceFut<JoinLeftData>,
     /// Projection to construct the output schema from the left and right tables.
@@ -1217,6 +1270,25 @@ impl Stream for NestedLoopJoinStream {
                     }
                 }
 
+                // Replay all right batches from spill and emit unmatched
+                // right rows using the global bitmap accumulated across all
+                // left chunks. Only entered in memory-limited mode for join
+                // types where `should_track_unmatched_right` is true
+                // (RIGHT, FULL, RIGHT SEMI, RIGHT ANTI, RIGHT MARK).
+                NLJState::EmitGlobalRightUnmatched => {
+                    debug!("[NLJState] Entering: {:?}", self.state);
+
+                    let join_metric = self.metrics.join_metrics.join_time.clone();
+                    let _join_timer = join_metric.timer();
+
+                    match self.handle_emit_global_right_unmatched(cx) {
+                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Break(poll) => {
+                            return self.metrics.join_metrics.baseline.record_poll(poll);
+                        }
+                    }
+                }
+
                 // The final state and the exit point
                 NLJState::Done => {
                     debug!("[NLJState] Entering: {:?}", self.state);
@@ -1258,7 +1330,7 @@ impl NestedLoopJoinStream {
             output_schema: Arc::clone(&schema),
             join_filter: filter,
             join_type,
-            right_data,
+            right_data: Some(right_data),
             column_indices,
             left_data,
             metrics,
@@ -1355,8 +1427,23 @@ impl NestedLoopJoinStream {
             .with_can_spill(true)
             .register(context.memory_pool());
 
+        // Separate reservation for the global right bitmaps. These buffers
+        // persist across all left chunks, whereas `reservation` is reset
+        // between chunks via `resize(0)`.
+        let global_right_bitmaps_reservation =
+            MemoryConsumer::new("NestedLoopJoinGlobalRightBitmaps".to_string())
+                .register(context.memory_pool());
+
         // Create SpillManager for right-side spilling
-        let right_schema = self.right_data.schema();
+        let right_schema = self
+            .right_data
+            .as_ref()
+            .expect("right_data must be present before fallback")
+            .schema();
+        let right_data = self
+            .right_data
+            .take()
+            .expect("right_data must be present before fallback");
         let right_spill_manager = SpillManager::new(
             context.runtime_env(),
             self.metrics.spill_metrics.clone(),
@@ -1370,11 +1457,14 @@ impl NestedLoopJoinStream {
             left_schema: None,
             reservation,
             pending_batches: Vec::new(),
-            right_spill_manager,
-            right_spill_in_progress: None,
-            right_spill_file: None,
-            right_max_batch_memory: 0,
-            is_first_right_pass: true,
+            right_input: ReplayableStreamSource::new(
+                right_data,
+                right_spill_manager,
+                "NestedLoopJoin right spill",
+            ),
+            global_right_bitmaps: Vec::new(),
+            global_right_bitmaps_reservation,
+            right_batch_index: 0,
         }));
 
         // State stays BufferingLeft — next poll will enter
@@ -1521,6 +1611,12 @@ impl NestedLoopJoinStream {
             }
         }
 
+        // If the left stream is fully exhausted, release its resources so the
+        // upstream pipeline can be torn down before we move on to probing.
+        if self.left_exhausted {
+            active.left_stream = None;
+        }
+
         if active.pending_batches.is_empty() {
             // No data at all — go directly to Done
             self.left_exhausted = true;
@@ -1571,33 +1667,13 @@ impl NestedLoopJoinStream {
 
         self.buffered_left_data = Some(Arc::new(left_data));
 
-        // Set up right-side stream for this pass
-        if !active.is_first_right_pass {
-            if let Some(file) = active.right_spill_file.as_ref() {
-                match active.right_spill_manager.read_spill_as_stream(
-                    file.clone(),
-                    Some(active.right_max_batch_memory),
-                ) {
-                    Ok(stream) => {
-                        self.right_data = stream;
-                    }
-                    Err(e) => {
-                        return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                    }
-                }
+        active.right_batch_index = 0;
+        match active.right_input.open_pass() {
+            Ok(stream) => {
+                self.right_data = Some(stream);
             }
-        } else {
-            // First pass: create InProgressSpillFile for right side
-            match active
-                .right_spill_manager
-                .create_in_progress_file("NestedLoopJoin right spill")
-            {
-                Ok(file) => {
-                    active.right_spill_in_progress = Some(file);
-                }
-                Err(e) => {
-                    return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                }
+            Err(e) => {
+                return ControlFlow::Break(Poll::Ready(Some(Err(e))));
             }
         }
 
@@ -1613,7 +1689,12 @@ impl NestedLoopJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        match self.right_data.poll_next_unpin(cx) {
+        match self
+            .right_data
+            .as_mut()
+            .expect("right_data must be present while fetching right")
+            .poll_next_unpin(cx)
+        {
             Poll::Ready(result) => match result {
                 Some(Ok(right_batch)) => {
                     // Update metrics
@@ -1624,19 +1705,6 @@ impl NestedLoopJoinStream {
                     // Skip the empty batch
                     if right_batch_rows == 0 {
                         return ControlFlow::Continue(());
-                    }
-
-                    // In memory-limited mode, spill right batch to disk on first pass
-                    if let SpillState::Active(ref mut active) = self.spill_state
-                        && active.is_first_right_pass
-                        && let Some(ref mut spill_file) = active.right_spill_in_progress
-                    {
-                        if let Err(e) = spill_file.append_batch(&right_batch) {
-                            return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                        }
-                        active.right_max_batch_memory = active
-                            .right_max_batch_memory
-                            .max(right_batch.get_array_memory_size());
                     }
 
                     self.current_right_batch = Some(right_batch);
@@ -1654,29 +1722,6 @@ impl NestedLoopJoinStream {
                 }
                 Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
                 None => {
-                    // Right stream exhausted.
-                    // In memory-limited mode, finalize the spill file after first pass.
-                    if let SpillState::Active(ref mut active) = self.spill_state
-                        && active.is_first_right_pass
-                    {
-                        if let Some(mut spill_in_progress) =
-                            active.right_spill_in_progress.take()
-                        {
-                            match spill_in_progress.finish() {
-                                Ok(Some(file)) => {
-                                    active.right_spill_file = Some(file);
-                                }
-                                Ok(None) => {
-                                    // No data was spilled (right side was empty)
-                                }
-                                Err(e) => {
-                                    return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                                }
-                            }
-                        }
-                        active.is_first_right_pass = false;
-                    }
-
                     self.state = NLJState::EmitLeftUnmatched;
                     ControlFlow::Continue(())
                 }
@@ -1731,10 +1776,37 @@ impl NestedLoopJoinStream {
         }
     }
 
-    /// Handle EmitRightUnmatched state - emit unmatched right rows
+    /// Handle EmitRightUnmatched state - emit unmatched right rows.
+    ///
+    /// In memory-limited mode, instead of emitting unmatched right rows
+    /// per-batch (which would be incorrect since more left chunks may
+    /// match those rows), we merge the bitmap into the global accumulator
+    /// and defer emission to `EmitGlobalRightUnmatched`.
     fn handle_emit_right_unmatched(
         &mut self,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        // In memory-limited mode, merge bitmap into global and move on
+        if self.is_memory_limited() {
+            debug_assert!(
+                self.current_right_batch_matched.is_some(),
+                "right bitmap must be present"
+            );
+            let bitmap = std::mem::take(&mut self.current_right_batch_matched)
+                .expect("right bitmap should be available");
+            let (values, _nulls) = bitmap.into_parts();
+
+            if let SpillState::Active(ref mut active) = self.spill_state {
+                let idx = active.right_batch_index;
+                active.merge_current_right_bitmap(idx, values);
+                active.right_batch_index += 1;
+            }
+
+            self.current_right_batch = None;
+            self.state = NLJState::FetchingRight;
+            return ControlFlow::Continue(());
+        }
+
+        // Standard (single-pass) mode: emit unmatched right rows immediately
         // Return any completed batches first
         if let Some(poll) = self.maybe_flush_ready_batch() {
             return ControlFlow::Break(poll);
@@ -1745,23 +1817,16 @@ impl NestedLoopJoinStream {
                 && self.current_right_batch.is_some(),
             "This state is yielding output for unmatched rows in the current right batch, so both the right batch and the bitmap must be present"
         );
-        // Construct the result batch for unmatched right rows using a utility function
         match self.process_right_unmatched() {
-            Ok(Some(batch)) => {
-                match self.output_buffer.push_batch(batch) {
-                    Ok(()) => {
-                        // Processed all in one pass
-                        // cleared inside `process_right_unmatched`
-                        debug_assert!(self.current_right_batch.is_none());
-                        self.state = NLJState::FetchingRight;
-                        ControlFlow::Continue(())
-                    }
-                    Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
+            Ok(Some(batch)) => match self.output_buffer.push_batch(batch) {
+                Ok(()) => {
+                    debug_assert!(self.current_right_batch.is_none());
+                    self.state = NLJState::FetchingRight;
+                    ControlFlow::Continue(())
                 }
-            }
+                Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
+            },
             Ok(None) => {
-                // Processed all in one pass
-                // cleared inside `process_right_unmatched`
                 debug_assert!(self.current_right_batch.is_none());
                 self.state = NLJState::FetchingRight;
                 ControlFlow::Continue(())
@@ -1809,6 +1874,17 @@ impl NestedLoopJoinStream {
                         self.left_probe_idx = 0;
                         self.left_emit_idx = 0;
                         self.state = NLJState::BufferingLeft;
+                    } else if self.is_memory_limited()
+                        && self.should_track_unmatched_right
+                    {
+                        // All left chunks done — emit global right unmatched.
+                        // Drop the exhausted right stream so that
+                        // EmitGlobalRightUnmatched opens a fresh replay pass
+                        // from the spill file. (process_left_unmatched_range
+                        // already ran with right_data still set, so its
+                        // schema access is not affected.)
+                        self.right_data = None;
+                        self.state = NLJState::EmitGlobalRightUnmatched;
                     } else {
                         self.state = NLJState::Done;
                     }
@@ -1817,6 +1893,103 @@ impl NestedLoopJoinStream {
                 Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
             },
             Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+        }
+    }
+
+    /// Handle EmitGlobalRightUnmatched state.
+    ///
+    /// Replays all right batches from the spill file and emits unmatched
+    /// right rows using the global bitmap accumulated across all left chunks.
+    fn handle_emit_global_right_unmatched(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        // Flush any completed batches first
+        if let Some(poll) = self.maybe_flush_ready_batch() {
+            return ControlFlow::Break(poll);
+        }
+
+        // On first entry, open a new replay pass on the right input
+        if self.right_data.is_none() {
+            let SpillState::Active(ref mut active) = self.spill_state else {
+                unreachable!("EmitGlobalRightUnmatched without Active spill state");
+            };
+            active.right_batch_index = 0;
+            match active.right_input.open_pass() {
+                Ok(stream) => {
+                    self.right_data = Some(stream);
+                }
+                Err(e) => {
+                    return ControlFlow::Break(Poll::Ready(Some(Err(e))));
+                }
+            }
+        }
+
+        // Poll the replay stream for the next right batch
+        match self
+            .right_data
+            .as_mut()
+            .expect("right_data must be present")
+            .poll_next_unpin(cx)
+        {
+            Poll::Ready(Some(Ok(right_batch))) => {
+                if right_batch.num_rows() == 0 {
+                    return ControlFlow::Continue(());
+                }
+
+                let SpillState::Active(ref mut active) = self.spill_state else {
+                    unreachable!();
+                };
+                let idx = active.right_batch_index;
+                active.right_batch_index += 1;
+
+                // Build BooleanArray from the global bitmap
+                let bitmap = if idx < active.global_right_bitmaps.len() {
+                    BooleanArray::new(active.global_right_bitmaps[idx].clone(), None)
+                } else {
+                    // Batch never seen — treat all rows as unmatched
+                    BooleanArray::new(
+                        BooleanBuffer::new_unset(right_batch.num_rows()),
+                        None,
+                    )
+                };
+
+                let left_schema = Arc::clone(
+                    active
+                        .left_schema
+                        .as_ref()
+                        .expect("left_schema must be set"),
+                );
+
+                match build_unmatched_batch(
+                    &self.output_schema,
+                    &right_batch,
+                    bitmap,
+                    &left_schema,
+                    &self.column_indices,
+                    self.join_type,
+                    JoinSide::Right,
+                ) {
+                    Ok(Some(batch)) => match self.output_buffer.push_batch(batch) {
+                        Ok(()) => ControlFlow::Continue(()),
+                        Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
+                    },
+                    Ok(None) => ControlFlow::Continue(()),
+                    Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+                }
+            }
+            Poll::Ready(Some(Err(e))) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+            Poll::Ready(None) => {
+                // All right batches replayed
+                match self.output_buffer.finish_buffered_batch() {
+                    Ok(()) => {
+                        self.state = NLJState::Done;
+                        ControlFlow::Continue(())
+                    }
+                    Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
+                }
+            }
+            Poll::Pending => ControlFlow::Break(Poll::Pending),
         }
     }
 
@@ -2156,7 +2329,7 @@ impl NestedLoopJoinStream {
             return Ok(None);
         }
 
-        if cur_right_bitmap.true_count() == 0 {
+        if !cur_right_bitmap.has_true() {
             // If none of the pairs has passed the join predicate/filter
             Ok(None)
         } else {
@@ -2257,7 +2430,11 @@ impl NestedLoopJoinStream {
         }
         let bitmap_sliced = BooleanArray::new(bitmap_sliced.finish(), None);
 
-        let right_schema = self.right_data.schema();
+        let right_schema = self
+            .right_data
+            .as_ref()
+            .expect("right_data must be present when building unmatched batch")
+            .schema();
         build_unmatched_batch(
             &self.output_schema,
             &left_batch_sliced,
@@ -2347,11 +2524,8 @@ impl NestedLoopJoinStream {
     ) -> Result<()> {
         let left_data = self.get_left_data()?;
 
-        // number of successfully joined pairs from (l_index x cur_right_batch)
-        let joined_len = r_matched_bitmap.true_count();
-
         // 1. Maybe update the left bitmap
-        if need_produce_result_in_final(self.join_type) && (joined_len > 0) {
+        if need_produce_result_in_final(self.join_type) && r_matched_bitmap.has_true() {
             let mut bitmap = left_data.bitmap().lock();
             bitmap.set_bit(l_index, true);
         }
@@ -2743,7 +2917,7 @@ fn build_unmatched_batch(
                 not(&batch_bitmap)?
             };
 
-            if bitmap.true_count() == 0 {
+            if !bitmap.has_true() {
                 return Ok(None);
             }
 
@@ -3360,6 +3534,10 @@ pub(crate) mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::LeftMark,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::RightMark,
         ];
 
         for join_type in &fallback_join_types {
@@ -3380,34 +3558,24 @@ pub(crate) mod tests {
             .await?;
         }
 
-        // Join types that do NOT support fallback should still OOM.
-        let no_fallback_join_types = vec![
-            JoinType::Right,
-            JoinType::Full,
-            JoinType::RightSemi,
-            JoinType::RightAnti,
-            JoinType::RightMark,
-        ];
-
-        for join_type in &no_fallback_join_types {
-            let runtime = RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
-                .build_arc()?;
-            let task_ctx = TaskContext::default().with_runtime(runtime);
-            let task_ctx = Arc::new(task_ctx);
-
-            let err = multi_partitioned_join_collect(
-                Arc::clone(&left),
-                Arc::clone(&right),
-                join_type,
-                Some(filter.clone()),
-                task_ctx,
-            )
-            .await
-            .unwrap_err();
-
-            assert_contains!(err.to_string(), "Resources exhausted");
-        }
+        // FULL JOIN with multiple right partitions is intentionally not
+        // supported in the fallback path yet (cross-partition left-bitmap
+        // coordination is missing). It should still OOM under tight memory.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(100, 1.0)
+            .build_arc()?;
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+        let err = multi_partitioned_join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            &JoinType::Full,
+            Some(filter.clone()),
+            task_ctx,
+        )
+        .await
+        .unwrap_err();
+        assert_contains!(err.to_string(), "Resources exhausted");
 
         Ok(())
     }
@@ -3621,19 +3789,156 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_nlj_right_join_no_fallback_on_oom() -> Result<()> {
-        // RIGHT JOIN does not support multi-pass fallback (needs global right
-        // bitmap). OOM should propagate as an error.
+    async fn test_nlj_memory_limited_right_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
         let left = build_left_table();
         let right = build_right_table();
         let filter = prepare_join_filter();
 
-        let err = join_collect(left, right, &JoinType::Right, Some(filter), task_ctx)
-            .await
-            .unwrap_err();
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::Right, Some(filter), task_ctx).await?;
 
-        assert_contains!(err.to_string(), "Resources exhausted");
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+        // Verify spill actually occurred
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Right join: all right rows appear. Unmatched right rows get NULLs on left.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+----+----+-----+
+        | a1 | b1 | c1 | a2 | b2 | c2  |
+        +----+----+----+----+----+-----+
+        |    |    |    | 10 | 10 | 100 |
+        |    |    |    | 12 | 10 | 40  |
+        | 5  | 5  | 50 | 2  | 2  | 80  |
+        +----+----+----+----+----+-----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_full_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::Full, Some(filter), task_ctx).await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+        // Verify spill actually occurred
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Full join: unmatched from both sides appear with NULL padding.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+----+----+-----+
+        | a1 | b1 | c1  | a2 | b2 | c2  |
+        +----+----+-----+----+----+-----+
+        |    |    |     | 10 | 10 | 100 |
+        |    |    |     | 12 | 10 | 40  |
+        | 11 | 8  | 110 |    |    |     |
+        | 5  | 5  | 50  | 2  | 2  | 80  |
+        | 9  | 8  | 90  |    |    |     |
+        +----+----+-----+----+----+-----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_right_semi_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::RightSemi, Some(filter), task_ctx)
+                .await?;
+
+        assert_eq!(columns, vec!["a2", "b2", "c2"]);
+
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Right semi: only right rows that matched at least one left row.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+
+        | a2 | b2 | c2 |
+        +----+----+----+
+        | 2  | 2  | 80 |
+        +----+----+----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_right_anti_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::RightAnti, Some(filter), task_ctx)
+                .await?;
+
+        assert_eq!(columns, vec!["a2", "b2", "c2"]);
+
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Right anti: right rows that did NOT match any left row.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+
+        | a2 | b2 | c2  |
+        +----+----+-----+
+        | 10 | 10 | 100 |
+        | 12 | 10 | 40  |
+        +----+----+-----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_right_mark_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::RightMark, Some(filter), task_ctx)
+                .await?;
+
+        assert_eq!(columns, vec!["a2", "b2", "c2", "mark"]);
+
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Right mark: all right rows with a bool column indicating match.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+-------+
+        | a2 | b2 | c2  | mark  |
+        +----+----+-----+-------+
+        | 10 | 10 | 100 | false |
+        | 12 | 10 | 40  | false |
+        | 2  | 2  | 80  | true  |
+        +----+----+-----+-------+
+        "));
         Ok(())
     }
 }

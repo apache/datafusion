@@ -24,9 +24,12 @@ EXPLAIN ANALYZE SELECT * FROM generate_series(100);
 Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 
 # --------------------------------------------
-# Test parquet-only output_rows_skew metric
+# Test parquet-only output_rows_skew metric (WITH ORDER(x) → preserve_order scan)
 # --------------------------------------------
 
+# Parquet supports dynamic work scheduling by default; per-partition data
+# sources might steal work from siblings, making row counts per partition
+# non-deterministic. Forcing `WITH ORDER` disables this behavior.
 statement ok
 set datafusion.explain.analyze_level = dev;
 
@@ -48,6 +51,7 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE skew_parquet
 STORED AS PARQUET
+WITH ORDER (x)
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
 
 # All partition's output_rows: [4]
@@ -70,6 +74,7 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE skew_parquet
 STORED AS PARQUET
+WITH ORDER (x)
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
 
 query TT
@@ -98,6 +103,7 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE skew_parquet
 STORED AS PARQUET
+WITH ORDER (x)
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
 
 query TT
@@ -109,6 +115,7 @@ Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=84.31%<slt:ignore
 statement ok
 CREATE EXTERNAL TABLE skew_parquet_single
 STORED AS PARQUET
+WITH ORDER (x)
 LOCATION 'test_files/scratch/explain_analyze/output_rows_skew/f4.parquet';
 
 query TT
@@ -240,7 +247,7 @@ explain analyze select * from cat_tracking where species > 'M' AND s >= 50 order
 ----
 Plan with Metrics
 01)SortExec: TopK(fetch=3), expr=[species@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[species@0 < Nlpine Sheep], metrics=[output_rows=3]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_pages_pruned=6 total → 6 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=22.13% (521/2.35 K)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_pages_pruned=2 total → 2 matched, page_index_pages_skipped_by_fully_matched=1, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=22.13% (521/2.35 K)]
 
 statement ok
 reset datafusion.explain.analyze_categories;
@@ -255,7 +262,7 @@ explain analyze select * from cat_tracking where species > 'M' AND s >= 50 order
 ----
 Plan with Metrics
 01)SortExec: TopK(fetch=3), expr=[species@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[species@0 < Nlpine Sheep], metrics=[output_rows=3, output_bytes=<slt:ignore>]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_pages_pruned=6 total → 6 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_pages_pruned=2 total → 2 matched, page_index_pages_skipped_by_fully_matched=1, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
 
 statement ok
 reset datafusion.explain.analyze_categories;
@@ -270,7 +277,7 @@ explain analyze select * from cat_tracking where species > 'M' AND s >= 50 order
 ----
 Plan with Metrics
 01)SortExec: TopK(fetch=3), expr=[species@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[species@0 < Nlpine Sheep], metrics=[output_rows=3, output_bytes=<slt:ignore>]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_pages_pruned=6 total → 6 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain_analyze/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_pages_pruned=2 total → 2 matched, page_index_pages_skipped_by_fully_matched=1, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
 
 statement ok
 reset datafusion.explain.analyze_categories;

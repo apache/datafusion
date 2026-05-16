@@ -23,7 +23,7 @@ use crate::protobuf_common::{
     EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::csv::WriterBuilder;
+use arrow::csv::{QuoteStyle, WriterBuilder};
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     SchemaRef, TimeUnit, UnionMode,
@@ -31,6 +31,7 @@ use arrow::datatypes::{
 use arrow::ipc::writer::{
     CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
 };
+use datafusion_common::parsers::CsvQuoteStyle;
 use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics,
@@ -171,6 +172,14 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::LargeList(item_type) => Self::LargeList(Box::new(protobuf::List {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
+            DataType::ListView(item_type) => Self::ListView(Box::new(protobuf::List {
+                field_type: Some(Box::new(item_type.as_ref().try_into()?)),
+            })),
+            DataType::LargeListView(item_type) => {
+                Self::LargeListView(Box::new(protobuf::List {
+                    field_type: Some(Box::new(item_type.as_ref().try_into()?)),
+                }))
+            }
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
                 sub_field_types: convert_arc_fields_to_proto_fields(struct_fields)?,
             }),
@@ -226,11 +235,6 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     run_ends_field: Some(Box::new(run_ends_field.as_ref().try_into()?)),
                     values_field: Some(Box::new(values_field.as_ref().try_into()?)),
                 }))
-            }
-            DataType::ListView(_) | DataType::LargeListView(_) => {
-                return Err(Error::General(format!(
-                    "Proto serialization error: {val} not yet supported"
-                )));
             }
         };
 
@@ -381,6 +385,12 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
             ScalarValue::FixedSizeList(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::ListView(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::LargeListView(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
             ScalarValue::Struct(arr) => {
@@ -843,6 +853,29 @@ impl From<&CompressionTypeVariant> for protobuf::CompressionTypeVariant {
     }
 }
 
+impl From<CsvQuoteStyle> for protobuf::CsvQuoteStyle {
+    fn from(value: CsvQuoteStyle) -> Self {
+        match value {
+            CsvQuoteStyle::Necessary => Self::Necessary,
+            CsvQuoteStyle::Always => Self::Always,
+            CsvQuoteStyle::NonNumeric => Self::NonNumeric,
+            CsvQuoteStyle::Never => Self::Never,
+        }
+    }
+}
+
+impl From<QuoteStyle> for protobuf::CsvQuoteStyle {
+    fn from(value: QuoteStyle) -> Self {
+        match value {
+            QuoteStyle::Necessary => Self::Necessary,
+            QuoteStyle::Always => Self::Always,
+            QuoteStyle::NonNumeric => Self::NonNumeric,
+            QuoteStyle::Never => Self::Never,
+            _ => Self::Necessary,
+        }
+    }
+}
+
 impl TryFrom<&CsvWriterOptions> for protobuf::CsvWriterOptions {
     type Error = DataFusionError;
 
@@ -986,6 +1019,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
 
     fn try_from(opts: &CsvOptions) -> datafusion_common::Result<Self, Self::Error> {
         let compression: protobuf::CompressionTypeVariant = opts.compression.into();
+        let quote_style: protobuf::CsvQuoteStyle = opts.quote_style.into();
         Ok(protobuf::CsvOptions {
             has_header: opts.has_header.map_or_else(Vec::new, |h| vec![h as u8]),
             delimiter: vec![opts.delimiter],
@@ -1008,6 +1042,13 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
             truncated_rows: opts.truncated_rows.map_or_else(Vec::new, |h| vec![h as u8]),
             compression_level: opts.compression_level,
+            quote_style: quote_style.into(),
+            ignore_leading_whitespace: opts
+                .ignore_leading_whitespace
+                .map_or_else(Vec::new, |h| vec![h as u8]),
+            ignore_trailing_whitespace: opts
+                .ignore_trailing_whitespace
+                .map_or_else(Vec::new, |h| vec![h as u8]),
         })
     }
 }
@@ -1042,8 +1083,8 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-// Nested ScalarValue types (List / FixedSizeList / LargeList / Struct / Map) are serialized using
-// Arrow IPC messages as a single column RecordBatch
+// Nested ScalarValue types (List / FixedSizeList / LargeList / ListView / LargeListView / Struct / Map)
+// are serialized using Arrow IPC messages as a single column RecordBatch
 fn encode_scalar_nested_value(
     arr: ArrayRef,
     val: &ScalarValue,
@@ -1105,6 +1146,16 @@ fn encode_scalar_nested_value(
                 scalar_list_value,
             )),
         }),
+        ScalarValue::ListView(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::ListViewValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::LargeListView(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::LargeListViewValue(
+                scalar_list_value,
+            )),
+        }),
         ScalarValue::Struct(_) => Ok(protobuf::ScalarValue {
             value: Some(protobuf::scalar_value::Value::StructValue(
                 scalar_list_value,
@@ -1135,6 +1186,7 @@ pub(crate) fn csv_writer_options_to_proto(
     compression: &CompressionTypeVariant,
 ) -> protobuf::CsvWriterOptions {
     let compression: protobuf::CompressionTypeVariant = compression.into();
+    let quote_style: protobuf::CsvQuoteStyle = csv_options.quote_style().into();
     protobuf::CsvWriterOptions {
         compression: compression.into(),
         delimiter: (csv_options.delimiter() as char).to_string(),
@@ -1147,5 +1199,8 @@ pub(crate) fn csv_writer_options_to_proto(
         quote: (csv_options.quote() as char).to_string(),
         escape: (csv_options.escape() as char).to_string(),
         double_quote: csv_options.double_quote(),
+        quote_style: quote_style.into(),
+        ignore_leading_whitespace: csv_options.ignore_leading_whitespace(),
+        ignore_trailing_whitespace: csv_options.ignore_trailing_whitespace(),
     }
 }

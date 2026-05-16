@@ -24,8 +24,10 @@ use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
-use datafusion_physical_expr::PhysicalExprSimplifier;
-use datafusion_physical_expr::expressions::NotExpr;
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::{BinaryExpr, IsNullExpr, NotExpr};
+use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprSimplifier};
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::basic::Type;
@@ -43,20 +45,13 @@ use parquet::{bloom_filter::Sbbf, file::metadata::RowGroupMetaData};
 pub struct RowGroupAccessPlanFilter {
     /// which row groups should be accessed
     access_plan: ParquetAccessPlan,
-    /// Row groups where ALL rows are known to match the pruning predicate
-    /// (the predicate does not filter any rows)
-    is_fully_matched: Vec<bool>,
 }
 
 impl RowGroupAccessPlanFilter {
     /// Create a new `RowGroupPlanBuilder` for pruning out the groups to scan
     /// based on metadata and statistics
     pub fn new(access_plan: ParquetAccessPlan) -> Self {
-        let num_row_groups = access_plan.len();
-        Self {
-            access_plan,
-            is_fully_matched: vec![false; num_row_groups],
-        }
+        Self { access_plan }
     }
 
     /// Return true if there are no row groups
@@ -74,14 +69,14 @@ impl RowGroupAccessPlanFilter {
         self.access_plan.row_group_index_iter()
     }
 
-    /// Returns the inner access plan
+    /// Returns the inner access plan.
     pub fn build(self) -> ParquetAccessPlan {
         self.access_plan
     }
 
-    /// Returns the is_fully_matched vector
+    /// Returns the is_fully_matched vector.
     pub fn is_fully_matched(&self) -> &Vec<bool> {
-        &self.is_fully_matched
+        self.access_plan.fully_matched()
     }
 
     /// Prunes the access plan based on the limit and fully contained row groups.
@@ -184,7 +179,7 @@ impl RowGroupAccessPlanFilter {
         // Iterate through the currently accessible row groups and try to
         // find a set of matching row groups that can satisfy the limit
         for &idx in self.access_plan.row_group_indexes().iter() {
-            if self.is_fully_matched[idx] {
+            if self.access_plan.is_fully_matched(idx) {
                 let row_group_row_count = rg_metadata[idx].num_rows() as usize;
                 fully_matched_row_group_indexes.push(idx);
                 fully_matched_rows_count += row_group_row_count;
@@ -207,6 +202,7 @@ impl RowGroupAccessPlanFilter {
             let mut new_access_plan = ParquetAccessPlan::new_none(rg_metadata.len());
             for &idx in &fully_matched_row_group_indexes {
                 new_access_plan.scan(idx);
+                new_access_plan.mark_fully_matched(idx);
             }
             self.access_plan = new_access_plan;
         }
@@ -272,6 +268,11 @@ impl RowGroupAccessPlanFilter {
             parquet_schema,
             row_group_metadatas,
             arrow_schema,
+            // Preserve the existing row-group pruning behavior. This path only
+            // proves whether matching rows may exist, so it uses the
+            // StatisticsConverter default for older parquet-rs files where a
+            // missing null count can mean there are zero nulls.
+            missing_null_counts_as_zero: true,
         };
 
         // try to prune the row groups in a single call
@@ -327,10 +328,33 @@ impl RowGroupAccessPlanFilter {
             return;
         }
 
-        // Use NotExpr to create the inverted predicate
-        let inverted_expr = Arc::new(NotExpr::new(Arc::clone(predicate.orig_expr())));
+        let mut inverted_expr: Arc<dyn PhysicalExpr> =
+            Arc::new(NotExpr::new(Arc::clone(predicate.orig_expr())));
 
-        // Simplify the NOT expression (e.g., NOT(c1 = 0) -> c1 != 0)
+        // Rows where the predicate evaluates to NULL do not pass the filter.
+        // Include NULL checks in the inverted expression so a row group is only
+        // considered fully matched when every referenced column is known non-null.
+        // This is conservative for null-accepting predicates, but fully matched
+        // row groups must not have false positives.
+        let mut columns = collect_columns(predicate.orig_expr())
+            .into_iter()
+            .filter(|column| arrow_schema.field(column.index()).is_nullable())
+            .collect::<Vec<_>>();
+        columns.sort_by(|a, b| {
+            a.index()
+                .cmp(&b.index())
+                .then_with(|| a.name().cmp(b.name()))
+        });
+
+        for column in columns {
+            inverted_expr = Arc::new(BinaryExpr::new(
+                inverted_expr,
+                Operator::Or,
+                Arc::new(IsNullExpr::new(Arc::new(column))),
+            ));
+        }
+
+        // Simplify the inverted expression (e.g., NOT(c1 = 0) -> c1 != 0)
         // before building the pruning predicate
         let simplifier = PhysicalExprSimplifier::new(arrow_schema);
         let Ok(inverted_expr) = simplifier.simplify(inverted_expr) else {
@@ -350,6 +374,11 @@ impl RowGroupAccessPlanFilter {
                 .map(|&i| &groups[i])
                 .collect::<Vec<_>>(),
             arrow_schema,
+            // Fully matched row groups require a stronger proof: every row
+            // must pass the predicate. Missing null counts are unknown here;
+            // treating them as zero can incorrectly mark nullable row groups as
+            // fully matched and make limit pruning unsound.
+            missing_null_counts_as_zero: false,
         };
 
         let Ok(inverted_values) = inverted_predicate.prune(&inverted_pruning_stats)
@@ -362,7 +391,7 @@ impl RowGroupAccessPlanFilter {
             // If the inverted predicate *also* prunes this row group (meaning inverted_values[i] is false),
             // it implies that *all* rows in this group satisfy the original predicate.
             if !inverted_values[i] {
-                self.is_fully_matched[original_row_group_idx] = true;
+                self.access_plan.mark_fully_matched(original_row_group_idx);
                 metrics.row_groups_pruned_statistics.add_fully_matched(1);
             }
         }
@@ -582,6 +611,7 @@ struct RowGroupPruningStatistics<'a> {
     parquet_schema: &'a SchemaDescriptor,
     row_group_metadatas: Vec<&'a RowGroupMetaData>,
     arrow_schema: &'a Schema,
+    missing_null_counts_as_zero: bool,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {
@@ -598,7 +628,8 @@ impl<'a> RowGroupPruningStatistics<'a> {
             &column.name,
             self.arrow_schema,
             self.parquet_schema,
-        )?)
+        )?
+        .with_missing_null_counts_as_zero(self.missing_null_counts_as_zero))
     }
 }
 
@@ -765,6 +796,65 @@ mod tests {
             &metrics,
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]))
+    }
+
+    #[test]
+    fn row_group_fully_matched_requires_known_non_null_predicate_columns() {
+        use datafusion_expr::{col, lit};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let expr = logical2physical(&col("c1").gt(lit(15)), &schema);
+        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
+        let schema_descr = get_test_schema_descr(vec![field]);
+
+        // All three row groups have non-null values in the predicate range,
+        // so none are pruned. Only the second row group can be proven fully
+        // matched because it is the only one with a known zero null count.
+        let rg_with_null = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::int32(
+                Some(16),
+                Some(20),
+                None,
+                Some(1),
+                false,
+            )],
+        );
+        let rg_without_null = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::int32(
+                Some(16),
+                Some(20),
+                None,
+                Some(0),
+                false,
+            )],
+        );
+        let rg_unknown_null_count = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::int32(
+                Some(16),
+                Some(20),
+                None,
+                None,
+                false,
+            )],
+        );
+
+        let metrics = parquet_file_metrics();
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &[rg_with_null, rg_without_null, rg_unknown_null_count],
+            &pruning_predicate,
+            &metrics,
+        );
+
+        assert_eq!(row_groups.access_plan.row_group_indexes(), vec![0, 1, 2]);
+        assert_eq!(row_groups.is_fully_matched(), &vec![false, true, false]);
     }
 
     #[test]

@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, Int64Array, PrimitiveArray,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, BooleanArray, Int64Array,
+    PrimitiveArray,
     builder::PrimitiveBuilder,
     cast::AsArray,
     types::{Float64Type, Int64Type},
@@ -30,6 +31,9 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
     Signature, TypeSignatureClass, Volatility,
+};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
+    filtered_null_mask, set_nulls,
 };
 use std::sync::Arc;
 
@@ -248,7 +252,7 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&arrow::array::BooleanArray>,
+        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
@@ -285,26 +289,26 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&arrow::array::BooleanArray>,
+        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
         // first batch is partial sums, second is counts
         let partial_sums = values[0].as_primitive::<T>();
         let partial_counts = values[1].as_primitive::<Int64Type>();
-        // update counts with partial counts
-        self.counts.resize(total_num_groups, 0);
-        let iter1 = group_indices.iter().zip(partial_counts.values().iter());
-        for (&group_index, &partial_count) in iter1 {
-            self.counts[group_index] += partial_count;
-        }
 
-        // update sums
+        self.counts.resize(total_num_groups, 0);
         self.sums.resize(total_num_groups, T::default_value());
-        let iter2 = group_indices.iter().zip(partial_sums.values().iter());
-        for (&group_index, &new_value) in iter2 {
+
+        for (idx, &group_index) in group_indices.iter().enumerate() {
+            // Skip null state entries emitted by convert_to_state for
+            // filtered / null input rows.
+            if partial_counts.is_null(idx) || partial_sums.is_null(idx) {
+                continue;
+            }
+            self.counts[group_index] += partial_counts.value(idx);
             let sum = &mut self.sums[group_index];
-            *sum = sum.add_wrapping(new_value);
+            *sum = sum.add_wrapping(partial_sums.value(idx));
         }
 
         Ok(())
@@ -343,7 +347,149 @@ where
         ])
     }
 
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let sums = values[0]
+            .as_primitive::<T>()
+            .clone()
+            .with_data_type(self.return_data_type.clone());
+        let counts = Int64Array::from_value(1, sums.len());
+
+        let nulls = filtered_null_mask(opt_filter, &sums);
+        let counts = set_nulls(counts, nulls.clone());
+        let sums = set_nulls(sums, nulls);
+
+        // [sum, count] - must match state() and merge_batch()
+        Ok(vec![
+            Arc::new(sums) as ArrayRef,
+            Arc::new(counts) as ArrayRef,
+        ])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<i64>() + self.sums.capacity() * size_of::<T>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Float64Array;
+
+    fn make_acc() -> AvgGroupsAccumulator<Float64Type, impl Fn(f64, i64) -> Result<f64>> {
+        AvgGroupsAccumulator::<Float64Type, _>::new(&DataType::Float64, |sum, count| {
+            Ok(sum / count as f64)
+        })
+    }
+
+    #[test]
+    fn supports_convert_to_state() {
+        assert!(make_acc().supports_convert_to_state());
+    }
+
+    #[test]
+    fn convert_to_state_basic() {
+        let acc = make_acc();
+        let values: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]))];
+        let state = acc.convert_to_state(&values, None).unwrap();
+
+        assert_eq!(state.len(), 2);
+        let sums = state[0].as_primitive::<Float64Type>();
+        let counts = state[1].as_primitive::<Int64Type>();
+
+        assert_eq!(sums.values().as_ref(), &[1.0, 2.0, 3.0]);
+        assert_eq!(counts.values().as_ref(), &[1, 1, 1]);
+        assert_eq!(sums.null_count(), 0);
+        assert_eq!(counts.null_count(), 0);
+    }
+
+    #[test]
+    fn convert_to_state_with_nulls() {
+        let acc = make_acc();
+        let values: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(3.0),
+        ]))];
+        let state = acc.convert_to_state(&values, None).unwrap();
+
+        let sums = state[0].as_primitive::<Float64Type>();
+        let counts = state[1].as_primitive::<Int64Type>();
+
+        assert!(!sums.is_null(0));
+        assert!(sums.is_null(1));
+        assert!(!sums.is_null(2));
+
+        assert_eq!(counts.value(0), 1);
+        assert!(counts.is_null(1));
+        assert_eq!(counts.value(2), 1);
+    }
+
+    #[test]
+    fn convert_to_state_with_filter() {
+        let acc = make_acc();
+        let values: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]))];
+        let filter = BooleanArray::from(vec![true, false, true]);
+        let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
+
+        let sums = state[0].as_primitive::<Float64Type>();
+        let counts = state[1].as_primitive::<Int64Type>();
+
+        assert!(!sums.is_null(0));
+        assert!(sums.is_null(1));
+        assert!(!sums.is_null(2));
+
+        assert_eq!(counts.value(0), 1);
+        assert!(counts.is_null(1));
+        assert_eq!(counts.value(2), 1);
+    }
+
+    #[test]
+    fn convert_to_state_roundtrips_through_merge() {
+        let mut acc = make_acc();
+        let input: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0]))];
+        let state = acc.convert_to_state(&input, None).unwrap();
+
+        // feed the converted state back through merge_batch
+        acc.merge_batch(
+            &state,
+            &[0, 0, 0],
+            None,
+            1, // single group
+        )
+        .unwrap();
+
+        let result = acc.evaluate(EmitTo::All).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert_eq!(result.value(0), 20.0); // (10+20+30)/3
+    }
+
+    #[test]
+    fn convert_to_state_null_merge_matches_direct() {
+        // avg([1.0, NULL, 3.0]) must be 2.0 after a convert_to_state → merge_batch
+        // round-trip. Before the merge-path null fix this leaked the backing
+        // buffer value at the null slot and produced the wrong average.
+        let mut acc = make_acc();
+        let input: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(3.0),
+        ]))];
+        let state = acc.convert_to_state(&input, None).unwrap();
+        acc.merge_batch(&state, &[0, 0, 0], None, 1).unwrap();
+
+        let result = acc.evaluate(EmitTo::All).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert_eq!(result.value(0), 2.0);
     }
 }

@@ -43,6 +43,7 @@ pub mod diagnostic;
 pub mod display;
 pub mod encryption;
 pub mod error;
+pub mod extensions;
 pub mod file_options;
 pub mod format;
 pub mod hash_utils;
@@ -114,6 +115,7 @@ pub type HashMap<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<K, V, S>;
 pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
 pub mod hash_map {
     pub use hashbrown::hash_map::Entry;
+    pub use hashbrown::hash_map::EntryRef;
 }
 pub mod hash_set {
     pub use hashbrown::hash_set::Entry;

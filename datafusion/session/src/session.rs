@@ -23,7 +23,9 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::registry::ExtensionTypeRegistryRef;
-use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
+};
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use parking_lot::{Mutex, RwLock};
 use std::any::Any;
@@ -111,6 +113,9 @@ pub trait Session: Send + Sync {
     /// Return reference to scalar_functions
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>>;
 
+    /// Return reference to higher_order_functions
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>>;
+
     /// Return reference to aggregate_functions
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>>;
 
@@ -153,6 +158,7 @@ impl From<&dyn Session> for TaskContext {
             state.session_id().to_string(),
             state.config().clone(),
             state.scalar_functions().clone(),
+            state.higher_order_functions().clone(),
             state.aggregate_functions().clone(),
             state.window_functions().clone(),
             Arc::clone(state.runtime_env()),
