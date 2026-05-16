@@ -207,8 +207,11 @@ mod tests {
     use crate::expressions::{Column, Literal};
     use crate::scalar_function::ScalarFunctionExpr;
     use arrow::datatypes::{Field, Schema};
-    use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{
+        ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    };
 
     fn f64_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, false)]))
@@ -241,6 +244,48 @@ mod tests {
         ))
     }
 
+    /// A minimal UDF whose declared return type is Utf8, used to test that
+    /// check_support rejects functions with unsupported return types without
+    /// relying on an invalid ceil-returns-Utf8 combination.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct Utf8UDF {
+        signature: Signature,
+    }
+
+    impl Utf8UDF {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for Utf8UDF {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "utf8_udf"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+        fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+        }
+    }
+
+    fn utf8_udf() -> Arc<datafusion_expr::ScalarUDF> {
+        Arc::new(datafusion_expr::ScalarUDF::from(Utf8UDF::new()))
+    }
+
     #[test]
     fn test_check_support_scalar_fn_supported_return_type() {
         // ceil(x) returns Float64 — both return type and child are supported
@@ -255,13 +300,9 @@ mod tests {
 
     #[test]
     fn test_check_support_scalar_fn_unsupported_return_type() {
-        // A UDF that returns Utf8 — not in is_datatype_supported
+        // utf8_udf(x) returns Utf8 — not in is_datatype_supported
         let schema = f64_schema();
-        let expr = scalar_fn_expr(
-            datafusion_functions::math::ceil(),
-            vec![col_x()],
-            DataType::Utf8,
-        );
+        let expr = scalar_fn_expr(utf8_udf(), vec![col_x()], DataType::Utf8);
         assert!(!check_support(&expr, &schema));
     }
 
@@ -294,13 +335,9 @@ mod tests {
 
     #[test]
     fn test_check_support_scalar_fn_in_binary_expr_unsupported_return() {
-        // f(x) > 5.0 where f returns Utf8 — should be false
+        // utf8_udf(x) > 5.0 where f returns Utf8 — should be false
         let schema = f64_schema();
-        let fn_expr = scalar_fn_expr(
-            datafusion_functions::math::ceil(),
-            vec![col_x()],
-            DataType::Utf8,
-        );
+        let fn_expr = scalar_fn_expr(utf8_udf(), vec![col_x()], DataType::Utf8);
         let expr: Arc<dyn PhysicalExpr> =
             Arc::new(BinaryExpr::new(fn_expr, Operator::Gt, lit_f64(5.0)));
         assert!(!check_support(&expr, &schema));
