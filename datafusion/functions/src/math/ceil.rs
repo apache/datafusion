@@ -216,22 +216,23 @@ impl ScalarUDFImpl for CeilFunc {
                 inputs.len()
             );
         };
-        // ceil(x) ∈ [N, M] → x ∈ (N−1, M] — conservative closed: [N−1, M]
+        // ceil(x) ∈ [N, M] → x ∈ (ceil(N)−1, floor(M)]
+        // Normalize bounds to integers ceil can actually take before mapping back.
         let lo = match interval.lower() {
             ScalarValue::Float64(Some(n)) if n.is_finite() => {
-                Some(ScalarValue::Float64(Some(n - 1.0)))
+                Some(ScalarValue::Float64(Some(n.ceil() - 1.0)))
             }
             ScalarValue::Float32(Some(n)) if n.is_finite() => {
-                Some(ScalarValue::Float32(Some(n - 1.0)))
+                Some(ScalarValue::Float32(Some(n.ceil() - 1.0)))
             }
             _ => None,
         };
         let hi = match interval.upper() {
             ScalarValue::Float64(Some(n)) if n.is_finite() => {
-                Some(ScalarValue::Float64(Some(*n)))
+                Some(ScalarValue::Float64(Some(n.floor())))
             }
             ScalarValue::Float32(Some(n)) if n.is_finite() => {
-                Some(ScalarValue::Float32(Some(*n)))
+                Some(ScalarValue::Float32(Some(n.floor())))
             }
             _ => None,
         };
