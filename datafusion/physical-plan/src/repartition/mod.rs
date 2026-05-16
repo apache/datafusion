@@ -177,6 +177,8 @@ impl OutputChannel {
     /// Send a single batch through the channel for `partition`, applying
     /// the memory reservation / spill-writer fallback. Removes the channel
     /// from `self.inner` if the receiver has hung up.
+    ///
+    /// Used after [`OutputChannel::coalesce`] for performance purposes.
     async fn send(&mut self, batch: RecordBatch) -> Result<(), SendError<MaybeBatch>> {
         let size = batch.get_array_memory_size();
 
