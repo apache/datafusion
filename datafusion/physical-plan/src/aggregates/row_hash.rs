@@ -23,7 +23,9 @@ use std::vec;
 
 use super::AggregateExec;
 use super::order::GroupOrdering;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, new_group_values, new_group_values_with_group_indices,
+};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
@@ -590,7 +592,13 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let require_group_indices = !accumulators.is_empty()
+            || matches!(group_ordering, GroupOrdering::Partial(_));
+        let group_values = new_group_values_with_group_indices(
+            group_schema,
+            &group_ordering,
+            require_group_indices,
+        )?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
@@ -955,62 +963,89 @@ impl GroupedHashAggregateStream {
         for group_values in &group_by_values {
             let groups_start_time = Instant::now();
 
-            // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
-            let group_indices = &self.current_group_indices;
+            let needs_group_indices = !self.accumulators.is_empty()
+                || matches!(self.group_ordering, GroupOrdering::Partial(_));
 
-            // Update ordering information if necessary
-            let total_num_groups = self.group_values.len();
-            if total_num_groups > starting_num_groups {
-                self.group_ordering.new_groups(
-                    group_values,
-                    group_indices,
-                    total_num_groups,
-                )?;
-            }
+            if needs_group_indices {
+                // calculate the group indices for each input row
+                self.group_values
+                    .intern(group_values, &mut self.current_group_indices)?;
+                let group_indices = &self.current_group_indices;
 
-            // Use this instant for both measurements to save a syscall
-            let agg_start_time = Instant::now();
-            self.group_by_metrics
-                .time_calculating_group_ids
-                .add_duration(agg_start_time - groups_start_time);
-
-            // Gather the inputs to call the actual accumulator
-            let t = self
-                .accumulators
-                .iter_mut()
-                .zip(input_values.iter())
-                .zip(filter_values.iter());
-
-            for ((acc, values), opt_filter) in t {
-                let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
-
-                // Call the appropriate method on each aggregator with
-                // the entire input row and the relevant group indexes
-                if self.mode.input_mode() == AggregateInputMode::Raw
-                    && !self.spill_state.is_stream_merging
-                {
-                    acc.update_batch(
-                        values,
+                // Update ordering information if necessary
+                let total_num_groups = self.group_values.len();
+                if total_num_groups > starting_num_groups {
+                    self.group_ordering.new_groups(
+                        group_values,
                         group_indices,
-                        opt_filter,
                         total_num_groups,
                     )?;
-                } else {
-                    assert_or_internal_err!(
-                        opt_filter.is_none(),
-                        "aggregate filter should be applied in partial stage, there should be no filter in final stage"
-                    );
-
-                    // if aggregation is over intermediate states,
-                    // use merge
-                    acc.merge_batch(values, group_indices, None, total_num_groups)?;
                 }
+
+                // Use this instant for both measurements to save a syscall
+                let agg_start_time = Instant::now();
                 self.group_by_metrics
-                    .aggregation_time
-                    .add_elapsed(agg_start_time);
+                    .time_calculating_group_ids
+                    .add_duration(agg_start_time - groups_start_time);
+
+                // Gather the inputs to call the actual accumulator
+                let t = self
+                    .accumulators
+                    .iter_mut()
+                    .zip(input_values.iter())
+                    .zip(filter_values.iter());
+
+                for ((acc, values), opt_filter) in t {
+                    let opt_filter =
+                        opt_filter.as_ref().map(|filter| filter.as_boolean());
+
+                    // Call the appropriate method on each aggregator with
+                    // the entire input row and the relevant group indexes
+                    if self.mode.input_mode() == AggregateInputMode::Raw
+                        && !self.spill_state.is_stream_merging
+                    {
+                        acc.update_batch(
+                            values,
+                            group_indices,
+                            opt_filter,
+                            total_num_groups,
+                        )?;
+                    } else {
+                        assert_or_internal_err!(
+                            opt_filter.is_none(),
+                            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+                        );
+
+                        // if aggregation is over intermediate states,
+                        // use merge
+                        acc.merge_batch(values, group_indices, None, total_num_groups)?;
+                    }
+                    self.group_by_metrics
+                        .aggregation_time
+                        .add_elapsed(agg_start_time);
+                }
+            } else {
+                self.current_group_indices.clear();
+                self.group_values
+                    .intern(group_values, &mut self.current_group_indices)?;
+
+                let total_num_groups = self.group_values.len();
+                if total_num_groups > starting_num_groups {
+                    match &mut self.group_ordering {
+                        GroupOrdering::None => {}
+                        GroupOrdering::Full(ordering) => {
+                            ordering.new_groups(total_num_groups);
+                        }
+                        GroupOrdering::Partial(_) => unreachable!(
+                            "partial ordering requires per-row group indices"
+                        ),
+                    }
+                }
+
+                self.group_by_metrics
+                    .time_calculating_group_ids
+                    .add_duration(Instant::now() - groups_start_time);
             }
         }
 
@@ -1374,13 +1409,15 @@ impl GroupedHashAggregateStream {
 
             // Recreate `group_values` for streaming merge so group ids are assigned
             // in first-seen order, as required by `GroupOrderingFull`.
-            // The pre-spill multi-column collector may use `vectorized_intern`, which
-            // can assign new group ids out of input order under hash collisions.
+            // The pre-spill collector may not track group ids for DISTINCT-only
+            // aggregation. The pre-spill multi-column collector may use
+            // `vectorized_intern`, which can assign new group ids out of input
+            // order under hash collisions.
             let group_schema = self
                 .spill_state
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
-            if group_schema.fields().len() > 1 {
+            if self.accumulators.is_empty() || group_schema.fields().len() > 1 {
                 self.group_values = new_group_values(group_schema, &self.group_ordering)?;
             }
 
@@ -1470,9 +1507,12 @@ mod tests {
     use super::*;
     use crate::InputOrderMode;
     use crate::execution_plan::ExecutionPlan;
+    use crate::metrics::MetricValue;
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -1580,6 +1620,80 @@ mod tests {
             total_output_groups, num_groups,
             "Unexpected number of groups",
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_distinct_single_primitive_group_by() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            DataType::Int32,
+            false,
+        )]));
+
+        let num_distinct = 512;
+        let num_spills = 24;
+        let input_partitions = vec![
+            (0..num_spills)
+                .map(|_| {
+                    Ok(RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int32Array::from_iter_values(0..num_distinct))],
+                    )?)
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ];
+
+        let session_config = SessionConfig::new().with_batch_size(4);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(FairSpillPool::new(6000)))
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime),
+        );
+
+        let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
+        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(group_expr),
+            Vec::<Arc<AggregateFunctionExpr>>::new(),
+            vec![],
+            exec,
+            Arc::clone(&schema),
+        )?;
+
+        let mut stream =
+            GroupedHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
+        let mut values = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            let batch = result?;
+            let group_col = batch
+                .column(0)
+                .as_primitive::<arrow::datatypes::Int32Type>();
+            values.extend(group_col.values().iter().copied());
+        }
+
+        let spill_count = aggregate_exec
+            .metrics()
+            .unwrap()
+            .iter()
+            .find_map(|metric| match metric.value() {
+                MetricValue::SpillCount(count) => Some(count.value()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(spill_count > 0, "expected test to exercise spilling");
+
+        values.sort_unstable();
+        let expected = (0..num_distinct).collect::<Vec<_>>();
+        assert_eq!(values, expected);
 
         Ok(())
     }

@@ -135,45 +135,74 @@ pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
+    new_group_values_with_group_indices(schema, group_ordering, true)
+}
+
+pub(crate) fn new_group_values_with_group_indices(
+    schema: SchemaRef,
+    group_ordering: &GroupOrdering,
+    require_group_indices: bool,
+) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
+        let track_group_ids =
+            require_group_indices || !matches!(group_ordering, GroupOrdering::None);
 
         macro_rules! downcast_helper {
-            ($t:ty, $d:ident) => {
-                return Ok(Box::new(GroupValuesPrimitive::<$t>::new($d.clone())))
+            ($t:ty, $d:ident, $track_group_ids:expr) => {
+                return Ok(Box::new(GroupValuesPrimitive::<$t>::new(
+                    $d.clone(),
+                    $track_group_ids,
+                )))
             };
         }
 
         downcast_primitive! {
-            d => (downcast_helper, d),
+            d => (downcast_helper, d, track_group_ids),
             _ => {}
         }
 
         match d {
             DataType::Date32 => {
-                downcast_helper!(Date32Type, d);
+                downcast_helper!(Date32Type, d, track_group_ids);
             }
             DataType::Date64 => {
-                downcast_helper!(Date64Type, d);
+                downcast_helper!(Date64Type, d, track_group_ids);
             }
             DataType::Time32(t) => match t {
-                TimeUnit::Second => downcast_helper!(Time32SecondType, d),
-                TimeUnit::Millisecond => downcast_helper!(Time32MillisecondType, d),
+                TimeUnit::Second => {
+                    downcast_helper!(Time32SecondType, d, track_group_ids)
+                }
+                TimeUnit::Millisecond => {
+                    downcast_helper!(Time32MillisecondType, d, track_group_ids)
+                }
                 _ => {}
             },
             DataType::Time64(t) => match t {
-                TimeUnit::Microsecond => downcast_helper!(Time64MicrosecondType, d),
-                TimeUnit::Nanosecond => downcast_helper!(Time64NanosecondType, d),
+                TimeUnit::Microsecond => {
+                    downcast_helper!(Time64MicrosecondType, d, track_group_ids)
+                }
+                TimeUnit::Nanosecond => {
+                    downcast_helper!(Time64NanosecondType, d, track_group_ids)
+                }
                 _ => {}
             },
             DataType::Timestamp(t, _tz) => match t {
-                TimeUnit::Second => downcast_helper!(TimestampSecondType, d),
-                TimeUnit::Millisecond => downcast_helper!(TimestampMillisecondType, d),
-                TimeUnit::Microsecond => downcast_helper!(TimestampMicrosecondType, d),
-                TimeUnit::Nanosecond => downcast_helper!(TimestampNanosecondType, d),
+                TimeUnit::Second => {
+                    downcast_helper!(TimestampSecondType, d, track_group_ids)
+                }
+                TimeUnit::Millisecond => {
+                    downcast_helper!(TimestampMillisecondType, d, track_group_ids)
+                }
+                TimeUnit::Microsecond => {
+                    downcast_helper!(TimestampMicrosecondType, d, track_group_ids)
+                }
+                TimeUnit::Nanosecond => {
+                    downcast_helper!(TimestampNanosecondType, d, track_group_ids)
+                }
             },
             DataType::Decimal128(_, _) => {
-                downcast_helper!(Decimal128Type, d);
+                downcast_helper!(Decimal128Type, d, track_group_ids);
             }
             DataType::Utf8 => {
                 return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Utf8)));
