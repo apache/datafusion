@@ -65,11 +65,16 @@ select array_length(arrow_cast(array_repeat(array_repeat(array_repeat(3, 5), 2),
 ----
 3 2
 
-# array_length scalar function #5
+# array_length scalar function #5 empty array dimension (PostgreSQL-compatible)
 query III
 select array_length(make_array()), array_length(make_array(), 1), array_length(make_array(), 2)
 ----
-0 0 NULL
+NULL NULL NULL
+
+query I
+SELECT array_length(ARRAY[]::INT[], 1)
+----
+NULL
 
 # array_length scalar function #6 nested array
 query III
