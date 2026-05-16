@@ -358,7 +358,10 @@ fn try_perfect_list_zip(args: &[ArrayRef]) -> Result<Option<ArrayRef>> {
     let values_len = first.values().len();
 
     for arr in &list_arrays {
-        if arr.len() != num_rows || arr.values().len() != values_len {
+        if arr.len() != num_rows
+            || arr.values().len() != values_len
+            || arr.offsets() != &offsets
+        {
             return Ok(None);
         }
     }
@@ -389,12 +392,6 @@ fn try_perfect_list_zip(args: &[ArrayRef]) -> Result<Option<ArrayRef>> {
     } else {
         None
     };
-
-    for arr in &list_arrays {
-        if arr.offsets() != &offsets {
-            return Ok(None);
-        }
-    }
 
     let struct_columns = list_arrays
         .iter()
