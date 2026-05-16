@@ -337,8 +337,8 @@ impl GenerateSeriesTable {
         Ok(generator)
     }
 
-    /// Detects output sort order to potentially remove `SortExec`
-    /// Now only `Int64` argument type is supported
+    /// Detects output sort order to potentially remove `SortExec`.
+    /// Only the `Int64` argument type is currently supported.
     fn output_ordering(&self, schema: &Schema) -> Option<PhysicalSortExpr> {
         let step = match &self.args {
             GenSeriesArgs::Int64Args { step, .. } => *step,

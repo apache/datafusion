@@ -100,8 +100,8 @@ SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC
 2
 1
 
-# Ensures the physical plan doesn't include `SortExec`
-# Tests that generate_series() on Int64 auto-detects output sort order
+# Ensures the physical plan doesn't include `SortExec`.
+# Tests that generate_series() on Int64 auto-detects output sort order.
 query TT
 EXPLAIN FORMAT INDENT SELECT * FROM generate_series(100000) AS t1(v1) ORDER BY v1
 ----
