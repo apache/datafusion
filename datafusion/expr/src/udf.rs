@@ -931,6 +931,9 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         _interval: &Interval,
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
+        // Conservative default: return inputs unchanged (no narrowing).
+        // The returned vec must have the same length as `inputs` to satisfy
+        // the interval solver contract.
         Ok(Some(inputs.iter().map(|i| (*i).clone()).collect()))
     }
 

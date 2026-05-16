@@ -261,3 +261,157 @@ fn ceil_scalar(v: &ScalarValue) -> Option<ScalarValue> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ceil() -> CeilFunc {
+        CeilFunc::new()
+    }
+
+    fn f64_interval(lo: f64, hi: f64) -> Interval {
+        Interval::try_new(
+            ScalarValue::Float64(Some(lo)),
+            ScalarValue::Float64(Some(hi)),
+        )
+        .unwrap()
+    }
+
+    fn f32_interval(lo: f32, hi: f32) -> Interval {
+        Interval::try_new(
+            ScalarValue::Float32(Some(lo)),
+            ScalarValue::Float32(Some(hi)),
+        )
+        .unwrap()
+    }
+
+    fn unbounded_f64() -> Interval {
+        Interval::make_unbounded(&DataType::Float64).unwrap()
+    }
+
+    fn unbounded_f32() -> Interval {
+        Interval::make_unbounded(&DataType::Float32).unwrap()
+    }
+
+    // --- evaluate_bounds ---
+
+    #[test]
+    fn test_evaluate_bounds_basic() {
+        // ceil([1.2, 3.7]) = [2.0, 4.0]
+        let input = f64_interval(1.2, 3.7);
+        let result = ceil().evaluate_bounds(&[&input]).unwrap();
+        assert_eq!(result, f64_interval(2.0, 4.0));
+    }
+
+    #[test]
+    fn test_evaluate_bounds_already_integer() {
+        // ceil([2.0, 4.0]) = [2.0, 4.0]
+        let input = f64_interval(2.0, 4.0);
+        let result = ceil().evaluate_bounds(&[&input]).unwrap();
+        assert_eq!(result, f64_interval(2.0, 4.0));
+    }
+
+    #[test]
+    fn test_evaluate_bounds_f32() {
+        // ceil([1.1f32, 2.9f32]) = [2.0f32, 3.0f32]
+        let input = f32_interval(1.1, 2.9);
+        let result = ceil().evaluate_bounds(&[&input]).unwrap();
+        assert_eq!(result, f32_interval(2.0, 3.0));
+    }
+
+    #[test]
+    fn test_evaluate_bounds_unbounded_returns_unbounded() {
+        let input = unbounded_f64();
+        let result = ceil().evaluate_bounds(&[&input]).unwrap();
+        assert_eq!(result, unbounded_f64());
+    }
+
+    #[test]
+    fn test_evaluate_bounds_negative() {
+        // ceil([-3.7, -1.2]) = [-3.0, -1.0]
+        let input = f64_interval(-3.7, -1.2);
+        let result = ceil().evaluate_bounds(&[&input]).unwrap();
+        assert_eq!(result, f64_interval(-3.0, -1.0));
+    }
+
+    // --- propagate_constraints ---
+
+    #[test]
+    fn test_propagate_constraints_basic() {
+        // ceil(x) ∈ [13.0, 15.0] → x ∈ (12.0, 15.0]
+        let output = f64_interval(13.0, 15.0);
+        let input = unbounded_f64();
+        let result = ceil()
+            .propagate_constraints(&output, &[&input])
+            .unwrap()
+            .unwrap();
+        assert_eq!(result[0], f64_interval(12.0, 15.0));
+    }
+
+    #[test]
+    fn test_propagate_constraints_non_integer_bounds() {
+        // ceil(x) ∈ [12.3, 14.7] — non-integer bounds are normalized:
+        // lower: ceil(12.3)-1 = 13-1 = 12.0, upper: floor(14.7) = 14.0
+        // → x ∈ (12.0, 14.0]
+        let output = f64_interval(12.3, 14.7);
+        let input = unbounded_f64();
+        let result = ceil()
+            .propagate_constraints(&output, &[&input])
+            .unwrap()
+            .unwrap();
+        assert_eq!(result[0], f64_interval(12.0, 14.0));
+    }
+
+    #[test]
+    fn test_propagate_constraints_f32() {
+        // Same as basic but with Float32
+        let output = f32_interval(5.0, 8.0);
+        let input = unbounded_f32();
+        let result = ceil()
+            .propagate_constraints(&output, &[&input])
+            .unwrap()
+            .unwrap();
+        assert_eq!(result[0], f32_interval(4.0, 8.0));
+    }
+
+    #[test]
+    fn test_propagate_constraints_unbounded_output_no_change() {
+        // No output constraint → input unchanged
+        let output = unbounded_f64();
+        let input = f64_interval(1.0, 10.0);
+        let result = ceil()
+            .propagate_constraints(&output, &[&input])
+            .unwrap()
+            .unwrap();
+        assert_eq!(result[0], input);
+    }
+
+    #[test]
+    fn test_propagate_constraints_nan_output_no_change() {
+        // NaN bounds → conservative: input unchanged
+        let output = Interval::try_new(
+            ScalarValue::Float64(Some(f64::NAN)),
+            ScalarValue::Float64(Some(f64::NAN)),
+        )
+        .unwrap();
+        let input = f64_interval(0.0, 100.0);
+        let result = ceil()
+            .propagate_constraints(&output, &[&input])
+            .unwrap()
+            .unwrap();
+        assert_eq!(result[0], input);
+    }
+
+    #[test]
+    fn test_propagate_constraints_negative_range() {
+        // ceil(x) ∈ [-3.0, -1.0] → x ∈ (-4.0, -1.0]
+        let output = f64_interval(-3.0, -1.0);
+        let input = unbounded_f64();
+        let result = ceil()
+            .propagate_constraints(&output, &[&input])
+            .unwrap()
+            .unwrap();
+        assert_eq!(result[0], f64_interval(-4.0, -1.0));
+    }
+}
