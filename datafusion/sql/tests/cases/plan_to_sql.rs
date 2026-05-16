@@ -3505,8 +3505,11 @@ fn test_unparse_aggregate_with_limit_sort_no_inner_proj() -> Result<()> {
 }
 
 /// Projection → Sort → Limit → Aggregate (aliases inlined into Aggregate).
-/// Reverse stacking of the case above: the Sort sits above the Limit.
-/// Both clauses should still fold into the outer SELECT.
+/// The Sort sits above the Limit — the logical plan applies Limit first
+/// and Sort second, which a single `ORDER BY … LIMIT` SELECT cannot
+/// express (SQL applies the sort first). The outer Sort folds into the
+/// outer SELECT using passthrough column references, while the Limit
+/// (and the Aggregate it sits over) goes into a derived subquery.
 #[test]
 fn test_unparse_aggregate_with_sort_over_limit_no_inner_proj() -> Result<()> {
     let context = MockContextProvider {
@@ -3530,7 +3533,7 @@ fn test_unparse_aggregate_with_sort_over_limit_no_inner_proj() -> Result<()> {
         .build()?;
 
     let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
-    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST LIMIT 5"#);
+    insta::assert_snapshot!(sql, @r#"SELECT __agg_0 AS "max1(j1_id)" FROM (SELECT max(bla.j1_rename) AS __agg_0 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 5) ORDER BY __agg_0 ASC NULLS FIRST"#);
     Ok(())
 }
 
@@ -3625,11 +3628,13 @@ fn test_unparse_aggregate_with_repeated_sorts_keeps_outermost() -> Result<()> {
     Ok(())
 }
 
-/// Projection → Sort(ASC) → Limit(10) → Sort(DESC) → Aggregate. Folds
-/// into a single SELECT: outermost Sort wins, the Limit is taken, inner
-/// Sort dropped.
+/// Projection → Sort(ASC) → Limit(10) → Sort(DESC) → Aggregate. The
+/// inner Sort determines which rows the Limit keeps and the outer Sort
+/// re-orders the kept rows — a single SELECT cannot express that, so
+/// the outer Sort folds into the outer SELECT (passthrough refs) and
+/// the Limit + inner Sort + Aggregate go into a derived subquery.
 #[test]
-fn test_unparse_aggregate_with_sort_limit_sort_combines() -> Result<()> {
+fn test_unparse_aggregate_with_sort_limit_sort_uses_derived_subquery() -> Result<()> {
     let context = MockContextProvider {
         state: MockSessionState::default(),
     };
@@ -3652,7 +3657,7 @@ fn test_unparse_aggregate_with_sort_limit_sort_combines() -> Result<()> {
         .build()?;
 
     let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
-    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST LIMIT 10"#);
+    insta::assert_snapshot!(sql, @r#"SELECT __agg_0 AS "max1(j1_id)" FROM (SELECT max(bla.j1_rename) AS __agg_0 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) DESC NULLS LAST LIMIT 10) ORDER BY __agg_0 ASC NULLS FIRST"#);
     Ok(())
 }
 
