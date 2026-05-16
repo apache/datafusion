@@ -192,11 +192,10 @@ impl ScalarUDFImpl for CeilFunc {
 
     fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
         let [input] = inputs else {
-            let data_type = inputs
-                .first()
-                .map(|i| i.data_type())
-                .unwrap_or(DataType::Float64);
-            return Interval::make_unbounded(&data_type);
+            return exec_err!(
+                "ceil expected 1 argument for bounds evaluation, got {}",
+                inputs.len()
+            );
         };
         let data_type = input.data_type();
         match (ceil_scalar(input.lower()), ceil_scalar(input.upper())) {
@@ -212,7 +211,10 @@ impl ScalarUDFImpl for CeilFunc {
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         let [input_interval] = inputs else {
-            return Ok(Some(inputs.iter().map(|i| (*i).clone()).collect()));
+            return exec_err!(
+                "ceil expected 1 argument for constraint propagation, got {}",
+                inputs.len()
+            );
         };
         // ceil(x) ∈ [N, M] → x ∈ (N−1, M] — conservative closed: [N−1, M]
         let lo = match interval.lower() {

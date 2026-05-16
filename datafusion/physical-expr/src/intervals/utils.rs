@@ -28,8 +28,8 @@ use crate::{
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{Result, ScalarValue, internal_err};
-use datafusion_expr::Operator;
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::{Operator, Volatility};
 
 /// Indicates whether interval arithmetic is supported for the given expression.
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
@@ -58,7 +58,8 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
     } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
         check_support(negative.arg(), schema)
     } else if let Some(scalar_fn) = expr.downcast_ref::<ScalarFunctionExpr>() {
-        is_datatype_supported(scalar_fn.return_type())
+        scalar_fn.fun().signature().volatility == Volatility::Immutable
+            && is_datatype_supported(scalar_fn.return_type())
             && scalar_fn
                 .args()
                 .iter()
@@ -265,9 +266,6 @@ mod tests {
     }
 
     impl ScalarUDFImpl for Utf8UDF {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
         fn name(&self) -> &str {
             "utf8_udf"
         }
