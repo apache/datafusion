@@ -350,11 +350,8 @@ where
                     // For inline strings, the stored view is identical to the input view:
                     // make_view(value, 0, 0) produces the same u128 as view_u128.
                     //
-                    // SAFETY: the enclosing `if len <= 12` branch establishes
-                    // that view_u128 is a valid inline ByteView. Its low 32
-                    // bits encode `len` (<= 12) and the next 12 bytes are the
-                    // value bytes the source array produced for this row, so
-                    // every required invariant of `append_inline_view` holds.
+                    // SAFETY: view_u128 was a valid view, and the enclosing `len <= 12`
+                    // ensures it is inline
                     let new_view = unsafe { self.append_inline_view(view_u128) };
                     (new_view, payload)
                 } else {
