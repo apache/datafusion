@@ -25,7 +25,8 @@ use crate::parser::{
     LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
-    ContextProvider, PlannerContext, SqlToRel, object_name_to_qualifier,
+    ContextProvider, PlannerContext, SqlToRel, ensure_unique_column_names,
+    object_name_to_qualifier,
 };
 use crate::utils::normalize_ident;
 
@@ -545,6 +546,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             plan
                         };
 
+                        ensure_unique_column_names(plan.schema())?;
+
                         let constraints = self.new_constraint_from_table_constraints(
                             &all_constraints,
                             plan.schema(),
@@ -672,6 +675,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 plan = self.apply_expr_alias(plan, columns)?;
+
+                ensure_unique_column_names(plan.schema())?;
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: self.object_name_to_table_reference(name)?,
