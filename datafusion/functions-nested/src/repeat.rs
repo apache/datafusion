@@ -228,10 +228,8 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         if count > 0 && list_array.is_valid(i) {
             let len = list_offsets[i + 1].to_usize().unwrap()
                 - list_offsets[i].to_usize().unwrap();
-            inner_total = checked_repeat_len_add(
-                inner_total,
-                checked_repeat_len_mul(len, count)?,
-            )?;
+            inner_total =
+                checked_repeat_len_add(inner_total, checked_repeat_len_mul(len, count)?)?;
             ensure_array_repeat_output_len::<O>(inner_total)?;
         }
     }
