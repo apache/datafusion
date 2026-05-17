@@ -22,10 +22,11 @@ use arrow::array::{
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::compute::take;
-use arrow::datatypes::{ArrowNativeType, DataType};
-use datafusion_common::{Result, ScalarValue};
+use arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use twox_hash::XxHash64;
 
@@ -64,7 +65,13 @@ impl ScalarUDFImpl for SparkXxhash64 {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Spark's HashExpression overrides nullable to false: NULL inputs are
+        // skipped and the seed is used, so the result is never null.
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -141,6 +148,25 @@ fn create_xxhash64_hashes(arrays: &[ArrayRef], hashes_buffer: &mut [u64]) -> Res
 mod tests {
     use super::*;
     use arrow::array::{FixedSizeBinaryArray, Int32Array, StringArray};
+
+    #[test]
+    fn test_xxhash64_nullability() -> Result<()> {
+        let func = SparkXxhash64::new();
+
+        // Spark's xxhash64 is never null (NULL args are skipped, seed is returned),
+        // so the output field is non-nullable regardless of input nullability.
+        let nullable: FieldRef = Arc::new(Field::new("a", DataType::Int32, true));
+        let non_nullable: FieldRef = Arc::new(Field::new("b", DataType::Int32, false));
+
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&nullable), Arc::clone(&non_nullable)],
+            scalar_arguments: &[None, None],
+        })?;
+        assert!(!out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Int64);
+
+        Ok(())
+    }
 
     #[test]
     fn test_xxhash64_i32() {
