@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use datafusion_common::{Constraints, Statistics, not_impl_err};
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
+use datafusion_expr::statistics::StatisticsRequest;
 
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
@@ -406,6 +407,7 @@ pub struct ScanArgs<'a> {
     filters: Option<&'a [Expr]>,
     projection: Option<&'a [usize]>,
     limit: Option<usize>,
+    statistics_requests: &'a [StatisticsRequest],
 }
 
 impl<'a> ScanArgs<'a> {
@@ -466,6 +468,27 @@ impl<'a> ScanArgs<'a> {
     /// Returns the row limit, or `None` if no limit was specified.
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+
+    /// Set the statistics the caller would like the provider to answer for
+    /// this scan, if it can do so cheaply.
+    ///
+    /// Providers read these via [`Self::statistics_requests()`]; anything a
+    /// provider cannot answer cheaply it simply ignores. DataFusion's own
+    /// `TableProvider`s ignore this field — it exists so a request can be
+    /// threaded from a custom optimizer rule (which annotates
+    /// `TableScan::statistics_requests`) through to a custom provider.
+    pub fn with_statistics_requests(
+        mut self,
+        statistics_requests: &'a [StatisticsRequest],
+    ) -> Self {
+        self.statistics_requests = statistics_requests;
+        self
+    }
+
+    /// Get the statistics requests for the scan. Empty if none were set.
+    pub fn statistics_requests(&self) -> &'a [StatisticsRequest] {
+        self.statistics_requests
     }
 }
 
