@@ -36,9 +36,8 @@ use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, DynamicFilterPhysicalExpr, InListExpr,
-    IsNotNullExpr, IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr,
-    UnKnownColumn,
+    BinaryExpr, CaseExpr, CastExpr, DynamicFilterPhysicalExpr, InListExpr, IsNotNullExpr,
+    IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -328,17 +327,7 @@ pub fn serialize_physical_expr_with_converter(
         });
     }
 
-    if let Some(expr) = expr.downcast_ref::<Column>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
-                protobuf::PhysicalColumn {
-                    name: expr.name().to_string(),
-                    index: expr.index() as u32,
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
+    if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
         Ok(protobuf::PhysicalExprNode {
             expr_id,
             expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
