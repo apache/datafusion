@@ -77,7 +77,7 @@ pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
     fn should_stop(&self, end: Self, step: &Self::StepType, include_end: bool) -> bool;
 
     /// Advance to the next value in the series
-    fn advance(&mut self, step: &Self::StepType) -> Result<()>;
+    fn advance(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()>;
 
     /// Create an Arrow array from a vector of values
     fn create_array(&self, values: Vec<Self::ValueType>) -> Result<ArrayRef>;
@@ -97,8 +97,16 @@ impl SeriesValue for i64 {
         reach_end_int64(*self, end, *step, include_end)
     }
 
-    fn advance(&mut self, step: &Self::StepType) -> Result<()> {
-        *self += step;
+    fn advance(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()> {
+        if let Some(next) = self.checked_add(*step) {
+            *self = next;
+        } else {
+            *end = if *step > 0 {
+                self.saturating_sub(1)
+            } else {
+                self.saturating_add(1)
+            };
+        }
         Ok(())
     }
 
@@ -152,7 +160,7 @@ impl SeriesValue for TimestampValue {
         }
     }
 
-    fn advance(&mut self, step: &Self::StepType) -> Result<()> {
+    fn advance(&mut self, _end: &mut Self, step: &Self::StepType) -> Result<()> {
         let tz = self
             .parsed_tz
             .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
@@ -250,16 +258,18 @@ impl GenerateSeriesTable {
                 step,
                 include_end,
                 name,
-            } => Arc::new(RwLock::new(GenericSeriesState {
-                schema: self.schema(),
-                start: *start,
-                end: *end,
-                step: *step,
-                current: *start,
-                batch_size,
-                include_end: *include_end,
-                name,
-            })),
+            } => {
+                Arc::new(RwLock::new(GenericSeriesState {
+                    schema: self.schema(),
+                    start: *start,
+                    end: *end,
+                    step: *step,
+                    current: *start,
+                    batch_size,
+                    include_end: *include_end,
+                    name,
+                }))
+            }
             GenSeriesArgs::TimestampArgs {
                 start,
                 end,
@@ -391,7 +401,15 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
                 .should_stop(self.end.clone(), &self.step, self.include_end)
         {
             buf.push(self.current.to_value_type());
-            self.current.advance(&self.step)?;
+            if self
+                .current
+                .should_stop(self.end.clone(), &self.step, false)
+            {
+                self.current.advance(&mut self.end, &self.step)?;
+                break;
+            }
+
+            self.current.advance(&mut self.end, &self.step)?;
         }
 
         if buf.is_empty() {
