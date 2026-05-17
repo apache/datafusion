@@ -123,7 +123,7 @@ pub(crate) struct PushDecoderStreamState {
 }
 
 impl PushDecoderStreamState {
-    /// Drive the state machine to completion as a [`Stream`] of record batches.
+    /// Drive the state machine to completion as a [`futures::Stream`] of record batches.
     ///
     /// The returned stream is fused and boxed so the caller can wrap it (for
     /// example, with an early-stopping adapter) without naming the unfold type.
