@@ -64,6 +64,9 @@ select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 5, 4);
 query error
 select array_resize(make_array(1, 2, 3), -5, 2);
 
+query error DataFusion error: Execution error: array_resize: target size too large
+select array_resize(make_array(1), 9223372036854775807, 0);
+
 # array_resize scalar function #5
 query ?
 select array_resize(make_array(1.1, 2.2, 3.3), 10, 9.9);
