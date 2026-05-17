@@ -329,7 +329,6 @@ where
     )
     .map(|(value, regex, start, nth, flags, subexp)| match regex {
         None => Ok(None),
-        Some("") => Ok(Some(0)),
         Some(regex) => get_index(
             value,
             regex,
@@ -395,11 +394,8 @@ where
 {
     let value = match value {
         None => return Ok(None),
-        Some("") => return Ok(Some(0)),
         Some(value) => value,
     };
-    let pattern: &Regex = compile_and_cache_regex(pattern, flags, regex_cache)?;
-    // println!("get_index: value = {}, pattern = {}, start = {}, n = {}, subexpr = {}, flags = {:?}", value, pattern, start, n, subexpr, flags);
     if start < 1 {
         return Err(ArrowError::ComputeError(
             "regexp_instr() requires start to be 1-based".to_string(),
@@ -412,8 +408,22 @@ where
         ));
     }
 
-    // --- Simplified byte_start_offset calculation ---
     let total_chars = value.chars().count() as i64;
+    if pattern.is_empty() {
+        compile_and_cache_regex(pattern, flags, regex_cache)?;
+        if subexpr > 0 {
+            return Ok(Some(0));
+        }
+
+        let match_position = start.saturating_add(n).saturating_sub(1);
+        return Ok(Some(if match_position <= total_chars + 1 {
+            match_position
+        } else {
+            0
+        }));
+    }
+
+    let pattern: &Regex = compile_and_cache_regex(pattern, flags, regex_cache)?;
     let byte_start_offset: usize = if start > total_chars {
         // If start is beyond the total characters, it means we start searching
         // after the string effectively. No matches possible.
@@ -426,7 +436,6 @@ where
             .map(|(idx, _)| idx)
             .unwrap_or(0) // Should not happen if start is valid and <= total_chars
     };
-    // --- End simplified calculation ---
 
     let search_slice = &value[byte_start_offset..];
 
@@ -492,7 +501,7 @@ mod tests {
     fn test_case_sensitive_regexp_instr_nulls() {
         let v = "";
         let r = "";
-        let expected = 0;
+        let expected = 1;
         let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
         let re = regexp_instr_with_scalar_values(&[v.to_string().into(), regex_sv]);
         // let res_exp = re.unwrap();
@@ -511,10 +520,11 @@ mod tests {
             "no match here",
             "abc",
             "ДатаФусион数据融合📊🔥",
+            "abc",
         ];
-        let regex = ["o", "d", "123", "z", "gg", "📊"];
+        let regex = ["o", "d", "123", "z", "gg", "📊", ""];
 
-        let expected: Vec<i64> = vec![5, 4, 4, 0, 0, 15];
+        let expected: Vec<i64> = vec![5, 4, 4, 0, 0, 15, 1];
 
         izip!(values.iter(), regex.iter())
             .enumerate()
@@ -772,10 +782,11 @@ mod tests {
             "xyz123xyz",
             "no match here",
             "",
+            "abc",
         ]);
-        let regex = A::from(vec!["o", "d", "123", "z", "gg"]);
+        let regex = A::from(vec!["o", "d", "123", "z", "gg", ""]);
 
-        let expected = Int64Array::from(vec![5, 4, 4, 0, 0]);
+        let expected = Int64Array::from(vec![5, 4, 4, 0, 0, 1]);
         let re = regexp_instr_func(&[Arc::new(values), Arc::new(regex)]).unwrap();
         assert_eq!(re.as_ref(), &expected);
     }
@@ -784,10 +795,10 @@ mod tests {
     where
         A: From<Vec<&'static str>> + Array + 'static,
     {
-        let values = A::from(vec!["abcabcabc", "abcabcabc", ""]);
-        let regex = A::from(vec!["abc", "abc", "gg"]);
-        let start = Int64Array::from(vec![4, 5, 5]);
-        let expected = Int64Array::from(vec![4, 7, 0]);
+        let values = A::from(vec!["abcabcabc", "abcabcabc", "", "abc"]);
+        let regex = A::from(vec!["abc", "abc", "gg", ""]);
+        let start = Int64Array::from(vec![4, 5, 5, 2]);
+        let expected = Int64Array::from(vec![4, 7, 0, 2]);
 
         let re = regexp_instr_func(&[Arc::new(values), Arc::new(regex), Arc::new(start)])
             .unwrap();
@@ -798,11 +809,17 @@ mod tests {
     where
         A: From<Vec<&'static str>> + Array + 'static,
     {
-        let values = A::from(vec!["abcabcabc", "abcabcabc", "abcabcabc", "abcabcabc"]);
-        let regex = A::from(vec!["abc", "abc", "abc", "abc"]);
-        let start = Int64Array::from(vec![1, 1, 1, 1]);
-        let nth = Int64Array::from(vec![1, 2, 3, 4]);
-        let expected = Int64Array::from(vec![1, 4, 7, 0]);
+        let values = A::from(vec![
+            "abcabcabc",
+            "abcabcabc",
+            "abcabcabc",
+            "abcabcabc",
+            "abc",
+        ]);
+        let regex = A::from(vec!["abc", "abc", "abc", "abc", ""]);
+        let start = Int64Array::from(vec![1, 1, 1, 1, 2]);
+        let nth = Int64Array::from(vec![1, 2, 3, 4, 3]);
+        let expected = Int64Array::from(vec![1, 4, 7, 0, 4]);
 
         let re = regexp_instr_func(&[
             Arc::new(values),
