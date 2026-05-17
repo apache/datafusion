@@ -35,8 +35,8 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan, LogicalPlanBuilder,
-    Operator, expr, lit,
+    BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
+    LogicalPlanBuilder, Operator, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -513,15 +513,15 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .clone()
             .transform_up(|expr| {
                 let new_expr = match expr {
-                    Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
-                        if func.name() == "count" {
-                            Transformed::yes(Expr::Literal(
-                                ScalarValue::Int64(Some(0)),
-                                None,
-                            ))
-                        } else {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null, None))
-                        }
+                    Expr::AggregateFunction(expr::AggregateFunction { func, params }) => {
+                        let arg_types = params
+                            .args
+                            .iter()
+                            .map(|arg| arg.get_type(schema.as_ref()))
+                            .collect::<Result<Vec<_>>>()?;
+                        let return_type = func.return_type(&arg_types)?;
+                        let default_value = func.default_value(&return_type)?;
+                        Transformed::yes(Expr::Literal(default_value, None))
                     }
                     _ => Transformed::no(expr),
                 };

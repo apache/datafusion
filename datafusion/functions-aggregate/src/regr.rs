@@ -457,6 +457,14 @@ impl AggregateUDFImpl for Regr {
         }
     }
 
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        if self.regr_type == RegrType::Count {
+            Ok(ScalarValue::UInt64(Some(0)))
+        } else {
+            ScalarValue::try_from(data_type)
+        }
+    }
+
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(RegrAccumulator::try_new(&self.regr_type)?))
     }
