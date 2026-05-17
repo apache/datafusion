@@ -73,7 +73,9 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 /// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
 pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
-    /// Get the data type of this expression, given the schema of the input
+    /// Get the data type of this expression, given the schema of the input.
+    /// Returns an error if the data type cannot be determined, ex. if the
+    /// schema is missing a required field.
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_field(input_schema)?.data_type().to_owned())
     }
