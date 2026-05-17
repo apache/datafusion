@@ -156,14 +156,12 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                 // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut expr_to_rewrite_expr_map = HashMap::new();
-                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
-                // Expr contains Arc with interior mutability but is intentionally used as hash key
-                let mut subquery_to_expr_map = HashMap::new();
+                let mut alias_to_expr_map: HashMap<String, Expr> = HashMap::new();
                 for expr in projection.expr.iter() {
                     let (subqueries, rewrite_exprs) =
                         self.extract_subquery_exprs(expr, config.alias_generator())?;
-                    for (subquery, _) in &subqueries {
-                        subquery_to_expr_map.insert(subquery.clone(), expr.clone());
+                    for (_, alias) in &subqueries {
+                        alias_to_expr_map.insert(alias.clone(), expr.clone());
                     }
                     all_subqueries.extend(subqueries);
                     expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
@@ -180,7 +178,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     {
                         cur_input = optimized_subquery;
                         if !expr_check_map.is_empty()
-                            && let Some(expr) = subquery_to_expr_map.get(&subquery)
+                            && let Some(expr) = alias_to_expr_map.get(&alias)
                             && let Some(rewrite_expr) = expr_to_rewrite_expr_map.get(expr)
                         {
                             let new_expr = rewrite_expr
