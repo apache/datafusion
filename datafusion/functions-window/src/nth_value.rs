@@ -685,9 +685,8 @@ mod tests {
             ))
             .unwrap_err();
 
-        assert!(
-            err.to_string()
-                .starts_with("Execution error: The second argument of nth_value must not be i64::MIN")
-        );
+        assert!(err.to_string().starts_with(
+            "Execution error: The second argument of nth_value must not be i64::MIN"
+        ));
     }
 }
