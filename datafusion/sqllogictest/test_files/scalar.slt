@@ -1300,6 +1300,12 @@ NULL -32
 statement ok
 set datafusion.sql_parser.dialect = postgresql;
 
+# postgresql exponentiation uses caret
+query R
+select 2 ^ 3;
+----
+8
+
 # postgresql bitwise xor with column and scalar
 query I rowsort
 select c # 856 from signed_integers;
