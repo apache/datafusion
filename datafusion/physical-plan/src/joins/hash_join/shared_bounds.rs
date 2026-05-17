@@ -61,22 +61,29 @@ impl ColumnBounds {
     }
 }
 
-/// Represents the bounds for all join key columns from a single partition.
-/// This contains the min/max values computed from one partition's build-side data.
+/// Min/max bounds for join key columns, indexed by join key expression index.
+///
+/// A `None` slot marks a column with no usable bounds — e.g. one dropped from
+/// a global envelope because it was not totally ordered across partitions. The
+/// slot is kept (rather than removed) so that every later column keeps its
+/// join-key index; [`create_bounds_predicate`] pairs bounds with `on_right`
+/// positionally. Per-partition bounds built via [`PartitionBounds::new`] are
+/// always fully populated.
 #[derive(Debug, Clone)]
 pub(crate) struct PartitionBounds {
-    /// Min/max bounds for each join key column in this partition.
-    /// Index corresponds to the join key expression index.
-    column_bounds: Vec<ColumnBounds>,
+    column_bounds: Vec<Option<ColumnBounds>>,
 }
 
 impl PartitionBounds {
+    /// Build from dense per-partition bounds, where every column has bounds.
     pub(crate) fn new(column_bounds: Vec<ColumnBounds>) -> Self {
-        Self { column_bounds }
+        Self {
+            column_bounds: column_bounds.into_iter().map(Some).collect(),
+        }
     }
 
     pub(crate) fn get_column_bounds(&self, index: usize) -> Option<&ColumnBounds> {
-        self.column_bounds.get(index)
+        self.column_bounds.get(index).and_then(Option::as_ref)
     }
 }
 
@@ -198,48 +205,53 @@ fn combine_membership_and_bounds(
 
 /// Compute the global (envelope) min/max bounds across a set of partition bounds.
 ///
-/// For each column index, returns the smallest min seen and the largest max seen.
-/// Columns where any partition is missing bounds, or where bounds are not totally
-/// ordered (e.g. mixed-type comparisons), are dropped from the global envelope.
+/// For each join-key column, returns the smallest min and largest max seen
+/// across partitions. A column that is not totally ordered across partitions
+/// (e.g. a mixed-type comparison where `partial_cmp` yields `None`) becomes a
+/// `None` slot: dropped from the envelope but keeping its index, so the
+/// surviving columns stay aligned with `on_right`. Returns `None` when there
+/// are no partitions, the partitions disagree on column count, or no column
+/// survives.
 fn compute_global_bounds(per_partition: &[&PartitionBounds]) -> Option<PartitionBounds> {
     let mut iter = per_partition.iter();
     let first = iter.next()?;
-    let mut acc: Vec<Option<ColumnBounds>> = first
-        .column_bounds
-        .iter()
-        .map(|cb| Some(cb.clone()))
-        .collect();
+    let mut acc: Vec<Option<ColumnBounds>> = first.column_bounds.clone();
 
     for partition in iter {
         if partition.column_bounds.len() != acc.len() {
             return None;
         }
-        for (slot, cb) in acc.iter_mut().zip(partition.column_bounds.iter()) {
+        for (slot, incoming) in acc.iter_mut().zip(partition.column_bounds.iter()) {
             let Some(existing) = slot.as_mut() else {
+                continue; // already dropped by an earlier partition
+            };
+            let Some(cb) = incoming else {
+                *slot = None;
                 continue;
             };
-            match cb.min.partial_cmp(&existing.min) {
-                Some(std::cmp::Ordering::Less) => existing.min = cb.min.clone(),
-                Some(_) => {}
-                None => {
-                    *slot = None;
-                    continue;
+            match (
+                cb.min.partial_cmp(&existing.min),
+                cb.max.partial_cmp(&existing.max),
+            ) {
+                (Some(min_ord), Some(max_ord)) => {
+                    if min_ord == std::cmp::Ordering::Less {
+                        existing.min = cb.min.clone();
+                    }
+                    if max_ord == std::cmp::Ordering::Greater {
+                        existing.max = cb.max.clone();
+                    }
                 }
-            }
-            match cb.max.partial_cmp(&existing.max) {
-                Some(std::cmp::Ordering::Greater) => existing.max = cb.max.clone(),
-                Some(_) => {}
-                None => *slot = None,
+                // Not totally ordered: drop just this column, keep the slot
+                // so later columns stay at their join-key index.
+                _ => *slot = None,
             }
         }
     }
 
-    let merged: Vec<ColumnBounds> = acc.into_iter().flatten().collect();
-    if merged.is_empty() {
-        None
-    } else {
-        Some(PartitionBounds::new(merged))
+    if acc.iter().all(Option::is_none) {
+        return None;
     }
+    Some(PartitionBounds { column_bounds: acc })
 }
 
 /// Concatenate per-partition InList arrays into a single array. Returns `None`
@@ -985,10 +997,57 @@ mod tests {
         assert_eq!(cb.max, ScalarValue::Int32(Some(20)));
     }
 
+    /// Regression test for the column-index misalignment bug.
+    ///
+    /// When a *middle* join-key column is incomparable across partitions, it
+    /// must be dropped *in place* (its index left as a gap) so that every
+    /// later column keeps its join-key index. `create_bounds_predicate` pairs
+    /// each surviving column with `on_right` positionally; a column that
+    /// shifted index would be filtered against the wrong probe expression — a
+    /// silent wrong-results bug.
+    #[test]
+    fn compute_global_bounds_keeps_index_alignment_when_middle_column_dropped() {
+        let p1 = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Int32(Some(5)), ScalarValue::Int32(Some(10))),
+            ColumnBounds::new(ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))),
+            ColumnBounds::new(
+                ScalarValue::Int32(Some(100)),
+                ScalarValue::Int32(Some(200)),
+            ),
+        ]);
+        let p2 = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(20))),
+            // Column 1 is incomparable with p1's column 1 (different
+            // ScalarValue variant -> partial_cmp returns None).
+            ColumnBounds::new(
+                ScalarValue::Utf8(Some("a".to_string())),
+                ScalarValue::Utf8(Some("z".to_string())),
+            ),
+            ColumnBounds::new(
+                ScalarValue::Int32(Some(50)),
+                ScalarValue::Int32(Some(300)),
+            ),
+        ]);
+        let global = compute_global_bounds(&[&p1, &p2]).unwrap();
+
+        // Column 0 merges normally and stays at index 0.
+        let c0 = global.get_column_bounds(0).unwrap();
+        assert_eq!(c0.min, ScalarValue::Int32(Some(3)));
+        assert_eq!(c0.max, ScalarValue::Int32(Some(20)));
+        // Column 1 is incomparable and dropped.
+        assert!(global.get_column_bounds(1).is_none());
+        // Column 2 still merges, and critically stays at index 2 — the buggy
+        // `flatten()` shifted its bounds into index 1.
+        let c2 = global.get_column_bounds(2).unwrap();
+        assert_eq!(c2.min, ScalarValue::Int32(Some(50)));
+        assert_eq!(c2.max, ScalarValue::Int32(Some(300)));
+    }
+
     /// When one partition's bounds for a column cannot be ordered against
     /// another's (different ScalarValue variants → `partial_cmp` returns
-    /// `None`), that column is dropped from the global envelope while
-    /// orderable columns continue to widen normally.
+    /// `None`), that column is dropped from the global envelope (its index
+    /// becomes a `None` slot) while orderable columns continue to widen
+    /// normally.
     #[test]
     fn compute_global_bounds_drops_incomparable_column() {
         let p1 = PartitionBounds::new(vec![
@@ -1006,8 +1065,9 @@ mod tests {
             ),
         ]);
         let global = compute_global_bounds(&[&p1, &p2]).unwrap();
-        // Only the orderable column survives.
-        assert_eq!(global.column_bounds.len(), 1);
+        // The orderable column survives at its index; the incomparable one
+        // is a `None` slot.
+        assert!(global.get_column_bounds(1).is_none());
         let cb = global.get_column_bounds(0).unwrap();
         assert_eq!(cb.min, ScalarValue::Int32(Some(3)));
         assert_eq!(cb.max, ScalarValue::Int32(Some(20)));
