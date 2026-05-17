@@ -329,7 +329,6 @@ where
     )
     .map(|(value, regex, start, nth, flags, subexp)| match regex {
         None => Ok(None),
-        Some("") => Ok(Some(0)),
         Some(regex) => get_index(
             value,
             regex,
@@ -607,6 +606,61 @@ mod tests {
             });
     }
 
+    fn test_case_sensitive_regexp_instr_scalar_empty_pattern() {
+        let values = ["abcabcabc", "", "abcabcabc"];
+        let regex = ["", "", ""];
+        let start = [1, 1, 4];
+        let expected: Vec<i64> = vec![1, 0, 4];
+
+        izip!(values.iter(), regex.iter(), start.iter())
+            .enumerate()
+            .for_each(|(pos, (&v, &r, &s))| {
+                let expected = expected.get(pos).cloned();
+
+                let v_sv = ScalarValue::Utf8(Some(v.to_string()));
+                let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
+                let start_sv = ScalarValue::Int64(Some(s));
+                let re =
+                    regexp_instr_with_scalar_values(&[v_sv, regex_sv, start_sv.clone()]);
+                match re {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                        assert_eq!(
+                            v, expected,
+                            "regexp_instr scalar empty-pattern test failed"
+                        );
+                    }
+                    _ => panic!("Unexpected result"),
+                }
+
+                let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
+                let regex_sv = ScalarValue::LargeUtf8(Some(r.to_string()));
+                let re =
+                    regexp_instr_with_scalar_values(&[v_sv, regex_sv, start_sv.clone()]);
+                match re {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                        assert_eq!(
+                            v, expected,
+                            "regexp_instr scalar empty-pattern test failed"
+                        );
+                    }
+                    _ => panic!("Unexpected result"),
+                }
+
+                let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
+                let regex_sv = ScalarValue::Utf8View(Some(r.to_string()));
+                let re = regexp_instr_with_scalar_values(&[v_sv, regex_sv, start_sv]);
+                match re {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                        assert_eq!(
+                            v, expected,
+                            "regexp_instr scalar empty-pattern test failed"
+                        );
+                    }
+                    _ => panic!("Unexpected result"),
+                }
+            });
+    }
+
     fn test_case_sensitive_regexp_instr_scalar_nth() {
         let values = ["abcabcabc", "abcabcabc", "abcabcabc", "abcabcabc"];
         let regex = ["abc", "abc", "abc", "abc"];
@@ -812,5 +866,10 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_regexp_instr_empty_pattern() {
+        test_case_sensitive_regexp_instr_scalar_empty_pattern();
     }
 }
