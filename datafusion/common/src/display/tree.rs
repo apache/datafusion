@@ -17,6 +17,8 @@
 
 //! Types for plan display
 
+use indexmap::IndexMap;
+
 use crate::HashMap;
 use crate::display::{DisplayAs, DisplayFormatType};
 use crate::tree_node::{TreeNode, TreeNodeRecursion};
@@ -48,22 +50,6 @@ use std::{cmp, fmt};
 /// 3. Bottom layer: renders the bottom borders and connections
 ///
 /// Each node is rendered in a box of fixed width (NODE_RENDER_WIDTH).
-pub struct TreeRenderVisitor {}
-
-impl TreeRenderVisitor {
-    /// Main entry point for rendering an execution plan as a tree.
-    /// The rendering process happens in three stages for each level of the tree:
-    /// 1. Render top borders and connections
-    /// 2. Render node content and vertical connections
-    /// 3. Render bottom borders and connections
-    fn visit<T: FormattedTreeNode>(
-        &mut self,
-        plan: &T,
-    ) -> Result<RenderTree, fmt::Error> {
-        let root = RenderTree::create_tree(plan, 240);
-        Ok(root)
-    }
-}
 impl RenderTree {
     // Unicode box-drawing characters for creating borders and connections.
     const LTCORNER: &'static str = "┌"; // Left top corner
@@ -306,7 +292,7 @@ impl RenderTree {
     }
 
     fn split_up_extra_info(
-        extra_info: &HashMap<String, String>,
+        extra_info: &IndexMap<String, String>,
         result: &mut Vec<String>,
         max_lines: usize,
     ) {
@@ -327,14 +313,27 @@ impl RenderTree {
             let available_width = Self::NODE_RENDER_WIDTH - 7;
             let total_size = key.len() + str.len() + 2;
             let is_multiline = str.contains('\n');
+            let hide_key = key == "__main_content__";
 
             if str.is_empty() {
-                str = key.to_string();
+                str = if hide_key{
+                    str
+                }else{
+                    key.to_string()
+                };
             } else if !is_multiline && total_size < available_width {
-                str = format!("{key}: {str}");
+                str = if hide_key {
+                    str
+                } else {
+                    format!("{key}: {str}")
+                };
                 is_inlined = true;
             } else {
-                str = format!("{key}:\n{str}");
+                str = if hide_key {
+                    str
+                } else {
+                    format!("{key}:\n{str}")
+                };
             }
 
             if is_inlined && was_inlined {
@@ -495,14 +494,14 @@ impl Coordinate {
 pub struct RenderTreeNode {
     /// The name of physical `ExecutionPlan`.
     name: String,
-    /// Execution info collected from `ExecutionPlan`.
-    extra_text: HashMap<String, String>,
+    /// Additional info being displayed along with the nameA.
+    extra_text: IndexMap<String, String>,
     /// Positions of child nodes in the rendered tree.
     child_positions: Vec<Coordinate>,
 }
 
 impl RenderTreeNode {
-    pub fn new(name: String, extra_text: HashMap<String, String>) -> Self {
+    pub fn new(name: String, extra_text: IndexMap<String, String>) -> Self {
         RenderTreeNode {
             name,
             extra_text,
@@ -544,6 +543,11 @@ impl fmt::Display for RenderTree {
 }
 
 impl RenderTree {
+    /// Main entry point for rendering an execution plan as a tree.
+    /// The rendering process happens in three stages for each level of the tree:
+    /// 1. Render top borders and connections
+    /// 2. Render node content and vertical connections
+    /// 3. Render bottom borders and connections
     fn create_tree<T: FormattedTreeNode>(node: &T, max_width: usize) -> Self {
         let (width, height) = get_tree_width_height(node);
 
@@ -566,7 +570,7 @@ impl RenderTree {
     fn get_node(&self, x: usize, y: usize) -> Option<Arc<RenderTreeNode>> {
         if x >= self.width || y >= self.height {
             return None;
-        }
+        }cargo test --test sqllogictests  -- explain_tree.slt --nocapture 
 
         let pos = self.get_position(x, y);
         self.nodes.get(pos).and_then(|node| node.clone())
@@ -654,7 +658,7 @@ pub fn create_tree_recursive<T: FormattedTreeNode>(
     y: usize,
 ) -> usize {
     let display_info = RenderTree::fmt_display(plan).to_string();
-    let mut extra_info = HashMap::new();
+    let mut extra_info = IndexMap::new();
 
     // Parse the key-value pairs from the formatted string.
     // See DisplayFormatType::TreeRender for details

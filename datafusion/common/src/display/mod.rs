@@ -182,7 +182,7 @@ pub enum DisplayFormatType {
     ///
     /// 2. A string with a `=` that is treated as a `key=value pair`. Everything
     ///    before the first `=` is treated as the key, and everything after the
-    ///    first `=` is treated as the value.
+    ///    first `=` is treated as the value. If key is __main_content__ it will be omitted
     ///
     /// For example, if the output of `TreeRender` is this:
     /// ```text
@@ -200,5 +200,20 @@ pub enum DisplayFormatType {
     /// │          Parquet          │
     /// └───────────────────────────┘
     ///  ```
+    /// For logical plan
+    /// ```text
+    /// __main_content__=table1.string_col != Utf8View("foo")
+    /// ```
+    ///
+    /// Is rendered as:
+    ///
+    /// ```text
+    /// ┌───────────────────────────┐
+    /// │           Filter          │
+    /// │    --------------------   │
+    /// │    table1.string_col !=   │
+    /// │       Utf8View("foo")     │
+    /// └───────────────────────────┘
+    /// ```
     TreeRender,
 }

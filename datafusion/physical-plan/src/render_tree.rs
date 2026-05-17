@@ -24,8 +24,8 @@
 use core::fmt;
 use std::{cmp, fmt::Formatter, sync::Arc};
 
-use datafusion_common::HashMap;
 pub use datafusion_common::display::{RenderTree, RenderTreeNode};
+use indexmap::IndexMap;
 
 use crate::{DisplayFormatType, ExecutionPlan};
 
@@ -103,7 +103,7 @@ fn create_tree_recursive(
     y: usize,
 ) -> usize {
     let display_info = fmt_display(plan).to_string();
-    let mut extra_info = HashMap::new();
+    let mut extra_info = IndexMap::new();
 
     // Parse the key-value pairs from the formatted string.
     // See DisplayFormatType::TreeRender for details

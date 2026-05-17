@@ -56,16 +56,28 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{Result, internal_err};
 
-impl FormattedTreeNode for LogicalPlan {}
+impl FormattedTreeNode for LogicalPlan {
+    fn node_name(&self) -> String {
+        self.display()
+            .to_string()
+            .split(":")
+            .next()
+            .unwrap_or("")
+            .to_string()
+    }
+}
 
 impl DisplayAs for LogicalPlan {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         if let DisplayFormatType::TreeRender = t {
-            if let LogicalPlan::TableScan(TableScan { table_name, .. }) = &self {
-                return write!(f, "TableScan {table_name}");
-            };
-            return write!(f, "{}", self.display());
+            let full = self.display().to_string();
+            let second = full
+                .split_once(':')
+                .map(|(_, second)| second.trim_start())
+                .unwrap_or("");
+            return write!(f, "__main_content__={}", second);
         }
+        // DisplayAs only used to render tree for now
         unimplemented!()
     }
 }
