@@ -30,6 +30,7 @@ pub mod metadata;
 mod metrics;
 mod opener;
 mod page_filter;
+mod push_decoder;
 mod reader;
 mod row_filter;
 mod row_group_filter;
