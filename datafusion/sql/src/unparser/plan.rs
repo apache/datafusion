@@ -803,43 +803,53 @@ impl Unparser<'_> {
                             }
                             cur = limit.input.as_ref();
                         }
-                        LogicalPlan::Sort(sort) => {
+                        LogicalPlan::Sort(sort) if sort.fetch.is_some() => {
+                            // `Sort { fetch }` is logically
+                            // `Limit(fetch) -> Sort`. Try to absorb the
+                            // virtual Limit first; only if that succeeds
+                            // do we absorb the Sort. Otherwise we'd
+                            // silently drop the fetch.
+                            let fetch = sort.fetch.expect("guarded above");
                             if have_order_by {
-                                if sort.fetch.is_some() {
-                                    // Inner Sort with `fetch` acts as
-                                    // Sort+Limit; dropping it would lose
-                                    // the hidden Limit.
-                                    break;
-                                }
+                                // The virtual Limit would sit below an
+                                // already-absorbed outer Sort.
+                                break;
+                            }
+                            if have_direct_limit {
+                                // Cannot combine a literal fetch with a
+                                // non-literal direct Limit; let the
+                                // derived subquery preserve both.
+                                break;
+                            }
+                            if have_combined_limit {
+                                let (cs, cf) = combine_limit(
+                                    combined_skip,
+                                    combined_fetch,
+                                    0,
+                                    Some(fetch),
+                                );
+                                combined_skip = cs;
+                                combined_fetch = cf;
+                            } else {
+                                combined_skip = 0;
+                                combined_fetch = Some(fetch);
+                                have_combined_limit = true;
+                            }
+                            // Now the Sort itself. We know
+                            // `!have_order_by` from the check above.
+                            absorbed_sort = Some(sort);
+                            have_order_by = true;
+                            cur = sort.input.as_ref();
+                        }
+                        LogicalPlan::Sort(sort) => {
+                            // Sort without `fetch`.
+                            if have_order_by {
                                 // Outer Sort already absorbed; the inner
                                 // Sort is reordered by it and is
-                                // conventionally dropped — matches
+                                // conventionally dropped, matching
                                 // `EnforceSorting` on the physical side.
                                 cur = sort.input.as_ref();
                                 continue;
-                            }
-                            // First Sort. Capture `fetch` as a combined
-                            // Limit (since `Sort { fetch }` is equivalent
-                            // to Sort + Limit). Defer emitting `ORDER BY`
-                            // until we know whether the chain fully
-                            // absorbed.
-                            if let Some(fetch) = sort.fetch
-                                && !have_direct_limit
-                            {
-                                if have_combined_limit {
-                                    let (cs, cf) = combine_limit(
-                                        combined_skip,
-                                        combined_fetch,
-                                        0,
-                                        Some(fetch),
-                                    );
-                                    combined_skip = cs;
-                                    combined_fetch = cf;
-                                } else {
-                                    combined_skip = 0;
-                                    combined_fetch = Some(fetch);
-                                    have_combined_limit = true;
-                                }
                             }
                             absorbed_sort = Some(sort);
                             have_order_by = true;
