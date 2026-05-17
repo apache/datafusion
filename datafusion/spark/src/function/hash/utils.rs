@@ -15,16 +15,112 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Shared macros for Spark-compatible hash functions.
+//! Shared helpers for Spark-compatible hash functions.
+//!
+//! Generic helpers ([`hash_primitive_values`], [`hash_bytes_values`]) cover
+//! the cases where a function-based abstraction is clean; less uniform paths
+//! (booleans, decimals, list/map dispatch) remain as macros.
 //!
 //! Ported from Apache DataFusion Comet:
 //! <https://github.com/apache/datafusion-comet/blob/main/native/spark-expr/src/hash_funcs/utils.rs>
 
+use arrow::array::{Array, PrimitiveArray};
+use arrow::datatypes::ArrowPrimitiveType;
+use datafusion_common::Result;
+
+/// Hash the values of a primitive array, calling `transform` to convert each
+/// value into a byte slice before feeding it to `hash_method`.
+#[inline]
+pub(crate) fn hash_primitive_values<P, F, B, H>(
+    array: &PrimitiveArray<P>,
+    hashes: &mut [u64],
+    transform: F,
+    hash_method: H,
+) where
+    P: ArrowPrimitiveType,
+    F: Fn(P::Native) -> B,
+    B: AsRef<[u8]>,
+    H: Fn(B, u64) -> u64,
+{
+    let values = array.values();
+    if array.null_count() == 0 {
+        // Fast path: no nulls, skip null checks
+        for (i, hash) in hashes.iter_mut().enumerate() {
+            *hash = hash_method(transform(values[i]), *hash);
+        }
+    } else {
+        // Slow path: check each row for null
+        for (i, hash) in hashes.iter_mut().enumerate() {
+            if !array.is_null(i) {
+                *hash = hash_method(transform(values[i]), *hash);
+            }
+        }
+    }
+}
+
+/// Hash an array by calling `value_at(array, i)` to produce a byte slice for
+/// each non-null row. Used for byte-slice arrays (Utf8/Binary/FixedSizeBinary
+/// and their Large/View variants) and for arrays whose values need a small
+/// transform (e.g. booleans widened to `i32`, decimals to `i128` bytes).
+#[inline]
+pub(crate) fn hash_bytes_values<A, B, H>(
+    array: &A,
+    hashes: &mut [u64],
+    value_at: impl Fn(&A, usize) -> B,
+    hash_method: H,
+) where
+    A: Array,
+    B: AsRef<[u8]>,
+    H: Fn(B, u64) -> u64,
+{
+    if array.null_count() == 0 {
+        for (i, hash) in hashes.iter_mut().enumerate() {
+            *hash = hash_method(value_at(array, i), *hash);
+        }
+    } else {
+        for (i, hash) in hashes.iter_mut().enumerate() {
+            if !array.is_null(i) {
+                *hash = hash_method(value_at(array, i), *hash);
+            }
+        }
+    }
+}
+
+/// Fallible variant of [`hash_bytes_values`]: `value_at` may return an error
+/// (used by the small-decimal path, where values may not fit in `i64`).
+#[inline]
+pub(crate) fn try_hash_bytes_values<A, B, H>(
+    array: &A,
+    hashes: &mut [u64],
+    value_at: impl Fn(&A, usize) -> Result<B>,
+    hash_method: H,
+) -> Result<()>
+where
+    A: Array,
+    B: AsRef<[u8]>,
+    H: Fn(B, u64) -> u64,
+{
+    if array.null_count() == 0 {
+        for (i, hash) in hashes.iter_mut().enumerate() {
+            *hash = hash_method(value_at(array, i)?, *hash);
+        }
+    } else {
+        for (i, hash) in hashes.iter_mut().enumerate() {
+            if !array.is_null(i) {
+                *hash = hash_method(value_at(array, i)?, *hash);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Downcast `$column` to `$array_type`, panicking with a useful error if the
+/// type does not match.
 #[macro_export]
 #[doc(hidden)]
-macro_rules! hash_array {
-    ($array_type: ident, $column: ident, $hashes: ident, $hash_method: ident) => {
-        let array = $column
+macro_rules! downcast_array {
+    ($column:ident, $array_type:ident) => {
+        $column
             .as_any()
             .downcast_ref::<$array_type>()
             .unwrap_or_else(|| {
@@ -33,14 +129,26 @@ macro_rules! hash_array {
                     stringify!($array_type),
                     $column.data_type()
                 )
-            });
+            })
+    };
+}
+
+/// Hash a byte-slice-accessor array (strings, binary, fixed-size binary, ...)
+/// where `value(i)` returns the item directly.
+///
+/// Kept as a macro because `a.value(i)` returns a borrow whose lifetime
+/// depends on the array, which Rust's closure inference does not propagate
+/// through a `Fn(&A, usize) -> B` bound with a free type parameter `B`.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! hash_array {
+    ($array_type:ident, $column:ident, $hashes:ident, $hash_method:ident) => {
+        let array = $crate::downcast_array!($column, $array_type);
         if array.null_count() == 0 {
-            // Fast path: no nulls, use direct indexing
             for i in 0..$hashes.len() {
                 $hashes[i] = $hash_method(&array.value(i), $hashes[i]);
             }
         } else {
-            // Slow path: check nulls
             for i in 0..$hashes.len() {
                 if !array.is_null(i) {
                     $hashes[i] = $hash_method(&array.value(i), $hashes[i]);
@@ -50,189 +158,90 @@ macro_rules! hash_array {
     };
 }
 
+/// Hash a `BooleanArray`, widening each value to `$hash_input_type` first.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! hash_array_boolean {
-    ($array_type: ident, $column: ident, $hash_input_type: ident, $hashes: ident, $hash_method: ident) => {
-        let array = $column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Failed to downcast column to {}. Actual data type: {:?}.",
-                    stringify!($array_type),
-                    $column.data_type()
-                )
-            });
-        if array.null_count() == 0 {
-            // Fast path: no nulls, use direct indexing
-            for i in 0..$hashes.len() {
-                $hashes[i] = $hash_method(
-                    $hash_input_type::from(array.value(i)).to_le_bytes(),
-                    $hashes[i],
-                );
-            }
-        } else {
-            // Slow path: check nulls
-            for i in 0..$hashes.len() {
-                if !array.is_null(i) {
-                    $hashes[i] = $hash_method(
-                        $hash_input_type::from(array.value(i)).to_le_bytes(),
-                        $hashes[i],
-                    );
-                }
-            }
-        }
+    ($array_type:ident, $column:ident, $hash_input_type:ident, $hashes:ident, $hash_method:ident) => {
+        let array = $crate::downcast_array!($column, $array_type);
+        $crate::function::hash::utils::hash_bytes_values(
+            array,
+            $hashes,
+            |a, i| $hash_input_type::from(a.value(i)).to_le_bytes(),
+            $hash_method,
+        );
     };
 }
 
+/// Hash a primitive array, widening each native value to `$ty` before hashing.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! hash_array_primitive {
-    ($array_type: ident, $column: ident, $ty: ident, $hashes: ident, $hash_method: ident) => {
-        let array = $column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Failed to downcast column to {}. Actual data type: {:?}.",
-                    stringify!($array_type),
-                    $column.data_type()
-                )
-            });
-        let values = array.values();
-
-        if array.null_count() == 0 {
-            // Fast path: no nulls, use direct indexing
-            for i in 0..values.len() {
-                $hashes[i] = $hash_method((values[i] as $ty).to_le_bytes(), $hashes[i]);
-            }
-        } else {
-            // Slow path: check nulls
-            for i in 0..values.len() {
-                if !array.is_null(i) {
-                    $hashes[i] =
-                        $hash_method((values[i] as $ty).to_le_bytes(), $hashes[i]);
-                }
-            }
-        }
+    ($array_type:ident, $column:ident, $ty:ident, $hashes:ident, $hash_method:ident) => {
+        let array = $crate::downcast_array!($column, $array_type);
+        $crate::function::hash::utils::hash_primitive_values(
+            array,
+            $hashes,
+            |v| (v as $ty).to_le_bytes(),
+            $hash_method,
+        );
     };
 }
 
+/// Hash a floating-point primitive array, normalizing `-0.0` to `0.0` per Spark.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! hash_array_primitive_float {
-    ($array_type: ident, $column: ident, $ty: ident, $ty2: ident, $hashes: ident, $hash_method: ident) => {
-        let array = $column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Failed to downcast column to {}. Actual data type: {:?}.",
-                    stringify!($array_type),
-                    $column.data_type()
-                )
-            });
-        let values = array.values();
-
-        if array.null_count() == 0 {
-            // Fast path: no nulls, use direct indexing
-            for i in 0..values.len() {
-                let value = values[i];
+    ($array_type:ident, $column:ident, $ty:ident, $ty2:ident, $hashes:ident, $hash_method:ident) => {
+        let array = $crate::downcast_array!($column, $array_type);
+        $crate::function::hash::utils::hash_primitive_values(
+            array,
+            $hashes,
+            |v| {
                 // Spark uses 0 as hash for -0.0, see `Murmur3Hash` expression.
-                if value == 0.0 && value.is_sign_negative() {
-                    $hashes[i] = $hash_method((0 as $ty2).to_le_bytes(), $hashes[i]);
+                if v == 0.0 && v.is_sign_negative() {
+                    (0 as $ty2).to_le_bytes()
                 } else {
-                    $hashes[i] = $hash_method((value as $ty).to_le_bytes(), $hashes[i]);
+                    (v as $ty).to_le_bytes()
                 }
-            }
-        } else {
-            // Slow path: check nulls
-            for i in 0..values.len() {
-                if !array.is_null(i) {
-                    let value = values[i];
-                    // Spark uses 0 as hash for -0.0, see `Murmur3Hash` expression.
-                    if value == 0.0 && value.is_sign_negative() {
-                        $hashes[i] = $hash_method((0 as $ty2).to_le_bytes(), $hashes[i]);
-                    } else {
-                        $hashes[i] =
-                            $hash_method((value as $ty).to_le_bytes(), $hashes[i]);
-                    }
-                }
-            }
-        }
+            },
+            $hash_method,
+        );
     };
 }
 
+/// Hash a small (precision <= 18) decimal array by reducing each value to `i64`.
+/// Errors via `?` if a value does not fit in `i64`.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! hash_array_small_decimal {
-    ($array_type:ident, $column: ident, $hashes: ident, $hash_method: ident) => {
-        let array = $column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Failed to downcast column to {}. Actual data type: {:?}.",
-                    stringify!($array_type),
-                    $column.data_type()
-                )
-            });
-
-        if array.null_count() == 0 {
-            // Fast path: no nulls, use direct indexing
-            for i in 0..$hashes.len() {
-                $hashes[i] = $hash_method(
-                    i64::try_from(array.value(i))
-                        .map(|v| v.to_le_bytes())
-                        .map_err(|e| DataFusionError::Execution(e.to_string()))?,
-                    $hashes[i],
-                );
-            }
-        } else {
-            // Slow path: check nulls
-            for i in 0..$hashes.len() {
-                if !array.is_null(i) {
-                    $hashes[i] = $hash_method(
-                        i64::try_from(array.value(i))
-                            .map(|v| v.to_le_bytes())
-                            .map_err(|e| DataFusionError::Execution(e.to_string()))?,
-                        $hashes[i],
-                    );
-                }
-            }
-        }
+    ($array_type:ident, $column:ident, $hashes:ident, $hash_method:ident) => {
+        let array = $crate::downcast_array!($column, $array_type);
+        $crate::function::hash::utils::try_hash_bytes_values(
+            array,
+            $hashes,
+            |a, i| {
+                i64::try_from(a.value(i))
+                    .map(|v| v.to_le_bytes())
+                    .map_err(|e| DataFusionError::Execution(e.to_string()))
+            },
+            $hash_method,
+        )?;
     };
 }
 
+/// Hash a wide decimal array using the raw 128-bit byte representation.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! hash_array_decimal {
-    ($array_type:ident, $column: ident, $hashes: ident, $hash_method: ident) => {
-        let array = $column
-            .as_any()
-            .downcast_ref::<$array_type>()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Failed to downcast column to {}. Actual data type: {:?}.",
-                    stringify!($array_type),
-                    $column.data_type()
-                )
-            });
-
-        if array.null_count() == 0 {
-            // Fast path: no nulls, use direct indexing
-            for i in 0..$hashes.len() {
-                $hashes[i] = $hash_method(array.value(i).to_le_bytes(), $hashes[i]);
-            }
-        } else {
-            // Slow path: check nulls
-            for i in 0..$hashes.len() {
-                if !array.is_null(i) {
-                    $hashes[i] = $hash_method(array.value(i).to_le_bytes(), $hashes[i]);
-                }
-            }
-        }
+    ($array_type:ident, $column:ident, $hashes:ident, $hash_method:ident) => {
+        let array = $crate::downcast_array!($column, $array_type);
+        $crate::function::hash::utils::hash_bytes_values(
+            array,
+            $hashes,
+            |a, i| a.value(i).to_le_bytes(),
+            $hash_method,
+        );
     };
 }
 
@@ -510,6 +519,158 @@ macro_rules! hash_list_with_primitive_elements {
                     }
                 }
             }
+        }
+    };
+}
+
+/// Hash a map array by hashing its key/value entries in order.
+///
+/// Specializes for common key/value type combinations so the hot path stays
+/// monomorphic; falls back to recursive hashing for arbitrary nested types.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! hash_map_array {
+    // Specialized variant: typed key and value arrays, byte transforms.
+    ($map_array:ident, $key_array:ident, $value_array:ident, $offsets:ident, $hashes_buffer:ident, $hash_method:ident, $key_transform:expr, $value_transform:expr) => {
+        if $map_array.null_count() == 0
+            && $key_array.null_count() == 0
+            && $value_array.null_count() == 0
+        {
+            for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
+                let start = $offsets[row_idx] as usize;
+                let end = $offsets[row_idx + 1] as usize;
+                for entry_idx in start..end {
+                    *hash =
+                        $hash_method($key_transform($key_array.value(entry_idx)), *hash);
+                    *hash = $hash_method(
+                        $value_transform($value_array.value(entry_idx)),
+                        *hash,
+                    );
+                }
+            }
+        } else {
+            for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
+                if !$map_array.is_null(row_idx) {
+                    let start = $offsets[row_idx] as usize;
+                    let end = $offsets[row_idx + 1] as usize;
+                    for entry_idx in start..end {
+                        if !$key_array.is_null(entry_idx) {
+                            *hash = $hash_method(
+                                $key_transform($key_array.value(entry_idx)),
+                                *hash,
+                            );
+                        }
+                        if !$value_array.is_null(entry_idx) {
+                            *hash = $hash_method(
+                                $value_transform($value_array.value(entry_idx)),
+                                *hash,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    };
+    // Fallback variant: recursively hash each key/value entry.
+    (recursive: $map_array:ident, $keys:ident, $values:ident, $offsets:ident, $hashes_buffer:ident, $recursive_hash_method:ident) => {
+        if $map_array.null_count() == 0 {
+            for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
+                let start = $offsets[row_idx] as usize;
+                let end = $offsets[row_idx + 1] as usize;
+                for entry_idx in start..end {
+                    let key_array = $keys.slice(entry_idx, 1);
+                    let mut single_hash = [*hash];
+                    $recursive_hash_method(&[key_array], &mut single_hash)?;
+                    *hash = single_hash[0];
+
+                    let value_array = $values.slice(entry_idx, 1);
+                    single_hash = [*hash];
+                    $recursive_hash_method(&[value_array], &mut single_hash)?;
+                    *hash = single_hash[0];
+                }
+            }
+        } else {
+            for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
+                if !$map_array.is_null(row_idx) {
+                    let start = $offsets[row_idx] as usize;
+                    let end = $offsets[row_idx + 1] as usize;
+                    for entry_idx in start..end {
+                        let key_array = $keys.slice(entry_idx, 1);
+                        let mut single_hash = [*hash];
+                        $recursive_hash_method(&[key_array], &mut single_hash)?;
+                        *hash = single_hash[0];
+
+                        let value_array = $values.slice(entry_idx, 1);
+                        single_hash = [*hash];
+                        $recursive_hash_method(&[value_array], &mut single_hash)?;
+                        *hash = single_hash[0];
+                    }
+                }
+            }
+        }
+    };
+}
+
+/// Dispatch over a `MapArray`'s key/value types, calling [`hash_map_array!`]
+/// with the right specialization (or the recursive fallback).
+#[macro_export]
+#[doc(hidden)]
+macro_rules! hash_map_with_typed_entries {
+    ($col:ident, $field:expr, $hashes_buffer:ident, $hash_method:ident, $recursive_hash_method:ident) => {
+        let map_array = $col.as_any().downcast_ref::<MapArray>().unwrap();
+        let keys = map_array.keys();
+        let values = map_array.values();
+        let offsets = map_array.offsets();
+
+        if let DataType::Struct(fields) = $field.data_type() {
+            let key_type = &fields[0].data_type();
+            let value_type = &fields[1].data_type();
+
+            match (key_type, value_type) {
+                (DataType::Utf8, DataType::Int32) => {
+                    let key_array = keys.as_any().downcast_ref::<StringArray>().unwrap();
+                    let value_array = values.as_any().downcast_ref::<Int32Array>().unwrap();
+                    $crate::hash_map_array!(
+                        map_array, key_array, value_array, offsets, $hashes_buffer,
+                        $hash_method, |v| v, |v: i32| v.to_le_bytes()
+                    );
+                }
+                (DataType::Int32, DataType::Utf8) => {
+                    let key_array = keys.as_any().downcast_ref::<Int32Array>().unwrap();
+                    let value_array = values.as_any().downcast_ref::<StringArray>().unwrap();
+                    $crate::hash_map_array!(
+                        map_array, key_array, value_array, offsets, $hashes_buffer,
+                        $hash_method, |v: i32| v.to_le_bytes(), |v| v
+                    );
+                }
+                (DataType::Utf8, DataType::Utf8) => {
+                    let key_array = keys.as_any().downcast_ref::<StringArray>().unwrap();
+                    let value_array = values.as_any().downcast_ref::<StringArray>().unwrap();
+                    $crate::hash_map_array!(
+                        map_array, key_array, value_array, offsets, $hashes_buffer,
+                        $hash_method, |v| v, |v| v
+                    );
+                }
+                (DataType::Int32, DataType::Int32) => {
+                    let key_array = keys.as_any().downcast_ref::<Int32Array>().unwrap();
+                    let value_array = values.as_any().downcast_ref::<Int32Array>().unwrap();
+                    $crate::hash_map_array!(
+                        map_array, key_array, value_array, offsets, $hashes_buffer,
+                        $hash_method, |v: i32| v.to_le_bytes(), |v: i32| v.to_le_bytes()
+                    );
+                }
+                _ => {
+                    $crate::hash_map_array!(
+                        recursive: map_array, keys, values, offsets,
+                        $hashes_buffer, $recursive_hash_method
+                    );
+                }
+            }
+        } else {
+            return Err(DataFusionError::Internal(format!(
+                "Map field type must be a struct, got: {}",
+                $field.data_type()
+            )));
         }
     };
 }
@@ -827,179 +988,9 @@ macro_rules! create_hashes_internal {
                     }
                 }
                 DataType::Map(field, _) => {
-                    let map_array = col.as_any().downcast_ref::<MapArray>().unwrap();
-                    let keys = map_array.keys();
-                    let values = map_array.values();
-                    let offsets = map_array.offsets();
-
-                    // Get key and value types from the struct field
-                    if let DataType::Struct(fields) = field.data_type() {
-                        let key_type = &fields[0].data_type();
-                        let value_type = &fields[1].data_type();
-
-                        // Specialize for common map key/value combinations
-                        match (key_type, value_type) {
-                            (DataType::Utf8, DataType::Int32) => {
-                                let key_array = keys.as_any().downcast_ref::<StringArray>().unwrap();
-                                let value_array = values.as_any().downcast_ref::<Int32Array>().unwrap();
-                                if map_array.null_count() == 0 && key_array.null_count() == 0 && value_array.null_count() == 0 {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        let start = offsets[row_idx] as usize;
-                                        let end = offsets[row_idx + 1] as usize;
-                                        for entry_idx in start..end {
-                                            *hash = $hash_method(key_array.value(entry_idx), *hash);
-                                            *hash = $hash_method(value_array.value(entry_idx).to_le_bytes(), *hash);
-                                        }
-                                    }
-                                } else {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        if !map_array.is_null(row_idx) {
-                                            let start = offsets[row_idx] as usize;
-                                            let end = offsets[row_idx + 1] as usize;
-                                            for entry_idx in start..end {
-                                                if !key_array.is_null(entry_idx) {
-                                                    *hash = $hash_method(key_array.value(entry_idx), *hash);
-                                                }
-                                                if !value_array.is_null(entry_idx) {
-                                                    *hash = $hash_method(value_array.value(entry_idx).to_le_bytes(), *hash);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            (DataType::Int32, DataType::Utf8) => {
-                                let key_array = keys.as_any().downcast_ref::<Int32Array>().unwrap();
-                                let value_array = values.as_any().downcast_ref::<StringArray>().unwrap();
-                                if map_array.null_count() == 0 && key_array.null_count() == 0 && value_array.null_count() == 0 {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        let start = offsets[row_idx] as usize;
-                                        let end = offsets[row_idx + 1] as usize;
-                                        for entry_idx in start..end {
-                                            *hash = $hash_method(key_array.value(entry_idx).to_le_bytes(), *hash);
-                                            *hash = $hash_method(value_array.value(entry_idx), *hash);
-                                        }
-                                    }
-                                } else {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        if !map_array.is_null(row_idx) {
-                                            let start = offsets[row_idx] as usize;
-                                            let end = offsets[row_idx + 1] as usize;
-                                            for entry_idx in start..end {
-                                                if !key_array.is_null(entry_idx) {
-                                                    *hash = $hash_method(key_array.value(entry_idx).to_le_bytes(), *hash);
-                                                }
-                                                if !value_array.is_null(entry_idx) {
-                                                    *hash = $hash_method(value_array.value(entry_idx), *hash);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            (DataType::Utf8, DataType::Utf8) => {
-                                let key_array = keys.as_any().downcast_ref::<StringArray>().unwrap();
-                                let value_array = values.as_any().downcast_ref::<StringArray>().unwrap();
-                                if map_array.null_count() == 0 && key_array.null_count() == 0 && value_array.null_count() == 0 {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        let start = offsets[row_idx] as usize;
-                                        let end = offsets[row_idx + 1] as usize;
-                                        for entry_idx in start..end {
-                                            *hash = $hash_method(key_array.value(entry_idx), *hash);
-                                            *hash = $hash_method(value_array.value(entry_idx), *hash);
-                                        }
-                                    }
-                                } else {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        if !map_array.is_null(row_idx) {
-                                            let start = offsets[row_idx] as usize;
-                                            let end = offsets[row_idx + 1] as usize;
-                                            for entry_idx in start..end {
-                                                if !key_array.is_null(entry_idx) {
-                                                    *hash = $hash_method(key_array.value(entry_idx), *hash);
-                                                }
-                                                if !value_array.is_null(entry_idx) {
-                                                    *hash = $hash_method(value_array.value(entry_idx), *hash);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            (DataType::Int32, DataType::Int32) => {
-                                let key_array = keys.as_any().downcast_ref::<Int32Array>().unwrap();
-                                let value_array = values.as_any().downcast_ref::<Int32Array>().unwrap();
-                                if map_array.null_count() == 0 && key_array.null_count() == 0 && value_array.null_count() == 0 {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        let start = offsets[row_idx] as usize;
-                                        let end = offsets[row_idx + 1] as usize;
-                                        for entry_idx in start..end {
-                                            *hash = $hash_method(key_array.value(entry_idx).to_le_bytes(), *hash);
-                                            *hash = $hash_method(value_array.value(entry_idx).to_le_bytes(), *hash);
-                                        }
-                                    }
-                                } else {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        if !map_array.is_null(row_idx) {
-                                            let start = offsets[row_idx] as usize;
-                                            let end = offsets[row_idx + 1] as usize;
-                                            for entry_idx in start..end {
-                                                if !key_array.is_null(entry_idx) {
-                                                    *hash = $hash_method(key_array.value(entry_idx).to_le_bytes(), *hash);
-                                                }
-                                                if !value_array.is_null(entry_idx) {
-                                                    *hash = $hash_method(value_array.value(entry_idx).to_le_bytes(), *hash);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {
-                                // Fall back to recursive approach for other type combinations
-                                if map_array.null_count() == 0 {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        let start = offsets[row_idx] as usize;
-                                        let end = offsets[row_idx + 1] as usize;
-                                        for entry_idx in start..end {
-                                            let key_array = keys.slice(entry_idx, 1);
-                                            let mut single_hash = [*hash];
-                                            $recursive_hash_method(&[key_array], &mut single_hash)?;
-                                            *hash = single_hash[0];
-
-                                            let value_array = values.slice(entry_idx, 1);
-                                            single_hash = [*hash];
-                                            $recursive_hash_method(&[value_array], &mut single_hash)?;
-                                            *hash = single_hash[0];
-                                        }
-                                    }
-                                } else {
-                                    for (row_idx, hash) in $hashes_buffer.iter_mut().enumerate() {
-                                        if !map_array.is_null(row_idx) {
-                                            let start = offsets[row_idx] as usize;
-                                            let end = offsets[row_idx + 1] as usize;
-                                            for entry_idx in start..end {
-                                                let key_array = keys.slice(entry_idx, 1);
-                                                let mut single_hash = [*hash];
-                                                $recursive_hash_method(&[key_array], &mut single_hash)?;
-                                                *hash = single_hash[0];
-
-                                                let value_array = values.slice(entry_idx, 1);
-                                                single_hash = [*hash];
-                                                $recursive_hash_method(&[value_array], &mut single_hash)?;
-                                                *hash = single_hash[0];
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        return Err(DataFusionError::Internal(format!(
-                            "Map field type must be a struct, got: {}",
-                            field.data_type()
-                        )));
-                    }
+                    $crate::hash_map_with_typed_entries!(
+                        col, field, $hashes_buffer, $hash_method, $recursive_hash_method
+                    );
                 }
                 _ => {
                     // This is internal because we should have caught this before.
