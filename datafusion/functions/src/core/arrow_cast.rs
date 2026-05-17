@@ -140,10 +140,9 @@ impl ScalarUDFImpl for ArrowCastFunc {
                         self.name()
                     )
                 },
-                |casted_type| match casted_type.parse::<DataType>() {
-                    Ok(data_type) => Ok(Field::new(self.name(), data_type, nullable).into()),
-                    Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
-                    Err(e) => Err(arrow_datafusion_err!(e)),
+                |casted_type| {
+                    let data_type = parse_arrow_cast_data_type(casted_type)?;
+                    Ok(Field::new(self.name(), data_type, nullable).into())
                 },
             )
     }
@@ -189,10 +188,48 @@ pub(crate) fn data_type_from_type_arg(name: &str, type_arg: &Expr) -> Result<Dat
         );
     };
 
-    val.parse().map_err(|e| match e {
+    parse_arrow_cast_data_type(val)
+}
+
+pub(crate) fn parse_arrow_cast_data_type(casted_type: &str) -> Result<DataType> {
+    let data_type = casted_type.parse().map_err(|e| match e {
         // If the data type cannot be parsed, return a Plan error to signal an
         // error in the input rather than a more general ArrowError
         ArrowError::ParseError(e) => exec_datafusion_err!("{e}"),
         e => arrow_datafusion_err!(e),
-    })
+    })?;
+    validate_arrow_cast_data_type(&data_type)?;
+    Ok(data_type)
+}
+
+fn validate_arrow_cast_data_type(data_type: &DataType) -> Result<()> {
+    match data_type {
+        DataType::FixedSizeBinary(length) if *length < 0 => {
+            exec_err!("FixedSizeBinary element length must be non-negative, got {length}")
+        }
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => validate_arrow_cast_data_type(field.data_type()),
+        DataType::Struct(fields) => {
+            for field in fields.iter() {
+                validate_arrow_cast_data_type(field.data_type())?;
+            }
+            Ok(())
+        }
+        DataType::Union(fields, _) => {
+            for (_, field) in fields.iter() {
+                validate_arrow_cast_data_type(field.data_type())?;
+            }
+            Ok(())
+        }
+        DataType::Dictionary(_, value_type) => validate_arrow_cast_data_type(value_type),
+        DataType::RunEndEncoded(run_ends, values) => {
+            validate_arrow_cast_data_type(run_ends.data_type())?;
+            validate_arrow_cast_data_type(values.data_type())
+        }
+        _ => Ok(()),
+    }
 }

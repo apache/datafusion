@@ -104,6 +104,15 @@ SELECT arrow_cast('1', arrow_cast('Utf8', 'Utf8'))
 query error DataFusion error: Execution error: Unsupported type 'unknown'\. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'\. Error unknown token: unknown
 SELECT arrow_cast('1', 'unknown')
 
+query error DataFusion error: Execution error: FixedSizeBinary element length must be non-negative, got -1
+SELECT arrow_cast(NULL, 'FixedSizeBinary(-1)')
+
+query error DataFusion error: Execution error: FixedSizeBinary element length must be non-negative, got -1
+SELECT arrow_try_cast(NULL, 'FixedSizeBinary(-1)')
+
+query error DataFusion error: Execution error: FixedSizeBinary element length must be non-negative, got -1
+SELECT arrow_cast(NULL, 'List(FixedSizeBinary(-1))')
+
 # Round Trip tests:
 query TTTTTTTTTTTTTTTTTTTTTTTTT
 SELECT
