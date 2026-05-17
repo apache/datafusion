@@ -177,6 +177,43 @@ async fn test_invalid_memory_limit_when_limit_is_not_numeric() {
 }
 
 #[tokio::test]
+async fn test_runtime_config_non_ascii_suffix_returns_error() {
+    let ctx = SessionContext::new();
+
+    for (sql, expected) in [
+        (
+            "SET datafusion.runtime.memory_limit = 'é'",
+            "Failed to parse number from 'datafusion.runtime.memory_limit', limit 'é'",
+        ),
+        (
+            "SET datafusion.runtime.max_temp_directory_size = 'é'",
+            "Failed to parse number from 'datafusion.runtime.max_temp_directory_size', limit 'é'",
+        ),
+        (
+            "SET datafusion.runtime.metadata_cache_limit = 'é'",
+            "Failed to parse number from 'datafusion.runtime.metadata_cache_limit', limit 'é'",
+        ),
+        (
+            "SET datafusion.runtime.list_files_cache_limit = 'é'",
+            "Failed to parse number from 'datafusion.runtime.list_files_cache_limit', limit 'é'",
+        ),
+        (
+            "SET datafusion.runtime.list_files_cache_ttl = '1mé'",
+            "Failed to parse number from duration 'é' for 'datafusion.runtime.list_files_cache_ttl'",
+        ),
+    ] {
+        let result = ctx.sql(sql).await;
+
+        assert!(result.is_err());
+        let error_message = result.unwrap_err().to_string();
+        assert!(
+            error_message.contains(expected),
+            "expected {error_message:?} to contain {expected:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_max_temp_directory_size_enforcement() {
     let ctx = SessionContext::new();
 
