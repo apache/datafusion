@@ -1008,6 +1008,11 @@ message PhysicalBinaryExprNode {
   // Linearized operands for chains of the same operator (e.g. a AND b AND c).
   // When present, `l` and `r` are ignored and `operands` holds the flattened list.
   repeated PhysicalExprNode operands = 4;
+  // Optional pre-selection threshold for AND operations. When absent, the
+  // default threshold is used on decode. Stored as a scalar-wrapped float so
+  // it can round-trip distinguishably from "unset" while remaining
+  // backwards-compatible with existing plans.
+  optional float preselection_threshold = 5;
 }
 
 message PhysicalDateTimeIntervalExprNode {

@@ -3465,6 +3465,86 @@ fn test_linearization_stops_at_different_op() -> Result<()> {
     Ok(())
 }
 
+/// Verify that a non-default `preselection_threshold` on `BinaryExpr` survives
+/// a protobuf round trip, both for a simple two-operand node and when nested
+/// with a mix of default-threshold children.
+#[test]
+fn roundtrip_binary_expr_preselection_threshold() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Boolean, false);
+    let field_c = Field::new("c", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    // Case 1: a single AND with a custom threshold.
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(
+        BinaryExpr::new(col("a", &schema)?, Operator::And, col("b", &schema)?)
+            .with_preselection_threshold(0.75),
+    );
+
+    let proto = proto_converter.physical_expr_to_proto(&expr, &codec)?;
+    match &proto.expr_type {
+        Some(protobuf::physical_expr_node::ExprType::BinaryExpr(b)) => {
+            assert_eq!(b.preselection_threshold, Some(0.75));
+        }
+        other => panic!("Expected BinaryExpr, got {other:?}"),
+    }
+
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+    let decoded = proto_converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+    let decoded_binary = decoded
+        .downcast_ref::<BinaryExpr>()
+        .expect("decoded expression should be a BinaryExpr");
+    assert_eq!(decoded_binary.preselection_threshold(), 0.75);
+
+    // Case 2: an AND chain where only the outer node carries a custom
+    // threshold. Linearization must stop at the inner AND (which uses the
+    // default) so the thresholds are preserved on both halves of the tree.
+    let inner: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        col("a", &schema)?,
+        Operator::And,
+        col("b", &schema)?,
+    ));
+    let outer: Arc<dyn PhysicalExpr> = Arc::new(
+        BinaryExpr::new(inner, Operator::And, col("c", &schema)?)
+            .with_preselection_threshold(1.0),
+    );
+
+    let outer_proto = proto_converter.physical_expr_to_proto(&outer, &codec)?;
+    match &outer_proto.expr_type {
+        Some(protobuf::physical_expr_node::ExprType::BinaryExpr(b)) => {
+            assert_eq!(b.preselection_threshold, Some(1.0));
+            assert_eq!(
+                b.operands.len(),
+                2,
+                "linearization must not fold children with different thresholds"
+            );
+        }
+        other => panic!("Expected BinaryExpr, got {other:?}"),
+    }
+
+    let decoded_outer =
+        proto_converter.proto_to_physical_expr(&outer_proto, &schema, &decode_ctx)?;
+    let decoded_outer_binary = decoded_outer
+        .downcast_ref::<BinaryExpr>()
+        .expect("decoded outer should be a BinaryExpr");
+    assert_eq!(decoded_outer_binary.preselection_threshold(), 1.0);
+    let decoded_inner = decoded_outer_binary
+        .left()
+        .downcast_ref::<BinaryExpr>()
+        .expect("decoded inner should be a BinaryExpr");
+    assert_eq!(
+        decoded_inner.preselection_threshold(),
+        datafusion::physical_expr::expressions::DEFAULT_PRESELECTION_THRESHOLD,
+    );
+
+    Ok(())
+}
+
 /// returns a SessionContext with an empty `netflow` table registered
 fn netflow_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
