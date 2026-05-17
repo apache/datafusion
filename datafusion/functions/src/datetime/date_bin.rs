@@ -594,53 +594,85 @@ fn date_bin_impl(
         return exec_err!("DATE_BIN stride must be non-zero");
     }
 
-    fn stride_map_fn<T: ArrowTimestampType>(
-        origin: i64,
-        stride: i64,
-        stride_fn: BinFunction,
-    ) -> impl Fn(i64) -> Result<i64> {
-        let scale = match T::UNIT {
+    fn timestamp_scale<T: ArrowTimestampType>() -> i64 {
+        match T::UNIT {
             Nanosecond => 1,
             Microsecond => NANOS_PER_MICRO,
             Millisecond => NANOS_PER_MILLI,
             Second => NANOSECONDS,
-        };
-        move |x: i64| match stride_fn(stride, x * scale, origin) {
-            Ok(result) => Ok(result / scale),
-            Err(e) => Err(e),
         }
+    }
+
+    fn scale_timestamp_to_nanos(x: i64, scale: i64) -> Result<i64> {
+        x.checked_mul(scale).ok_or_else(|| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "DATE_BIN source timestamp {x} cannot be represented in nanoseconds"
+            ))
+        })
     }
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampNanosecondType>(origin, stride, stride_fn);
+            let scale = timestamp_scale::<TimestampNanosecondType>();
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                v.and_then(|val| apply_stride_fn(val).ok()),
+                match *v {
+                    Some(val) => {
+                        let scaled = scale_timestamp_to_nanos(val, scale)?;
+                        match stride_fn(stride, scaled, origin) {
+                            Ok(result) => Some(result / scale),
+                            Err(_) => None,
+                        }
+                    }
+                    None => None,
+                },
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampMicrosecondType>(origin, stride, stride_fn);
+            let scale = timestamp_scale::<TimestampMicrosecondType>();
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                v.and_then(|val| apply_stride_fn(val).ok()),
+                match *v {
+                    Some(val) => {
+                        let scaled = scale_timestamp_to_nanos(val, scale)?;
+                        match stride_fn(stride, scaled, origin) {
+                            Ok(result) => Some(result / scale),
+                            Err(_) => None,
+                        }
+                    }
+                    None => None,
+                },
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampMillisecondType>(origin, stride, stride_fn);
+            let scale = timestamp_scale::<TimestampMillisecondType>();
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                v.and_then(|val| apply_stride_fn(val).ok()),
+                match *v {
+                    Some(val) => {
+                        let scaled = scale_timestamp_to_nanos(val, scale)?;
+                        match stride_fn(stride, scaled, origin) {
+                            Ok(result) => Some(result / scale),
+                            Err(_) => None,
+                        }
+                    }
+                    None => None,
+                },
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampSecondType>(origin, stride, stride_fn);
+            let scale = timestamp_scale::<TimestampSecondType>();
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                v.and_then(|val| apply_stride_fn(val).ok()),
+                match *v {
+                    Some(val) => {
+                        let scaled = scale_timestamp_to_nanos(val, scale)?;
+                        match stride_fn(stride, scaled, origin) {
+                            Ok(result) => Some(result / scale),
+                            Err(_) => None,
+                        }
+                    }
+                    None => None,
+                },
                 tz_opt.clone(),
             ))
         }
@@ -710,20 +742,21 @@ fn date_bin_impl(
                 T: ArrowTimestampType,
             {
                 let array = as_primitive_array::<T>(array)?;
-                let scale = match T::UNIT {
-                    Nanosecond => 1,
-                    Microsecond => NANOS_PER_MICRO,
-                    Millisecond => NANOS_PER_MILLI,
-                    Second => NANOSECONDS,
-                };
+                let scale = timestamp_scale::<T>();
 
-                let result: PrimitiveArray<T> = array.try_unary(|val| {
-                    stride_fn(stride, val * scale, origin)
-                        .map(|binned| binned / scale)
-                        .map_err(|e| {
+                let result: PrimitiveArray<T> = array
+                    .try_unary(|val| {
+                        let scaled = scale_timestamp_to_nanos(val, scale).map_err(|e| {
                             arrow::error::ArrowError::ComputeError(e.to_string())
-                        })
-                })?;
+                        })?;
+
+                        stride_fn(stride, scaled, origin)
+                            .map(|binned| binned / scale)
+                            .map_err(|e| {
+                                arrow::error::ArrowError::ComputeError(e.to_string())
+                            })
+                    })
+                    .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))?;
 
                 let array = result.with_timezone_opt(tz_opt.clone());
                 Ok(ColumnarValue::Array(Arc::new(array)))
@@ -1084,6 +1117,24 @@ mod tests {
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
+        );
+
+        // source: overflow while scaling to nanoseconds
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNano {
+                    months: 0,
+                    days: 0,
+                    nanoseconds: 1,
+                },
+            ))),
+            ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(i64::MAX), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(0), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
+        assert_eq!(
+            res.err().unwrap().strip_backtrace(),
+            "Execution error: DATE_BIN source timestamp 9223372036854775807 cannot be represented in nanoseconds"
         );
     }
 
