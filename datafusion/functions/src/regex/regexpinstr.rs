@@ -461,6 +461,7 @@ mod tests {
         test_case_sensitive_regexp_instr_scalar_start();
         test_case_sensitive_regexp_instr_scalar_nth();
         test_case_sensitive_regexp_instr_scalar_subexp();
+        test_regexp_instr_empty_pattern_global_flag();
 
         test_case_sensitive_regexp_instr_array::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_instr_array::<GenericStringArray<i64>>();
@@ -770,6 +771,22 @@ mod tests {
                 _ => panic!("Unexpected result"),
             }
         });
+    }
+
+    fn test_regexp_instr_empty_pattern_global_flag() {
+        let args = [
+            ScalarValue::Utf8(Some("abc".to_string())),
+            ScalarValue::Utf8(Some("".to_string())),
+            ScalarValue::Int64(Some(1)),
+            ScalarValue::Int64(Some(1)),
+            ScalarValue::Utf8(Some("g".to_string())),
+        ];
+        let err = regexp_instr_with_scalar_values(&args)
+            .expect_err("global flag should be rejected for empty patterns");
+        assert!(
+            err.to_string().contains("does not support the global flag"),
+            "{err}"
+        );
     }
 
     fn test_case_sensitive_regexp_instr_array<A>()
