@@ -743,6 +743,28 @@ impl Alias {
         self.metadata = metadata;
         self
     }
+
+    #[doc(hidden)]
+    pub fn with_expr(mut self, expr: Expr) -> Self {
+        self.expr = Box::new(expr);
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn try_map_expr(self, f: impl FnOnce(Expr) -> Result<Expr>) -> Result<Expr> {
+        let Alias {
+            expr,
+            relation,
+            name,
+            metadata,
+        } = self;
+        Ok(Expr::Alias(Alias {
+            expr: Box::new(f(*expr)?),
+            relation,
+            name,
+            metadata,
+        }))
+    }
 }
 
 /// Binary expression for [`Expr::BinaryExpr`]
@@ -4153,6 +4175,36 @@ mod test {
             ),
             "column_name"
         );
+    }
+
+    #[test]
+    fn test_unalias_nested_respects_user_metadata() {
+        use std::collections::HashMap;
+
+        let base_expr = col("id");
+
+        let no_metadata = base_expr.clone().alias("alias");
+        assert_eq!(no_metadata.unalias_nested().data, base_expr);
+
+        let Expr::Alias(empty_metadata_alias) = base_expr.clone().alias("alias") else {
+            unreachable!();
+        };
+        let empty_metadata_alias = Expr::Alias(
+            empty_metadata_alias.with_metadata(Some(FieldMetadata::default())),
+        );
+        assert_eq!(empty_metadata_alias.unalias_nested().data, base_expr);
+
+        let user_metadata = FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]));
+
+        let Expr::Alias(user_alias) = base_expr.clone().alias("alias") else {
+            unreachable!();
+        };
+        let user_alias =
+            Expr::Alias(user_alias.with_metadata(Some(user_metadata.clone())));
+        assert_eq!(user_alias.clone().unalias_nested().data, user_alias);
     }
 
     fn wildcard_options(

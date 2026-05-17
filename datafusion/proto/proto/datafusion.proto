@@ -1204,6 +1204,8 @@ message HashJoinExecNode {
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
   bool null_aware = 10;
+  // Optional dynamic filter expression for pushing down to the probe side.
+  PhysicalExprNode dynamic_filter = 11;
 }
 
 enum StreamPartitionMode {
@@ -1335,6 +1337,8 @@ message AggregateExecNode {
   repeated MaybeFilter filter_expr = 10;
   AggLimit limit = 11;
   bool has_grouping_set = 12;
+  // Optional dynamic filter expression for pushing down to the child.
+  PhysicalExprNode dynamic_filter = 13;
 }
 
 message GlobalLimitExecNode {
@@ -1356,6 +1360,8 @@ message SortExecNode {
   // Maximum number of highest/lowest rows to fetch; negative means no limit
   int64 fetch = 3;
   bool preserve_partitioning = 4;
+  // Optional dynamic filter expression for TopK pushdown.
+  PhysicalExprNode dynamic_filter = 5;
 }
 
 message SortPreservingMergeExecNode {
