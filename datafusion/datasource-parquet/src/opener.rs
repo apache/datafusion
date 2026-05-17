@@ -51,6 +51,7 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
     MetricCategory, PruningMetrics,
@@ -76,9 +77,7 @@ use parquet::arrow::parquet_column;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
-};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 
 /// Stateless Parquet morselizer implementation.
 ///
@@ -139,6 +138,8 @@ pub(super) struct ParquetMorselizer {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Optional sort order used to reorder row groups by their min/max statistics.
+    pub sort_order_for_reorder: Option<LexOrdering>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -289,6 +290,7 @@ struct PreparedParquetOpen {
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
     reverse_row_groups: bool,
+    sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -658,6 +660,7 @@ impl ParquetMorselizer {
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
             reverse_row_groups: self.reverse_row_groups,
+            sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
@@ -1112,6 +1115,41 @@ impl RowGroupsPrunedParquetOpen {
             );
         }
 
+        // Prepare access plans, then apply row-group ordering tweaks per
+        // run. Two composable steps:
+        //
+        // 1. `reorder_by_statistics`: sort row groups by `min(col)` ASC.
+        //    Fixes out-of-order row groups (e.g. append-heavy workloads).
+        //    Skipped gracefully when statistics aren't available or the
+        //    sort expression isn't a plain column.
+        //
+        // 2. `reverse`: flip the iteration order for DESC requests, applied
+        //    AFTER any reorder so the reversed order is correct whether or
+        //    not reorder changed anything. Also handles `row_selection`
+        //    remapping.
+        //
+        // For sorted data: reorder is a no-op, reverse gives perfect DESC.
+        // For unsorted data: reorder fixes the order, reverse flips for DESC.
+        //
+        // Both inputs come from the sort-pushdown channel —
+        // `ParquetSource::try_pushdown_sort` sets `sort_order_for_reorder`
+        // and/or `reverse_row_groups`.
+        let prepare_access_plan =
+            |plan: ParquetAccessPlan| -> Result<PreparedAccessPlan> {
+                let mut prepared_plan = plan.prepare(rg_metadata)?;
+                if let Some(sort_order) = prepared.sort_order_for_reorder.as_ref() {
+                    prepared_plan = prepared_plan.reorder_by_statistics(
+                        sort_order,
+                        file_metadata.as_ref(),
+                        &prepared.physical_file_schema,
+                    )?;
+                }
+                if prepared.reverse_row_groups {
+                    prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
+                }
+                Ok(prepared_plan)
+            };
+
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
         let read_plan = build_projection_read_plan(
             prepared.projection.expr_iter(),
@@ -1146,12 +1184,7 @@ impl RowGroupsPrunedParquetOpen {
             // Build a decoder per run.
             let mut decoders = VecDeque::with_capacity(runs.len());
             for run in runs {
-                let prepared_access_plan = prepare_access_plan(
-                    run.access_plan,
-                    rg_metadata,
-                    file_metadata.as_ref(),
-                    prepared.reverse_row_groups,
-                )?;
+                let prepared_access_plan = prepare_access_plan(run.access_plan)?;
                 let mut builder =
                     decoder_config.build(prepared_access_plan, reader_metadata.clone());
                 if run.needs_filter {
@@ -1289,19 +1322,6 @@ impl<'a> RowFilterGenerator<'a> {
             }
         }
     }
-}
-
-fn prepare_access_plan(
-    plan: ParquetAccessPlan,
-    rg_metadata: &[RowGroupMetaData],
-    file_metadata: &ParquetMetaData,
-    reverse_row_groups: bool,
-) -> Result<PreparedAccessPlan> {
-    let mut prepared_access_plan = plan.prepare(rg_metadata)?;
-    if reverse_row_groups {
-        prepared_access_plan = prepared_access_plan.reverse(file_metadata)?;
-    }
-    Ok(prepared_access_plan)
 }
 
 /// State shared while building [`ParquetPushDecoder`]s for one file scan.
@@ -1971,6 +1991,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                sort_order_for_reorder: None,
             }
         }
     }
