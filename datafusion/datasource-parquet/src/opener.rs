@@ -1152,11 +1152,8 @@ impl RowGroupsPrunedParquetOpen {
                     file_metadata.as_ref(),
                     prepared.reverse_row_groups,
                 )?;
-                let mut builder = build_decoder_builder(
-                    prepared_access_plan,
-                    reader_metadata.clone(),
-                    &decoder_config,
-                );
+                let mut builder =
+                    decoder_config.build(prepared_access_plan, reader_metadata.clone());
                 if run.needs_filter {
                     if let Some(row_filter) = row_filter_generator.next_filter() {
                         builder = builder.with_row_filter(row_filter);
@@ -1307,6 +1304,12 @@ fn prepare_access_plan(
     Ok(prepared_access_plan)
 }
 
+/// State shared while building [`ParquetPushDecoder`]s for one file scan.
+///
+/// A scan can be split into multiple decoder runs when row groups have
+/// different filtering requirements. This config holds the options that apply
+/// to every [`ParquetPushDecoderBuilder`], while each run supplies its own
+/// [`PreparedAccessPlan`] and optional row filter.
 struct DecoderBuilderConfig<'a> {
     read_plan: &'a ParquetReadPlan,
     batch_size: usize,
@@ -1315,26 +1318,28 @@ struct DecoderBuilderConfig<'a> {
     decoder_limit: Option<usize>,
 }
 
-fn build_decoder_builder(
-    prepared_access_plan: PreparedAccessPlan,
-    metadata: ArrowReaderMetadata,
-    config: &DecoderBuilderConfig<'_>,
-) -> ParquetPushDecoderBuilder {
-    let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
-        .with_projection(config.read_plan.projection_mask.clone())
-        .with_batch_size(config.batch_size)
-        .with_metrics(config.arrow_reader_metrics.clone());
-    if config.force_filter_selections {
-        builder = builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
+impl DecoderBuilderConfig<'_> {
+    fn build(
+        &self,
+        prepared_access_plan: PreparedAccessPlan,
+        metadata: ArrowReaderMetadata,
+    ) -> ParquetPushDecoderBuilder {
+        let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
+            .with_projection(self.read_plan.projection_mask.clone())
+            .with_batch_size(self.batch_size)
+            .with_metrics(self.arrow_reader_metrics.clone());
+        if self.force_filter_selections {
+            builder = builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
+        }
+        if let Some(row_selection) = prepared_access_plan.row_selection {
+            builder = builder.with_row_selection(row_selection);
+        }
+        builder = builder.with_row_groups(prepared_access_plan.row_group_indexes);
+        if let Some(limit) = self.decoder_limit {
+            builder = builder.with_limit(limit);
+        }
+        builder
     }
-    if let Some(row_selection) = prepared_access_plan.row_selection {
-        builder = builder.with_row_selection(row_selection);
-    }
-    builder = builder.with_row_groups(prepared_access_plan.row_group_indexes);
-    if let Some(limit) = config.decoder_limit {
-        builder = builder.with_limit(limit);
-    }
-    builder
 }
 
 /// State for a stream that decodes a single Parquet file using a push-based decoder.
