@@ -295,7 +295,8 @@ macro_rules! make_math_unary_udf {
                         DataType::Float64 => {
                             let values = args[0]
                                 .as_primitive::<Float64Type>()
-                                .try_unary::<_, Float64Type, _>(|x: f64| -> std::result::Result<f64, ArrowError> {
+                                .try_unary::<_, Float64Type, _>(
+                                |x: f64| -> std::result::Result<f64, ArrowError> {
                                     if let Some(validate) = $VALIDATOR {
                                         validate(x).map_err(|error| {
                                             ArrowError::ComputeError(error.to_string())
@@ -303,13 +304,15 @@ macro_rules! make_math_unary_udf {
                                     }
 
                                     Ok(f64::$UNARY_FUNC(x))
-                                })?;
+                                },
+                            )?;
                             Arc::new(values) as ArrayRef
                         }
                         DataType::Float32 => {
                             let values = args[0]
                                 .as_primitive::<Float32Type>()
-                                .try_unary::<_, Float32Type, _>(|x: f32| -> std::result::Result<f32, ArrowError> {
+                                .try_unary::<_, Float32Type, _>(
+                                |x: f32| -> std::result::Result<f32, ArrowError> {
                                     if let Some(validate) = $VALIDATOR {
                                         validate(x as f64).map_err(|error| {
                                             ArrowError::ComputeError(error.to_string())
@@ -317,7 +320,8 @@ macro_rules! make_math_unary_udf {
                                     }
 
                                     Ok(f32::$UNARY_FUNC(x))
-                                })?;
+                                },
+                            )?;
                             Arc::new(values) as ArrayRef
                         }
                         other => {
