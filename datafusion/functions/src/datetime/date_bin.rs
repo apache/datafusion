@@ -746,9 +746,10 @@ fn date_bin_impl(
 
                 let result: PrimitiveArray<T> = array
                     .try_unary(|val| {
-                        let scaled = scale_timestamp_to_nanos(val, scale).map_err(|e| {
-                            arrow::error::ArrowError::ComputeError(e.to_string())
-                        })?;
+                        let scaled =
+                            scale_timestamp_to_nanos(val, scale).map_err(|e| {
+                                arrow::error::ArrowError::ComputeError(e.to_string())
+                            })?;
 
                         stride_fn(stride, scaled, origin)
                             .map(|binned| binned / scale)
@@ -756,7 +757,9 @@ fn date_bin_impl(
                                 arrow::error::ArrowError::ComputeError(e.to_string())
                             })
                     })
-                    .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))?;
+                    .map_err(|e| {
+                        datafusion_common::DataFusionError::Execution(e.to_string())
+                    })?;
 
                 let array = result.with_timezone_opt(tz_opt.clone());
                 Ok(ColumnarValue::Array(Arc::new(array)))
