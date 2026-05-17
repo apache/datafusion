@@ -75,7 +75,7 @@ impl DisplayAs for LogicalPlan {
                 .split_once(':')
                 .map(|(_, second)| second.trim_start())
                 .unwrap_or("");
-            return write!(f, "__main_content__={}", second);
+            return write!(f, "__main_content__={second}");
         }
         // DisplayAs only used to render tree for now
         unimplemented!()

@@ -19,7 +19,6 @@
 
 use indexmap::IndexMap;
 
-use crate::HashMap;
 use crate::display::{DisplayAs, DisplayFormatType};
 use crate::tree_node::{TreeNode, TreeNodeRecursion};
 use std::collections::BTreeMap;
@@ -155,9 +154,9 @@ impl RenderTree {
                     // Rigure out what to render.
                     let mut render_text = String::new();
                     if render_y == 0 {
-                        render_text = node.name.clone();
+                        render_text.clone_from(&node.name);
                     } else if render_y <= extra_info[x].len() {
-                        render_text = extra_info[x][render_y - 1].clone();
+                        render_text.clone_from(&extra_info[x][render_y - 1]);
                     }
 
                     render_text = Self::adjust_text_for_rendering(
@@ -316,11 +315,7 @@ impl RenderTree {
             let hide_key = key == "__main_content__";
 
             if str.is_empty() {
-                str = if hide_key{
-                    str
-                }else{
-                    key.to_string()
-                };
+                str = if hide_key { str } else { key.to_string() };
             } else if !is_multiline && total_size < available_width {
                 str = if hide_key {
                     str
@@ -570,7 +565,7 @@ impl RenderTree {
     fn get_node(&self, x: usize, y: usize) -> Option<Arc<RenderTreeNode>> {
         if x >= self.width || y >= self.height {
             return None;
-        }cargo test --test sqllogictests  -- explain_tree.slt --nocapture 
+        }
 
         let pos = self.get_position(x, y);
         self.nodes.get(pos).and_then(|node| node.clone())
