@@ -18,7 +18,7 @@
 //! Logical plan types
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
@@ -50,6 +50,7 @@ use crate::{
     WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
 };
 
+use crate::statistics::StatisticsRequest;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::ExplainFormat;
@@ -2793,6 +2794,19 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Statistics the planner would like the provider to answer for this
+    /// scan, typically attached by a custom optimizer rule from the
+    /// surrounding plan shape (e.g. Min/Max for sort keys). Threaded into
+    /// the table provider via `ScanArgs::statistics_requests` at
+    /// physical-planning time. Advisory and empty by default; DataFusion's
+    /// own rules never populate it.
+    ///
+    /// A [`BTreeSet`], not a `Vec`: optimizer rules run to a fixpoint, so the
+    /// collection must be idempotent under re-derivation — a rule `insert`s
+    /// the requests it wants and re-running is a no-op (and composes with
+    /// other rules) without each rule having to dedupe. The ordering also
+    /// keeps the resulting plan deterministic.
+    pub statistics_requests: BTreeSet<StatisticsRequest>,
 }
 
 impl Debug for TableScan {
@@ -2896,6 +2910,7 @@ pub struct TableScanBuilder {
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
     fetch: Option<usize>,
+    statistics_requests: BTreeSet<StatisticsRequest>,
 }
 
 impl TableScanBuilder {
@@ -2910,6 +2925,7 @@ impl TableScanBuilder {
             projection: None,
             filters: vec![],
             fetch: None,
+            statistics_requests: BTreeSet::new(),
         }
     }
 
@@ -2931,6 +2947,16 @@ impl TableScanBuilder {
         self
     }
 
+    /// Set the statistics requests for the scan. See
+    /// [`TableScan::statistics_requests`].
+    pub fn with_statistics_requests(
+        mut self,
+        statistics_requests: BTreeSet<StatisticsRequest>,
+    ) -> Self {
+        self.statistics_requests = statistics_requests;
+        self
+    }
+
     /// Build the [`TableScan`], deriving its `projected_schema` from the
     /// source schema and projection.
     pub fn build(self) -> Result<TableScan> {
@@ -2940,6 +2966,7 @@ impl TableScanBuilder {
             projection,
             filters,
             fetch,
+            statistics_requests,
         } = self;
 
         if table_name.table().is_empty() {
@@ -2980,6 +3007,7 @@ impl TableScanBuilder {
             projected_schema,
             filters,
             fetch,
+            statistics_requests,
         })
     }
 }
@@ -2992,6 +3020,7 @@ impl From<TableScan> for TableScanBuilder {
             projection: scan.projection,
             filters: scan.filters,
             fetch: scan.fetch,
+            statistics_requests: scan.statistics_requests,
         }
     }
 }
@@ -5230,6 +5259,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
+            statistics_requests: BTreeSet::new(),
         }));
         let col = schema.field_names()[0].clone();
 
@@ -5260,6 +5290,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
+            statistics_requests: BTreeSet::new(),
         }));
         let col = schema.field_names()[0].clone();
 
