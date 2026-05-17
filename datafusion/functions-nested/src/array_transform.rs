@@ -292,10 +292,8 @@ mod tests {
     };
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
-        Expr, col,
-        execution_props::ExecutionProps,
-        expr::{HigherOrderFunction, LambdaVariable},
-        lambda, lit,
+        Expr, col, execution_props::ExecutionProps, expr::HigherOrderFunction, lambda,
+        lambda_var, lit,
     };
     use datafusion_physical_expr::create_physical_expr;
 
@@ -327,18 +325,10 @@ mod tests {
         create_physical_expr(
             &Expr::HigherOrderFunction(HigherOrderFunction::new(
                 array_transform,
-                vec![
-                    col("list"),
-                    lambda(
-                        ["v"],
-                        lit(100i32)
-                            / Expr::LambdaVariable(LambdaVariable::new(
-                                "v".to_string(),
-                                Some(Arc::new(Field::new("v", DataType::Int32, true))),
-                            )),
-                    ),
-                ],
-            )),
+                vec![col("list"), lambda(["v"], lit(100i32) / lambda_var("v"))],
+            ))
+            .resolve_lambda_variables(&schema)?
+            .data,
             &schema,
             &ExecutionProps::new(),
         )?

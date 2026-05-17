@@ -58,3 +58,13 @@ select date_bin(
 ) as b;
 ----
 NULL
+
+# Extreme timestamp overflow: source - origin overflows i64 (should return NULL, not panic)
+query P
+select date_bin(
+  interval '1 nanosecond',
+  arrow_cast(9223372036854775807, 'Timestamp(Nanosecond, None)'),
+  arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
+);
+----
+NULL
