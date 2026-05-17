@@ -258,18 +258,16 @@ impl GenerateSeriesTable {
                 step,
                 include_end,
                 name,
-            } => {
-                Arc::new(RwLock::new(GenericSeriesState {
-                    schema: self.schema(),
-                    start: *start,
-                    end: *end,
-                    step: *step,
-                    current: *start,
-                    batch_size,
-                    include_end: *include_end,
-                    name,
-                }))
-            }
+            } => Arc::new(RwLock::new(GenericSeriesState {
+                schema: self.schema(),
+                start: *start,
+                end: *end,
+                step: *step,
+                current: *start,
+                batch_size,
+                include_end: *include_end,
+                name,
+            })),
             GenSeriesArgs::TimestampArgs {
                 start,
                 end,
