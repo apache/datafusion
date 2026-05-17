@@ -225,16 +225,14 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     let mut inner_total = 0usize;
     for i in 0..count_array.len() {
         let count = get_count_with_validity(count_array, i);
-        if count > 0 {
-            if list_array.is_valid(i) {
-                let len = list_offsets[i + 1].to_usize().unwrap()
-                    - list_offsets[i].to_usize().unwrap();
-                inner_total = checked_repeat_len_add(
-                    inner_total,
-                    checked_repeat_len_mul(len, count)?,
-                )?;
-                ensure_array_repeat_output_len::<O>(inner_total)?;
-            }
+        if count > 0 && list_array.is_valid(i) {
+            let len = list_offsets[i + 1].to_usize().unwrap()
+                - list_offsets[i].to_usize().unwrap();
+            inner_total = checked_repeat_len_add(
+                inner_total,
+                checked_repeat_len_mul(len, count)?,
+            )?;
+            ensure_array_repeat_output_len::<O>(inner_total)?;
         }
     }
 
@@ -362,11 +360,9 @@ fn max_offset_elements<O: OffsetSizeTrait>() -> usize {
 
 fn max_vec_elements<T>() -> usize {
     let element_size = size_of::<T>();
-    if element_size == 0 {
-        usize::MAX
-    } else {
-        isize::MAX as usize / element_size
-    }
+    (isize::MAX as usize)
+        .checked_div(element_size)
+        .unwrap_or(usize::MAX)
 }
 
 /// Helper function to get count from count_array at given index
