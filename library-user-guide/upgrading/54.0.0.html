@@ -435,6 +435,67 @@
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">54.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
+<section id="aggregatefunctionexpr-human-display-now-returns-option-str">
+<h3><code class="docutils literal notranslate"><span class="pre">AggregateFunctionExpr::human_display()</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;str&gt;</span></code><a class="headerlink" href="#aggregatefunctionexpr-human-display-now-returns-option-str" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr::aggregate::AggregateFunctionExpr::human_display()</span></code>
+now returns <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;str&gt;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">&amp;str</span></code>.</p>
+<p>If your code read the display text directly, handle the <code class="docutils literal notranslate"><span class="pre">None</span></code> case and fall
+back to <code class="docutils literal notranslate"><span class="pre">name()</span></code> when needed:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">display</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">agg_expr</span><span class="p">.</span><span class="n">human_display</span><span class="p">().</span><span class="n">unwrap_or</span><span class="p">(</span><span class="n">agg_expr</span><span class="p">.</span><span class="n">name</span><span class="p">());</span>
+</pre></div>
+</div>
+</section>
+<section id="aggregate-logical-to-physical-lowering-helpers-are-deprecated">
+<h3>Aggregate logical-to-physical lowering helpers are deprecated<a class="headerlink" href="#aggregate-logical-to-physical-lowering-helpers-are-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">create_aggregate_expr_with_name_and_maybe_filter</span></code> and
+<code class="docutils literal notranslate"><span class="pre">create_aggregate_expr_and_maybe_filter</span></code> are deprecated. Use
+<code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr::aggregate::LoweredAggregateBuilder</span></code> for new code that
+lowers a logical aggregate <code class="docutils literal notranslate"><span class="pre">Expr</span></code> into an <code class="docutils literal notranslate"><span class="pre">AggregateFunctionExpr</span></code>, filter, and
+order-by expressions.</p>
+<p>For example:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">lowered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LoweredAggregateBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
+<span class="w">    </span><span class="n">expr</span><span class="p">,</span>
+<span class="w">    </span><span class="n">logical_input_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">physical_input_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">execution_props</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">LoweredAggregateBuilder</span></code> returns a <code class="docutils literal notranslate"><span class="pre">LoweredAggregate</span></code> containing the aggregate
+physical expression, optional filter, and order-by expressions.</p>
+</section>
+<section id="expr-unalias-nested-preserves-aliases-with-metadata">
+<h3><code class="docutils literal notranslate"><span class="pre">Expr::unalias_nested()</span></code> preserves aliases with metadata<a class="headerlink" href="#expr-unalias-nested-preserves-aliases-with-metadata" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">Expr::unalias_nested()</span></code> no longer removes aliases that carry non-empty
+<code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code>. This preserves user-provided output field metadata. Code that
+needs to remove all aliases, including aliases with metadata, should unwrap
+<code class="docutils literal notranslate"><span class="pre">Expr::Alias</span></code> explicitly.</p>
+</section>
+<section id="physical-aggregate-proto-display-may-contain-encoded-alias-data">
+<h3>Physical aggregate proto display may contain encoded alias data<a class="headerlink" href="#physical-aggregate-proto-display-may-contain-encoded-alias-data" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">PhysicalAggregateExprNode.human_display</span></code> may now contain an internal encoded
+prefix when an aggregate display has a separate output alias. DataFusion decodes
+this when reading physical plans. Older readers that do not know this encoding
+may show the prefix text directly in diagnostics.</p>
+</section>
+<section id="physical-explain-now-shows-lowered-aggregate-execution-forms">
+<h3>Physical <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> now shows lowered aggregate execution forms<a class="headerlink" href="#physical-explain-now-shows-lowered-aggregate-execution-forms" title="Link to this heading">#</a></h3>
+<p>Physical <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output is intended for diagnostics and may change between
+DataFusion versions. This release changes aggregate expression formatting in
+physical plans to show the lowered expression executed by the engine while
+keeping the visible output alias.</p>
+<p>Examples:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">count(*)</span></code> may now appear as <code class="docutils literal notranslate"><span class="pre">count(1)</span> <span class="pre">as</span> <span class="pre">count(*)</span></code></p></li>
+<li><p>simplified aggregates may show the lowered implementation, such as
+<code class="docutils literal notranslate"><span class="pre">min(...)</span> <span class="pre">as</span> <span class="pre">percentile_cont(...)</span></code></p></li>
+<li><p>internal aggregate aliases may now show the underlying expression instead of
+only the alias name</p></li>
+</ul>
+<p>Tests or diagnostics that compare physical <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output exactly may need
+to update their expected strings.</p>
+</section>
 <section id="string-numeric-comparison-coercion-now-prefers-numeric-types">
 <h3>String/numeric comparison coercion now prefers numeric types<a class="headerlink" href="#string-numeric-comparison-coercion-now-prefers-numeric-types" title="Link to this heading">#</a></h3>
 <p>Previously, comparing a numeric column with a string value (e.g.,
@@ -1073,6 +1134,11 @@ or <code class="docutils literal notranslate"><span class="pre">Arc&lt;OnceLock&
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-54-0-0">DataFusion 54.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregatefunctionexpr-human-display-now-returns-option-str"><code class="docutils literal notranslate"><span class="pre">AggregateFunctionExpr::human_display()</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;str&gt;</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate-logical-to-physical-lowering-helpers-are-deprecated">Aggregate logical-to-physical lowering helpers are deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#expr-unalias-nested-preserves-aliases-with-metadata"><code class="docutils literal notranslate"><span class="pre">Expr::unalias_nested()</span></code> preserves aliases with metadata</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-aggregate-proto-display-may-contain-encoded-alias-data">Physical aggregate proto display may contain encoded alias data</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-explain-now-shows-lowered-aggregate-execution-forms">Physical <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> now shows lowered aggregate execution forms</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#string-numeric-comparison-coercion-now-prefers-numeric-types">String/numeric comparison coercion now prefers numeric types</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#castcolumnexpr-removed-in-favor-of-field-aware-castexpr"><code class="docutils literal notranslate"><span class="pre">CastColumnExpr</span></code> removed in favor of field-aware <code class="docutils literal notranslate"><span class="pre">CastExpr</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#comparison-coercion-numeric-removed-replaced-by-comparison-coercion"><code class="docutils literal notranslate"><span class="pre">comparison_coercion_numeric</span></code> removed, replaced by <code class="docutils literal notranslate"><span class="pre">comparison_coercion</span></code></a></li>
