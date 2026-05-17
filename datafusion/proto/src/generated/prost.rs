@@ -532,6 +532,10 @@ pub struct UnnestOptions {
     pub preserve_nulls: bool,
     #[prost(message, repeated, tag = "2")]
     pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
+    /// Set when `UNNEST ... WITH ORDINALITY` (1-indexed) or `WITH OFFSET`
+    /// (0-indexed) was requested; absent for plain UNNEST.
+    #[prost(message, optional, tag = "3")]
+    pub position: ::core::option::Option<PositionColumn>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RecursionUnnestOption {
@@ -541,6 +545,13 @@ pub struct RecursionUnnestOption {
     pub input_column: ::core::option::Option<super::datafusion_common::Column>,
     #[prost(uint32, tag = "3")]
     pub depth: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PositionColumn {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(enumeration = "IndexBase", tag = "2")]
+    pub base: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnionNode {
@@ -2302,6 +2313,35 @@ impl FileFormatKind {
             "FILE_FORMAT_KIND_PARQUET" => Some(Self::Parquet),
             "FILE_FORMAT_KIND_ARROW" => Some(Self::Arrow),
             "FILE_FORMAT_KIND_AVRO" => Some(Self::Avro),
+            _ => None,
+        }
+    }
+}
+/// 0/1 index base for the synthetic position column produced by UNNEST.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum IndexBase {
+    /// 0-indexed (BigQuery `WITH OFFSET`, Snowflake `FLATTEN.INDEX`, Spark `posexplode`).
+    Zero = 0,
+    /// 1-indexed (Postgres / SQL standard `WITH ORDINALITY`, Trino/Presto).
+    One = 1,
+}
+impl IndexBase {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Zero => "INDEX_BASE_ZERO",
+            Self::One => "INDEX_BASE_ONE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "INDEX_BASE_ZERO" => Some(Self::Zero),
+            "INDEX_BASE_ONE" => Some(Self::One),
             _ => None,
         }
     }

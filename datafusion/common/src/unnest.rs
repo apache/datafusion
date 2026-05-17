@@ -66,6 +66,11 @@ use crate::Column;
 /// `recursions` instruct how a column should be unnested (e.g unnesting a column multiple
 /// time, with depth = 1 and depth = 2). Any unnested column not being mentioned inside this
 /// options is inferred to be unnested with depth = 1
+///
+/// If `position` is set, an additional column is appended to the output containing the
+/// position of each element within its source list. The index base is selected by the
+/// SQL spelling used: `WITH ORDINALITY` (Postgres, SQL standard) is 1-indexed,
+/// `WITH OFFSET` (BigQuery) is 0-indexed.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Hash, Eq)]
 pub struct UnnestOptions {
     /// Should nulls in the input be preserved? Defaults to true
@@ -74,6 +79,9 @@ pub struct UnnestOptions {
     /// declare them here. Any unnested columns not being mentioned inside this option
     /// will be unnested with depth = 1
     pub recursions: Vec<RecursionUnnestOption>,
+    /// If set, append a position column to the output (per-list element index).
+    /// Defaults to `None` (no position column emitted).
+    pub position: Option<PositionColumn>,
 }
 
 /// Instruction on how to unnest a column (mostly with a list type)
@@ -85,12 +93,41 @@ pub struct RecursionUnnestOption {
     pub depth: usize,
 }
 
+/// The 0/1 index base for the position column emitted by `UNNEST`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IndexBase {
+    /// 0-indexed (BigQuery `WITH OFFSET`, Snowflake `FLATTEN.INDEX`, Spark `posexplode`).
+    Zero,
+    /// 1-indexed (Postgres / SQL standard `WITH ORDINALITY`, Trino/Presto).
+    One,
+}
+
+/// Specification for the extra position column produced by `UNNEST WITH ORDINALITY`
+/// (1-indexed) or `UNNEST WITH OFFSET` (0-indexed).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+pub struct PositionColumn {
+    /// Output column name (e.g. `"ordinality"`, `"offset"`, or a user alias).
+    pub name: String,
+    /// Whether the column is 0- or 1-indexed.
+    pub base: IndexBase,
+}
+
+impl PositionColumn {
+    pub fn new(name: impl Into<String>, base: IndexBase) -> Self {
+        Self {
+            name: name.into(),
+            base,
+        }
+    }
+}
+
 impl Default for UnnestOptions {
     fn default() -> Self {
         Self {
             // default to true to maintain backwards compatible behavior
             preserve_nulls: true,
             recursions: vec![],
+            position: None,
         }
     }
 }
@@ -111,6 +148,12 @@ impl UnnestOptions {
     /// Set the recursions for the unnest operation
     pub fn with_recursions(mut self, recursion: RecursionUnnestOption) -> Self {
         self.recursions.push(recursion);
+        self
+    }
+
+    /// Request a position column on the output (see [`PositionColumn`]).
+    pub fn with_position(mut self, position: PositionColumn) -> Self {
+        self.position = Some(position);
         self
     }
 }

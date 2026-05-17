@@ -46,8 +46,8 @@ use arrow_ord::cmp::lt;
 use async_trait::async_trait;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
-    internal_err,
+    Constraints, HashMap, HashSet, IndexBase, Result, UnnestOptions, exec_datafusion_err,
+    exec_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -498,6 +498,7 @@ fn list_unnest_at_level(
     temp_unnested_arrs: &mut HashMap<ListUnnest, ArrayRef>,
     level_to_unnest: usize,
     options: &UnnestOptions,
+    position_array_out: &mut Option<ArrayRef>,
 ) -> Result<Option<Vec<ArrayRef>>> {
     // Extract unnestable columns at this level
     let (arrs_to_unnest, list_unnest_specs): (Vec<Arc<dyn Array>>, Vec<_>) =
@@ -543,6 +544,20 @@ fn list_unnest_at_level(
 
     // Create the take indices array for other columns
     let take_indices = create_take_indices(unnested_length, total_length);
+
+    // At the final unnest level, materialize the WITH ORDINALITY / WITH OFFSET
+    // position column if the caller requested one. Multi-level (recursive) unnest
+    // currently always reports the leaf-level position.
+    if level_to_unnest == 1
+        && let Some(position) = &options.position
+    {
+        *position_array_out = Some(Arc::new(create_position_indices(
+            unnested_length,
+            total_length,
+            position.base,
+        )) as ArrayRef);
+    }
+
     unnested_temp_arrays
         .into_iter()
         .zip(list_unnest_specs.iter())
@@ -643,6 +658,7 @@ fn build_batch(
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
 ) -> Result<Option<RecordBatch>> {
+    let mut position_array: Option<ArrayRef> = None;
     let transformed = match list_type_columns.len() {
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
@@ -669,6 +685,7 @@ fn build_batch(
                     &mut temp_unnested_result,
                     depth,
                     options,
+                    &mut position_array,
                 )?
                 else {
                     return Ok(None);
@@ -740,7 +757,7 @@ fn build_batch(
                 )
                 .collect::<HashMap<_, _>>();
 
-            let ret = flatten_arrs
+            let mut ret = flatten_arrs
                 .into_iter()
                 .enumerate()
                 .flat_map(|(col_idx, arr)| {
@@ -753,6 +770,12 @@ fn build_batch(
                     }
                 })
                 .collect::<Vec<_>>();
+
+            // Append the WITH ORDINALITY / WITH OFFSET position column, if any.
+            // The Unnest logical plan placed this as the last schema field.
+            if let Some(pos_arr) = position_array.take() {
+                ret.push(pos_arr);
+            }
 
             flatten_struct_cols(&ret, schema, struct_column_indices)
         }
@@ -992,6 +1015,34 @@ fn create_take_indices(
         // The length array should not contain nulls, so unwrap is safe
         let repeat = repeat.unwrap();
         (0..repeat).for_each(|_| builder.append_value(index as i64));
+    }
+    builder.finish()
+}
+
+/// Builds the per-element position column for `UNNEST ... WITH ORDINALITY`
+/// (1-indexed) or `UNNEST ... WITH OFFSET` (0-indexed).
+///
+/// Given the length array `[2, 3, 1]` and `base = Zero`, returns `[0, 1, 0, 1, 2, 0]`.
+/// With `base = One`, returns `[1, 2, 1, 2, 3, 1]`.
+fn create_position_indices(
+    length_array: &PrimitiveArray<Int64Type>,
+    capacity: usize,
+    base: IndexBase,
+) -> PrimitiveArray<Int64Type> {
+    debug_assert!(
+        length_array.null_count() == 0,
+        "length array should not contain nulls"
+    );
+    let start: i64 = match base {
+        IndexBase::Zero => 0,
+        IndexBase::One => 1,
+    };
+    let mut builder = PrimitiveArray::<Int64Type>::builder(capacity);
+    for repeat in length_array.iter() {
+        let repeat = repeat.unwrap();
+        for i in 0..repeat {
+            builder.append_value(start + i);
+        }
     }
     builder.finish()
 }
@@ -1252,6 +1303,7 @@ mod tests {
             &UnnestOptions {
                 preserve_nulls: true,
                 recursions: vec![],
+                position: None,
             },
         )?
         .unwrap();
@@ -1339,6 +1391,7 @@ mod tests {
         let options = UnnestOptions {
             preserve_nulls,
             recursions: vec![],
+            position: None,
         };
         let longest_length = find_longest_length(list_arrays, &options)?;
         let expected_array = Int64Array::from(expected);
@@ -1390,6 +1443,26 @@ mod tests {
         let take_indices = create_take_indices(&length_array, 6);
         let expected = Int64Array::from(vec![0, 0, 1, 1, 1, 2]);
         assert_eq!(take_indices, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_position_indices_zero_based() -> Result<()> {
+        // BigQuery `WITH OFFSET` semantics: per-list position starts at 0.
+        let length_array = Int64Array::from(vec![2, 3, 1]);
+        let position = create_position_indices(&length_array, 6, IndexBase::Zero);
+        let expected = Int64Array::from(vec![0, 1, 0, 1, 2, 0]);
+        assert_eq!(position, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_position_indices_one_based() -> Result<()> {
+        // Postgres / SQL-standard `WITH ORDINALITY` semantics: starts at 1.
+        let length_array = Int64Array::from(vec![2, 3, 1]);
+        let position = create_position_indices(&length_array, 6, IndexBase::One);
+        let expected = Int64Array::from(vec![1, 2, 1, 2, 3, 1]);
+        assert_eq!(position, expected);
         Ok(())
     }
 }

@@ -333,12 +333,28 @@ message ColumnUnnestListRecursion {
 message UnnestOptions {
   bool preserve_nulls = 1;
   repeated RecursionUnnestOption recursions = 2;
+  // Set when `UNNEST ... WITH ORDINALITY` (1-indexed) or `WITH OFFSET`
+  // (0-indexed) was requested; absent for plain UNNEST.
+  optional PositionColumn position = 3;
 }
 
 message RecursionUnnestOption {
   datafusion_common.Column output_column = 1;
   datafusion_common.Column input_column = 2;
   uint32 depth = 3;
+}
+
+// 0/1 index base for the synthetic position column produced by UNNEST.
+enum IndexBase {
+  // 0-indexed (BigQuery `WITH OFFSET`, Snowflake `FLATTEN.INDEX`, Spark `posexplode`).
+  INDEX_BASE_ZERO = 0;
+  // 1-indexed (Postgres / SQL standard `WITH ORDINALITY`, Trino/Presto).
+  INDEX_BASE_ONE = 1;
+}
+
+message PositionColumn {
+  string name = 1;
+  IndexBase base = 2;
 }
 
 message UnionNode {

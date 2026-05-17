@@ -95,7 +95,7 @@ pub use schema_reference::SchemaReference;
 pub use spans::{Location, Span, Spans};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
-pub use unnest::{RecursionUnnestOption, UnnestOptions};
+pub use unnest::{IndexBase, PositionColumn, RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
 
 // These are hidden from docs purely to avoid polluting the public view of what this crate exports.

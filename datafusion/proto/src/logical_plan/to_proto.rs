@@ -21,7 +21,9 @@
 
 use std::collections::HashMap;
 
-use datafusion_common::{NullEquality, TableReference, UnnestOptions};
+use datafusion_common::{
+    IndexBase, NullEquality, PositionColumn, TableReference, UnnestOptions,
+};
 use datafusion_expr::WriteOp;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
@@ -65,6 +67,20 @@ impl From<&UnnestOptions> for protobuf::UnnestOptions {
                     depth: r.depth as u32,
                 })
                 .collect(),
+            position: opts.position.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<&PositionColumn> for protobuf::PositionColumn {
+    fn from(pos: &PositionColumn) -> Self {
+        let base = match pos.base {
+            IndexBase::Zero => protobuf::IndexBase::Zero,
+            IndexBase::One => protobuf::IndexBase::One,
+        };
+        Self {
+            name: pos.name.clone(),
+            base: base as i32,
         }
     }
 }

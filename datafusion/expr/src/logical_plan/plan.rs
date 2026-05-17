@@ -4286,6 +4286,12 @@ impl Unnest {
         // 4.unnest_col2_depth_1: int
         // Meaning the placeholder column will be replaced by its unnested variation(s), note
         // the plural.
+        // Pick one of the unnest target indices as the dependency anchor for the
+        // synthetic position column (it depends on the unnest happening at all,
+        // not on any one input column). Safe to unwrap because exec_columns was
+        // verified non-empty above.
+        let position_dep_index = *indices_to_unnest.keys().next().unwrap();
+
         let fields = input_schema
             .iter()
             .enumerate()
@@ -4371,6 +4377,13 @@ impl Unnest {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
+
+        let mut fields = fields;
+        if let Some(position) = &options.position {
+            let pos_field = Arc::new(Field::new(&position.name, DataType::Int64, true));
+            fields.push((None, pos_field));
+            dependency_indices.push(position_dep_index);
+        }
 
         let metadata = input_schema.metadata().clone();
         let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
