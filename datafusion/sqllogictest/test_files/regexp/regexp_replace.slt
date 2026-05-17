@@ -113,6 +113,20 @@ SELECT regexp_replace('foobar', 'bar', 'xx', 'gi')
 ----
 fooxx
 
+query TT
+SELECT 'm', regexp_replace(concat('a', chr(10), 'b'), '^b', 'x', 'm')
+----
+m
+01)a
+02)x
+
+query TT
+SELECT 'gm', regexp_replace(concat('a', chr(10), 'b'), '^b', 'x', 'gm')
+----
+gm
+01)a
+02)x
+
 query T
 SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'xx', 'gi')
 ----

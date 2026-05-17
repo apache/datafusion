@@ -878,6 +878,25 @@ mod tests {
     );
 
     #[test]
+    fn test_static_pattern_regexp_replace_multiline_flag() {
+        let values = StringArray::from(vec!["a\nb"]);
+        let patterns = StringArray::from(vec!["^b"]);
+        let replacements = StringArray::from(vec!["x"]);
+        let flags = StringArray::from(vec!["m"]);
+        let expected = StringArray::from(vec!["a\nx"]);
+
+        let re = regexp_replace_static_pattern_replace::<i32>(&[
+            Arc::new(values),
+            Arc::new(patterns),
+            Arc::new(replacements),
+            Arc::new(flags),
+        ])
+        .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
     fn test_static_pattern_regexp_replace_early_abort() {
         let values = StringArray::from(vec!["abc"; 5]);
         let patterns = StringArray::from(vec![None::<&str>; 5]);
