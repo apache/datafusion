@@ -582,15 +582,21 @@ select ln(0);
 -Infinity
 
 # ln with positive column values (round is needed to normalize the outputs of different operating systems)
-query R rowsort
-select round(ln(a), 5) from signed_integers where a > 0;
+query RRR rowsort
+select round(ln(a), 5), round(ln(b), 5), round(ln(c), 5) from unsigned_integers;
 ----
-0.69315
-1.38629
+0 4.60517 6.34036
+0.69315 6.90776 4.81218
+1.09861 9.21034 6.88551
+1.38629 NULL NULL
 
 # ln rejects negative scalar inputs
 query error Arrow error: Compute error: Cannot take logarithm of a negative number
 select ln((-1.0)::float8);
+
+# ln rejects negative Float32 scalar inputs
+query error Arrow error: Compute error: Cannot take logarithm of a negative number
+select ln((-1.0)::float4);
 
 # ln rejects negative column inputs
 query error Arrow error: Compute error: Cannot take logarithm of a negative number
