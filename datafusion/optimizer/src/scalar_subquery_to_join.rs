@@ -34,7 +34,7 @@ use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, pla
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, expr};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
 
 /// Optimizer rule that rewrites correlated scalar subquery filters to joins and
 /// places an additional projection on top of the filter, to preserve the
@@ -107,18 +107,17 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = filter.input.as_ref().clone();
                 for (subquery, alias) in subqueries {
-                    if let Some((optimized_subquery, expr_check_map)) =
+                    if let Some((optimized_subquery, compensation_exprs)) =
                         build_join(&subquery, &cur_input, &alias)?
                     {
-                        if !expr_check_map.is_empty() {
+                        if !compensation_exprs.is_empty() {
                             rewrite_expr = rewrite_expr
                                 .transform_up(|expr| {
-                                    // replace column references with entry in map, if it exists
-                                    if let Some(map_expr) = expr
+                                    if let Some(compensation_expr) = expr
                                         .try_as_col()
-                                        .and_then(|col| expr_check_map.get(col))
+                                        .and_then(|col| compensation_exprs.get(col))
                                     {
-                                        Ok(Transformed::yes(map_expr.clone()))
+                                        Ok(Transformed::yes(compensation_expr.clone()))
                                     } else {
                                         Ok(Transformed::no(expr))
                                     }
@@ -175,23 +174,22 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueries {
-                    if let Some((optimized_subquery, expr_check_map)) =
+                    if let Some((optimized_subquery, compensation_exprs)) =
                         build_join(&subquery, &cur_input, &alias)?
                     {
                         cur_input = optimized_subquery;
-                        if !expr_check_map.is_empty()
+                        if !compensation_exprs.is_empty()
                             && let Some(expr) = subquery_to_expr_map.get(&subquery)
                             && let Some(rewrite_expr) = expr_to_rewrite_expr_map.get(expr)
                         {
                             let new_expr = rewrite_expr
                                 .clone()
                                 .transform_up(|expr| {
-                                    // replace column references with entry in map, if it exists
-                                    if let Some(map_expr) = expr
+                                    if let Some(compensation_expr) = expr
                                         .try_as_col()
-                                        .and_then(|col| expr_check_map.get(col))
+                                        .and_then(|col| compensation_exprs.get(col))
                                     {
-                                        Ok(Transformed::yes(map_expr.clone()))
+                                        Ok(Transformed::yes(compensation_expr.clone()))
                                     } else {
                                         Ok(Transformed::no(expr))
                                     }
@@ -290,90 +288,95 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 ///
 /// ```text
 /// select c.id from customers c
-/// left join (select c_id, avg(total) as val from orders group by c_id) o on o.c_id = c.c_id
-/// where c.balance > o.val
-/// ```
-///
-/// Or a query like:
-///
-/// ```text
-/// select id from customers where balance >
-///     (select avg(total) from orders)
-/// ```
-///
-/// and optimizes it into:
-///
-/// ```text
-/// select c.id from customers c
-/// left join (select avg(total) as val from orders) a
-/// where c.balance > a.val
+/// left join (select c_id, avg(total) from orders group by c_id) o
+/// on o.c_id = c.id
+/// where c.balance > o."avg(total)"
 /// ```
 ///
 /// # Arguments
 ///
-/// * `query_info` - The subquery portion of the `where` (select avg(total) from orders)
-/// * `filter_input` - The non-subquery portion (from customers)
-/// * `outer_others` - Any additional parts to the `where` expression (and c.x = y)
-/// * `subquery_alias` - Subquery aliases
+/// * `subquery` - The correlated scalar subquery to decorrelate.
+/// * `outer_input` - The outer plan that the decorrelated subquery is
+///   left-joined onto — the input of the `Filter` or `Projection` node
+///   that contained the subquery.
+/// * `subquery_alias` - The unique alias assigned to the decorrelated
+///   subquery; used both to qualify the join condition and to produce
+///   column references for the caller to substitute.
+///
+/// Returns `Ok(None)` if the subquery cannot be decorrelated. On success,
+/// returns the rewritten outer plan and a map from each count-bug-affected
+/// column to its `CASE WHEN __always_true IS NULL THEN ... END` compensation
+/// expression, which the caller must substitute into any expression that
+/// references those columns.
 fn build_join(
     subquery: &Subquery,
-    filter_input: &LogicalPlan,
+    outer_input: &LogicalPlan,
     subquery_alias: &str,
 ) -> Result<Option<(LogicalPlan, HashMap<Column, Expr>)>> {
+    assert_or_internal_err!(
+        !subquery.outer_ref_columns.is_empty(),
+        "build_join should only be called for correlated subqueries"
+    );
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
-    let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
+    let decorrelated_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
     }
 
-    let collected_count_expr_map =
-        pull_up.collected_count_expr_map.get(&new_plan).cloned();
-    let sub_query_alias = LogicalPlanBuilder::from(new_plan)
+    let collected_count_expr_map = pull_up
+        .collected_count_expr_map
+        .get(&decorrelated_subquery)
+        .cloned();
+    let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
         .alias(subquery_alias.to_string())?
         .build()?;
 
-    let mut all_correlated_cols = BTreeSet::new();
-    pull_up
+    let all_correlated_cols: BTreeSet<Column> = pull_up
         .correlated_subquery_cols_map
         .values()
-        .for_each(|cols| all_correlated_cols.extend(cols.clone()));
+        .flatten()
+        .cloned()
+        .collect();
 
-    // alias the join filter
+    // Correlated columns now live in the decorrelated subquery's output,
+    // so re-qualify them with the subquery alias.
     let join_filter_opt =
         conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
             replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
         })?;
 
-    // join our sub query into the main plan
-    let new_plan = if join_filter_opt.is_none() {
-        match filter_input {
-            LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row: true,
-                schema: _,
-            }) => sub_query_alias,
-            _ => {
-                // if not correlated, group down to 1 row and left join on that (preserving row count)
-                LogicalPlanBuilder::from(filter_input.clone())
-                    .join_on(
-                        sub_query_alias,
-                        JoinType::Left,
-                        vec![Expr::Literal(ScalarValue::Boolean(Some(true)), None)],
-                    )?
-                    .build()?
-            }
-        }
-    } else {
-        // left join if correlated, grouping by the join keys so we don't change row count
-        LogicalPlanBuilder::from(filter_input.clone())
-            .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
-            .build()?
-    };
-    let mut computation_project_expr = HashMap::new();
+    // When pull-up did not extract any usable join keys (a correlated subquery
+    // whose predicate references only outer columns), fall back to `ON true`:
+    // the decorrelated subquery still yields at most one row per outer row
+    // because its aggregate is grouped by the (empty) set of correlated inner
+    // columns.
+    let join_filter = join_filter_opt.or_else(|| Some(lit(true)));
+
+    let new_plan = LogicalPlanBuilder::from(outer_input.clone())
+        .join_on(aliased_subquery, JoinType::Left, join_filter)?
+        .build()?;
+
+    // Add count-bug compensation for each of the subquery's projected
+    // expressions that yield non-NULL values on empty input. We wrap each
+    // such expression in a CASE that substitutes the empty-input value
+    // when the LEFT JOIN produced synthetic right-side NULLs (no inner
+    // row matched), and uses the actual right-side value (which may
+    // itself be NULL) otherwise.
+    let mut compensation_exprs = HashMap::new();
     if let Some(expr_map) = collected_count_expr_map {
+        let mut expr_rewrite = TypeCoercionRewriter {
+            schema: new_plan.schema(),
+        };
+        let having_arm = pull_up
+            .pull_up_having_expr
+            .as_ref()
+            .map(|f| (not(f.clone()), lit(ScalarValue::Null)));
         for (name, result) in expr_map {
             if evaluates_to_null(result.clone(), result.column_refs())? {
-                // If expr always returns null when column is null, skip processing
+                // Aggregates whose empty-input value is NULL (max/min/sum/…)
+                // need no compensation: the LEFT JOIN already produces NULL
+                // for unmatched outer rows.
                 continue;
             }
 
@@ -381,42 +384,21 @@ fn build_join(
                 Column::new(Some(subquery_alias), UN_MATCHED_ROW_INDICATOR);
             // Qualify with the subquery alias to avoid ambiguity when the
             // outer table has a column with the same name as the aggregate.
-            let value_col = Column::new(Some(subquery_alias), name.clone());
+            let value_col = Column::new(Some(subquery_alias), name);
 
-            let computer_expr = if let Some(filter) = &pull_up.pull_up_having_expr {
-                Expr::Case(expr::Case {
-                    expr: None,
-                    when_then_expr: vec![
-                        (
-                            Box::new(Expr::IsNull(Box::new(Expr::Column(indicator_col)))),
-                            Box::new(result),
-                        ),
-                        (
-                            Box::new(Expr::Not(Box::new(filter.clone()))),
-                            Box::new(Expr::Literal(ScalarValue::Null, None)),
-                        ),
-                    ],
-                    else_expr: Some(Box::new(Expr::Column(value_col.clone()))),
-                })
-            } else {
-                Expr::Case(expr::Case {
-                    expr: None,
-                    when_then_expr: vec![(
-                        Box::new(Expr::IsNull(Box::new(Expr::Column(indicator_col)))),
-                        Box::new(result),
-                    )],
-                    else_expr: Some(Box::new(Expr::Column(value_col.clone()))),
-                })
-            };
-            let mut expr_rewrite = TypeCoercionRewriter {
-                schema: new_plan.schema(),
-            };
-            computation_project_expr
-                .insert(value_col, computer_expr.rewrite(&mut expr_rewrite).data()?);
+            let mut builder = when(Expr::Column(indicator_col).is_null(), result);
+            if let Some((when_expr, then_expr)) = &having_arm {
+                builder = builder.when(when_expr.clone(), then_expr.clone());
+            }
+            let compensation_expr = builder.otherwise(Expr::Column(value_col.clone()))?;
+            compensation_exprs.insert(
+                value_col,
+                compensation_expr.rewrite(&mut expr_rewrite).data()?,
+            );
         }
     }
 
-    Ok(Some((new_plan, computation_project_expr)))
+    Ok(Some((new_plan, compensation_exprs)))
 }
 
 #[cfg(test)]
@@ -430,7 +412,7 @@ mod tests {
     use datafusion_expr::test::function_stub::sum;
 
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
-    use datafusion_expr::{Between, col, lit, out_ref_col, scalar_subquery};
+    use datafusion_expr::{Between, col, expr, out_ref_col, scalar_subquery};
     use datafusion_functions_aggregate::min_max::{max, min};
 
     macro_rules! assert_optimized_plan_equal {
