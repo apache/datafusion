@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use super::AggregateExec;
 use super::order::GroupOrdering;
+use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
@@ -564,7 +564,11 @@ impl GroupedHashAggregateStream {
 
         let agg_fn_names = aggregate_exprs
             .iter()
-            .map(|expr| expr.human_display())
+            .map(|expr| {
+                format_human_display(expr.human_display(), expr.human_display_alias())
+                    .map(|display| display.into_owned())
+                    .unwrap_or_else(|| expr.name().to_string())
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");

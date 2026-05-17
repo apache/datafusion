@@ -43,11 +43,12 @@ use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::count_udaf;
+use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{JoinType, Operator, Volatility, create_udf};
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
@@ -2165,7 +2166,105 @@ async fn test_round_trip_human_display() -> Result<()> {
     let sql = "select r_name, count(r_name) from region group by r_name";
     roundtrip_test_sql_with_context(sql, &ctx).await?;
 
+    let sql = "select count(*) as count_star from region";
+    roundtrip_test_sql_with_context(sql, &ctx).await?;
+
     Ok(())
+}
+
+#[test]
+fn test_round_trip_aliased_reverse_human_display() -> Result<()> {
+    let aggregate_expr = roundtrip_first_value_aggregate(
+        "agg",
+        "first_value(b) ORDER BY [b ASC NULLS LAST]",
+        Some("agg"),
+    )?;
+    let reversed = aggregate_expr
+        .reverse_expr()
+        .expect("expected reverse expr");
+
+    assert_eq!(reversed.name(), "agg");
+    assert_eq!(reversed.human_display_alias(), Some("agg"));
+    assert_eq!(
+        reversed.human_display(),
+        Some("last_value(b) ORDER BY [b DESC NULLS FIRST]")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_round_trip_human_display_alias_with_colon() -> Result<()> {
+    let aggregate_expr = roundtrip_first_value_aggregate(
+        "agg:one",
+        "first_value(b) ORDER BY [b ASC NULLS LAST]",
+        Some("agg:one"),
+    )?;
+
+    assert_eq!(aggregate_expr.name(), "agg:one");
+    assert_eq!(aggregate_expr.human_display_alias(), Some("agg:one"));
+    assert_eq!(
+        aggregate_expr.human_display(),
+        Some("first_value(b) ORDER BY [b ASC NULLS LAST]")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_round_trip_non_aliased_human_display_ending_like_alias() -> Result<()> {
+    let aggregate_expr =
+        roundtrip_first_value_aggregate("agg", "first_value(b) as agg", None)?;
+
+    assert_eq!(aggregate_expr.name(), "agg");
+    assert_eq!(
+        aggregate_expr.human_display(),
+        Some("first_value(b) as agg")
+    );
+    assert_eq!(aggregate_expr.human_display_alias(), None);
+
+    Ok(())
+}
+
+fn roundtrip_first_value_aggregate(
+    alias: &str,
+    human_display: &str,
+    human_display_alias: Option<&str>,
+) -> Result<Arc<AggregateFunctionExpr>> {
+    let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+    let mut builder =
+        AggregateExprBuilder::new(first_value_udaf(), vec![col("b", &schema)?])
+            .order_by(vec![PhysicalSortExpr {
+                expr: col("b", &schema)?,
+                options: SortOptions::new(false, false),
+            }])
+            .schema(Arc::clone(&schema))
+            .alias(alias)
+            .human_display(human_display);
+    if let Some(human_display_alias) = human_display_alias {
+        builder = builder.human_display_alias(human_display_alias);
+    }
+    let agg_expr = builder.build().map(Arc::new)?;
+
+    let plan = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
+        vec![agg_expr],
+        vec![None],
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        schema,
+    )?);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtrip_plan = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+    let aggregate = roundtrip_plan
+        .as_ref()
+        .downcast_ref::<AggregateExec>()
+        .expect("expected AggregateExec after roundtrip");
+
+    Ok(Arc::clone(&aggregate.aggr_expr()[0]))
 }
 
 // Bug 2 of https://github.com/apache/datafusion/issues/16772

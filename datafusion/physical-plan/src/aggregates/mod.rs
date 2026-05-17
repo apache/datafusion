@@ -17,6 +17,7 @@
 
 //! Aggregates functionalities
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
@@ -1374,7 +1375,7 @@ impl DisplayAs for AggregateExec {
                 let a: Vec<String> = self
                     .aggr_expr
                     .iter()
-                    .map(|agg| agg.name().to_string())
+                    .map(|agg| format_aggregate_exec_expr(agg).to_string())
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
                 if let Some(config) = self.limit_options {
@@ -1428,7 +1429,7 @@ impl DisplayAs for AggregateExec {
                 let a: Vec<String> = self
                     .aggr_expr
                     .iter()
-                    .map(|agg| agg.human_display().to_string())
+                    .map(|agg| format_tree_aggregate_expr(agg).to_string())
                     .collect();
                 writeln!(f, "mode={:?}", self.mode)?;
                 if !g.is_empty() {
@@ -1444,6 +1445,29 @@ impl DisplayAs for AggregateExec {
         }
         Ok(())
     }
+}
+
+fn format_aggregate_exec_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
+    match agg.human_display_alias() {
+        Some(_) => format_human_display(agg.human_display(), agg.human_display_alias())
+            .unwrap_or_else(|| Cow::Borrowed(agg.name())),
+        None => Cow::Borrowed(agg.name()),
+    }
+}
+
+fn format_tree_aggregate_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
+    format_human_display(agg.human_display(), agg.human_display_alias())
+        .unwrap_or_else(|| Cow::Borrowed(agg.name()))
+}
+
+fn format_human_display<'a>(
+    human_display: Option<&'a str>,
+    alias: Option<&'a str>,
+) -> Option<Cow<'a, str>> {
+    human_display.map(|human_display| match alias {
+        Some(alias) => Cow::Owned(format!("{human_display} as {alias}")),
+        None => Cow::Borrowed(human_display),
+    })
 }
 
 impl ExecutionPlan for AggregateExec {
@@ -3019,6 +3043,147 @@ mod tests {
             .alias(String::from("last_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
             .map(Arc::new)
+    }
+
+    fn first_value_agg_expr(
+        schema: &SchemaRef,
+        column: &str,
+        alias: &str,
+        human_display: Option<&str>,
+        human_display_alias: Option<&str>,
+    ) -> Result<AggregateFunctionExpr> {
+        let mut builder =
+            AggregateExprBuilder::new(first_value_udaf(), vec![col(column, schema)?])
+                .order_by(vec![PhysicalSortExpr {
+                    expr: col(column, schema)?,
+                    options: SortOptions::new(false, false),
+                }])
+                .schema(Arc::clone(schema))
+                .alias(alias);
+
+        if let Some(human_display) = human_display {
+            builder = builder.human_display(human_display);
+        }
+        if let Some(human_display_alias) = human_display_alias {
+            builder = builder.human_display_alias(human_display_alias);
+        }
+
+        builder.build()
+    }
+
+    #[test]
+    fn test_reverse_expr_preserves_aliased_human_display() -> Result<()> {
+        let schema = create_test_schema()?;
+        let agg = first_value_agg_expr(
+            &schema,
+            "b",
+            "agg",
+            Some("first_value(b) ORDER BY [b ASC NULLS LAST]"),
+            Some("agg"),
+        )?;
+
+        let reversed = agg.reverse_expr().expect("expected reverse expr");
+
+        assert_eq!(reversed.name(), "agg");
+        assert_eq!(reversed.human_display_alias(), Some("agg"));
+        assert_eq!(
+            format_tree_aggregate_expr(&reversed),
+            "last_value(b) ORDER BY [b DESC NULLS FIRST] as agg"
+        );
+        assert_eq!(
+            reversed.human_display(),
+            Some("last_value(b) ORDER BY [b DESC NULLS FIRST]")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reverse_expr_does_not_rewrite_column_names_in_human_display() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "first_value_col",
+            DataType::Int32,
+            true,
+        )]));
+        let agg = first_value_agg_expr(
+            &schema,
+            "first_value_col",
+            "agg",
+            Some(
+                "first_value(first_value_col) ORDER BY [first_value_col ASC NULLS LAST]",
+            ),
+            Some("agg"),
+        )?;
+
+        let reversed = agg.reverse_expr().expect("expected reverse expr");
+
+        assert_eq!(reversed.name(), "agg");
+        assert_eq!(
+            reversed.human_display(),
+            Some(
+                "last_value(first_value_col) ORDER BY [first_value_col DESC NULLS FIRST]"
+            )
+        );
+        assert_eq!(
+            format_tree_aggregate_expr(&reversed),
+            "last_value(first_value_col) ORDER BY [first_value_col DESC NULLS FIRST] as agg"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_human_display_is_treated_as_absent() -> Result<()> {
+        let schema = create_test_schema()?;
+        let agg = first_value_agg_expr(&schema, "b", "agg", Some(""), None)?;
+
+        assert_eq!(agg.human_display(), None);
+        assert_eq!(format_tree_aggregate_expr(&agg), "agg");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_human_display_alias_must_match_name() -> Result<()> {
+        let schema = create_test_schema()?;
+        let error = first_value_agg_expr(
+            &schema,
+            "b",
+            "agg",
+            Some("first_value(b) ORDER BY [b ASC NULLS LAST]"),
+            Some("other_alias"),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("aggregate human_display_alias must match")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reverse_expr_preserves_non_aliased_display_path() -> Result<()> {
+        let schema = create_test_schema()?;
+        let agg = first_value_agg_expr(
+            &schema,
+            "b",
+            "first_value(b) ORDER BY [b ASC NULLS LAST]",
+            None,
+            None,
+        )?;
+
+        let reversed = agg.reverse_expr().expect("expected reverse expr");
+
+        assert_eq!(
+            reversed.name(),
+            "last_value(b) ORDER BY [b DESC NULLS FIRST]"
+        );
+        assert_eq!(reversed.human_display(), None);
+
+        Ok(())
     }
 
     // This function constructs the physical plan below,
