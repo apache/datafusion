@@ -233,15 +233,15 @@ where
     where
         i64: TryInto<O>,
     {
+        if index <= 0 {
+            return Ok(None);
+        }
+
         let index: O = index.try_into().map_err(|_| {
             exec_datafusion_err!("array_element got invalid index: {index}")
         })?;
-        // 0 ~ len - 1
-        let adjusted_zero_index = if index < O::usize_as(0) {
-            index + len
-        } else {
-            index - O::usize_as(1)
-        };
+        // Convert from 1-based indexing to 0-based indexing.
+        let adjusted_zero_index = index - O::usize_as(1);
 
         if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
             Ok(Some(adjusted_zero_index))

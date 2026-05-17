@@ -67,7 +67,7 @@ statement error Parser error: Invalid timezone "Foo": failed to parse timezone
 SELECT arrow_cast('2021-01-02T03:04:00', 'Timestamp(Nanosecond, Some("Foo"))')
 
 # test_array_index
-query III??IIIIII
+query III??IIIIIII
 SELECT
     ([5,4,3,2,1])[1],
     ([5,4,3,2,1])[2],
@@ -80,11 +80,11 @@ SELECT
     -- out of bounds
     ([5,4,3,2,1])[0],
     ([5,4,3,2,1])[6],
-    -- ([5,4,3,2,1])[-1], -- TODO: wrong answer
+    ([5,4,3,2,1])[-1],
     -- ([5,4,3,2,1])[null], -- TODO: not supported
     ([5,4,3,2,1])[100]
 ----
-5 4 1 [1, 2] [3, 4] 1 3 4 NULL NULL NULL
+5 4 1 [1, 2] [3, 4] 1 3 4 NULL NULL NULL NULL
 
 # test_array_literals
 query ?????

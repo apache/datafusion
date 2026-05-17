@@ -106,17 +106,17 @@ NULL NULL
 query IT
 select array_element(make_array(1, 2, 3, 4, 5), -2), array_element(make_array('h', 'e', 'l', 'l', 'o'), -3);
 ----
-4 l
+NULL NULL
 
 query IT
 select array_element(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -2), array_element(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -3);
 ----
-4 l
+NULL NULL
 
 query IT
 select array_element(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), -2), array_element(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'FixedSizeList(5, Utf8)'), -3);
 ----
-4 l
+NULL NULL
 
 # array_element scalar function #6 (with negative index; out of bounds)
 query IT
@@ -205,7 +205,7 @@ select array_element(column1, column2) from slices;
 NULL
 12
 NULL
-37
+NULL
 NULL
 NULL
 55
@@ -216,7 +216,7 @@ select array_element(arrow_cast(column1, 'LargeList(Int64)'), column2) from slic
 NULL
 12
 NULL
-37
+NULL
 NULL
 NULL
 55
@@ -227,7 +227,7 @@ select array_element(column1, column2) from fixed_slices;
 NULL
 12
 NULL
-37
+NULL
 NULL
 55
 
@@ -238,7 +238,7 @@ select array_element(make_array(1, 2, 3, 4, 5), column2), array_element(column1,
 1 3
 2 13
 NULL 23
-2 33
+NULL 33
 4 NULL
 NULL 43
 5 NULL
@@ -249,7 +249,7 @@ select array_element(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 
 1 3
 2 13
 NULL 23
-2 33
+NULL 33
 4 NULL
 NULL 43
 5 NULL
@@ -260,7 +260,7 @@ select array_element(make_array(1, 2, 3, 4, 5), column2), array_element(column1,
 1 3
 2 13
 NULL 23
-2 33
+NULL 33
 NULL 43
 5 NULL
 

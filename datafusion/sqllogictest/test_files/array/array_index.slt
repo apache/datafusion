@@ -38,13 +38,13 @@ NULL
 query IRT
 select make_array(1, 2, 3)[-1], make_array(1.0, 2.0, 3.0)[-2], make_array('h', 'e', 'l', 'l', 'o')[-3];
 ----
-3 2 l
+NULL NULL NULL
 
 # single index with scalars #4 (complex index)
 query IRT
 select make_array(1, 2, 3)[1 + 2 - 1], make_array(1.0, 2.0, 3.0)[2 * 1 * 0 - 2], make_array('h', 'e', 'l', 'l', 'o')[2 - 3];
 ----
-2 2 o
+2 NULL NULL
 
 # single index with columns #1 (positive index)
 query ?RT
@@ -74,23 +74,23 @@ NULL NULL NULL
 query ?RT
 select column1[-2], column2[-3], column3[-1] from arrays;
 ----
-[NULL, 2] 1.1 m
-[3, 4] NULL m
-[5, 6] 7.7 r
-[7, NULL] 10.1 t
-NULL 13.3 t
-[11, 12] NULL ,
-[15, 16] 16.6 NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
 
 # single index with columns #4 (complex index)
 query ?RT
 select column1[9 - 7], column2[2 * 0], column3[1 - 3] from arrays;
 ----
-[3, NULL] NULL e
-[5, 6] NULL u
-[7, 8] NULL o
-[9, 10] NULL i
-NULL NULL e
+[3, NULL] NULL NULL
+[5, 6] NULL NULL
+[7, 8] NULL NULL
+[9, 10] NULL NULL
+NULL NULL NULL
 [13, 14] NULL NULL
 [NULL, 18] NULL NULL
 
