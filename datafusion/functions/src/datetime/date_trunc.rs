@@ -133,6 +133,21 @@ impl DateTruncGranularity {
                 | Self::Microsecond
         )
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Microsecond => "microsecond",
+            Self::Millisecond => "millisecond",
+            Self::Second => "second",
+            Self::Minute => "minute",
+            Self::Hour => "hour",
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::Quarter => "quarter",
+            Self::Year => "year",
+        }
+    }
 }
 
 #[user_doc(
@@ -629,6 +644,7 @@ fn date_trunc_coarse(
     value: i64,
     tz: Option<Tz>,
 ) -> Result<i64> {
+    let input = value;
     let value = match tz {
         Some(tz) => {
             // Use chrono DateTime<Tz> to clear the various fields because need to clear per timezone,
@@ -645,8 +661,12 @@ fn date_trunc_coarse(
         }
     }?;
 
-    // `with_x(0)` are infallible because `0` are always a valid
-    Ok(value.unwrap())
+    value.ok_or_else(|| {
+        exec_datafusion_err!(
+            "Timestamp {input} out of range after truncating to {}",
+            granularity.as_str()
+        )
+    })
 }
 
 /// Fast path for fine granularities (hour and smaller) that can be handled
@@ -877,6 +897,19 @@ mod tests {
             let result = date_trunc_coarse(granularity_enum, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
         });
+    }
+
+    #[test]
+    fn date_trunc_out_of_range_lower_bound_returns_error() {
+        let timestamp = string_to_timestamp_nanos("1677-09-22T00:00:00Z").unwrap();
+        let err = date_trunc_coarse(DateTruncGranularity::Year, timestamp, None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("out of range after truncating to year"),
+            "{err}"
+        );
     }
 
     #[test]
