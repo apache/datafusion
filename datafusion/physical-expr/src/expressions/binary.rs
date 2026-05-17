@@ -992,7 +992,147 @@ pub fn similar_to(
         (true, false) => Operator::RegexNotMatch,
         (true, true) => Operator::RegexNotIMatch,
     };
-    Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
+    Ok(Arc::new(BinaryExpr::new(
+        expr,
+        binary_op,
+        Arc::new(SimilarToPatternExpr::new(pattern)),
+    )))
+}
+
+#[derive(Debug, Eq)]
+struct SimilarToPatternExpr {
+    pattern: Arc<dyn PhysicalExpr>,
+}
+
+impl SimilarToPatternExpr {
+    fn new(pattern: Arc<dyn PhysicalExpr>) -> Self {
+        Self { pattern }
+    }
+}
+
+impl PartialEq for SimilarToPatternExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.pattern.eq(&other.pattern)
+    }
+}
+
+impl Hash for SimilarToPatternExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.pattern.hash(state);
+    }
+}
+
+impl std::fmt::Display for SimilarToPatternExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "similar_to_pattern({})", self.pattern)
+    }
+}
+
+impl PhysicalExpr for SimilarToPatternExpr {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.pattern.data_type(input_schema)
+    }
+
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        self.pattern.nullable(input_schema)
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        translate_similar_to_pattern_value(self.pattern.evaluate(batch)?)
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.pattern]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(Self::new(Arc::clone(&children[0]))))
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.pattern.fmt_sql(f)
+    }
+}
+
+fn translate_similar_to_pattern_value(value: ColumnarValue) -> Result<ColumnarValue> {
+    match value {
+        ColumnarValue::Scalar(scalar) => {
+            translate_similar_to_pattern_scalar(scalar).map(ColumnarValue::Scalar)
+        }
+        ColumnarValue::Array(array) => {
+            translate_similar_to_pattern_array(&array).map(ColumnarValue::Array)
+        }
+    }
+}
+
+fn translate_similar_to_pattern_scalar(scalar: ScalarValue) -> Result<ScalarValue> {
+    match scalar {
+        ScalarValue::Utf8(value) => Ok(ScalarValue::Utf8(
+            value.map(|v| similar_to_regex_pattern(&v)),
+        )),
+        ScalarValue::LargeUtf8(value) => Ok(ScalarValue::LargeUtf8(
+            value.map(|v| similar_to_regex_pattern(&v)),
+        )),
+        ScalarValue::Utf8View(value) => Ok(ScalarValue::Utf8View(
+            value.map(|v| similar_to_regex_pattern(&v)),
+        )),
+        other => internal_err!(
+            "Data type {} not supported for SIMILAR TO pattern",
+            other.data_type()
+        ),
+    }
+}
+
+fn translate_similar_to_pattern_array(array: &ArrayRef) -> Result<ArrayRef> {
+    let values = match array.data_type() {
+        DataType::Utf8 => array
+            .as_string::<i32>()
+            .iter()
+            .map(|value| value.map(similar_to_regex_pattern))
+            .collect::<Vec<_>>(),
+        DataType::LargeUtf8 => {
+            let values = array
+                .as_string::<i64>()
+                .iter()
+                .map(|value| value.map(similar_to_regex_pattern))
+                .collect::<Vec<_>>();
+            return Ok(Arc::new(LargeStringArray::from(values)));
+        }
+        DataType::Utf8View => {
+            let values = array
+                .as_string_view()
+                .iter()
+                .map(|value| value.map(similar_to_regex_pattern))
+                .collect::<Vec<_>>();
+            return Ok(Arc::new(StringViewArray::from(values)));
+        }
+        other => {
+            return internal_err!(
+                "Data type {other:?} not supported for SIMILAR TO pattern"
+            );
+        }
+    };
+
+    Ok(Arc::new(StringArray::from(values)))
+}
+
+fn similar_to_regex_pattern(pattern: &str) -> String {
+    let mut regex = String::with_capacity(pattern.len() + 2);
+    regex.push('^');
+
+    for c in pattern.chars() {
+        match c {
+            '%' => regex.push_str(".*"),
+            '_' => regex.push('.'),
+            _ => regex.push(c),
+        }
+    }
+
+    regex.push('$');
+    regex
 }
 
 #[cfg(test)]
@@ -4645,6 +4785,16 @@ mod tests {
             &schema,
             vec!["hello world", "Hello World"],
             vec!["hello.*", "hello.*"],
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+        // SIMILAR TO uses SQL wildcards in addition to regular expression syntax.
+        apply_similar_to(
+            &schema,
+            vec!["hello world", "Hello World"],
+            vec!["hello%", "hello%"],
             false,
             false,
             &expected,
