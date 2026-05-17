@@ -557,6 +557,12 @@ impl FileSource for ParquetSource {
             .coerce_int96
             .as_ref()
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
+        let coerce_int96_tz = self
+            .table_parquet_options
+            .global
+            .coerce_int96_tz
+            .as_ref()
+            .map(|tz| Arc::<str>::from(tz.as_str()));
 
         Ok(Box::new(ParquetMorselizer {
             partition_index: partition,
@@ -578,6 +584,7 @@ impl FileSource for ParquetSource {
             enable_bloom_filter: self.bloom_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             coerce_int96,
+            coerce_int96_tz,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties,
             expr_adapter_factory,
