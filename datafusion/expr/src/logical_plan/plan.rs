@@ -2867,6 +2867,7 @@ impl Hash for TableScan {
 impl TableScan {
     /// Initialize TableScan with appropriate schema from the given
     /// arguments.
+    #[deprecated(since = "54.0.0", note = "use `TableScanBuilder` instead")]
     pub fn try_new(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
@@ -2874,14 +2875,79 @@ impl TableScan {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        let table_name = table_name.into();
+        TableScanBuilder::new(table_name, table_source)
+            .with_projection(projection)
+            .with_filters(filters)
+            .with_fetch(fetch)
+            .build()
+    }
+}
+
+/// Builder for [`TableScan`].
+///
+/// Prefer this over constructing a [`TableScan`] directly: it derives the
+/// `projected_schema` from the source schema and projection, and is resilient
+/// to new fields being added to [`TableScan`]. An existing scan can be turned
+/// back into a builder with `TableScanBuilder::from(scan)`, tweaked, and
+/// rebuilt with [`TableScanBuilder::build`].
+pub struct TableScanBuilder {
+    table_name: TableReference,
+    source: Arc<dyn TableSource>,
+    projection: Option<Vec<usize>>,
+    filters: Vec<Expr>,
+    fetch: Option<usize>,
+}
+
+impl TableScanBuilder {
+    /// Create a new builder for a scan of `source` named `table_name`.
+    pub fn new(
+        table_name: impl Into<TableReference>,
+        source: Arc<dyn TableSource>,
+    ) -> Self {
+        Self {
+            table_name: table_name.into(),
+            source,
+            projection: None,
+            filters: vec![],
+            fetch: None,
+        }
+    }
+
+    /// Set the column projection (indices into the source schema).
+    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    /// Set the filter expressions offered to the table provider.
+    pub fn with_filters(mut self, filters: Vec<Expr>) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    /// Set the maximum number of rows to read.
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
+    }
+
+    /// Build the [`TableScan`], deriving its `projected_schema` from the
+    /// source schema and projection.
+    pub fn build(self) -> Result<TableScan> {
+        let TableScanBuilder {
+            table_name,
+            source,
+            projection,
+            filters,
+            fetch,
+        } = self;
 
         if table_name.table().is_empty() {
             return plan_err!("table_name cannot be empty");
         }
-        let schema = table_source.schema();
+        let schema = source.schema();
         let func_dependencies = FunctionalDependencies::new_from_constraints(
-            table_source.constraints(),
+            source.constraints(),
             schema.fields.len(),
         );
         let projected_schema = projection
@@ -2907,14 +2973,26 @@ impl TableScan {
             })?;
         let projected_schema = Arc::new(projected_schema);
 
-        Ok(Self {
+        Ok(TableScan {
             table_name,
-            source: table_source,
+            source,
             projection,
             projected_schema,
             filters,
             fetch,
         })
+    }
+}
+
+impl From<TableScan> for TableScanBuilder {
+    fn from(scan: TableScan) -> Self {
+        Self {
+            table_name: scan.table_name,
+            source: scan.source,
+            projection: scan.projection,
+            filters: scan.filters,
+            fetch: scan.fetch,
+        }
     }
 }
 
