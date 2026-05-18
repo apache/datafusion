@@ -32,6 +32,15 @@ all-features = true
 [features]
 default = []
 core = ["datafusion"]
+# Spark-compatible Parquet schema adapter (see `parquet` module).
+parquet = [
+    "dep:datafusion-physical-expr",
+    "dep:datafusion-physical-expr-adapter",
+    "dep:datafusion-physical-expr-common",
+    "dep:datafusion-expr-common",
+    "dep:parquet",
+    "dep:uuid",
+]
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
@@ -53,24 +62,33 @@ datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true, optional = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+datafusion-physical-expr = { workspace = true, optional = true }
+datafusion-physical-expr-adapter = { workspace = true, optional = true }
+datafusion-physical-expr-common = { workspace = true, optional = true }
 log = { workspace = true }
 num-traits = { workspace = true }
+parquet = { workspace = true, optional = true }
 percent-encoding = "2.3.2"
 rand = { workspace = true }
 serde_json = { workspace = true }
 sha1 = "0.11"
 sha2 = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
-# for SessionStateBuilderSpark tests
-datafusion = { workspace = true, default-features = false }
+# for SessionStateBuilderSpark tests and Parquet schema-adapter tests
+datafusion = { workspace = true, default-features = false, features = ["parquet"] }
+futures = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true }
 
 [[bench]]
 harness = false
