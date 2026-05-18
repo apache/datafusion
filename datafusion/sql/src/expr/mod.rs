@@ -142,28 +142,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let RawBinaryExpr { op, left, right } = binary_expr;
-        if op == BinaryOperator::PGExp {
-            let fun_name = "power";
-            let fun = self
-                .context_provider
-                .get_function_meta(fun_name)
-                .ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "Unable to find expected '{fun_name}' function"
-                    )
-                })?;
-
-            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                fun,
-                vec![left, right],
-            )));
-        }
-
-        Ok(Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(left),
-            self.parse_sql_binary_op(&op)?,
-            Box::new(right),
-        )))
+        self.build_binary_expr(op, left, right)
     }
 
     pub fn sql_to_expr_with_alias(
