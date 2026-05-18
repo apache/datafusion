@@ -1906,7 +1906,7 @@ mod test {
         ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
     };
     use arrow::array::RecordBatch;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
         ColumnStatistics, Result, ScalarValue, Statistics, assert_contains, internal_err,
