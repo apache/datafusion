@@ -674,6 +674,13 @@ mod tests {
     }
 
     #[test]
+    fn test_pow_decimal256_zero_to_negative_exp_errors() {
+        assert!(pow_decimal256_float(i256::ZERO, 2, -1.0).is_err());
+        // Negative integer exponent uses pow_decimal256_float via pow_decimal256_int
+        assert!(pow_decimal256_int(i256::ZERO, 2, -1).is_err());
+    }
+
+    #[test]
     fn test_float64_power_checked_zero_negative_exp() {
         assert_eq!(float64_power_checked(0.0, 1.0).unwrap(), 0.0);
         assert_eq!(float64_power_checked(2.0, -1.0).unwrap(), 0.5);
