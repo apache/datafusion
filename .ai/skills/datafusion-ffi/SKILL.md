@@ -46,11 +46,14 @@ pub struct FFI_X {
     // gets the right answer either way without the consumer needing to know.
     some_method: unsafe extern "C" fn(this: &Self, ...) -> FFI_Result<...>,
 
-    // `Option<fn>` is correct ONLY when the producer's `new()` takes an
-    // explicit capability flag (see `FFI_TableProvider::new`'s
-    // `can_support_pushdown_filters: bool`). Do not use `Option<fn>` as a
-    // proxy for "is the trait default in effect?" — `Arc<dyn Trait>` does not
-    // expose that.
+    // `Option<fn>` exists exactly once in this crate today:
+    // `FFI_TableProvider::supports_filters_pushdown`, gated by the
+    // `can_support_pushdown_filters: bool` argument to `FFI_TableProvider::new`.
+    // Treat it as an exception, not a pattern. Default to a plain
+    // `unsafe extern "C" fn` and let dynamic dispatch handle override-or-default.
+    // Reach for `Option<fn>` only if you can name an explicit constructor
+    // argument that toggles the slot AND there is a real reason to suppress
+    // the FFI hop (e.g. consumer-side short-circuiting on a hot path).
     optional_method: Option<unsafe extern "C" fn(&Self, ...) -> FFI_Result<...>>,
 
     // Codec only if the trait moves Exprs/Plans across the boundary.
@@ -192,7 +195,7 @@ When adding or auditing an `FFI_X`, **enumerate every method on the wrapped trai
 
 **Do not use `Option<fn>` just because the underlying trait has a default.** `Arc<dyn Trait>` erases override-vs-default info, so the producer side cannot know whether to populate the slot. Always plumb the fn pointer; the wrapper body invokes the trait method and dynamic dispatch does the right thing.
 
-`Option<fn>` is reserved for **capability flags driven by an explicit argument to the producer's constructor** — e.g. `FFI_TableProvider::new(can_support_pushdown_filters: bool, …)` lets the caller opt out of pushdown entirely, suppressing the FFI hop for known-unsupported tables. If you cannot point to a constructor argument that turns the slot on/off, the field should not be `Option<fn>`.
+`Option<fn>` is used exactly once in the crate today: `FFI_TableProvider::supports_filters_pushdown`, gated by the `can_support_pushdown_filters: bool` argument to `FFI_TableProvider::new`. It is an exception, not a template. Reach for it only when (a) the producer's constructor takes an explicit capability flag and (b) skipping the FFI call is meaningfully cheaper than letting the trait default run on the producer side. Otherwise plumb the fn pointer unconditionally.
 
 ### Known gaps to close
 
