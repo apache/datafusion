@@ -59,6 +59,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 - [pow](#pow)
 - [power](#power)
 - [radians](#radians)
+- [rand](#rand)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
@@ -739,6 +740,10 @@ radians(numeric_expression)
 +----------------+
 ```
 
+### `rand`
+
+_Alias of [random](#random)._
+
 ### `random`
 
 Returns a random float value in the range [0, 1).
@@ -758,6 +763,10 @@ random()
 | 0.7389238902938  |
 +------------------+
 ```
+
+#### Aliases
+
+- rand
 
 ### `round`
 
@@ -1225,7 +1234,7 @@ bit_length(str)
 
 ### `btrim`
 
-Trims the specified trim string from the start and end of a string. If no trim string is provided, all whitespace is removed from the start and end of the input string.
+Trims the specified trim string from the start and end of a string. If no trim string is provided, all spaces are removed from the start and end of the input string.
 
 ```sql
 btrim(str[, trim_str])
@@ -1234,7 +1243,7 @@ btrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is whitespace characters._
+- **trim_str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is a space._
 
 #### Example
 
@@ -1592,7 +1601,7 @@ lpad(str, n[, padding_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **n**: String length to pad to.
+- **n**: String length to pad to. If the input string is longer than this length, it is truncated (on the right).
 - **padding_str**: Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
 #### Example
@@ -1612,7 +1621,7 @@ lpad(str, n[, padding_str])
 
 ### `ltrim`
 
-Trims the specified trim string from the beginning of a string. If no trim string is provided, all whitespace is removed from the start of the input string.
+Trims the specified trim string from the beginning of a string. If no trim string is provided, spaces are removed from the start of the input string.
 
 ```sql
 ltrim(str[, trim_str])
@@ -1621,7 +1630,7 @@ ltrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+- **trim_str**: String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._
 
 #### Example
 
@@ -1820,7 +1829,7 @@ rpad(str, n[, padding_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **n**: String length to pad to.
+- **n**: String length to pad to. If the input string is longer than this length, it is truncated.
 - **padding_str**: String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
 #### Example
@@ -1840,7 +1849,7 @@ rpad(str, n[, padding_str])
 
 ### `rtrim`
 
-Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.
+Trims the specified trim string from the end of a string. If no trim string is provided, all spaces are removed from the end of the input string.
 
 ```sql
 rtrim(str[, trim_str])
@@ -1849,7 +1858,7 @@ rtrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+- **trim_str**: String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._
 
 #### Example
 
@@ -1891,7 +1900,7 @@ split_part(str, delimiter, pos)
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **delimiter**: String or character to split on.
-- **pos**: Position of the part to return.
+- **pos**: Position of the part to return (counting from 1). Negative values count backward from the end of the string.
 
 #### Example
 
@@ -1974,7 +1983,7 @@ substr(str, start_pos[, length])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **start_pos**: Character position to start the substring at. The first character in the string has a position of 1.
+- **start_pos**: Character position to start the substring at. The first character in the string has a position of 1. If the start position is less than 1, it is treated as if it is before the start of the string and the (absolute) number of characters before position 1 is subtracted from `length` (if given). For example, `substr('abc', -3, 6)` returns `'ab'`.
 - **length**: Number of characters to extract. If not specified, returns the rest of the string after the start position.
 
 #### Example
@@ -2068,17 +2077,17 @@ to_hex(int)
 
 ### `translate`
 
-Translates characters in a string to specified translation characters.
+Performs character-wise substitution based on a mapping.
 
 ```sql
-translate(str, chars, translation)
+translate(str, from, to)
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **chars**: Characters to translate.
-- **translation**: Translation characters. Translation characters replace only characters at the same position in the **chars** string.
+- **from**: The characters to be replaced.
+- **to**: The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed. If a character appears more than once in **from**, the first occurrence determines the mapping.
 
 #### Example
 
@@ -2175,7 +2184,7 @@ encode(expression, format)
 #### Arguments
 
 - **expression**: Expression containing string or binary data
-- **format**: Supported formats are: `base64`, `hex`
+- **format**: Supported formats are: `base64`, `base64pad`, `hex`
 
 **Related functions**:
 
@@ -2415,6 +2424,26 @@ current_date()
     SELECT current_date();
 ```
 
+#### Example
+
+```sql
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-23     |
++----------------+
+
+-- The current date is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-24     |
++----------------+
+```
+
 #### Aliases
 
 - today
@@ -2431,6 +2460,26 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 current_time()
     (optional) SET datafusion.execution.time_zone = '+00:00';
     SELECT current_time();
+```
+
+#### Example
+
+```sql
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 06:30:00.123456789 |
++--------------------+
+
+-- The current time is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 15:30:00.123456789 |
++--------------------+
 ```
 
 ### `current_timestamp`
@@ -2533,9 +2582,26 @@ date_part(part, expression)
   - dow (day of the week where Sunday is 0)
   - doy (day of the year)
   - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
-  - isodow (day of the week where Monday is 0)
+  - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SELECT date_part('year', '2024-05-01T00:00:00');
++-----------------------------------------------------+
+| date_part(Utf8("year"),Utf8("2024-05-01T00:00:00")) |
++-----------------------------------------------------+
+| 2024                                                |
++-----------------------------------------------------+
+> SELECT extract(day FROM timestamp '2024-05-01T00:00:00');
++----------------------------------------------------+
+| date_part(Utf8("DAY"),Utf8("2024-05-01T00:00:00")) |
++----------------------------------------------------+
+| 1                                                  |
++----------------------------------------------------+
+```
 
 #### Alternative Syntax
 
@@ -2581,6 +2647,23 @@ date_trunc(precision, expression)
   - microsecond / MICROSECOND
 
 - **expression**: Timestamp or time expression to operate on. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SELECT date_trunc('month', '2024-05-15T10:30:00');
++-----------------------------------------------+
+| date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
++-----------------------------------------------+
+| 2024-05-01T00:00:00                           |
++-----------------------------------------------+
+> SELECT date_trunc('hour', '2024-05-15T10:30:00');
++----------------------------------------------+
+| date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
++----------------------------------------------+
+| 2024-05-15T10:00:00                          |
++----------------------------------------------+
+```
 
 #### Aliases
 
@@ -2692,6 +2775,26 @@ The `now()` return value is determined at query time and will return the same ti
 
 ```sql
 now()
+```
+
+#### Example
+
+```sql
+> SELECT now();
++----------------------------------+
+| now()                            |
++----------------------------------+
+| 2024-12-23T06:30:00.123456789    |
++----------------------------------+
+
+-- The timezone of the returned timestamp depends on the session time zone
+> SET datafusion.execution.time_zone = 'America/New_York';
+> SELECT now();
++--------------------------------------+
+| now()                                |
++--------------------------------------+
+| 2024-12-23T01:30:00.123456789-05:00  |
++--------------------------------------+
 ```
 
 #### Aliases
@@ -3140,9 +3243,12 @@ _Alias of [current_date](#current_date)._
 
 ## Array Functions
 
+- [any_match](#any_match)
+- [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
 - [array_cat](#array_cat)
+- [array_compact](#array_compact)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
@@ -3181,15 +3287,22 @@ _Alias of [current_date](#current_date)._
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
 - [array_to_string](#array_to_string)
+- [array_transform](#array_transform)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
+- [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
+- [cosine_distance](#cosine_distance)
+- [dot_product](#dot_product)
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
+- [inner_product](#inner_product)
+- [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
+- [list_compact](#list_compact)
 - [list_concat](#list_concat)
 - [list_contains](#list_contains)
 - [list_dims](#list_dims)
@@ -3227,12 +3340,47 @@ _Alias of [current_date](#current_date)._
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
+- [list_transform](#list_transform)
 - [list_union](#list_union)
+- [list_zip](#list_zip)
 - [make_array](#make_array)
 - [make_list](#make_list)
 - [range](#range)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
+
+### `any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
+### `array_any_match`
+
+Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others.
+
+```sql
+any_match(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean
+
+#### Example
+
+```sql
+> select any_match([1, 2, 3], x -> x > 2);
++----------------------------------+
+| any_match([1, 2, 3], x -> x > 2) |
++----------------------------------+
+| true                             |
++----------------------------------+
+```
+
+#### Aliases
+
+- any_match
+- list_any_match
 
 ### `array_any_value`
 
@@ -3294,6 +3442,33 @@ array_append(array, element)
 ### `array_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `array_compact`
+
+Removes null values from the array.
+
+```sql
+array_compact(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_compact([1, NULL, 2, NULL, 3]) arr;
++-----------+
+| arr       |
++-----------+
+| [1, 2, 3] |
++-----------+
+```
+
+#### Aliases
+
+- list_compact
 
 ### `array_concat`
 
@@ -3543,16 +3718,16 @@ array_has_all(array, sub-array)
 
 ### `array_has_any`
 
-Returns true if any elements exist in both arrays.
+Returns true if the arrays have any elements in common.
 
 ```sql
-array_has_any(array, sub-array)
+array_has_any(array1, array2)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **sub-array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
@@ -3774,7 +3949,7 @@ array_pop_front(array)
 
 ### `array_position`
 
-Returns the position of the first occurrence of the specified element in the array, or NULL if not found.
+Returns the position of the first occurrence of the specified element in the array, or NULL if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL.
 
 ```sql
 array_position(array, element)
@@ -3784,7 +3959,7 @@ array_position(array, element, index)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 - **index**: Index at which to start searching (1-indexed).
 
 #### Example
@@ -3821,7 +3996,7 @@ array_positions(array, element)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 
 #### Example
 
@@ -3878,7 +4053,7 @@ _Alias of [array_prepend](#array_prepend)._
 
 ### `array_remove`
 
-Removes the first element from the array equal to the given value.
+Removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
 array_remove(array, element)
@@ -3898,6 +4073,13 @@ array_remove(array, element)
 +----------------------------------------------+
 | [1, 2, 3, 2, 1, 4]                           |
 +----------------------------------------------+
+
+> select array_remove([1, 2, NULL, 2, 4], 2);
++---------------------------------------------------+
+| array_remove(List([1,2,NULL,2,4]),Int64(2)) |
++---------------------------------------------------+
+| [1, NULL, 2, 4]                              |
++---------------------------------------------------+
 ```
 
 #### Aliases
@@ -3906,7 +4088,7 @@ array_remove(array, element)
 
 ### `array_remove_all`
 
-Removes all elements from the array equal to the given value.
+Removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
 array_remove_all(array, element)
@@ -3926,6 +4108,13 @@ array_remove_all(array, element)
 +--------------------------------------------------+
 | [1, 3, 1, 4]                                     |
 +--------------------------------------------------+
+
+> select array_remove_all([1, 2, NULL, 2, 4], 2);
++-----------------------------------------------------+
+| array_remove_all(List([1,2,NULL,2,4]),Int64(2)) |
++-----------------------------------------------------+
+| [1, NULL, 4]                                     |
++-----------------------------------------------------+
 ```
 
 #### Aliases
@@ -3934,10 +4123,10 @@ array_remove_all(array, element)
 
 ### `array_remove_n`
 
-Removes the first `max` elements from the array equal to the given value.
+Removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
-array_remove_n(array, element, max))
+array_remove_n(array, element, max)
 ```
 
 #### Arguments
@@ -3955,6 +4144,13 @@ array_remove_n(array, element, max))
 +---------------------------------------------------------+
 | [1, 3, 2, 1, 4]                                         |
 +---------------------------------------------------------+
+
+> select array_remove_n([1, 2, NULL, 2, 4], 2, 2);
++----------------------------------------------------------+
+| array_remove_n(List([1,2,NULL,2,4]),Int64(2),Int64(2)) |
++----------------------------------------------------------+
+| [1, NULL, 4]                                            |
++----------------------------------------------------------+
 ```
 
 #### Aliases
@@ -4180,8 +4376,8 @@ array_sort(array, desc, nulls_first)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **desc**: Whether to sort in descending order(`ASC` or `DESC`).
-- **nulls_first**: Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).
+- **desc**: Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`.
+- **nulls_first**: Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`.
 
 #### Example
 
@@ -4210,7 +4406,7 @@ array_to_string(array, delimiter[, null_string])
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **delimiter**: Array element separator.
-- **null_string**: Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.
+- **null_string**: Optional. String to use for null values in the output. If not provided, nulls will be omitted.
 
 #### Example
 
@@ -4228,6 +4424,34 @@ array_to_string(array, delimiter[, null_string])
 - list_to_string
 - array_join
 - list_join
+
+### `array_transform`
+
+transforms the values of an array
+
+```sql
+array_transform(array, x -> x*2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda
+
+#### Example
+
+```sql
+> select array_transform([1, 2, 3, 4, 5], x -> x*2);
++-------------------------------------------+
+| array_transform([1, 2, 3, 4, 5], x -> x*2)       |
++-------------------------------------------+
+| [2, 4, 6, 8, 10]                          |
++-------------------------------------------+
+```
+
+#### Aliases
+
+- list_transform
 
 ### `array_union`
 
@@ -4267,6 +4491,40 @@ array_union(array1, array2)
 
 _Alias of [array_has_any](#array_has_any)._
 
+### `arrays_zip`
+
+Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.
+
+```sql
+arrays_zip(array1[, ..., array_n])
+```
+
+#### Arguments
+
+- **array1**: First array expression.
+- **array_n**: Optional additional array expressions.
+
+#### Example
+
+```sql
+> select arrays_zip([1, 2, 3]);
++---------------------------------------------------+
+| arrays_zip([1, 2, 3])                             |
++---------------------------------------------------+
+| [{1: 1}, {1: 2}, {1: 3}]                          |
++---------------------------------------------------+
+> select arrays_zip([1, 2], [3, 4, 5]);
++---------------------------------------------------+
+| arrays_zip([1, 2], [3, 4, 5])                     |
++---------------------------------------------------+
+| [{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]     |
++---------------------------------------------------+
+```
+
+#### Aliases
+
+- list_zip
+
 ### `cardinality`
 
 Returns the total number of elements in the array.
@@ -4289,6 +4547,34 @@ cardinality(array)
 | 8                                    |
 +--------------------------------------+
 ```
+
+### `cosine_distance`
+
+Returns the cosine distance between two input arrays of equal length. The cosine distance is defined as 1 - cosine_similarity, i.e. `1 - dot(a,b) / (||a|| * ||b||)`. Returns NULL if either array is NULL or contains only zeros.
+
+```sql
+cosine_distance(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select cosine_distance([1.0, 0.0], [0.0, 1.0]);
++-----------------------------------------------+
+| cosine_distance(List([1.0,0.0]),List([0.0,1.0])) |
++-----------------------------------------------+
+| 1.0                                           |
++-----------------------------------------------+
+```
+
+### `dot_product`
+
+_Alias of [inner_product](#inner_product)._
 
 ### `empty`
 
@@ -4372,6 +4658,38 @@ generate_series(start, stop[, step])
 +------------------------------------+
 ```
 
+### `inner_product`
+
+Returns the inner product (dot product) of two input arrays of equal length, computed as `sum(array1[i] * array2[i])`. Returns NULL if either array is NULL or contains NULL elements. Returns 0.0 for two empty arrays.
+
+```sql
+inner_product(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
++-------------------------------------------------------+
+| inner_product(List([1.0,2.0,3.0]),List([4.0,5.0,6.0])) |
++-------------------------------------------------------+
+| 32.0                                                  |
++-------------------------------------------------------+
+```
+
+#### Aliases
+
+- dot_product
+
+### `list_any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
 ### `list_any_value`
 
 _Alias of [array_any_value](#array_any_value)._
@@ -4383,6 +4701,10 @@ _Alias of [array_append](#array_append)._
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `list_compact`
+
+_Alias of [array_compact](#array_compact)._
 
 ### `list_concat`
 
@@ -4532,9 +4854,17 @@ _Alias of [array_sort](#array_sort)._
 
 _Alias of [array_to_string](#array_to_string)._
 
+### `list_transform`
+
+_Alias of [array_transform](#array_transform)._
+
 ### `list_union`
 
 _Alias of [array_union](#array_union)._
+
+### `list_zip`
+
+_Alias of [arrays_zip](#arrays_zip)._
 
 ### `make_array`
 
@@ -4648,6 +4978,8 @@ _Alias of [string_to_array](#string_to_array)._
 ### `named_struct`
 
 Returns an Arrow struct using the specified name and input expressions pairs.
+For information on comparing and ordering struct values (including `NULL` handling),
+see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).
 
 ```sql
 named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])
@@ -4689,6 +5021,8 @@ _Alias of [struct](#struct)._
 Returns an Arrow struct using the specified input expressions optionally named.
 Fields in the returned struct use the optional name or the `cN` naming convention.
 For example: `c0`, `c1`, `c2`, etc.
+For information on comparing and ordering struct values (including `NULL` handling),
+see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).
 
 ```sql
 struct(expression1[, ..., expression_n])
@@ -4846,6 +5180,11 @@ SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
 ['two']
 
 SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
+----
+[NULL]
+
+-- non-existing key
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'a');
 ----
 []
 ```
@@ -5123,10 +5462,15 @@ union_tag(union_expression)
 ## Other Functions
 
 - [arrow_cast](#arrow_cast)
+- [arrow_field](#arrow_field)
 - [arrow_metadata](#arrow_metadata)
+- [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
+- [cast_to_type](#cast_to_type)
 - [get_field](#get_field)
+- [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
+- [with_metadata](#with_metadata)
 
 ### `arrow_cast`
 
@@ -5166,6 +5510,36 @@ arrow_cast(expression, datatype)
 +---------------------------+---------------------+
 ```
 
+### `arrow_field`
+
+Returns a struct containing the Arrow field information of the expression, including name, data type, nullability, and metadata.
+
+```sql
+arrow_field(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select arrow_field(1);
++-------------------------------------------------------------+
+| arrow_field(Int64(1))                                       |
++-------------------------------------------------------------+
+| {name: lit, data_type: Int64, nullable: false, metadata: {}} |
++-------------------------------------------------------------+
+
+> select arrow_field(1)['data_type'];
++-----------------------------------+
+| arrow_field(Int64(1))[data_type]  |
++-----------------------------------+
+| Int64                             |
++-----------------------------------+
+```
+
 ### `arrow_metadata`
 
 Returns the metadata of the input expression. If a key is provided, returns the value for that key. If no key is provided, returns a Map of all metadata.
@@ -5196,6 +5570,32 @@ arrow_metadata(expression[, key])
 +-------------------------------+
 ```
 
+### `arrow_try_cast`
+
+Casts a value to a specific Arrow data type, returning NULL if the cast fails.
+
+```sql
+arrow_try_cast(expression, datatype)
+```
+
+#### Arguments
+
+- **expression**: Expression to cast. The expression can be a constant, column, or function, and any combination of operators.
+- **datatype**: [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]
+
+#### Example
+
+```sql
+> select arrow_try_cast('123', 'Int64') as a,
+         arrow_try_cast('not_a_number', 'Int64') as b;
+
++-----+------+
+| a   | b    |
++-----+------+
+| 123 | NULL |
++-----+------+
+```
+
 ### `arrow_typeof`
 
 Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression.
@@ -5217,6 +5617,37 @@ arrow_typeof(expression)
 +---------------------------+------------------------+
 | Utf8                      | Int64                  |
 +---------------------------+------------------------+
+```
+
+### `cast_to_type`
+
+Casts the first argument to the data type of the second argument. Only the type of the second argument is used; its value is ignored.
+
+```sql
+cast_to_type(expression, reference)
+```
+
+#### Arguments
+
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
+
+#### Example
+
+```sql
+> select cast_to_type('42', NULL::INTEGER) as a;
++----+
+| a  |
++----+
+| 42 |
++----+
+
+> select cast_to_type(1 + 2, NULL::DOUBLE) as b;
++-----+
+| b   |
++-----+
+| 3.0 |
++-----+
 ```
 
 ### `get_field`
@@ -5271,6 +5702,32 @@ get_field(expression, field_name[, field_name2, ...])
 +--------+
 ```
 
+### `try_cast_to_type`
+
+Casts the first argument to the data type of the second argument, returning NULL if the cast fails. Only the type of the second argument is used; its value is ignored.
+
+```sql
+try_cast_to_type(expression, reference)
+```
+
+#### Arguments
+
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
+
+#### Example
+
+```sql
+> select try_cast_to_type('123', NULL::INTEGER) as a,
+         try_cast_to_type('not_a_number', NULL::INTEGER) as b;
+
++-----+------+
+| a   | b    |
++-----+------+
+| 123 | NULL |
++-----+------+
+```
+
 ### `version`
 
 Returns the version of DataFusion.
@@ -5288,4 +5745,33 @@ version()
 +--------------------------------------------+
 | Apache DataFusion 42.0.0, aarch64 on macos |
 +--------------------------------------------+
+```
+
+### `with_metadata`
+
+Attaches Arrow field metadata (key/value pairs) to the input expression. Keys must be non-empty constant strings and values must be constant strings (empty values are allowed). Existing metadata on the input field is preserved; new keys overwrite on collision. This is the inverse of `arrow_metadata`.
+
+```sql
+with_metadata(expression, key1, value1[, key2, value2, ...])
+```
+
+#### Arguments
+
+- **expression**: The expression whose output Arrow field should be annotated. Values flow through unchanged.
+- **key**: Metadata key. Must be a non-empty constant string literal.
+- **value**: Metadata value. Must be a constant string literal (may be empty).
+
+#### Example
+
+```sql
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms'), 'unit') from (values (1));
++---------------------------------------------------------------+
+| arrow_metadata(with_metadata(column1,Utf8("unit"),Utf8("ms")),Utf8("unit")) |
++---------------------------------------------------------------+
+| ms                                                            |
++---------------------------------------------------------------+
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms', 'source', 'sensor')) from (values (1));
++--------------------------+
+| {source: sensor, unit: ms} |
++--------------------------+
 ```

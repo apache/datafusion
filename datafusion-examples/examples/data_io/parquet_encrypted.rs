@@ -55,7 +55,7 @@ pub async fn parquet_encrypted() -> datafusion::common::Result<()> {
 
     // Create a temporary file location for the encrypted parquet file
     let tmp_source = TempDir::new()?;
-    let tempfile = tmp_source.path().join("cars_encrypted");
+    let tempfile = tmp_source.path().join("cars_encrypted.parquet");
 
     // Write encrypted parquet
     let mut options = TableParquetOptions::default();
@@ -71,7 +71,7 @@ pub async fn parquet_encrypted() -> datafusion::common::Result<()> {
     // Read encrypted parquet back as a DataFrame using matching decryption config
     let ctx: SessionContext = SessionContext::new();
     let read_options =
-        ParquetReadOptions::default().file_decryption_properties((&decrypt).into());
+        ParquetReadOptions::default().file_decryption_properties((&decrypt).try_into()?);
 
     let encrypted_parquet_df = ctx
         .read_parquet(tempfile.to_str().unwrap(), read_options)

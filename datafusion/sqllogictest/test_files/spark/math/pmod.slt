@@ -64,8 +64,28 @@ SELECT pmod(0::int, 5::int) as pmod_zero_1;
 ----
 0
 
-statement error DataFusion error: Arrow error: Divide by zero error
+query I
 SELECT pmod(10::int, 0::int) as pmod_zero_2;
+----
+NULL
+
+query I
+SELECT pmod(-7::int, 0::int) as pmod_zero_3;
+----
+NULL
+
+# Division by zero errors in ANSI mode
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT pmod(10::int, 0::int);
+
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT pmod(-7::int, 0::int);
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
 
 # PMOD tests with NULL values
 query I

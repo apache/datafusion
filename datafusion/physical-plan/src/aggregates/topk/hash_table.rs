@@ -19,7 +19,6 @@
 
 use crate::aggregates::group_values::HashValue;
 use crate::aggregates::topk::heap::Comparable;
-use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, LargeStringArray, PrimitiveArray, StringArray,
@@ -28,9 +27,11 @@ use arrow::array::{
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::exec_datafusion_err;
+use datafusion_common::hash_utils::RandomState;
 use half::f16;
 use hashbrown::hash_table::HashTable;
 use std::fmt::Debug;
+use std::hash::BuildHasher;
 use std::sync::Arc;
 
 /// A "type alias" for Keys which are stored in our map

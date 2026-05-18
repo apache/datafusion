@@ -23,20 +23,24 @@
 
 use std::borrow::Borrow;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{any::Any, sync::Arc};
 
 use super::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
+use crate::check_if_same_properties;
 use crate::execution_plan::{
-    InvariantLevel, boundedness_from_children, check_default_invariants,
-    emission_type_from_children,
+    CardinalityEffect, InvariantLevel, boundedness_from_children,
+    check_default_invariants, emission_type_from_children,
 };
-use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
+use crate::filter::FilterExec;
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDown,
+};
 use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::stream::ObservedStream;
@@ -44,12 +48,15 @@ use crate::stream::ObservedStream;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::NdvFallback;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, assert_or_internal_err, exec_err, internal_datafusion_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, calculate_union};
+use datafusion_physical_expr::{
+    EquivalenceProperties, PhysicalExpr, calculate_union, conjunction,
+};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -100,7 +107,7 @@ pub struct UnionExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl UnionExec {
@@ -118,7 +125,7 @@ impl UnionExec {
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -147,7 +154,7 @@ impl UnionExec {
                 Ok(Arc::new(UnionExec {
                     inputs,
                     metrics: ExecutionPlanMetricsSet::new(),
-                    cache,
+                    cache: Arc::new(cache),
                 }))
             }
         }
@@ -183,6 +190,17 @@ impl UnionExec {
             boundedness_from_children(inputs),
         ))
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for UnionExec {
@@ -206,11 +224,7 @@ impl ExecutionPlan for UnionExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -255,10 +269,18 @@ impl ExecutionPlan for UnionExec {
         self.inputs.iter().collect()
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         UnionExec::try_new(children)
     }
 
@@ -304,11 +326,7 @@ impl ExecutionPlan for UnionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition_idx) = partition {
             // For a specific partition, find which input it belongs to
             let mut remaining_idx = partition_idx;
@@ -321,20 +339,21 @@ impl ExecutionPlan for UnionExec {
                 remaining_idx -= input_partition_count;
             }
             // If we get here, the partition index is out of bounds
-            Ok(Statistics::new_unknown(&self.schema()))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         } else {
-            // Collect statistics from all inputs
-            let stats = self
-                .inputs
-                .iter()
-                .map(|input_exec| input_exec.partition_statistics(None))
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(stats
-                .into_iter()
-                .reduce(stats_union)
-                .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+            let schema = self.schema();
+            Ok(Arc::new(merge_input_statistics(
+                &self.inputs,
+                None,
+                schema.as_ref(),
+            )?))
         }
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        // Union combines rows from multiple inputs, so output rows are not tied
+        // to any single input and can only be constrained as greater-or-equal.
+        CardinalityEffect::GreaterEqual
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -369,6 +388,83 @@ impl ExecutionPlan for UnionExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Pre phase: handle heterogeneous pushdown by wrapping individual
+        // children with FilterExec and reporting all filters as handled.
+        // Post phase: use default behavior to let the filter creator decide how to handle
+        // filters that weren't fully pushed down.
+        if phase != FilterPushdownPhase::Pre {
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        }
+
+        // UnionExec needs specialized filter pushdown handling when children have
+        // heterogeneous pushdown support. Without this, when some children support
+        // pushdown and others don't, the default behavior would leave FilterExec
+        // above UnionExec, re-applying filters to outputs of all children—including
+        // those that already applied the filters via pushdown. This specialized
+        // implementation adds FilterExec only to children that don't support
+        // pushdown, avoiding redundant filtering and improving performance.
+        //
+        // Example: Given Child1 (no pushdown support) and Child2 (has pushdown support)
+        //   Default behavior:          This implementation:
+        //   FilterExec                 UnionExec
+        //     UnionExec                  FilterExec
+        //       Child1                     Child1
+        //       Child2(filter)           Child2(filter)
+
+        // Collect unsupported filters for each child
+        let mut unsupported_filters_per_child = vec![Vec::new(); self.inputs.len()];
+        for parent_filter_result in child_pushdown_result.parent_filters.iter() {
+            for (child_idx, &child_result) in
+                parent_filter_result.child_results.iter().enumerate()
+            {
+                if matches!(child_result, PushedDown::No) {
+                    unsupported_filters_per_child[child_idx]
+                        .push(Arc::clone(&parent_filter_result.filter));
+                }
+            }
+        }
+
+        // Wrap children that have unsupported filters with FilterExec
+        let mut new_children = self.inputs.clone();
+        for (child_idx, unsupported_filters) in
+            unsupported_filters_per_child.iter().enumerate()
+        {
+            if !unsupported_filters.is_empty() {
+                let combined_filter = conjunction(unsupported_filters.clone());
+                new_children[child_idx] = Arc::new(FilterExec::try_new(
+                    combined_filter,
+                    Arc::clone(&self.inputs[child_idx]),
+                )?);
+            }
+        }
+
+        // Check if any children were modified
+        let children_modified = new_children
+            .iter()
+            .zip(self.inputs.iter())
+            .any(|(new, old)| !Arc::ptr_eq(new, old));
+
+        let all_filters_pushed =
+            vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()];
+        let propagation = if children_modified {
+            let updated_node = UnionExec::try_new(new_children)?;
+            FilterPushdownPropagation::with_parent_pushdown_result(all_filters_pushed)
+                .with_updated_node(updated_node)
+        } else {
+            FilterPushdownPropagation::with_parent_pushdown_result(all_filters_pushed)
+        };
+
+        // Report all parent filters as supported since we've ensured they're applied
+        // on all children (either pushed down or via FilterExec)
+        Ok(propagation)
     }
 }
 
@@ -411,7 +507,7 @@ pub struct InterleaveExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl InterleaveExec {
@@ -425,7 +521,7 @@ impl InterleaveExec {
         Ok(InterleaveExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -446,6 +542,17 @@ impl InterleaveExec {
             emission_type_from_children(inputs),
             boundedness_from_children(inputs),
         ))
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            inputs: children,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -470,11 +577,7 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -486,6 +589,13 @@ impl ExecutionPlan for InterleaveExec {
         vec![false; self.inputs().len()]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -495,6 +605,7 @@ impl ExecutionPlan for InterleaveExec {
             can_interleave(children.iter()),
             "Can not create InterleaveExec: new children can not be interleaved"
         );
+        check_if_same_properties!(self, children);
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 
@@ -545,21 +656,13 @@ impl ExecutionPlan for InterleaveExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let stats = self
-            .inputs
-            .iter()
-            .map(|stat| stat.partition_statistics(partition))
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(stats
-            .into_iter()
-            .reduce(stats_union)
-            .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let schema = self.schema();
+        Ok(Arc::new(merge_input_statistics(
+            &self.inputs,
+            partition,
+            schema.as_ref(),
+        )?))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -718,46 +821,35 @@ impl Stream for CombinedRecordBatchStream {
     }
 }
 
-fn col_stats_union(
-    mut left: ColumnStatistics,
-    right: &ColumnStatistics,
-) -> ColumnStatistics {
-    left.distinct_count = Precision::Absent;
-    left.min_value = left.min_value.min(&right.min_value);
-    left.max_value = left.max_value.max(&right.max_value);
-    left.sum_value = left.sum_value.add(&right.sum_value);
-    left.null_count = left.null_count.add(&right.null_count);
+fn merge_input_statistics(
+    inputs: &[Arc<dyn ExecutionPlan>],
+    partition: Option<usize>,
+    schema: &Schema,
+) -> Result<Statistics> {
+    let stats = inputs
+        .iter()
+        .map(|input| {
+            input
+                .partition_statistics(partition)
+                .map(Arc::unwrap_or_clone)
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    left
-}
-
-fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
-    let Statistics {
-        num_rows: right_num_rows,
-        total_byte_size: right_total_bytes,
-        column_statistics: right_column_statistics,
-        ..
-    } = right;
-    left.num_rows = left.num_rows.add(&right_num_rows);
-    left.total_byte_size = left.total_byte_size.add(&right_total_bytes);
-    left.column_statistics = left
-        .column_statistics
-        .into_iter()
-        .zip(right_column_statistics.iter())
-        .map(|(a, b)| col_stats_union(a, b))
-        .collect::<Vec<_>>();
-    left
+    Statistics::try_merge_iter_with_ndv_fallback(stats.iter(), schema, NdvFallback::Sum)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::collect;
+    use crate::repartition::RepartitionExec;
+    use crate::test::exec::StatisticsExec;
     use crate::test::{self, TestMemoryExec};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{ColumnStatistics, ScalarValue};
     use datafusion_physical_expr::equivalence::convert_to_orderings;
     use datafusion_physical_expr::expressions::col;
 
@@ -812,103 +904,204 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_stats_union() {
-        let left = Statistics {
-            num_rows: Precision::Exact(5),
-            total_byte_size: Precision::Exact(23),
-            column_statistics: vec![
-                ColumnStatistics {
-                    distinct_count: Precision::Exact(5),
-                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
-                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
-                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
-                    null_count: Precision::Exact(0),
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Exact(1),
-                    max_value: Precision::Exact(ScalarValue::from("x")),
-                    min_value: Precision::Exact(ScalarValue::from("a")),
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Exact(3),
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
-                    min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
-                    sum_value: Precision::Exact(ScalarValue::Float32(Some(42.0))),
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-            ],
-        };
+    fn stats_merge_inputs() -> (SchemaRef, Statistics, Statistics, Statistics) {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, true)]));
 
-        let right = Statistics {
-            num_rows: Precision::Exact(7),
-            total_byte_size: Precision::Exact(29),
-            column_statistics: vec![
-                ColumnStatistics {
-                    distinct_count: Precision::Exact(3),
-                    max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
-                    min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
-                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
-                    null_count: Precision::Exact(1),
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::from("c")),
-                    min_value: Precision::Exact(ScalarValue::from("b")),
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Absent,
-                    min_value: Precision::Absent,
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-            ],
-        };
+        let left = Statistics::default()
+            .with_num_rows(Precision::Exact(5))
+            .with_total_byte_size(Precision::Exact(23))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(5))
+                    .with_min_value(Precision::Exact(ScalarValue::UInt32(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::UInt32(Some(21))))
+                    .with_sum_value(Precision::Exact(ScalarValue::UInt32(Some(42))))
+                    .with_null_count(Precision::Exact(0))
+                    .with_byte_size(Precision::Exact(40)),
+            );
 
-        let result = stats_union(left, right);
-        let expected = Statistics {
-            num_rows: Precision::Exact(12),
-            total_byte_size: Precision::Exact(52),
-            column_statistics: vec![
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
-                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
-                    sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
-                    null_count: Precision::Exact(1),
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::from("x")),
-                    min_value: Precision::Exact(ScalarValue::from("a")),
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Absent,
-                    min_value: Precision::Absent,
-                    sum_value: Precision::Absent,
-                    null_count: Precision::Absent,
-                    byte_size: Precision::Absent,
-                },
-            ],
-        };
+        let right = Statistics::default()
+            .with_num_rows(Precision::Exact(7))
+            .with_total_byte_size(Precision::Exact(29))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(3))
+                    .with_min_value(Precision::Exact(ScalarValue::UInt32(Some(22))))
+                    .with_max_value(Precision::Exact(ScalarValue::UInt32(Some(34))))
+                    .with_sum_value(Precision::Exact(ScalarValue::UInt32(Some(8))))
+                    .with_null_count(Precision::Exact(1))
+                    .with_byte_size(Precision::Exact(60)),
+            );
 
-        assert_eq!(result, expected);
+        let expected = Statistics::default()
+            .with_num_rows(Precision::Exact(12))
+            .with_total_byte_size(Precision::Exact(52))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Inexact(8))
+                    .with_min_value(Precision::Exact(ScalarValue::UInt32(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::UInt32(Some(34))))
+                    .with_sum_value(Precision::Exact(ScalarValue::UInt64(Some(50))))
+                    .with_null_count(Precision::Exact(1))
+                    .with_byte_size(Precision::Exact(100)),
+            );
+
+        (schema, left, right, expected)
+    }
+
+    fn stats_merge_multicolumn_inputs() -> (SchemaRef, Statistics, Statistics, Statistics)
+    {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float32, true),
+        ]));
+
+        let left = Statistics::default()
+            .with_num_rows(Precision::Exact(5))
+            .with_total_byte_size(Precision::Exact(23))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(5))
+                    .with_min_value(Precision::Exact(ScalarValue::Int64(Some(-4))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int64(Some(21))))
+                    .with_sum_value(Precision::Exact(ScalarValue::Int64(Some(42))))
+                    .with_null_count(Precision::Exact(0)),
+            )
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(2))
+                    .with_min_value(Precision::Exact(ScalarValue::from("a")))
+                    .with_max_value(Precision::Exact(ScalarValue::from("x")))
+                    .with_null_count(Precision::Exact(3)),
+            )
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_max_value(Precision::Exact(ScalarValue::Float32(Some(1.1))))
+                    .with_min_value(Precision::Exact(ScalarValue::Float32(Some(0.1))))
+                    .with_sum_value(Precision::Exact(ScalarValue::Float32(Some(42.0)))),
+            );
+
+        let right = Statistics::default()
+            .with_num_rows(Precision::Exact(7))
+            .with_total_byte_size(Precision::Exact(29))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(3))
+                    .with_min_value(Precision::Exact(ScalarValue::Int64(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int64(Some(34))))
+                    .with_sum_value(Precision::Exact(ScalarValue::Int64(Some(42))))
+                    .with_null_count(Precision::Exact(1)),
+            )
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Exact(3))
+                    .with_min_value(Precision::Exact(ScalarValue::from("b")))
+                    .with_max_value(Precision::Exact(ScalarValue::from("z"))),
+            )
+            .add_column_statistics(ColumnStatistics::new_unknown());
+
+        let expected = Statistics::default()
+            .with_num_rows(Precision::Exact(12))
+            .with_total_byte_size(Precision::Exact(52))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Inexact(6))
+                    .with_min_value(Precision::Exact(ScalarValue::Int64(Some(-4))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int64(Some(34))))
+                    .with_sum_value(Precision::Exact(ScalarValue::Int64(Some(84))))
+                    .with_null_count(Precision::Exact(1)),
+            )
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_distinct_count(Precision::Inexact(5))
+                    .with_min_value(Precision::Exact(ScalarValue::from("a")))
+                    .with_max_value(Precision::Exact(ScalarValue::from("z"))),
+            )
+            .add_column_statistics(ColumnStatistics::new_unknown());
+
+        (schema, left, right, expected)
+    }
+
+    #[test]
+    fn test_union_partition_statistics_uses_shared_statistics_merge() -> Result<()> {
+        let (schema, left, right, expected) = stats_merge_inputs();
+
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(left, schema.as_ref().clone()));
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
+
+        let union = UnionExec::try_new(vec![left, right])?;
+        let stats = union.partition_statistics(None)?;
+
+        assert_eq!(stats.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_partition_statistics_uses_shared_statistics_merge_multicolumn()
+    -> Result<()> {
+        let (schema, left, right, expected) = stats_merge_multicolumn_inputs();
+
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(left, schema.as_ref().clone()));
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
+
+        let union = UnionExec::try_new(vec![left, right])?;
+        let stats = union.partition_statistics(None)?;
+
+        assert_eq!(stats.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_interleave_partition_statistics_uses_shared_statistics_merge() -> Result<()> {
+        let (schema, left, right, expected) = stats_merge_inputs();
+        let hash_expr = vec![col("a", schema.as_ref())?];
+
+        let left: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(left, schema.as_ref().clone())),
+            Partitioning::Hash(hash_expr.clone(), 2),
+        )?);
+        let right: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(right, schema.as_ref().clone())),
+            Partitioning::Hash(hash_expr, 2),
+        )?);
+
+        let interleave = InterleaveExec::try_new(vec![left, right])?;
+        let stats = interleave.partition_statistics(None)?;
+
+        assert_eq!(stats.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_interleave_partition_statistics_for_partition_uses_shared_statistics_merge()
+    -> Result<()> {
+        let (schema, left, right, _) = stats_merge_inputs();
+        let hash_expr = vec![col("a", schema.as_ref())?];
+
+        let left: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(left, schema.as_ref().clone())),
+            Partitioning::Hash(hash_expr.clone(), 2),
+        )?);
+        let right: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(right, schema.as_ref().clone())),
+            Partitioning::Hash(hash_expr, 2),
+        )?);
+
+        let interleave = InterleaveExec::try_new(vec![left, right])?;
+        let stats = interleave.partition_statistics(Some(0))?;
+
+        let expected = Statistics::default()
+            .with_num_rows(Precision::Inexact(5))
+            .with_total_byte_size(Precision::Inexact(25))
+            .add_column_statistics(ColumnStatistics::new_unknown());
+
+        assert_eq!(stats.as_ref(), &expected);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1065,7 +1258,6 @@ mod tests {
 
         // Downcast to verify it's a UnionExec
         let union = union_plan
-            .as_any()
             .downcast_ref::<UnionExec>()
             .expect("Expected UnionExec");
 
@@ -1094,5 +1286,25 @@ mod tests {
                 "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
             )
         );
+    }
+
+    #[test]
+    fn test_union_cardinality_effect() -> Result<()> {
+        let schema = create_test_schema()?;
+        let input1: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let input2: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+
+        let union = UnionExec::try_new(vec![input1, input2])?;
+        let union = union
+            .downcast_ref::<UnionExec>()
+            .expect("expected UnionExec for multiple inputs");
+
+        assert!(matches!(
+            union.cardinality_effect(),
+            CardinalityEffect::GreaterEqual
+        ));
+        Ok(())
     }
 }

@@ -19,10 +19,16 @@
 //! help with allocation accounting.
 
 use datafusion_common::{Result, internal_datafusion_err};
+use std::any::Any;
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
 mod pool;
+
+#[cfg(feature = "arrow_buffer_pool")]
+pub mod arrow;
+
 pub mod proxy {
     pub use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 }
@@ -177,7 +183,10 @@ pub use pool::*;
 ///
 /// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
 ///   providing better error messages on the largest memory users.
-pub trait MemoryPool: Send + Sync + std::fmt::Debug {
+pub trait MemoryPool: Any + Send + Sync + std::fmt::Debug + Display {
+    /// Return pool name
+    fn name(&self) -> &str;
+
     /// Registers a new [`MemoryConsumer`]
     ///
     /// Note: Subsequent calls to [`Self::grow`] must be made to reserve memory
@@ -216,6 +225,18 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     }
 }
 
+impl dyn MemoryPool {
+    /// Returns `true` if this pool is of type `T`.
+    pub fn is<T: MemoryPool>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this pool to a concrete type `T`.
+    pub fn downcast_ref<T: MemoryPool>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// Memory limit of `MemoryPool`
 pub enum MemoryLimit {
     Infinite,
@@ -228,7 +249,7 @@ pub enum MemoryLimit {
 /// [`MemoryReservation`] in a [`MemoryPool`]. All allocations are registered to
 /// a particular `MemoryConsumer`;
 ///
-/// Each `MemoryConsumer` is identifiable by a process-unique id, and is therefor not cloneable,
+/// Each `MemoryConsumer` is identifiable by a process-unique id, and is therefore not cloneable,
 /// If you want a clone of a `MemoryConsumer`, you should look into [`MemoryConsumer::clone_with_new_id`],
 /// but note that this `MemoryConsumer` may be treated as a separate entity based on the used pool,
 /// and is only guaranteed to share the name and inner properties.
@@ -368,9 +389,9 @@ impl MemoryReservation {
     /// Frees all bytes from this reservation back to the underlying
     /// pool, returning the number of bytes freed.
     pub fn free(&self) -> usize {
-        let size = self.size.load(atomic::Ordering::Relaxed);
+        let size = self.size.swap(0, atomic::Ordering::Relaxed);
         if size != 0 {
-            self.shrink(size)
+            self.registration.pool.shrink(self, size);
         }
         size
     }
@@ -381,26 +402,38 @@ impl MemoryReservation {
     ///
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn shrink(&self, capacity: usize) {
-        self.size.fetch_sub(capacity, atomic::Ordering::Relaxed);
+        self.size
+            .fetch_update(
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+                |prev| prev.checked_sub(capacity),
+            )
+            .unwrap_or_else(|prev| {
+                panic!("Cannot free the capacity {capacity} out of allocated size {prev}")
+            });
         self.registration.pool.shrink(self, capacity);
     }
 
     /// Tries to free `capacity` bytes from this reservation
-    /// if `capacity` does not exceed [`Self::size`]
-    /// Returns new reservation size
-    /// or error if shrinking capacity is more than allocated size
+    /// if `capacity` does not exceed [`Self::size`].
+    /// Returns new reservation size,
+    /// or error if shrinking capacity is more than allocated size.
     pub fn try_shrink(&self, capacity: usize) -> Result<usize> {
-        let updated = self.size.fetch_update(
-            atomic::Ordering::Relaxed,
-            atomic::Ordering::Relaxed,
-            |prev| prev.checked_sub(capacity),
-        );
-        updated.map_err(|_| {
-            let prev = self.size.load(atomic::Ordering::Relaxed);
-            internal_datafusion_err!(
-                "Cannot free the capacity {capacity} out of allocated size {prev}"
+        let prev = self
+            .size
+            .fetch_update(
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+                |prev| prev.checked_sub(capacity),
             )
-        })
+            .map_err(|prev| {
+                internal_datafusion_err!(
+                    "Cannot free the capacity {capacity} out of allocated size {prev}"
+                )
+            })?;
+
+        self.registration.pool.shrink(self, capacity);
+        Ok(prev - capacity)
     }
 
     /// Sets the size of this reservation to `capacity`
@@ -418,7 +451,9 @@ impl MemoryReservation {
         let size = self.size.load(atomic::Ordering::Relaxed);
         match capacity.cmp(&size) {
             Ordering::Greater => self.try_grow(capacity - size)?,
-            Ordering::Less => self.shrink(size - capacity),
+            Ordering::Less => {
+                self.try_shrink(size - capacity)?;
+            }
             _ => {}
         };
         Ok(())
@@ -579,5 +614,50 @@ mod tests {
         assert_eq!(r1.size(), 3);
         assert_eq!(r2.size(), 25);
         assert_eq!(pool.reserved(), 28);
+    }
+
+    #[test]
+    fn test_downcast() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(50));
+
+        assert!(pool.is::<GreedyMemoryPool>());
+        assert!(!pool.is::<UnboundedMemoryPool>());
+
+        let greedy: &GreedyMemoryPool = pool.downcast_ref().unwrap();
+        assert_eq!(greedy.reserved(), 0);
+        assert!(pool.downcast_ref::<UnboundedMemoryPool>().is_none());
+    }
+
+    #[test]
+    fn test_try_shrink() {
+        let pool = Arc::new(GreedyMemoryPool::new(100)) as _;
+        let r1 = MemoryConsumer::new("r1").register(&pool);
+
+        r1.try_grow(50).unwrap();
+        assert_eq!(r1.size(), 50);
+        assert_eq!(pool.reserved(), 50);
+
+        // Successful shrink returns new size and frees pool memory
+        let new_size = r1.try_shrink(30).unwrap();
+        assert_eq!(new_size, 20);
+        assert_eq!(r1.size(), 20);
+        assert_eq!(pool.reserved(), 20);
+
+        // Freed pool memory is now available to other consumers
+        let r2 = MemoryConsumer::new("r2").register(&pool);
+        r2.try_grow(80).unwrap();
+        assert_eq!(pool.reserved(), 100);
+
+        // Shrinking more than allocated fails without changing state
+        let err = r1.try_shrink(25);
+        assert!(err.is_err());
+        assert_eq!(r1.size(), 20);
+        assert_eq!(pool.reserved(), 100);
+
+        // Shrink to exactly zero
+        let new_size = r1.try_shrink(20).unwrap();
+        assert_eq!(new_size, 0);
+        assert_eq!(r1.size(), 0);
+        assert_eq!(pool.reserved(), 80);
     }
 }

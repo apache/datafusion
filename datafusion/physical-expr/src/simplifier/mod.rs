@@ -21,7 +21,12 @@ use arrow::datatypes::Schema;
 use datafusion_common::{Result, tree_node::TreeNode};
 use std::sync::Arc;
 
-use crate::{PhysicalExpr, simplifier::not::simplify_not_expr};
+use crate::{
+    PhysicalExpr,
+    simplifier::{
+        const_evaluator::create_dummy_batch, unwrap_cast::unwrap_cast_in_comparison,
+    },
+};
 
 pub mod const_evaluator;
 pub mod not;
@@ -50,21 +55,24 @@ impl<'a> PhysicalExprSimplifier<'a> {
         let mut count = 0;
         let schema = self.schema;
 
+        let batch = create_dummy_batch()?;
+
         while count < MAX_LOOP_COUNT {
             count += 1;
             let result = current_expr.transform(|node| {
-                #[cfg(test)]
+                #[cfg(debug_assertions)]
                 let original_type = node.data_type(schema).unwrap();
 
                 // Apply NOT expression simplification first, then unwrap cast optimization,
                 // then constant expression evaluation
-                let rewritten = simplify_not_expr(&node, schema)?
+                #[expect(deprecated, reason = "`simplify_not_expr` is marked as deprecated until it's made private.")]
+                let rewritten = not::simplify_not_expr(node, schema)?
+                    .transform_data(|node| unwrap_cast_in_comparison(node, schema))?
                     .transform_data(|node| {
-                        unwrap_cast::unwrap_cast_in_comparison(node, schema)
-                    })?
-                    .transform_data(|node| const_evaluator::simplify_const_expr(&node))?;
+                        const_evaluator::simplify_const_expr_immediate(node, batch)
+                    })?;
 
-                #[cfg(test)]
+                #[cfg(debug_assertions)]
                 assert_eq!(
                     rewritten.data.data_type(schema).unwrap(),
                     original_type,
@@ -89,7 +97,7 @@ mod tests {
     use crate::expressions::{
         BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr, col, in_list, lit,
     };
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 
@@ -111,15 +119,13 @@ mod tests {
 
     /// Helper function to extract a Literal from a PhysicalExpr
     fn as_literal(expr: &Arc<dyn PhysicalExpr>) -> &Literal {
-        expr.as_any()
-            .downcast_ref::<Literal>()
+        expr.downcast_ref::<Literal>()
             .unwrap_or_else(|| panic!("Expected Literal, got: {expr}"))
     }
 
     /// Helper function to extract a BinaryExpr from a PhysicalExpr
     fn as_binary(expr: &Arc<dyn PhysicalExpr>) -> &BinaryExpr {
-        expr.as_any()
-            .downcast_ref::<BinaryExpr>()
+        expr.downcast_ref::<BinaryExpr>()
             .unwrap_or_else(|| panic!("Expected BinaryExpr, got: {expr}"))
     }
 
@@ -156,8 +162,8 @@ mod tests {
         // Should be optimized to: c2 != INT64(99) (c2 is INT64, literal cast to match)
         let left_expr = optimized_binary.left();
         assert!(
-            left_expr.as_any().downcast_ref::<CastExpr>().is_none()
-                && left_expr.as_any().downcast_ref::<TryCastExpr>().is_none()
+            left_expr.downcast_ref::<CastExpr>().is_none()
+                && left_expr.downcast_ref::<TryCastExpr>().is_none()
         );
         let right_literal = as_literal(optimized_binary.right());
         assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(99)));
@@ -190,11 +196,8 @@ mod tests {
         let left_binary = as_binary(or_binary.left());
         let left_left_expr = left_binary.left();
         assert!(
-            left_left_expr.as_any().downcast_ref::<CastExpr>().is_none()
-                && left_left_expr
-                    .as_any()
-                    .downcast_ref::<TryCastExpr>()
-                    .is_none()
+            left_left_expr.downcast_ref::<CastExpr>().is_none()
+                && left_left_expr.downcast_ref::<TryCastExpr>().is_none()
         );
         let left_literal = as_literal(left_binary.right());
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(5)));
@@ -203,14 +206,8 @@ mod tests {
         let right_binary = as_binary(or_binary.right());
         let right_left_expr = right_binary.left();
         assert!(
-            right_left_expr
-                .as_any()
-                .downcast_ref::<CastExpr>()
-                .is_none()
-                && right_left_expr
-                    .as_any()
-                    .downcast_ref::<TryCastExpr>()
-                    .is_none()
+            right_left_expr.downcast_ref::<CastExpr>().is_none()
+                && right_left_expr.downcast_ref::<TryCastExpr>().is_none()
         );
         let right_literal = as_literal(right_binary.right());
         assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(10)));
@@ -468,7 +465,7 @@ mod tests {
         // If we just let `expr` go out of scope, Rust's recursive Drop will blow the stack
         // even with recursive_protection, because Drop doesn't use the #[recursive] attribute.
         // We peel off layers one by one to avoid deep recursion in Drop.
-        while let Some(not_expr) = expr.as_any().downcast_ref::<NotExpr>() {
+        while let Some(not_expr) = expr.downcast_ref::<NotExpr>() {
             // Clone the child (Arc increment).
             // Now child has 2 refs: one in parent, one in `child`.
             let child = Arc::clone(not_expr.arg());
@@ -569,7 +566,7 @@ mod tests {
         ));
         let result = simplifier.simplify(expr).unwrap();
         // Should remain a BinaryExpr, not become a Literal
-        assert!(result.as_any().downcast_ref::<BinaryExpr>().is_some());
+        assert!(result.downcast_ref::<BinaryExpr>().is_some());
     }
 
     #[test]

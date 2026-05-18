@@ -108,12 +108,12 @@ fn create_runtime_config_entries(
         ConfigEntry {
             key: "datafusion.runtime.memory_limit".to_string(),
             value: memory_limit,
-            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.max_temp_directory_size".to_string(),
             value: max_temp_directory_size,
-            description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.temp_directory".to_string(),
@@ -123,12 +123,12 @@ fn create_runtime_config_entries(
         ConfigEntry {
             key: "datafusion.runtime.metadata_cache_limit".to_string(),
             value: metadata_cache_limit,
-            description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.list_files_cache_limit".to_string(),
             value: list_files_cache_limit,
-            description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.list_files_cache_ttl".to_string(),

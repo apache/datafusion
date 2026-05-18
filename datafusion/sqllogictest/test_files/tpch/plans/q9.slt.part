@@ -81,8 +81,8 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[nation@0 as nation, o_year@1 as o_year], aggr=[sum(profit.amount)]
 05)--------RepartitionExec: partitioning=Hash([nation@0, o_year@1], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[nation@0 as nation, o_year@1 as o_year], aggr=[sum(profit.amount)]
-07)------------ProjectionExec: expr=[n_name@5 as nation, date_part(YEAR, o_orderdate@4) as o_year, l_extendedprice@1 * (Some(1),20,0 - l_discount@2) - ps_supplycost@3 * l_quantity@0 as amount]
-08)--------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@3, n_nationkey@0)], projection=[l_quantity@0, l_extendedprice@1, l_discount@2, ps_supplycost@4, o_orderdate@5, n_name@7]
+07)------------ProjectionExec: expr=[n_name@0 as nation, date_part(YEAR, o_orderdate@1) as o_year, l_extendedprice@2 * (Some(1),20,0 - l_discount@3) - ps_supplycost@4 * l_quantity@5 as amount]
+08)--------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@3, n_nationkey@0)], projection=[n_name@7, o_orderdate@5, l_extendedprice@1, l_discount@2, ps_supplycost@4, l_quantity@0]
 09)----------------RepartitionExec: partitioning=Hash([s_nationkey@3], 4), input_partitions=4
 10)------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_orderkey@0, o_orderkey@0)], projection=[l_quantity@1, l_extendedprice@2, l_discount@3, s_nationkey@4, ps_supplycost@5, o_orderdate@7]
 11)--------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4

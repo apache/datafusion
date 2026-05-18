@@ -15,20 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-#[macro_use]
-extern crate criterion;
-extern crate datafusion;
-
 mod data_utils;
 
-use crate::criterion::Criterion;
 use arrow::array::PrimitiveArray;
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use criterion::Bencher;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{ScalarValue, config::Dialect};
@@ -78,6 +73,21 @@ fn create_table_provider(column_prefix: &str, num_columns: usize) -> Arc<MemTabl
         .unwrap()
 }
 
+/// Create a table provider with a struct column: `id` (Int32) and `props` (Struct { value: Int32, label: Utf8 })
+fn create_struct_table_provider() -> Arc<MemTable> {
+    let struct_fields = Fields::from(vec![
+        Field::new("value", DataType::Int32, true),
+        Field::new("label", DataType::Utf8, true),
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("props", DataType::Struct(struct_fields), true),
+    ]));
+    MemTable::try_new(schema, vec![vec![]])
+        .map(Arc::new)
+        .unwrap()
+}
+
 fn create_context() -> SessionContext {
     let ctx = SessionContext::new();
     ctx.register_table("t1", create_table_provider("a", 200))
@@ -87,6 +97,10 @@ fn create_context() -> SessionContext {
     ctx.register_table("t700", create_table_provider("c", 700))
         .unwrap();
     ctx.register_table("t1000", create_table_provider("d", 1000))
+        .unwrap();
+    ctx.register_table("struct_t1", create_struct_table_provider())
+        .unwrap();
+    ctx.register_table("struct_t2", create_struct_table_provider())
         .unwrap();
     ctx
 }
@@ -116,7 +130,8 @@ fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
             format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")
         };
 
-    let sql = format!("CREATE EXTERNAL TABLE hits STORED AS PARQUET LOCATION '{path}'");
+    let sql =
+        format!("CREATE EXTERNAL TABLE hits_raw STORED AS PARQUET LOCATION '{path}'");
 
     // ClickBench partitioned dataset was written by an ancient version of pyarrow that
     // that wrote strings with the wrong logical type. To read it correctly, we must
@@ -124,6 +139,17 @@ fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
     rt.block_on(ctx.sql("SET datafusion.execution.parquet.binary_as_string  = true;"))
         .unwrap();
     rt.block_on(ctx.sql(&sql)).unwrap();
+
+    // ClickBench stores EventDate as UInt16 (days since 1970-01-01). Create a view
+    // that exposes it as SQL DATE so that queries comparing it with date literals
+    // (e.g. "EventDate >= '2013-07-01'") work correctly during planning.
+    rt.block_on(ctx.sql(
+        "CREATE VIEW hits AS \
+         SELECT * EXCEPT (\"EventDate\"), \
+                CAST(CAST(\"EventDate\" AS INTEGER) AS DATE) AS \"EventDate\" \
+         FROM hits_raw",
+    ))
+    .unwrap();
 
     let count =
         rt.block_on(async { ctx.table("hits").await.unwrap().count().await.unwrap() });
@@ -422,6 +448,25 @@ fn criterion_benchmark(c: &mut Criterion) {
                  FROM t1, t2 WHERE t1.a7 = t2.b8",
             );
         });
+    });
+
+    let struct_agg_sort_query = "SELECT \
+         struct_t1.props['label'], \
+         SUM(struct_t1.props['value']), \
+         MAX(struct_t2.props['value']), \
+         COUNT(*) \
+     FROM struct_t1 \
+     JOIN struct_t2 ON struct_t1.id = struct_t2.id \
+     WHERE struct_t1.props['value'] > 50 \
+     GROUP BY struct_t1.props['label'] \
+     ORDER BY SUM(struct_t1.props['value']) DESC";
+
+    // -- Struct column benchmarks --
+    c.bench_function("logical_plan_struct_join_agg_sort", |b| {
+        b.iter(|| logical_plan(&ctx, &rt, struct_agg_sort_query))
+    });
+    c.bench_function("physical_plan_struct_join_agg_sort", |b| {
+        b.iter(|| physical_plan(&ctx, &rt, struct_agg_sort_query))
     });
 
     // -- Sorted Queries --

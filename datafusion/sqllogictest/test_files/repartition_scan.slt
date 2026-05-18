@@ -286,5 +286,12 @@ logical_plan TableScan: avro_table projection=[f1, f2, f3]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/simple_enum.avro]]}, projection=[f1, f2, f3], file_type=avro
 
 # Cleanup
+# Config reset
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema;
+
+statement ok
+RESET datafusion.optimizer.repartition_file_min_size;
+
 statement ok
 DROP TABLE avro_table;

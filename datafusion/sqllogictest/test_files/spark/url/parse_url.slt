@@ -140,10 +140,180 @@ SELECT parse_url('notaurl', 'host');
 ----
 NULL
 
+# Schemeless URLs: Spark java.net.URI behavior
+# Simple schemeless string
+query T
+SELECT parse_url('notaurl', 'PATH');
+----
+notaurl
+
+query T
+SELECT parse_url('notaurl', 'FILE');
+----
+notaurl
+
+query T
+SELECT parse_url('notaurl', 'PROTOCOL');
+----
+NULL
+
+query T
+SELECT parse_url('notaurl', 'QUERY');
+----
+NULL
+
+# Schemeless URL with query string
+query T
+SELECT parse_url('notaurl?key=value', 'PATH');
+----
+notaurl
+
+query T
+SELECT parse_url('notaurl?key=value', 'FILE');
+----
+notaurl?key=value
+
+query T
+SELECT parse_url('notaurl?key=value', 'QUERY');
+----
+key=value
+
+query T
+SELECT parse_url('notaurl?key=value', 'QUERY', 'key');
+----
+value
+
+query T
+SELECT parse_url('notaurl?key=value', 'HOST');
+----
+NULL
+
+# Schemeless URL with fragment
+query T
+SELECT parse_url('notaurl#reference', 'REF');
+----
+reference
+
+query T
+SELECT parse_url('notaurl#reference', 'PATH');
+----
+notaurl
+
+query T
+SELECT parse_url('notaurl#reference', 'FILE');
+----
+notaurl
+
+# Schemeless URL with both query and fragment
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'PATH');
+----
+notaurl
+
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'QUERY');
+----
+a=1&b=2
+
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'QUERY', 'b');
+----
+2
+
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'REF');
+----
+frag
+
+query T
+SELECT parse_url('notaurl?a=1&b=2#frag', 'FILE');
+----
+notaurl?a=1&b=2
+
 query T
 SELECT parse_url('https://example.com', 'PATH');
 ----
 (empty)
+
+query T
+SELECT parse_url('https://example.com/', 'PATH');
+----
+/
+
+query T
+SELECT parse_url('https://ex.com/dir%20/pa%20th.HTML', 'PATH');
+----
+/dir%20/pa%20th.HTML
+
+query T
+SELECT parse_url('', 'PATH');
+----
+(empty)
+
+query T
+SELECT parse_url('http://example.com', 'FILE');
+----
+(empty)
+
+query T
+SELECT parse_url('http://example.com/', 'FILE');
+----
+/
+
+query T
+SELECT parse_url('http://example.com?foo=bar', 'FILE');
+----
+?foo=bar
+
+query T
+SELECT parse_url('http://example.com#fragment', 'FILE');
+----
+(empty)
+
+query T
+SELECT parse_url('http://example.com/?foo=bar', 'FILE');
+----
+/?foo=bar
+
+query T
+SELECT parse_url('http://ex.com/?', 'FILE');
+----
+/?
+
+query T
+SELECT parse_url('http://ex.com?', 'FILE');
+----
+?
+
+query T
+SELECT parse_url('https://use%20r:pas%20s@example.com/dir%20/pa%20th.HTML?query=x%20y&q2=2#Ref%20two', 'QUERY');
+----
+query=x%20y&q2=2
+
+query T
+SELECT parse_url('https://use%20r:pas%20s@example.com/dir%20/pa%20th.HTML?query=x%20y&q2=2#Ref%20two', 'QUERY', 'query');
+----
+x%20y
+
+query T
+SELECT parse_url('http://ex.com?key=', 'QUERY', 'key');
+----
+(empty)
+
+query T
+SELECT parse_url('http://ex.com?keyonly', 'QUERY', 'keyonly');
+----
+NULL
+
+query T
+SELECT parse_url('http://ex.com?a=1&a=2', 'QUERY', 'a');
+----
+1
+
+query T
+SELECT parse_url('http://ex.com?a%20b=1', 'QUERY', 'a b');
+----
+NULL
 
 query T
 SELECT parse_url('https://example.com', 'path');
@@ -175,3 +345,46 @@ SELECT parse_url();
 
 query error DataFusion error: Execution error: The url is invalid: inva lid://spark\.apache\.org/path\?query=1\. Use `try_parse_url` to tolerate invalid URL and return NULL instead\. SQLSTATE: 22P02
 SELECT parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');
+
+# NULL argument handling (Sail PR #1393)
+# NULL URL should return NULL
+query T
+SELECT parse_url(NULL, 'HOST');
+----
+NULL
+
+# NULL part should return NULL
+query T
+SELECT parse_url('https://example.com/path?query=1', NULL);
+----
+NULL
+
+# Both NULL should return NULL
+query T
+SELECT parse_url(NULL, NULL);
+----
+NULL
+
+# NULL URL with 3 args
+query T
+SELECT parse_url(NULL, 'QUERY', 'key');
+----
+NULL
+
+# NULL part with 3 args
+query T
+SELECT parse_url('https://example.com/path?query=1', NULL, 'key');
+----
+NULL
+
+# NULL key with 3 args (valid URL and part) - Spark returns NULL when third arg is NULL
+query T
+SELECT parse_url('https://example.com/path?query=1', 'QUERY', NULL);
+----
+NULL
+
+# All three NULL
+query T
+SELECT parse_url(NULL, NULL, NULL);
+----
+NULL

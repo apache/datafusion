@@ -44,7 +44,6 @@ use datafusion_physical_expr::{
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::{
-    any::Any,
     ops::Range,
     sync::{
         Arc,
@@ -536,7 +535,7 @@ impl OddCounter {
         impl SimpleWindowUDF {
             fn new(test_state: Arc<TestState>) -> Self {
                 let signature =
-                    Signature::exact(vec![DataType::Float64], Volatility::Immutable);
+                    Signature::exact(vec![DataType::Int64], Volatility::Immutable);
                 Self {
                     signature,
                     test_state: test_state.into(),
@@ -546,10 +545,6 @@ impl OddCounter {
         }
 
         impl WindowUDFImpl for SimpleWindowUDF {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-
             fn name(&self) -> &str {
                 "odd_counter"
             }
@@ -675,10 +670,6 @@ impl VariadicWindowUDF {
 }
 
 impl WindowUDFImpl for VariadicWindowUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "variadic_window_udf"
     }
@@ -819,10 +810,6 @@ impl MetadataBasedWindowUdf {
 }
 
 impl WindowUDFImpl for MetadataBasedWindowUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }

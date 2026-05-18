@@ -62,6 +62,7 @@ message LogicalPlanNode {
     RecursiveQueryNode recursive_query = 31;
     CteWorkTableScanNode cte_work_table_scan = 32;
     DmlNode dml = 33;
+    EmptyTableScanNode empty_table_scan = 34;
   }
 }
 
@@ -228,6 +229,7 @@ message AnalyzeNode {
 message ExplainNode {
   LogicalPlanNode input = 1;
   bool verbose = 2;
+  datafusion_common.ExplainFormat format = 3;
 }
 
 message AggregateNode {
@@ -268,6 +270,25 @@ message CopyToNode {
   string output_url = 2;
   bytes file_type = 3;
   repeated string partition_by = 7;
+}
+
+// Identifies a built-in file format supported by DataFusion.
+// Used by DefaultLogicalExtensionCodec to serialize/deserialize
+// FileFormatFactory instances (e.g. in CopyTo plans).
+enum FileFormatKind {
+  FILE_FORMAT_KIND_UNSPECIFIED = 0;
+  FILE_FORMAT_KIND_CSV = 1;
+  FILE_FORMAT_KIND_JSON = 2;
+  FILE_FORMAT_KIND_PARQUET = 3;
+  FILE_FORMAT_KIND_ARROW = 4;
+  FILE_FORMAT_KIND_AVRO = 5;
+}
+
+// Wraps a serialized FileFormatFactory with its format kind tag,
+// so the decoder can dispatch to the correct format-specific codec.
+message FileFormatProto {
+  FileFormatKind kind = 1;
+  bytes encoded_file_format = 2;
 }
 
 message DmlNode{
@@ -407,11 +428,22 @@ message LogicalExprNode {
 
     Unnest unnest = 35;
 
+    // Subquery expressions
+    ScalarSubqueryExprNode scalar_subquery_expr = 36;
   }
 }
 
 message Wildcard {
   TableReference qualifier = 1;
+}
+
+message SubqueryNode {
+  LogicalPlanNode subquery = 1;
+  repeated LogicalExprNode outer_ref_columns = 2;
+}
+
+message ScalarSubqueryExprNode {
+  SubqueryNode subquery = 1;
 }
 
 message PlaceholderNode {
@@ -594,11 +626,15 @@ message WhenThen {
 message CastNode {
   LogicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  map<string, string> metadata = 3;
+  optional bool nullable = 4;
 }
 
 message TryCastNode {
   LogicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  map<string, string> metadata = 3;
+  optional bool nullable = 4;
 }
 
 message SortExprNode {
@@ -750,6 +786,9 @@ message PhysicalPlanNode {
     SortMergeJoinExecNode sort_merge_join = 34;
     MemoryScanExecNode memory_scan = 35;
     AsyncFuncExecNode async_func = 36;
+    BufferExecNode buffer = 37;
+    ArrowScanExecNode arrow_scan = 38;
+    ScalarSubqueryExecNode scalar_subquery = 39;
   }
 }
 
@@ -758,6 +797,16 @@ message PartitionColumn {
   datafusion_common.ArrowType arrow_type = 2;
 }
 
+
+// Determines how file sink output paths are interpreted.
+enum FileOutputMode {
+  // Infer output mode from the URL (extension/trailing `/` heuristic).
+  FILE_OUTPUT_MODE_AUTOMATIC = 0;
+  // Write to a single file at the exact output path.
+  FILE_OUTPUT_MODE_SINGLE_FILE = 1;
+  // Write to a directory with generated filenames.
+  FILE_OUTPUT_MODE_DIRECTORY = 2;
+}
 
 message FileSinkConfig {
   reserved 6; // writer_mode
@@ -771,6 +820,8 @@ message FileSinkConfig {
   bool keep_partition_by_columns = 9;
   InsertOp insert_op = 10;
   string file_extension = 11;
+  // Determines how the output path is interpreted.
+  FileOutputMode file_output_mode = 12;
 }
 
 enum InsertOp {
@@ -838,6 +889,12 @@ message PhysicalExprNode {
   // Was date_time_interval_expr
   reserved 17;
 
+  // Unique identifier for this expression to do deduplication during deserialization.
+  // When serializing, this is set via `PhysicalExpr::expression_id`. When deserializing,
+  // this id is used by the `DeduplicatingProtoConverter` to preserve referential
+  // integrity across serde roundtrips for different expressions with the same id.
+  optional uint64 expr_id = 30;
+
   oneof ExprType {
     // column references
     PhysicalColumn column = 1;
@@ -875,7 +932,19 @@ message PhysicalExprNode {
     UnknownColumn unknown_column = 20;
 
     PhysicalHashExprNode hash_expr = 21;
+
+    PhysicalScalarSubqueryExprNode scalar_subquery = 22;
+
+    PhysicalDynamicFilterNode dynamic_filter = 23;
   }
+}
+
+message PhysicalDynamicFilterNode {
+  repeated PhysicalExprNode children = 1;
+  repeated PhysicalExprNode remapped_children = 2;
+  uint64 generation = 3;
+  PhysicalExprNode inner_expr = 4;
+  bool is_complete = 5;
 }
 
 message PhysicalScalarUdfNode {
@@ -936,6 +1005,9 @@ message PhysicalBinaryExprNode {
   PhysicalExprNode l = 1;
   PhysicalExprNode r = 2;
   string op = 3;
+  // Linearized operands for chains of the same operator (e.g. a AND b AND c).
+  // When present, `l` and `r` are ignored and `operands` holds the flattened list.
+  repeated PhysicalExprNode operands = 4;
 }
 
 message PhysicalDateTimeIntervalExprNode {
@@ -996,9 +1068,6 @@ message PhysicalExtensionExprNode {
 message PhysicalHashExprNode {
   repeated PhysicalExprNode on_columns = 1;
   uint64 seed0 = 2;
-  uint64 seed1 = 3;
-  uint64 seed2 = 4;
-  uint64 seed3 = 5;
   string description = 6;
 }
 
@@ -1008,6 +1077,7 @@ message FilterExecNode {
   uint32 default_filter_selectivity = 3;
   repeated uint32 projection = 9;
   uint32 batch_size = 10;
+  optional uint32 fetch = 11;
 }
 
 message FileGroup {
@@ -1085,6 +1155,10 @@ message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 
+message ArrowScanExecNode {
+  FileScanExecConf base_conf = 1;
+}
+
 message MemoryScanExecNode {
   repeated bytes partitions = 1;
   datafusion_common.Schema schema = 2;
@@ -1114,6 +1188,8 @@ message HashJoinExecNode {
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
   bool null_aware = 10;
+  // Optional dynamic filter expression for pushing down to the probe side.
+  PhysicalExprNode dynamic_filter = 11;
 }
 
 enum StreamPartitionMode {
@@ -1152,6 +1228,10 @@ message AnalyzeExecNode {
   bool show_statistics = 2;
   PhysicalPlanNode input = 3;
   datafusion_common.Schema schema = 4;
+  // Optional metric category filter.
+  // Empty means "plan only". Absent (has_metric_categories=false) means "all".
+  bool has_metric_categories = 5;
+  repeated string metric_categories = 6;
 }
 
 message CrossJoinExecNode {
@@ -1193,6 +1273,7 @@ enum AggregateMode {
   FINAL_PARTITIONED = 2;
   SINGLE = 3;
   SINGLE_PARTITIONED = 4;
+  PARTIAL_REDUCE = 5;
 }
 
 message PartiallySortedInputOrderMode {
@@ -1240,6 +1321,8 @@ message AggregateExecNode {
   repeated MaybeFilter filter_expr = 10;
   AggLimit limit = 11;
   bool has_grouping_set = 12;
+  // Optional dynamic filter expression for pushing down to the child.
+  PhysicalExprNode dynamic_filter = 13;
 }
 
 message GlobalLimitExecNode {
@@ -1261,6 +1344,8 @@ message SortExecNode {
   // Maximum number of highest/lowest rows to fetch; negative means no limit
   int64 fetch = 3;
   bool preserve_partitioning = 4;
+  // Optional dynamic filter expression for TopK pushdown.
+  PhysicalExprNode dynamic_filter = 5;
 }
 
 message SortPreservingMergeExecNode {
@@ -1302,6 +1387,7 @@ message RepartitionExecNode{
   //   uint64 unknown = 4;
   // }
   Partitioning partitioning = 5;
+  bool preserve_order = 6;
 }
 
 message Partitioning {
@@ -1354,6 +1440,13 @@ message RecursiveQueryNode {
 message CteWorkTableScanNode {
     string name = 1;
     datafusion_common.Schema schema = 2;
+}
+
+message EmptyTableScanNode {
+    TableReference table_name = 1;
+    datafusion_common.Schema schema = 2;
+    ProjectionColumns projection = 3;
+    repeated LogicalExprNode filters = 4;
 }
 
 enum GenerateSeriesName {
@@ -1416,4 +1509,20 @@ message AsyncFuncExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode async_exprs = 2;
   repeated string async_expr_names = 3;
+}
+
+message BufferExecNode {
+  PhysicalPlanNode input = 1;
+  uint64 capacity = 2;
+}
+
+message ScalarSubqueryExecNode {
+  PhysicalPlanNode input = 1;
+  repeated PhysicalPlanNode subqueries = 2;
+}
+
+message PhysicalScalarSubqueryExprNode {
+  datafusion_common.ArrowType data_type = 1;
+  bool nullable = 2;
+  uint32 index = 3;
 }

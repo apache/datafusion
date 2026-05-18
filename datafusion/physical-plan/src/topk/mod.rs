@@ -27,7 +27,8 @@ use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    RecordOutput,
 };
 use crate::spill::get_record_batch_memory_size;
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
@@ -162,7 +163,7 @@ impl TopKDynamicFilters {
 // Guesstimate for memory allocation: estimated number of bytes used per row in the RowConverter
 const ESTIMATED_BYTES_PER_ROW: usize = 20;
 
-fn build_sort_fields(
+pub(crate) fn build_sort_fields(
     ordering: &[PhysicalSortExpr],
     schema: &SchemaRef,
 ) -> Result<Vec<SortField>> {
@@ -253,13 +254,12 @@ impl TopK {
         let num_rows = batch.num_rows();
         let array = filtered.into_array(num_rows)?;
         let mut filter = array.as_boolean().clone();
-        let true_count = filter.true_count();
-        if true_count == 0 {
+        if !filter.has_true() {
             // nothing to filter, so no need to update
             return Ok(());
         }
         // only update the keys / rows if the filter does not match all rows
-        if true_count < num_rows {
+        if filter.null_count() > 0 || filter.has_false() {
             // Indices in `set_indices` should be correct if filter contains nulls
             // So we prepare the filter here. Note this is also done in the `FilterBuilder`
             // so there is no overhead to do this here.
@@ -647,6 +647,7 @@ impl TopKMetrics {
         Self {
             baseline: BaselineMetrics::new(metrics, partition),
             row_replacements: MetricBuilder::new(metrics)
+                .with_category(MetricCategory::Rows)
                 .counter("row_replacements", partition),
         }
     }
@@ -724,8 +725,8 @@ impl TopKHeap {
         let row = row.as_ref();
 
         // Reuse storage for evicted item if possible
-        let new_top_k = if self.inner.len() == self.k {
-            let prev_min = self.inner.pop().unwrap();
+        if self.inner.len() == self.k {
+            let mut prev_min = self.inner.peek_mut().unwrap();
 
             // Update batch use
             if prev_min.batch_id == batch_entry.id {
@@ -736,15 +737,16 @@ impl TopKHeap {
 
             // update memory accounting
             self.owned_bytes -= prev_min.owned_size();
-            prev_min.with_new_row(row, batch_id, index)
+
+            prev_min.replace_with(row, batch_id, index);
+
+            self.owned_bytes += prev_min.owned_size();
         } else {
-            TopKRow::new(row, batch_id, index)
+            let new_row = TopKRow::new(row, batch_id, index);
+            self.owned_bytes += new_row.owned_size();
+            // put the new row into the heap
+            self.inner.push(new_row);
         };
-
-        self.owned_bytes += new_top_k.owned_size();
-
-        // put the new row into the heap
-        self.inner.push(new_top_k)
     }
 
     /// Returns the values stored in this heap, from values low to
@@ -911,26 +913,13 @@ impl TopKRow {
         }
     }
 
-    /// Create a new  TopKRow reusing the existing allocation
-    fn with_new_row(
-        self,
-        new_row: impl AsRef<[u8]>,
-        batch_id: u32,
-        index: usize,
-    ) -> Self {
-        let Self {
-            mut row,
-            batch_id: _,
-            index: _,
-        } = self;
-        row.clear();
-        row.extend_from_slice(new_row.as_ref());
+    // Replace the existing row capacity with new values
+    fn replace_with(&mut self, new_row: impl AsRef<[u8]>, batch_id: u32, index: usize) {
+        self.row.clear();
+        self.row.extend_from_slice(new_row.as_ref());
 
-        Self {
-            row,
-            batch_id,
-            index,
-        }
+        self.batch_id = batch_id;
+        self.index = index;
     }
 
     /// Returns the number of bytes owned by this row in the heap (not
@@ -1071,7 +1060,7 @@ impl RecordBatchStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float64Array, Int32Array, RecordBatch};
+    use arrow::array::{Float64Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::assert_batches_eq;

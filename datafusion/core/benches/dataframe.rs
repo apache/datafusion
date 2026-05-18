@@ -15,13 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-#[macro_use]
-extern crate criterion;
-extern crate datafusion;
-
 use arrow_schema::{DataType, Field, Schema};
-use criterion::Criterion;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::col;

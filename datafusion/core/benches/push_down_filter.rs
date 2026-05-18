@@ -25,9 +25,9 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::ExecutionPlan;
-use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::ArrowWriter;
 use std::sync::Arc;
 

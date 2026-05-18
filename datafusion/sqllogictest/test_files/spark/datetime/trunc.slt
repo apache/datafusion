@@ -90,4 +90,3 @@ SELECT trunc('2009-02-12'::date, NULL::string);
 # incorrect format
 query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: The format argument of `TRUNC` must be one of: year, yy, yyyy, month, mm, mon, day, week, quarter.
 SELECT trunc('2009-02-12'::date, 'test'::string);
-

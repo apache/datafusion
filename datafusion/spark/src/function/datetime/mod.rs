@@ -22,12 +22,15 @@ pub mod date_part;
 pub mod date_sub;
 pub mod date_trunc;
 pub mod extract;
+pub mod from_utc_timestamp;
 pub mod last_day;
 pub mod make_dt_interval;
 pub mod make_interval;
 pub mod next_day;
 pub mod time_trunc;
+pub mod to_utc_timestamp;
 pub mod trunc;
+pub mod unix;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -39,6 +42,10 @@ make_udf_function!(date_diff::SparkDateDiff, date_diff);
 make_udf_function!(date_part::SparkDatePart, date_part);
 make_udf_function!(date_sub::SparkDateSub, date_sub);
 make_udf_function!(date_trunc::SparkDateTrunc, date_trunc);
+make_udf_function!(
+    from_utc_timestamp::SparkFromUtcTimestamp,
+    from_utc_timestamp
+);
 make_udf_function!(extract::SparkHour, hour);
 make_udf_function!(extract::SparkMinute, minute);
 make_udf_function!(extract::SparkSecond, second);
@@ -47,7 +54,24 @@ make_udf_function!(make_dt_interval::SparkMakeDtInterval, make_dt_interval);
 make_udf_function!(make_interval::SparkMakeInterval, make_interval);
 make_udf_function!(next_day::SparkNextDay, next_day);
 make_udf_function!(time_trunc::SparkTimeTrunc, time_trunc);
+make_udf_function!(to_utc_timestamp::SparkToUtcTimestamp, to_utc_timestamp);
 make_udf_function!(trunc::SparkTrunc, trunc);
+make_udf_function!(unix::SparkUnixDate, unix_date);
+make_udf_function!(
+    unix::SparkUnixTimestamp,
+    unix_micros,
+    unix::SparkUnixTimestamp::microseconds
+);
+make_udf_function!(
+    unix::SparkUnixTimestamp,
+    unix_millis,
+    unix::SparkUnixTimestamp::milliseconds
+);
+make_udf_function!(
+    unix::SparkUnixTimestamp,
+    unix_seconds,
+    unix::SparkUnixTimestamp::seconds
+);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -125,6 +149,36 @@ pub mod expr_fn {
         "Extracts a part of the date or time from a date, time, or timestamp expression.",
         arg1 arg2
     ));
+    export_functions!((
+        from_utc_timestamp,
+        "Interpret a given timestamp `ts` in UTC timezone and then convert it to timezone `tz`.",
+        ts tz
+    ));
+    export_functions!((
+        to_utc_timestamp,
+        "Interpret a given timestamp `ts` in timezone `tz` and then convert it to UTC timezone.",
+        ts tz
+    ));
+    export_functions!((
+        unix_date,
+        "Returns the number of days since epoch (1970-01-01) for the given date `dt`.",
+        dt
+    ));
+    export_functions!((
+        unix_micros,
+        "Returns the number of microseconds since epoch (1970-01-01 00:00:00 UTC) for the given timestamp `ts`.",
+        ts
+    ));
+    export_functions!((
+        unix_millis,
+        "Returns the number of milliseconds since epoch (1970-01-01 00:00:00 UTC) for the given timestamp `ts`.",
+        ts
+    ));
+    export_functions!((
+        unix_seconds,
+        "Returns the number of seconds since epoch (1970-01-01 00:00:00 UTC) for the given timestamp `ts`.",
+        ts
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -135,6 +189,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_part(),
         date_sub(),
         date_trunc(),
+        from_utc_timestamp(),
         hour(),
         last_day(),
         make_dt_interval(),
@@ -143,6 +198,11 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         next_day(),
         second(),
         time_trunc(),
+        to_utc_timestamp(),
         trunc(),
+        unix_date(),
+        unix_micros(),
+        unix_millis(),
+        unix_seconds(),
     ]
 }

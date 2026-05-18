@@ -100,7 +100,10 @@ impl fmt::Debug for dyn LogicalType {
 
 impl std::fmt::Display for dyn LogicalType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        match self.signature() {
+            TypeSignature::Native(_) => write!(f, "{}", self.native()),
+            TypeSignature::Extension { name, .. } => write!(f, "{name}"),
+        }
     }
 }
 
@@ -130,5 +133,120 @@ impl Hash for dyn LogicalType {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         // Logical types with identical signatures are considered equal.
         self.signature().hash(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{
+        LogicalField, LogicalFields, logical_boolean, logical_date, logical_float32,
+        logical_float64, logical_int32, logical_int64, logical_null, logical_string,
+    };
+    use arrow::datatypes::{Field, Fields};
+    use insta::assert_snapshot;
+
+    #[test]
+    fn test_logical_type_display_simple() {
+        assert_snapshot!(logical_null(), @"Null");
+        assert_snapshot!(logical_boolean(), @"Boolean");
+        assert_snapshot!(logical_int32(), @"Int32");
+        assert_snapshot!(logical_int64(), @"Int64");
+        assert_snapshot!(logical_float32(), @"Float32");
+        assert_snapshot!(logical_float64(), @"Float64");
+        assert_snapshot!(logical_string(), @"String");
+        assert_snapshot!(logical_date(), @"Date");
+    }
+
+    #[test]
+    fn test_logical_type_display_list() {
+        let list_type: Arc<dyn LogicalType> = Arc::new(NativeType::List(Arc::new(
+            LogicalField::from(&Field::new("item", DataType::Int32, true)),
+        )));
+        assert_snapshot!(list_type, @"List(Int32)");
+    }
+
+    #[test]
+    fn test_logical_type_display_struct() {
+        let struct_type: Arc<dyn LogicalType> = Arc::new(NativeType::Struct(
+            LogicalFields::from(&Fields::from(vec![
+                Field::new("x", DataType::Float64, false),
+                Field::new("y", DataType::Float64, true),
+            ])),
+        ));
+        assert_snapshot!(struct_type, @r#"Struct("x": non-null Float64, "y": Float64)"#);
+    }
+
+    #[test]
+    fn test_logical_type_display_fixed_size_list() {
+        let fsl_type: Arc<dyn LogicalType> = Arc::new(NativeType::FixedSizeList(
+            Arc::new(LogicalField::from(&Field::new(
+                "item",
+                DataType::Float32,
+                false,
+            ))),
+            3,
+        ));
+        assert_snapshot!(fsl_type, @"FixedSizeList(3 x non-null Float32)");
+    }
+
+    #[test]
+    fn test_logical_type_display_map() {
+        let map_type: Arc<dyn LogicalType> = Arc::new(NativeType::Map(Arc::new(
+            LogicalField::from(&Field::new("entries", DataType::Utf8, false)),
+        )));
+        assert_snapshot!(map_type, @"Map(non-null String)");
+    }
+
+    #[test]
+    fn test_logical_type_display_union() {
+        use arrow::datatypes::UnionFields;
+
+        let union_fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int_val", DataType::Int32, false),
+                Field::new("str_val", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let union_type: Arc<dyn LogicalType> = Arc::new(NativeType::Union(
+            crate::types::LogicalUnionFields::from(&union_fields),
+        ));
+        assert_snapshot!(union_type, @r#"Union(0: ("int_val": non-null Int32), 1: ("str_val": String))"#);
+    }
+
+    #[test]
+    fn test_logical_type_display_nullable_vs_non_nullable() {
+        let nullable_list: Arc<dyn LogicalType> = Arc::new(NativeType::List(Arc::new(
+            LogicalField::from(&Field::new("item", DataType::Int32, true)),
+        )));
+        let non_nullable_list: Arc<dyn LogicalType> =
+            Arc::new(NativeType::List(Arc::new(LogicalField::from(&Field::new(
+                "item",
+                DataType::Int32,
+                false,
+            )))));
+
+        assert_snapshot!(nullable_list, @"List(Int32)");
+        assert_snapshot!(non_nullable_list, @"List(non-null Int32)");
+    }
+
+    #[test]
+    fn test_logical_type_display_extension() {
+        struct JsonType;
+        impl LogicalType for JsonType {
+            fn native(&self) -> &NativeType {
+                &NativeType::String
+            }
+            fn signature(&self) -> TypeSignature<'_> {
+                TypeSignature::Extension {
+                    name: "JSON",
+                    parameters: &[],
+                }
+            }
+        }
+        let json: Arc<dyn LogicalType> = Arc::new(JsonType);
+        assert_snapshot!(json, @"JSON");
     }
 }

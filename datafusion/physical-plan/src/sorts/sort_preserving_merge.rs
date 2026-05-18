@@ -17,7 +17,6 @@
 
 //! [`SortPreservingMergeExec`] merges multiple sorted streams into one sorted stream.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
@@ -28,11 +27,14 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+    check_if_same_properties,
 };
 
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use crate::execution_plan::{EvaluationType, SchedulingType};
@@ -93,7 +95,7 @@ pub struct SortPreservingMergeExec {
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Use round-robin selection of tied winners of loser tree
     ///
     /// See [`Self::with_round_robin_repartition`] for more information.
@@ -109,7 +111,7 @@ impl SortPreservingMergeExec {
             expr,
             metrics: ExecutionPlanMetricsSet::new(),
             fetch: None,
-            cache,
+            cache: Arc::new(cache),
             enable_round_robin_repartition: true,
         }
     }
@@ -180,6 +182,17 @@ impl SortPreservingMergeExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for SortPreservingMergeExec {
@@ -221,11 +234,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -240,8 +249,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
             expr: self.expr.clone(),
             metrics: self.metrics.clone(),
             fetch: limit,
-            cache: self.cache.clone(),
-            enable_round_robin_repartition: true,
+            cache: Arc::clone(&self.cache),
+            enable_round_robin_repartition: self.enable_round_robin_repartition,
         }))
     }
 
@@ -278,12 +287,24 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for sort_expr in &self.expr {
+            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+        }
+        Ok(tnr)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(
-            SortPreservingMergeExec::new(self.expr.clone(), Arc::clone(&children[0]))
+            SortPreservingMergeExec::new(self.expr.clone(), children.swap_remove(0))
                 .with_fetch(self.fetch),
         ))
     }
@@ -372,11 +393,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(None)
     }
 
@@ -469,6 +486,7 @@ mod tests {
             .with_session_config(config);
         Ok(Arc::new(task_ctx))
     }
+
     // The number in the function is highly related to the memory limit we are testing,
     // any change of the constant should be aware of
     fn generate_spm_for_round_robin_tie_breaker(
@@ -479,10 +497,9 @@ mod tests {
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"); row_size]));
         let c: ArrayRef = Arc::new(Int64Array::from_iter(vec![0; row_size]));
         let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)])?;
-
-        let rbs = (0..1024).map(|_| rb.clone()).collect::<Vec<_>>();
-
         let schema = rb.schema();
+
+        let rbs = std::iter::repeat_n(rb, 1024).collect::<Vec<_>>();
         let sort = [
             PhysicalSortExpr {
                 expr: col("b", &schema)?,
@@ -1363,7 +1380,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct CongestedExec {
         schema: Schema,
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
         congestion: Arc<Congestion>,
     }
 
@@ -1396,14 +1413,17 @@ mod tests {
         fn name(&self) -> &'static str {
             Self::static_name()
         }
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
         fn with_new_children(
             self: Arc<Self>,
@@ -1492,7 +1512,7 @@ mod tests {
         };
         let source = CongestedExec {
             schema: schema.clone(),
-            cache: properties,
+            cache: Arc::new(properties),
             congestion: Arc::new(Congestion::new(partition_count)),
         };
         let spm = SortPreservingMergeExec::new(
@@ -1511,5 +1531,60 @@ mod tests {
             Ok(Err(_)) => exec_err!("SortPreservingMerge task panicked or was cancelled"),
             Err(_) => exec_err!("SortPreservingMerge caused a deadlock"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_sort_merge_stops_after_error_with_buffered_rows() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let sort: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "i", 0,
+        ))
+            as Arc<dyn PhysicalExpr>)]
+        .into();
+
+        let mut stream0 = RecordBatchReceiverStream::builder(Arc::clone(&schema), 2);
+        let tx0 = stream0.tx();
+        let schema0 = Arc::clone(&schema);
+        stream0.spawn(async move {
+            let batch =
+                RecordBatch::try_new(schema0, vec![Arc::new(Int32Array::from(vec![1]))])?;
+            tx0.send(Ok(batch)).await.unwrap();
+            tx0.send(exec_err!("stream failure")).await.unwrap();
+            Ok(())
+        });
+
+        let mut stream1 = RecordBatchReceiverStream::builder(Arc::clone(&schema), 1);
+        let tx1 = stream1.tx();
+        let schema1 = Arc::clone(&schema);
+        stream1.spawn(async move {
+            let batch =
+                RecordBatch::try_new(schema1, vec![Arc::new(Int32Array::from(vec![2]))])?;
+            tx1.send(Ok(batch)).await.unwrap();
+            Ok(())
+        });
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let reservation =
+            MemoryConsumer::new("test").register(&task_ctx.runtime_env().memory_pool);
+
+        let mut merge_stream = StreamingMergeBuilder::new()
+            .with_streams(vec![stream0.build(), stream1.build()])
+            .with_schema(Arc::clone(&schema))
+            .with_expressions(&sort)
+            .with_metrics(BaselineMetrics::new(&metrics, 0))
+            .with_batch_size(task_ctx.session_config().batch_size())
+            .with_fetch(None)
+            .with_reservation(reservation)
+            .build()?;
+
+        let first = merge_stream.next().await.unwrap();
+        assert!(first.is_err(), "expected merge stream to surface the error");
+        assert!(
+            merge_stream.next().await.is_none(),
+            "merge stream yielded data after returning an error"
+        );
+
+        Ok(())
     }
 }

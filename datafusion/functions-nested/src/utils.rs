@@ -22,11 +22,12 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Fields};
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar, UInt32Array,
+    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar,
 };
 use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::{
-    as_fixed_size_list_array, as_large_list_array, as_list_array,
+    as_fixed_size_list_array, as_large_list_array, as_large_list_view_array,
+    as_list_array, as_list_view_array,
 };
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
@@ -161,8 +162,7 @@ pub(crate) fn compare_element_to_list(
         );
     }
 
-    let indices = UInt32Array::from(vec![row_index as u32]);
-    let element_array_row = arrow::compute::take(element_array, &indices, None)?;
+    let element_array_row = element_array.slice(row_index, 1);
 
     // Compute all positions in list_row_array (that is itself an
     // array) that are equal to `from_array_row`
@@ -242,6 +242,14 @@ pub(crate) fn compute_array_dims(
             }
             DataType::LargeList(_) => {
                 value = as_large_list_array(&value)?.value(0);
+                res.push(Some(value.len() as u64));
+            }
+            DataType::ListView(_) => {
+                value = as_list_view_array(&value)?.value(0);
+                res.push(Some(value.len() as u64));
+            }
+            DataType::LargeListView(_) => {
+                value = as_large_list_view_array(&value)?.value(0);
                 res.push(Some(value.len() as u64));
             }
             DataType::FixedSizeList(..) => {

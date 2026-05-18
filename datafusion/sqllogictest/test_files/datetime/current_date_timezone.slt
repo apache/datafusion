@@ -78,3 +78,7 @@ query B
 SELECT current_date() = today();
 ----
 true
+
+# Config reset
+statement ok
+RESET datafusion.execution.time_zone;

@@ -767,7 +767,7 @@ async fn hash_join_without_repartition_and_no_agg(
 #[derive(Debug)]
 enum Yielded {
     ReadyOrPending,
-    Err(#[allow(dead_code)] DataFusionError),
+    Err(#[expect(dead_code)] DataFusionError),
     Timeout,
 }
 
@@ -794,9 +794,9 @@ async fn stream_yields(
     let yielded = select! {
         result = join_handle => {
             match result {
-                Ok(Pending) => Yielded::ReadyOrPending,
-                Ok(Ready(Ok(_))) => Yielded::ReadyOrPending,
-                Ok(Ready(Err(e))) => Yielded::Err(e),
+                Ok(Poll::Pending) => Yielded::ReadyOrPending,
+                Ok(Poll::Ready(Ok(_))) => Yielded::ReadyOrPending,
+                Ok(Poll::Ready(Err(e))) => Yielded::Err(e),
                 Err(_) => Yielded::Err(exec_datafusion_err!("join error")),
             }
         },

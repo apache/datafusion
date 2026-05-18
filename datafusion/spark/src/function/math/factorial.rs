@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{Array, Int64Array};
@@ -51,10 +50,6 @@ impl SparkFactorial {
 }
 
 impl ScalarUDFImpl for SparkFactorial {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "factorial"
     }

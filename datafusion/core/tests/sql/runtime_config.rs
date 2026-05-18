@@ -46,7 +46,7 @@ async fn test_memory_limit_with_spill() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let plan = df.create_physical_plan().await.unwrap();
@@ -76,7 +76,7 @@ async fn test_no_spill_with_adequate_memory() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let plan = df.create_physical_plan().await.unwrap();
@@ -127,7 +127,7 @@ async fn test_memory_limit_enforcement() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1 desc;";
     let result = ctx.sql(query).await.unwrap().collect().await;
 
     assert!(result.is_err(), "Should fail due to memory limit");
@@ -145,7 +145,7 @@ async fn test_memory_limit_enforcement() {
 }
 
 #[tokio::test]
-async fn test_invalid_memory_limit() {
+async fn test_invalid_memory_limit_when_unit_is_invalid() {
     let ctx = SessionContext::new();
 
     let result = ctx
@@ -154,7 +154,26 @@ async fn test_invalid_memory_limit() {
 
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
-    assert!(error_message.contains("Unsupported unit 'X'"));
+    assert!(
+        error_message
+            .contains("Unsupported unit 'X' in 'datafusion.runtime.memory_limit'")
+            && error_message.contains("Unit must be one of: 'K', 'M', 'G'")
+    );
+}
+
+#[tokio::test]
+async fn test_invalid_memory_limit_when_limit_is_not_numeric() {
+    let ctx = SessionContext::new();
+
+    let result = ctx
+        .sql("SET datafusion.runtime.memory_limit = 'invalid_memory_limit'")
+        .await;
+
+    assert!(result.is_err());
+    let error_message = result.unwrap_err().to_string();
+    assert!(error_message.contains(
+        "Failed to parse number from 'datafusion.runtime.memory_limit', limit 'invalid_memory_limit'"
+    ));
 }
 
 #[tokio::test]
@@ -182,7 +201,7 @@ async fn test_max_temp_directory_size_enforcement() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1 desc;";
     let result = ctx.sql(query).await.unwrap().collect().await;
 
     assert!(

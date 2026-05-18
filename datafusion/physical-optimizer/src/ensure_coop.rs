@@ -130,7 +130,6 @@ impl PhysicalOptimizerRule for EnsureCooperative {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::config::ConfigOptions;
     use datafusion_physical_plan::{displayable, test::scan_partitioned};
     use insta::assert_snapshot;
 
@@ -264,16 +263,15 @@ mod tests {
     async fn test_eager_evaluation_resets_cooperative_context() {
         // Test that cooperative context is reset when encountering an eager evaluation boundary.
         use arrow::datatypes::Schema;
-        use datafusion_common::{Result, internal_err};
+        use datafusion_common::internal_err;
+        use datafusion_common::tree_node::TreeNodeRecursion;
         use datafusion_execution::TaskContext;
         use datafusion_physical_expr::EquivalenceProperties;
         use datafusion_physical_plan::{
-            DisplayAs, DisplayFormatType, Partitioning, PlanProperties,
+            DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr, PlanProperties,
             SendableRecordBatchStream,
             execution_plan::{Boundedness, EmissionType},
         };
-        use std::any::Any;
-        use std::fmt::Formatter;
 
         #[derive(Debug)]
         struct DummyExec {
@@ -281,7 +279,7 @@ mod tests {
             input: Arc<dyn ExecutionPlan>,
             scheduling_type: SchedulingType,
             evaluation_type: EvaluationType,
-            properties: PlanProperties,
+            properties: Arc<PlanProperties>,
         }
 
         impl DummyExec {
@@ -305,7 +303,7 @@ mod tests {
                     input,
                     scheduling_type,
                     evaluation_type,
-                    properties,
+                    properties: Arc::new(properties),
                 }
             }
         }
@@ -324,10 +322,7 @@ mod tests {
             fn name(&self) -> &str {
                 &self.name
             }
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-            fn properties(&self) -> &PlanProperties {
+            fn properties(&self) -> &Arc<PlanProperties> {
                 &self.properties
             }
             fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -350,6 +345,13 @@ mod tests {
                 _: Arc<TaskContext>,
             ) -> Result<SendableRecordBatchStream> {
                 internal_err!("DummyExec does not support execution")
+            }
+
+            fn apply_expressions(
+                &self,
+                _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            ) -> Result<TreeNodeRecursion> {
+                Ok(TreeNodeRecursion::Continue)
             }
         }
 

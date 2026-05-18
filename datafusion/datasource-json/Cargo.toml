@@ -45,12 +45,16 @@ datafusion-session = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
 # https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lib]
 name = "datafusion_datasource_json"

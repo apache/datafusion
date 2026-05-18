@@ -17,7 +17,7 @@
 
 //! See `main.rs` for how to run it.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::datatypes::Field;
 use arrow::{
@@ -68,11 +68,6 @@ impl SmoothItUdf {
 }
 
 impl WindowUDFImpl for SmoothItUdf {
-    /// We implement as_any so that we can downcast the WindowUDFImpl trait object
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// Return the name of this function
     fn name(&self) -> &str {
         "smooth_it"
@@ -176,10 +171,6 @@ impl SimplifySmoothItUdf {
     }
 }
 impl WindowUDFImpl for SimplifySmoothItUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "simplify_smooth_it"
     }

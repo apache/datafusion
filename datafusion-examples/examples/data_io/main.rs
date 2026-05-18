@@ -21,23 +21,47 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example data_io -- [all|catalog|json_shredding|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
+//! cargo run --example data_io -- [all|catalog|in_memory_object_store|json_shredding|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `catalog` — register the table into a custom catalog
-//! - `json_shredding` — shows how to implement custom filter rewriting for JSON shredding
-//! - `parquet_adv_idx` — create a detailed secondary index that covers the contents of several parquet files
-//! - `parquet_emb_idx` — store a custom index inside a Parquet file and use it to speed up queries
-//! - `parquet_enc_with_kms` — read and write encrypted Parquet files using an encryption factory
-//! - `parquet_enc` — read and write encrypted Parquet files using DataFusion
-//! - `parquet_exec_visitor` — extract statistics by visiting an ExecutionPlan after execution
-//! - `parquet_idx` — create an secondary index over several parquet files and use it to speed up queries
-//! - `query_http_csv` — configure `object_store` and run a query against files via HTTP
-//! - `remote_catalog` — interfacing with a remote catalog (e.g. over a network)
+//!
+//! - `catalog`
+//!   (file: catalog.rs, desc: Register tables into a custom catalog)
+//!
+//! - `in_memory_object_store`
+//!   (file: in_memory_object_store.rs, desc: Read CSV from an in-memory object store (pattern applies to JSON/Parquet))
+//!
+//! - `json_shredding`
+//!   (file: json_shredding.rs, desc: Implement filter rewriting for JSON shredding)
+//!
+//! - `parquet_adv_idx`
+//!   (file: parquet_advanced_index.rs, desc: Create a secondary index across multiple parquet files)
+//!
+//! - `parquet_emb_idx`
+//!   (file: parquet_embedded_index.rs, desc: Store a custom index inside Parquet files)
+//!
+//! - `parquet_enc`  
+//!   (file: parquet_encrypted.rs, desc: Read & write encrypted Parquet files)
+//!
+//! - `parquet_enc_with_kms`
+//!   (file: parquet_encrypted_with_kms.rs, desc: Encrypted Parquet I/O using a KMS-backed factory)
+//!
+//! - `parquet_exec_visitor`
+//!   (file: parquet_exec_visitor.rs, desc: Extract statistics by visiting an ExecutionPlan)
+//!
+//! - `parquet_idx`
+//!   (file: parquet_index.rs, desc: Create a secondary index)
+//!
+//! - `query_http_csv`
+//!   (file: query_http_csv.rs, desc: Query CSV files via HTTP)
+//!
+//! - `remote_catalog`
+//!   (file: remote_catalog.rs, desc: Interact with a remote catalog)
 
 mod catalog;
+mod in_memory_object_store;
 mod json_shredding;
 mod parquet_advanced_index;
 mod parquet_embedded_index;
@@ -57,6 +81,7 @@ use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 enum ExampleKind {
     All,
     Catalog,
+    InMemoryObjectStore,
     JsonShredding,
     ParquetAdvIdx,
     ParquetEmbIdx,
@@ -84,6 +109,9 @@ impl ExampleKind {
                 }
             }
             ExampleKind::Catalog => catalog::catalog().await?,
+            ExampleKind::InMemoryObjectStore => {
+                in_memory_object_store::in_memory_object_store().await?
+            }
             ExampleKind::JsonShredding => json_shredding::json_shredding().await?,
             ExampleKind::ParquetAdvIdx => {
                 parquet_advanced_index::parquet_advanced_index().await?

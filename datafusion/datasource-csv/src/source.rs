@@ -19,7 +19,6 @@
 
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_plan::projection::ProjectionExprs;
-use std::any::Any;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -35,6 +34,7 @@ use datafusion_datasource::{
 
 use arrow::csv;
 use datafusion_common::config::CsvOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
@@ -262,10 +262,6 @@ impl FileSource for CsvSource {
         Ok(opener)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
     }
@@ -313,6 +309,20 @@ impl FileSource for CsvSource {
             }
             DisplayFormatType::TreeRender => Ok(()),
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit projection expressions
+        let mut tnr = TreeNodeRecursion::Continue;
+        for proj_expr in &self.projection.source {
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
+        }
+        Ok(tnr)
     }
 }
 

@@ -34,7 +34,6 @@ use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
-use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter;
@@ -44,6 +43,7 @@ use std::sync::{Arc, LazyLock};
 define_udwf_and_expr!(
     Rank,
     rank,
+    rank_udwf,
     "Returns rank of the current row with gaps. Same as `row_number` of its first peer",
     Rank::basic
 );
@@ -51,6 +51,7 @@ define_udwf_and_expr!(
 define_udwf_and_expr!(
     DenseRank,
     dense_rank,
+    dense_rank_udwf,
     "Returns rank of the current row without gaps. This function counts peer groups",
     Rank::dense_rank
 );
@@ -58,6 +59,7 @@ define_udwf_and_expr!(
 define_udwf_and_expr!(
     PercentRank,
     percent_rank,
+    percent_rank_udwf,
     "Returns the relative rank of the current row: (rank - 1) / (total rows - 1)",
     Rank::percent_rank
 );
@@ -194,10 +196,6 @@ fn get_percent_rank_doc() -> &'static Documentation {
 }
 
 impl WindowUDFImpl for Rank {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }

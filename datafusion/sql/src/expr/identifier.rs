@@ -21,6 +21,7 @@ use datafusion_common::{
     Column, DFSchema, Result, Span, TableReference, assert_or_internal_err,
     exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
+use datafusion_expr::expr::LambdaVariable;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
@@ -59,6 +60,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // identifier. (e.g. it is "foo.bar" not foo.bar)
             let normalize_ident = self.ident_normalizer.normalize(id);
 
+            // lambdas parameters have higher precedence
+            if let Some(field) = planner_context.lambda_parameters().get(&normalize_ident)
+            {
+                let mut lambda_var =
+                    LambdaVariable::new(normalize_ident, Some(Arc::clone(field)));
+                if self.options.collect_spans
+                    && let Some(span) = Span::try_from_sqlparser_span(id_span)
+                {
+                    lambda_var.spans_mut().add_span(span);
+                }
+                return Ok(Expr::LambdaVariable(lambda_var));
+            }
+
             // Check for qualified field with unqualified name
             if let Ok((qualifier, _)) =
                 schema.qualified_field_with_unqualified_name(normalize_ident.as_str())
@@ -76,15 +90,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             // Check the outer query schema
-            if let Some(outer) = planner_context.outer_query_schema()
-                && let Ok((qualifier, field)) =
+            for outer in planner_context.outer_schemas_iter() {
+                if let Ok((qualifier, field)) =
                     outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
-            {
-                // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                return Ok(Expr::OuterReferenceColumn(
-                    Arc::clone(field),
-                    Column::from((qualifier, field)),
-                ));
+                {
+                    // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                    return Ok(Expr::OuterReferenceColumn(
+                        Arc::clone(field),
+                        Column::from((qualifier, field)),
+                    ));
+                }
             }
 
             // Default case
@@ -167,19 +182,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 None => {
                     // Return default where use all identifiers to not have a nested field
-                    // this len check is because at 5 identifiers will have to have a nested field
-                    if ids.len() == 5 {
+                    // this len check is because at 5 or more identifiers will have to have a nested field
+                    if ids.len() >= 5 {
                         not_impl_err!("compound identifier: {ids:?}")
                     } else {
                         // Check the outer_query_schema and try to find a match
-                        if let Some(outer) = planner_context.outer_query_schema() {
+                        for outer in planner_context.outer_schemas_iter() {
                             let search_result = search_dfschema(&ids, outer);
-                            match search_result {
+                            let result = match search_result {
                                 // Found matching field with spare identifier(s) for nested field(s) in structure
                                 Some((field, qualifier, nested_names))
                                     if !nested_names.is_empty() =>
                                 {
-                                    // TODO: remove when can support nested identifiers for OuterReferenceColumn
+                                    // TODO: remove this when we have support for nested identifiers for OuterReferenceColumn
                                     not_impl_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
                                         Column::from((qualifier, field))
@@ -195,26 +210,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     ))
                                 }
                                 // Found no matching field, will return a default
-                                None => {
-                                    let s = &ids[0..ids.len()];
-                                    // safe unwrap as s can never be empty or exceed the bounds
-                                    let (relation, column_name) =
-                                        form_identifier(s).unwrap();
-                                    Ok(Expr::Column(Column::new(relation, column_name)))
-                                }
-                            }
-                        } else {
-                            let s = &ids[0..ids.len()];
-                            // Safe unwrap as s can never be empty or exceed the bounds
-                            let (relation, column_name) = form_identifier(s).unwrap();
-                            let mut column = Column::new(relation, column_name);
-                            if self.options.collect_spans
-                                && let Some(span) = ids_span
-                            {
-                                column.spans_mut().add_span(span);
-                            }
-                            Ok(Expr::Column(column))
+                                None => continue,
+                            };
+                            return result;
                         }
+                        // Safe unwrap as column name can never be empty or exceed the bounds
+                        let (relation, column_name) =
+                            form_identifier(&ids[0..ids.len()]).unwrap();
+                        let mut column = Column::new(relation, column_name);
+                        if self.options.collect_spans
+                            && let Some(span) = ids_span
+                        {
+                            column.spans_mut().add_span(span);
+                        }
+                        Ok(Expr::Column(column))
                     }
                 }
             }

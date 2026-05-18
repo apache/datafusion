@@ -223,7 +223,15 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
 
     let mut collects = p.expr.clone();
     for sort in &sort.expr {
-        collects.push(sort.expr.clone());
+        // Strip aliases from sort expressions so the comparison matches
+        // the inner Projection's raw expressions. The optimizer may add
+        // sort expressions to the inner Projection without aliases, while
+        // the Sort node's expressions carry aliases from the original plan.
+        let mut expr = sort.expr.clone();
+        while let Expr::Alias(alias) = expr {
+            expr = *alias.expr;
+        }
+        collects.push(expr);
     }
 
     // Compare outer collects Expr::to_string with inner collected transformed values
@@ -245,6 +253,48 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
             .iter()
             .map(|e| map.get(e).unwrap_or(e).clone())
             .collect::<Vec<_>>();
+
+        // The inner Projection may define aliases that the Sort references
+        // but the outer Projection does not include.  Since we are about to
+        // replace the inner Projection's expressions with `new_exprs` (which
+        // only contains the outer Projection's columns), those alias
+        // definitions will be lost.  To keep the Sort valid, rewrite any
+        // sort expression that references a dropped alias so that it uses
+        // the alias's underlying expression instead.
+        let projected_aliases: HashSet<&str> = new_exprs
+            .iter()
+            .filter_map(|e| match e {
+                Expr::Alias(alias) => Some(alias.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        let dropped_aliases: HashMap<String, Expr> = inner_p
+            .expr
+            .iter()
+            .filter_map(|e| match e {
+                Expr::Alias(alias)
+                    if !projected_aliases.contains(alias.name.as_str()) =>
+                {
+                    Some((alias.name.clone(), (*alias.expr).clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        if !dropped_aliases.is_empty() {
+            for sort_expr in &mut sort.expr {
+                let mut expr = sort_expr.expr.clone();
+                while let Expr::Alias(alias) = expr {
+                    expr = *alias.expr;
+                }
+                if let Expr::Column(ref col) = expr
+                    && let Some(underlying) = dropped_aliases.get(col.name())
+                {
+                    sort_expr.expr = underlying.clone();
+                }
+            }
+        }
 
         inner_p.expr.clone_from(&new_exprs);
         sort.input = Arc::new(LogicalPlan::Projection(inner_p));
@@ -310,6 +360,10 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     // Check if the inner projection and outer projection have a matching pattern like
     //     Projection: j1.j1_id AS id
     //       Projection: j1.j1_id
+    if outer_projections.expr.len() != inner_projection.expr.len() {
+        return (plan, vec![]);
+    }
+
     for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
         let Expr::Alias(outer_alias) = &outer_projections.expr[i] else {
             return (plan, vec![]);
@@ -480,5 +534,55 @@ impl TreeNodeRewriter for TableAliasRewriter<'_> {
             }
             _ => Ok(Transformed::no(expr)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_expr::{LogicalPlanBuilder, col, table_scan};
+
+    // this is a regression test: when the outer projection has fewer expressions than
+    // the inner projection, `subquery_alias_inner_query_and_columns` must not panic
+    // with an index oob error
+    // note: this happens when optimizer passes (e.g. CommonSubexprEliminate)
+    // insert an inner projection with extra columns that a subsequent projection narrows
+    // back down
+    #[test]
+    fn test_stacked_projections_mismatched_lengths_no_panic() {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+
+        // Inner projection has 2 expressions, outer has 0 (empty).
+        let inner_plan = LogicalPlanBuilder::from(
+            table_scan(Some("t"), &schema, Some(vec![0, 1]))
+                .unwrap()
+                .build()
+                .unwrap(),
+        )
+        .project(vec![col("t.id"), col("t.name")])
+        .unwrap()
+        .build()
+        .unwrap();
+
+        // Build an empty outer projection over the inner.
+        let outer_plan = LogicalPlanBuilder::from(inner_plan)
+            .project(Vec::<Expr>::new())
+            .unwrap()
+            .alias("sub")
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let LogicalPlan::SubqueryAlias(subquery_alias) = &outer_plan else {
+            panic!("expected SubqueryAlias");
+        };
+
+        // should return early without panicking
+        let (_plan, columns) = subquery_alias_inner_query_and_columns(subquery_alias);
+        assert!(columns.is_empty());
     }
 }

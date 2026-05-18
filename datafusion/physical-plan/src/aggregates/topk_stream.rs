@@ -26,6 +26,7 @@ use crate::aggregates::{
     evaluate_many,
 };
 use crate::metrics::BaselineMetrics;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
@@ -50,7 +51,7 @@ pub struct GroupedTopKAggregateStream {
     baseline_metrics: BaselineMetrics,
     group_by_metrics: GroupByMetrics,
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    group_by: PhysicalGroupBy,
+    group_by: Arc<PhysicalGroupBy>,
     priority_map: PriorityMap,
 }
 
@@ -62,7 +63,7 @@ impl GroupedTopKAggregateStream {
         limit: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&aggr.schema);
-        let group_by = aggr.group_by.clone();
+        let group_by = Arc::clone(&aggr.group_by);
         let input = aggr.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
@@ -205,6 +206,9 @@ impl Stream for GroupedTopKAggregateStream {
                 }
                 // inner is done, emit all rows and switch to producing output
                 None => {
+                    // Release the input pipeline's resources before emitting.
+                    let input_schema = self.input.schema();
+                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     if self.priority_map.is_empty() {
                         trace!("partition {} emit None", self.partition);
                         return Poll::Ready(None);

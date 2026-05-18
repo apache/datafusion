@@ -277,6 +277,23 @@ drop table strings
 statement ok
 drop table dict_table
 
+# Dict value types that themselves need further coercion against the literal
+statement ok
+create table dict_inner as
+select arrow_cast(arrow_cast(c, 'Binary'), 'Dictionary(UInt32, Binary)') as bin_col,
+       arrow_cast(arrow_cast(c, 'Dictionary(UInt32, Utf8)'),
+                  'Dictionary(Int32, Dictionary(UInt32, Utf8))') as nested_col
+from (values ('foo'), ('bar')) as t(c);
+
+query BB
+select bin_col LIKE 'foo', nested_col ~ 'foo' from dict_inner;
+----
+true true
+false false
+
+statement ok
+drop table dict_inner
+
 # Ensure that regexp_like is rewritten to use the (more optimized) regex operators
 statement ok
 create table regexp_test as values
@@ -333,6 +350,11 @@ from regexp_test;
 true true
 false false
 false false
+
+query TT
+select * from regexp_test where regexp_like('f', regexp_replace((('v\r') like ('f_*sP6H1*')), '339629555', '-1459539013'));
+----
+
 
 statement ok
 drop table if exists dict_table;

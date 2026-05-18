@@ -117,7 +117,7 @@ pub(crate) fn to_substrait_literal(
             (
                 LiteralType::UserDefined(
                     substrait::proto::expression::literal::UserDefined {
-                        type_reference: type_anchor,
+                        type_anchor_type: Some(substrait::proto::expression::literal::user_defined::TypeAnchorType::TypeReference(type_anchor)),
                         type_parameters: vec![],
                         val: Some(substrait::proto::expression::literal::user_defined::Val::Value(
                             pbjson_types::Any {
@@ -305,7 +305,7 @@ pub(crate) fn to_substrait_literal(
 
                 let key_values = keys
                     .into_iter()
-                    .zip(values.into_iter())
+                    .zip(values)
                     .map(|(k, v)| {
                         Ok(KeyValue {
                             key: Some(k),

@@ -31,11 +31,31 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{ExprSchema, Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::placement::ExpressionPlacement;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+/// Describes how a struct-producing UDF's output fields correspond to its
+/// input arguments. This enables the optimizer to propagate orderings
+/// through struct projections (e.g., so that sorting by a struct field
+/// can be recognized as equivalent to sorting by the source column).
+///
+/// See [`ScalarUDFImpl::struct_field_mapping`] for details.
+pub struct StructFieldMapping {
+    /// The UDF used to construct field access expressions on the output.
+    /// For example, the `get_field` UDF for accessing struct fields.
+    pub field_accessor: Arc<ScalarUDF>,
+    /// For each output field: the literal arguments to pass to the
+    /// `field_accessor` UDF (after the base expression), and the index
+    /// of the corresponding input argument that produces the field's value.
+    ///
+    /// For `named_struct('a', col1, 'b', col2)`, this would be:
+    /// `[(["a"], 1), (["b"], 3)]` — field `"a"` comes from arg index 1.
+    pub fields: Vec<(Vec<ScalarValue>, usize)>,
+}
 
 /// Logical representation of a Scalar User Defined Function.
 ///
@@ -66,7 +86,7 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(other.inner.as_any())
+        self.inner.as_ref().dyn_eq(other.inner.as_ref() as &dyn Any)
     }
 }
 
@@ -216,7 +236,7 @@ impl ScalarUDF {
         self.inner.return_field_from_args(args)
     }
 
-    /// Do the function rewrite
+    /// Returns this scalar function's simplification result.
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
     pub fn simplify(
@@ -260,7 +280,7 @@ impl ScalarUDF {
             let expected_type = return_field.data_type();
             assert_or_internal_err!(
                 result_data_type == *expected_type,
-                "Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
+                "Function '{}' returned value of type '{}' while the following type was promised at planning time and expected: '{}'",
                 self.name(),
                 result_data_type,
                 expected_type
@@ -302,6 +322,14 @@ impl ScalarUDF {
     /// then the output interval would be `[0, 3]`.
     pub fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
         self.inner.evaluate_bounds(inputs)
+    }
+
+    /// See [`ScalarUDFImpl::struct_field_mapping`] for more details.
+    pub fn struct_field_mapping(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        self.inner.struct_field_mapping(literal_args)
     }
 
     /// Updates bounds for child expressions, given a known interval for this
@@ -359,7 +387,14 @@ impl ScalarUDF {
 
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
-        self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
+        self.inner().downcast_ref::<AsyncScalarUDF>()
+    }
+
+    /// Returns placement information for this function.
+    ///
+    /// See [`ScalarUDFImpl::placement`] for more details.
+    pub fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        self.inner.placement(args)
     }
 }
 
@@ -463,7 +498,6 @@ pub struct ReturnFieldArgs<'a> {
 ///
 /// /// Implement the ScalarUDFImpl trait for AddOne
 /// impl ScalarUDFImpl for AddOne {
-///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "add_one" }
 ///    fn signature(&self) -> &Signature { &self.signature }
 ///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -487,10 +521,7 @@ pub struct ReturnFieldArgs<'a> {
 /// // Call the function `add_one(col)`
 /// let expr = add_one.call(vec![col("a")]);
 /// ```
-pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
-    /// Returns this object as an [`Any`] trait object
-    fn as_any(&self) -> &dyn Any;
-
+pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns this function's name
     fn name(&self) -> &str;
 
@@ -556,7 +587,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// If you provide an implementation for [`Self::return_field_from_args`],
     /// DataFusion will not call `return_type` (this function). While it is
-    /// valid to to put [`unimplemented!()`] or [`unreachable!()`], it is
+    /// valid to put [`unimplemented!()`] or [`unreachable!()`], it is
     /// recommended to return [`DataFusionError::Internal`] instead, which
     /// reduces the severity of symptoms if bugs occur (an error rather than a
     /// panic).
@@ -709,22 +740,101 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
-    /// Returns the [preimage] for this function and the specified scalar value, if any.
+    /// Returns a single contiguous preimage for this function and the specified
+    /// scalar expression, if any.
     ///
-    /// A preimage is a single contiguous [`Interval`] of values where the function
-    /// will always return `lit_value`
+    /// Currently only applies to `=, !=, >, >=, <, <=, is distinct from, is not distinct from` predicates
+    /// # Return Value
     ///
-    /// Implementations should return intervals with an inclusive lower bound and
-    /// exclusive upper bound.
+    /// Implementations should return a half-open interval: inclusive lower
+    /// bound and exclusive upper bound. This is slightly different from normal
+    /// [`Interval`] semantics where the upper bound is closed (inclusive).
+    /// Typically this means the upper endpoint must be adjusted to the next
+    /// value not included in the preimage. See the Half-Open Intervals section
+    /// below for more details.
     ///
-    /// This rewrite is described in the [ClickHouse Paper] and is particularly
-    /// useful for simplifying expressions `date_part` or equivalent functions. The
-    /// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
-    /// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
-    /// covering the entire year of 2024. Thus, you can rewrite the expression to `k
-    /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
+    /// # Background
     ///
+    /// Inspired by the [ClickHouse Paper], a "preimage rewrite" transforms a
+    /// predicate containing a function call into a predicate containing an
+    /// equivalent set of input literal (constant) values. The resulting
+    /// predicate can often be further optimized by other rewrites (see
+    /// Examples).
+    ///
+    /// From the paper:
+    ///
+    /// > some functions can compute the preimage of a given function result.
+    /// > This is used to replace comparisons of constants with function calls
+    /// > on the key columns by comparing the key column value with the preimage.
+    /// > For example, `toYear(k) = 2024` can be replaced by
+    /// > `k >= 2024-01-01 && k < 2025-01-01`
+    ///
+    /// For example, given an expression like
+    /// ```sql
+    /// date_part('YEAR', k) = 2024
+    /// ```
+    ///
+    /// The interval `[2024-01-01, 2025-12-31`]` contains all possible input
+    /// values (preimage values) for which the function `date_part(YEAR, k)`
+    /// produces the output value `2024` (image value). Returning the interval
+    /// (note upper bound adjusted up) `[2024-01-01, 2025-01-01]` the expression
+    /// can be rewritten to
+    ///
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01'
+    /// ```
+    ///
+    /// which is a simpler and a more canonical form, making it easier for other
+    /// optimizer passes to recognize and apply further transformations.
+    ///
+    /// # Examples
+    ///
+    /// Case 1:
+    ///
+    /// Original:
+    /// ```sql
+    /// date_part('YEAR', k) = 2024 AND k >= '2024-06-01'
+    /// ```
+    ///
+    /// After preimage rewrite:
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01' AND k >= '2024-06-01'
+    /// ```
+    ///
+    /// Since this form is much simpler, the optimizer can combine and simplify
+    /// sub-expressions further into:
+    /// ```sql
+    /// k >= '2024-06-01' AND k < '2025-01-01'
+    /// ```
+    ///
+    /// Case 2:
+    ///
+    /// For min/max pruning, simpler predicates such as:
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01'
+    /// ```
+    /// are much easier for the pruner to reason about. See [PruningPredicate]
+    /// for the backgrounds of predicate pruning.
+    ///
+    /// The trade-off with the preimage rewrite is that evaluating the rewritten
+    /// form might be slightly more expensive than evaluating the original
+    /// expression. In practice, this cost is usually outweighed by the more
+    /// aggressive optimization opportunities it enables.
+    ///
+    /// # Half-Open Intervals
+    ///
+    /// The preimage API uses half-open intervals, which makes the rewrite
+    /// easier to implement by avoiding calculations to adjust the upper bound.
+    /// For example, if a function returns its input unchanged and the desired
+    /// output is the single value `5`, a closed interval could be represented
+    /// as `[5, 5]`, but then the rewrite would require adjusting the upper
+    /// bound to `6` to create a proper range predicate. With a half-open
+    /// interval, the same range is represented as `[5, 6)`, which already
+    /// forms a valid predicate.
+    ///
+    /// [PruningPredicate]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html
     /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
+    /// [image]: https://en.wikipedia.org/wiki/Image_(mathematics)#Image_of_an_element
     /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
     fn preimage(
         &self,
@@ -878,12 +988,64 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
+    /// For struct-producing functions, return how output fields map to input
+    /// arguments. This enables the optimizer to propagate orderings through
+    /// struct projections.
+    ///
+    /// `literal_args[i]` is `Some(value)` if argument `i` is a known literal,
+    /// allowing extraction of field names from arguments like
+    /// `named_struct('field_name', value, ...)`.
+    ///
+    /// For example, `named_struct('a', col1, 'b', col2)` would return a
+    /// mapping indicating that output field `'a'` (accessed via
+    /// `get_field(output, 'a')`) corresponds to input argument `col1` at
+    /// index 1, and field `'b'` corresponds to `col2` at index 3.
+    fn struct_field_mapping(
+        &self,
+        _literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        None
+    }
+
     /// Returns the documentation for this Scalar UDF.
     ///
     /// Documentation can be accessed programmatically as well as generating
     /// publicly facing documentation.
     fn documentation(&self) -> Option<&Documentation> {
         None
+    }
+
+    /// Returns placement information for this function.
+    ///
+    /// This is used by optimizers to make decisions about expression placement,
+    /// such as whether to push expressions down through projections.
+    ///
+    /// The default implementation returns [`ExpressionPlacement::KeepInPlace`],
+    /// meaning the expression should be kept where it is in the plan.
+    ///
+    /// Override this method to indicate that the function can be pushed down
+    /// closer to the data source.
+    fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        ExpressionPlacement::KeepInPlace
+    }
+}
+
+impl dyn ScalarUDFImpl {
+    /// Returns `true` if the implementation is of type `T`.
+    ///
+    /// Works correctly when called on `Arc<dyn ScalarUDFImpl>` via auto-deref.
+    pub fn is<T: ScalarUDFImpl>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast to a concrete type `T`, returning `None` if the
+    /// implementation is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn ScalarUDFImpl>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: ScalarUDFImpl>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
     }
 }
 
@@ -911,10 +1073,6 @@ impl AliasedScalarUDFImpl {
 
 #[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl ScalarUDFImpl for AliasedScalarUDFImpl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -997,6 +1155,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.propagate_constraints(interval, inputs)
     }
 
+    fn struct_field_mapping(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        self.inner.struct_field_mapping(literal_args)
+    }
+
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
         self.inner.output_ordering(inputs)
     }
@@ -1011,6 +1176,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
+    }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        self.inner.placement(args)
     }
 }
 
@@ -1027,10 +1196,6 @@ mod tests {
         signature: Signature,
     }
     impl ScalarUDFImpl for TestScalarUDFImpl {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             self.name
         }

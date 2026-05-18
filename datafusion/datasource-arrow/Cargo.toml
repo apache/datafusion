@@ -62,6 +62,6 @@ name = "datafusion_datasource_arrow"
 path = "src/mod.rs"
 
 [features]
-compression = [
-    "arrow-ipc/zstd",
-]
+# This feature is deprecated, as core functionality in the SpillManager requires all features
+# it enabled, and will be removed in a future version.
+compression = []

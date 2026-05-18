@@ -36,7 +36,8 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::registry::ExtensionTypeRegistrationRef;
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -112,6 +113,15 @@ impl SessionStateDefaults {
         functions
     }
 
+    /// returns the list of default [`HigherOrderUDF`]s
+    pub fn default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
+        #[cfg(feature = "nested_expressions")]
+        return functions_nested::all_default_higher_order_functions();
+
+        #[cfg(not(feature = "nested_expressions"))]
+        return Vec::new();
+    }
+
     /// returns the list of default [`AggregateUDF`]s
     pub fn default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         functions_aggregate::all_default_aggregate_functions()
@@ -120,6 +130,13 @@ impl SessionStateDefaults {
     /// returns the list of default [`WindowUDF`]s
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
         functions_window::all_default_window_functions()
+    }
+
+    /// Returns the list of default extension types.
+    ///
+    /// For now, we do not register any extension types by default.
+    pub fn default_extension_types() -> Vec<ExtensionTypeRegistrationRef> {
+        vec![]
     }
 
     /// returns the list of default [`TableFunction`]s

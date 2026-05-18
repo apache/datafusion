@@ -22,7 +22,7 @@ use crate::{
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use datafusion_common::Result;
+use datafusion_common::{Result, tree_node::TreeNodeRecursion};
 use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
@@ -34,6 +34,7 @@ pub(crate) struct MockSource {
     filter: Option<Arc<dyn PhysicalExpr>>,
     table_schema: crate::table_schema::TableSchema,
     projection: crate::projection::SplitProjection,
+    file_opener: Option<Arc<dyn FileOpener>>,
 }
 
 impl Default for MockSource {
@@ -45,6 +46,7 @@ impl Default for MockSource {
             filter: None,
             projection: crate::projection::SplitProjection::unprojected(&table_schema),
             table_schema,
+            file_opener: None,
         }
     }
 }
@@ -57,11 +59,17 @@ impl MockSource {
             filter: None,
             projection: crate::projection::SplitProjection::unprojected(&table_schema),
             table_schema,
+            file_opener: None,
         }
     }
 
     pub fn with_filter(mut self, filter: Arc<dyn PhysicalExpr>) -> Self {
         self.filter = Some(filter);
+        self
+    }
+
+    pub fn with_file_opener(mut self, file_opener: Arc<dyn FileOpener>) -> Self {
+        self.file_opener = Some(file_opener);
         self
     }
 }
@@ -73,11 +81,9 @@ impl FileSource for MockSource {
         _base_config: &FileScanConfig,
         _partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
-        unimplemented!()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+        self.file_opener.clone().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!("MockSource missing FileOpener")
+        })
     }
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
@@ -118,6 +124,13 @@ impl FileSource for MockSource {
         &self,
     ) -> Option<&datafusion_physical_plan::projection::ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

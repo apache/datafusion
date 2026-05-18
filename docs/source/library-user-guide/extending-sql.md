@@ -158,7 +158,7 @@ when you need to support SQL types that aren't natively recognized.
 
 ```rust
 # use std::sync::Arc;
-# use arrow::datatypes::{DataType, TimeUnit};
+# use arrow::datatypes::{DataType, FieldRef, TimeUnit};
 # use datafusion::error::Result;
 # use datafusion::prelude::*;
 # use datafusion::execution::SessionStateBuilder;
@@ -169,7 +169,7 @@ use datafusion_expr::planner::TypePlanner;
 struct MyTypePlanner;
 
 impl TypePlanner for MyTypePlanner {
-    fn plan_type(&self, sql_type: &ast::DataType) -> Result<Option<DataType>> {
+    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
         match sql_type {
             // Map DATETIME(precision) to Arrow Timestamp
             ast::DataType::Datetime(precision) => {
@@ -180,7 +180,9 @@ impl TypePlanner for MyTypePlanner {
                     None | Some(9) => TimeUnit::Nanosecond,
                     _ => return Ok(None), // Let default handling take over
                 };
-                Ok(Some(DataType::Timestamp(time_unit, None)))
+                Ok(Some(
+                    DataType::Timestamp(time_unit, None).into_nullable_field_ref()
+                ))
             }
             _ => Ok(None), // Return None for types we don't handle
         }
@@ -198,6 +200,49 @@ async fn main() -> Result<()> {
 
     // Now DATETIME type is recognized
     ctx.sql("CREATE TABLE events (ts DATETIME(3))").await?;
+    Ok(())
+}
+```
+
+#### Example: Supporting the UUID Type
+
+```rust
+# use std::sync::Arc;
+# use arrow::datatypes::{DataType, FieldRef, TimeUnit};
+# use datafusion::error::Result;
+# use datafusion::prelude::*;
+# use datafusion::execution::SessionStateBuilder;
+use datafusion_expr::planner::TypePlanner;
+# use sqlparser::ast;
+
+#[derive(Debug)]
+struct MyTypePlanner;
+
+impl TypePlanner for MyTypePlanner {
+    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
+        match sql_type {
+            sqlparser::ast::DataType::Uuid => Ok(Some(Arc::new(
+                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
+                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
+                        .into(),
+                ),
+            ))),
+            _ => Ok(None),
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_type_planner(Arc::new(MyTypePlanner))
+        .build();
+
+    let ctx = SessionContext::new_with_state(state);
+
+    // Now UUID type is recognized
+    ctx.sql("CREATE TABLE idx (uuid UUID)").await?;
     Ok(())
 }
 ```
