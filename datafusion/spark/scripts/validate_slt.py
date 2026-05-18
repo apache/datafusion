@@ -791,7 +791,9 @@ def main():
     parser.add_argument(
         "--known-failures",
         default=str(default_known_failures),
-        help="Path to known-failures.txt file (use --known-failures=none to disable)",
+        help="Path to optional known-failures.txt file (deprecated; "
+             "prefer skipif/onlyif directives in .slt files. "
+             "Use --known-failures=none to disable)",
     )
     args = parser.parse_args()
 

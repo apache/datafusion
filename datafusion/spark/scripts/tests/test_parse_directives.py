@@ -95,7 +95,8 @@ def test_skipif_spark_records_are_filtered_during_process():
     )
 
     # Both records should be skipped before any execution.
-    # TODO: lazy Spark init — if PySpark is not installed this test will fail
+    # Both records are filtered by directive check before any Spark SQL is executed,
+    # so process_file runs to completion without needing a SparkSession.
     result = process_file(path, verbose=False, show_skipped=True)
     assert result.passed == 0
     assert result.failed == 0

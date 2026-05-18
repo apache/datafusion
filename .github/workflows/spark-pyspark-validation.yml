@@ -65,5 +65,10 @@ jobs:
       - name: Install PySpark
         run: pip install pyspark==${{ matrix.pyspark-version }}
 
+      - name: Run validate_slt.py unit tests
+        run: |
+          pip install pytest
+          python -m pytest datafusion/spark/scripts/tests/ -v
+
       - name: Run PySpark validation
         run: python datafusion/spark/scripts/validate_slt.py
