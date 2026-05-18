@@ -41,7 +41,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 - **2026-04-04** [Video: Generalized Consensus & Native Top-K Joins in ParadeDB](https://www.youtube.com/watch?v=TeFsBVIYBis)
 
-- **2026-03-31** [Blog: Writing Custom Table Providers in Apache DataFusion](https://datafusion.apache.org/blog/2026/03/31/custom-table-providers/)
+- **2026-03-31** [Blog: Writing Custom Table Providers in Apache DataFusion](https://datafusion.apache.org/blog/2026/03/31/writing-table-providers/)
 
 - **2026-03-24** [Podcast: The Data Fusion Secret & Why Custom Query Engines Fail with Nikita Lapkov](https://www.youtube.com/watch?v=HkYF2So6nHQ)
 
