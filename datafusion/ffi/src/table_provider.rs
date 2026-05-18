@@ -478,6 +478,7 @@ impl TableProvider for ForeignTableProvider {
             Ok(stats) => Some(stats),
             Err(e) => {
                 log::warn!("Failed to deserialize FFI statistics: {e}");
+                // Fires in debug builds to surface encoding bugs early; callers see None.
                 debug_assert!(false, "Failed to deserialize FFI statistics: {e}");
                 None
             }
