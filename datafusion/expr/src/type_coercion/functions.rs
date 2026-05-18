@@ -2084,4 +2084,79 @@ mod tests {
             "The function 'mock_higher_order_function' expected 1 arguments but received 0"
         );
     }
+
+    #[test]
+    fn test_higher_order_function_exact_signature() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::exact(1, 1, Volatility::Immutable),
+            coerced_value_types: vec![DataType::new_large_list(DataType::Int32, false)],
+        };
+
+        let new_fields = value_fields_with_higher_order_udf(
+            &[
+                ValueOrLambda::Value(Arc::new(Field::new_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false,
+                ))),
+                ValueOrLambda::Lambda(()),
+            ],
+            &fun,
+        )
+        .unwrap();
+
+        // type coercion applied: List(Int32) -> LargeList(Int32)
+        assert_eq!(
+            new_fields,
+            vec![
+                ValueOrLambda::Value(Arc::new(Field::new_large_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false
+                ))),
+                ValueOrLambda::Lambda(()),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_higher_order_function_exact_signature_wrong_value_count() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::exact(1, 1, Volatility::Immutable),
+            coerced_value_types: vec![],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(
+            &[ValueOrLambda::Lambda(()), ValueOrLambda::Lambda(())],
+            &fun,
+        )
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "expected 1 value argument(s) and 1 lambda(s) but received 0 value argument(s) and 2 lambda(s)"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_exact_signature_wrong_lambda_count() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::exact(1, 1, Volatility::Immutable),
+            coerced_value_types: vec![],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(
+            &[
+                ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, false))),
+                ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, false))),
+            ],
+            &fun,
+        )
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "expected 1 value argument(s) and 1 lambda(s) but received 2 value argument(s) and 0 lambda(s)"
+        );
+    }
 }
