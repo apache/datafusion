@@ -471,15 +471,7 @@ impl TableProvider for ForeignTableProvider {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        let ffi_result = df_result!(unsafe { (self.0.statistics)(&self.0) });
-        let ffi_opt = match ffi_result {
-            Ok(v) => v,
-            Err(e) => {
-                log::warn!("FFI TableProvider::statistics failed: {e}");
-                debug_assert!(false, "FFI TableProvider::statistics failed: {e}");
-                return None;
-            }
-        };
+        let ffi_opt = unsafe { (self.0.statistics)(&self.0) };
         let bytes: Option<SVec<u8>> = ffi_opt.into();
         let bytes = bytes?;
         match deserialize_statistics(bytes.as_slice()) {
