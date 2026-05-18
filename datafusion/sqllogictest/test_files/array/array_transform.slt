@@ -396,13 +396,13 @@ physical_plan
 query error
 select array_transform();
 ----
-DataFusion error: Error during planning: The function 'array_transform' expected 1 value argument(s) and 1 lambda(s) but received 0 value argument(s) and 0 lambda(s)
+DataFusion error: Error during planning: The function 'array_transform' expected 2 argument(s) but received 0
 
 
 query error DataFusion error: Error during planning: array_transform expected a list as first argument, got Int64
 select array_transform(1, v -> v*2);
 
-query error DataFusion error: Error during planning: array_transform expects a value as first argument
+query error DataFusion error: Error during planning: The function 'array_transform' expected a value at position 0 but received a lambda
 select array_transform(v -> v*2, [1, 2]);
 
 query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 1

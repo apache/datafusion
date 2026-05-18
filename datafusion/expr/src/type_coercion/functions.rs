@@ -230,21 +230,35 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
 
             Ok(current_fields.to_vec())
         }
-        HigherOrderTypeSignature::Exact { values, lambdas } => {
-            let actual_values = current_fields
-                .iter()
-                .filter(|f| matches!(f, ValueOrLambda::Value(_)))
-                .count();
-            let actual_lambdas = current_fields
-                .iter()
-                .filter(|f| matches!(f, ValueOrLambda::Lambda(_)))
-                .count();
-
-            if actual_values != values || actual_lambdas != lambdas {
+        HigherOrderTypeSignature::Exact(ref expected) => {
+            if current_fields.len() != expected.len() {
                 let name = func.name();
+                let expected_len = expected.len();
+                let actual_len = current_fields.len();
                 return plan_err!(
-                    "The function '{name}' expected {values} value argument(s) and {lambdas} lambda(s) but received {actual_values} value argument(s) and {actual_lambdas} lambda(s)"
+                    "The function '{name}' expected {expected_len} argument(s) but received {actual_len}"
                 );
+            }
+
+            for (i, (actual, expected)) in
+                current_fields.iter().zip(expected.iter()).enumerate()
+            {
+                match (actual, expected) {
+                    (ValueOrLambda::Value(_), ValueOrLambda::Value(_)) => {}
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Lambda(_)) => {}
+                    (ValueOrLambda::Value(_), ValueOrLambda::Lambda(_)) => {
+                        let name = func.name();
+                        return plan_err!(
+                            "The function '{name}' expected a lambda at position {i} but received a value"
+                        );
+                    }
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Value(_)) => {
+                        let name = func.name();
+                        return plan_err!(
+                            "The function '{name}' expected a value at position {i} but received a lambda"
+                        );
+                    }
+                }
             }
 
             let arg_types = current_fields
@@ -2088,7 +2102,10 @@ mod tests {
     #[test]
     fn test_higher_order_function_exact_signature() {
         let fun = MockHigherOrderUDF {
-            signature: HigherOrderSignature::exact(1, 1, Volatility::Immutable),
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
             coerced_value_types: vec![DataType::new_large_list(DataType::Int32, false)],
         };
 
@@ -2122,7 +2139,10 @@ mod tests {
     #[test]
     fn test_higher_order_function_exact_signature_wrong_value_count() {
         let fun = MockHigherOrderUDF {
-            signature: HigherOrderSignature::exact(1, 1, Volatility::Immutable),
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
             coerced_value_types: vec![],
         };
 
@@ -2134,14 +2154,17 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "expected 1 value argument(s) and 1 lambda(s) but received 0 value argument(s) and 2 lambda(s)"
+            "expected a value at position 0 but received a lambda"
         );
     }
 
     #[test]
     fn test_higher_order_function_exact_signature_wrong_lambda_count() {
         let fun = MockHigherOrderUDF {
-            signature: HigherOrderSignature::exact(1, 1, Volatility::Immutable),
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
             coerced_value_types: vec![],
         };
 
@@ -2156,7 +2179,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "expected 1 value argument(s) and 1 lambda(s) but received 2 value argument(s) and 0 lambda(s)"
+            "expected a lambda at position 1 but received a value"
         );
     }
 }

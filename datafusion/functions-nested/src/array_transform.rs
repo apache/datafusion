@@ -77,7 +77,10 @@ impl Default for ArrayTransform {
 impl ArrayTransform {
     pub fn new() -> Self {
         Self {
-            signature: HigherOrderSignature::exact(1, 1, Volatility::Immutable),
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_transform")],
         }
     }
@@ -98,7 +101,11 @@ impl HigherOrderUDF for ArrayTransform {
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [list] = arg_types else {
-            unreachable!("arity enforced by Exact signature")
+            return plan_err!(
+                "{} function requires 1 value argument, got {}",
+                self.name(),
+                arg_types.len()
+            );
         };
 
         let coerced = match list {
@@ -146,8 +153,8 @@ impl HigherOrderUDF for ArrayTransform {
         &self,
         args: HigherOrderReturnFieldArgs,
     ) -> Result<Arc<Field>> {
-        let [list, lambda] = take_function_args(self.name(), args.arg_fields)?;
-        let (ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)) = (list, lambda)
+        let [ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)] =
+            take_function_args(self.name(), args.arg_fields)?
         else {
             return plan_err!("{} expects a value followed by a lambda", self.name());
         };
