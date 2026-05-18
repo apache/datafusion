@@ -918,8 +918,8 @@ select round(a), round(b), round(c) from small_floats;
 ----
 -1 0 -1
 -1 NULL NULL
+0 0 0
 0 0 1
-1 0 0
 
 # round with too large
 #  max Int32 is 2147483647

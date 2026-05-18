@@ -630,15 +630,36 @@ fn round_columnar(
     }
 }
 
+trait RoundEven: num_traits::Float {
+    fn round_even(self) -> Self;
+}
+
+impl RoundEven for f32 {
+    fn round_even(self) -> Self {
+        self.round_ties_even()
+    }
+}
+
+impl RoundEven for f64 {
+    fn round_even(self) -> Self {
+        self.round_ties_even()
+    }
+}
+
 fn round_float<T>(value: T, decimal_places: i32) -> Result<T, ArrowError>
 where
-    T: num_traits::Float,
+    T: RoundEven,
 {
+    if decimal_places == 0 {
+        return Ok(value.round_even());
+    }
+
     let factor = T::from(10_f64.powi(decimal_places)).ok_or_else(|| {
         ArrowError::ComputeError(format!(
             "Invalid value for decimal places: {decimal_places}"
         ))
     })?;
+
     Ok((value * factor).round() / factor)
 }
 
@@ -810,6 +831,22 @@ mod test {
     }
 
     #[test]
+    fn test_round_even_f32_one_input() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float32Array::from(vec![2.5, 3.5, -2.5, -3.5])), // input
+        ];
+
+        let result = round_arrays(Arc::clone(&args[0]), None)
+            .expect("failed to initialize function round");
+        let floats =
+            as_float32_array(&result).expect("failed to initialize function round");
+
+        let expected = Float32Array::from(vec![2.0, 4.0, -2.0, -4.0]);
+
+        assert_eq!(floats, &expected);
+    }
+
+    #[test]
     fn test_round_f64_one_input() {
         let args: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from(vec![125.2345, 12.345, 1.234, 0.1234])), // input
@@ -821,6 +858,22 @@ mod test {
             as_float64_array(&result).expect("failed to initialize function round");
 
         let expected = Float64Array::from(vec![125.0, 12.0, 1.0, 0.0]);
+
+        assert_eq!(floats, &expected);
+    }
+
+    #[test]
+    fn test_round_even_f64_one_input() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![2.5, 3.5, -2.5, -3.5])), // input
+        ];
+
+        let result = round_arrays(Arc::clone(&args[0]), None)
+            .expect("failed to initialize function round");
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function round");
+
+        let expected = Float64Array::from(vec![2.0, 4.0, -2.0, -4.0]);
 
         assert_eq!(floats, &expected);
     }
