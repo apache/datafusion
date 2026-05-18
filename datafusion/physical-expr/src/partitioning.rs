@@ -21,6 +21,7 @@ use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
     expressions::UnKnownColumn, physical_exprs_equal,
 };
+use datafusion_common::ScalarValue;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use std::fmt;
 use std::fmt::Display;
@@ -117,8 +118,8 @@ pub enum Partitioning {
     /// Allocate rows based on a hash of one of more expressions and the specified number of
     /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
-    /// Partition rows by source-declared expression domains
-    Expr(ExprPartitioning),
+    /// Partition rows by source-declared ranges
+    Range(RangePartitioning),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
@@ -135,7 +136,7 @@ impl Display for Partitioning {
                     .join(", ");
                 write!(f, "Hash([{phy_exprs_str}], {size})")
             }
-            Partitioning::Expr(expr) => write!(f, "{expr}"),
+            Partitioning::Range(range) => write!(f, "{range}"),
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
             }
@@ -143,54 +144,74 @@ impl Display for Partitioning {
     }
 }
 
-/// Physical expression partitioning.
+/// Physical range partitioning.
 ///
-/// Partition `i` contains rows where `partition_exprs[i]` evaluates to true.
-/// The source declaring partitioning is responsible for ensuring that, for every
-/// row emitted, exactly one partition expression evaluates to true and that row
-/// is emitted by the corresponding partition. The expressions do not need to
-/// cover values that the plan cannot emit.
+/// [`RangePartitioning`] describes range bounds over one or more physical
+/// expressions. Each [`RangePartition`] represents one output partition and must
+/// contain exactly one [`RangeInterval`] for each partition expression.
 ///
-/// For example, a scan that can only emit rows for `2022` can declare two date
-/// partitions as:
+/// The source declaring this partitioning is responsible for ensuring that, for
+/// every emitted row, the row belongs to exactly one partition and is emitted by
+/// that partition. The declared ranges do not need to cover values that the plan
+/// cannot emit.
+///
+/// Each lower and upper bound explicitly records whether it is inclusive.
+/// Unbounded sides are represented with `None`, bound values should be non-null
+/// until null routing semantics are defined.
+///
+/// For example, a scan can declare date and city range partitions as:
 ///
 /// ```text
-/// partition_exprs[0] = date >= 2022-01-01 AND date < 2022-07-01
-/// partition_exprs[1] = date >= 2022-07-01 AND date < 2023-01-01
+/// exprs = [date, city]
+///
+/// partition 0:
+///   date in [2021-01-01, 2022-01-01)
+///   city in [Allston, Boston)
+///
+/// partition 1:
+///   date in [2021-01-01, 2022-01-01)
+///   city in [Boston, NYC)
 /// ```
 ///
-/// This is valid even though values outside `2022` are not covered, as long as
-/// the source does not emit rows outside those ranges. It would not be valid
-/// for this plan to emit a row from `partition[i]` whose date is not within
-/// `partition_exprs[i]`, or to emit a row whose date matches multiple
-/// partition expressions.
-///
-/// More complex partitioning can be represented using normal expression
-/// composition. For example, one partition in a date and city range can be
-/// represented as `date >= 2021-01-01 AND date < 2022-07-01 AND city < 'Boston'`.
-///
 /// NOTE: Optimizer and execution behavior for this partitioning is intentionally
-/// not implemented and will be introduced incrementally.
+/// not implemented and will be introduced incrementally. This public API keeps
+/// the partition ranges explicit for users. Repartitioning may compile the same
+/// metadata into a more efficient internal router.
 #[derive(Debug, Clone)]
-pub struct ExprPartitioning {
+pub struct RangePartitioning {
     partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    partitions: Vec<RangePartition>,
 }
 
-impl ExprPartitioning {
-    /// Creates expression partitioning metadata from one predicate expression
-    /// per partition.
-    pub fn new(partition_exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        Self { partition_exprs }
+impl RangePartitioning {
+    /// Creates range partitioning metadata.
+    ///
+    /// The caller is responsible for ensuring each partition has one range per
+    /// partition expression and for satisfying the contract documented on
+    /// [`RangePartitioning`].
+    pub fn new(
+        partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        partitions: Vec<RangePartition>,
+    ) -> Self {
+        Self {
+            partition_exprs,
+            partitions,
+        }
     }
 
-    /// Returns the partition predicate expressions.
+    /// Returns the partition expressions.
     pub fn partition_exprs(&self) -> &[Arc<dyn PhysicalExpr>] {
         &self.partition_exprs
     }
 
+    /// Returns the declared range partitions.
+    pub fn partitions(&self) -> &[RangePartition] {
+        &self.partitions
+    }
+
     /// Returns the number of partitions.
     pub fn partition_count(&self) -> usize {
-        self.partition_exprs.len()
+        self.partitions.len()
     }
 
     fn project(
@@ -202,24 +223,135 @@ impl ExprPartitioning {
             .project_expressions(&self.partition_exprs, mapping)
             .collect::<Option<Vec<_>>>()?;
 
-        Some(Self { partition_exprs })
+        Some(Self {
+            partition_exprs,
+            partitions: self.partitions.clone(),
+        })
     }
 }
 
-impl Display for ExprPartitioning {
+impl Display for RangePartitioning {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let partitions = self
+            .partitions
+            .iter()
+            .map(|partition| format!("{partition}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         write!(
             f,
-            "Expr({}, {})",
+            "Range({}, [{}], {})",
             format_physical_expr_list(&self.partition_exprs),
+            partitions,
             self.partition_count()
         )
     }
 }
 
-impl PartialEq for ExprPartitioning {
+impl PartialEq for RangePartitioning {
     fn eq(&self, other: &Self) -> bool {
         physical_exprs_equal(&self.partition_exprs, &other.partition_exprs)
+            && self.partitions == other.partitions
+    }
+}
+
+/// Ranges for one output partition in a [`RangePartitioning`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangePartition {
+    ranges: Vec<RangeInterval>,
+}
+
+impl RangePartition {
+    /// Creates a partition from one range per partition expression.
+    pub fn new(ranges: Vec<RangeInterval>) -> Self {
+        Self { ranges }
+    }
+
+    /// Returns the ranges for this partition.
+    pub fn ranges(&self) -> &[RangeInterval] {
+        &self.ranges
+    }
+}
+
+impl Display for RangePartition {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let ranges = self
+            .ranges
+            .iter()
+            .map(|range| format!("{range}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "({ranges})")
+    }
+}
+
+/// A scalar interval in one range partition dimension.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeInterval {
+    lower: Option<RangeBound>,
+    upper: Option<RangeBound>,
+}
+
+impl RangeInterval {
+    /// Creates a range interval with optional lower and upper bounds.
+    pub fn new(lower: Option<RangeBound>, upper: Option<RangeBound>) -> Self {
+        Self { lower, upper }
+    }
+
+    /// Returns the lower bound, if any.
+    pub fn lower(&self) -> Option<&RangeBound> {
+        self.lower.as_ref()
+    }
+
+    /// Returns the upper bound, if any.
+    pub fn upper(&self) -> Option<&RangeBound> {
+        self.upper.as_ref()
+    }
+}
+
+impl Display for RangeInterval {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let lower_bracket = match self.lower() {
+            Some(bound) if bound.inclusive() => "[",
+            _ => "(",
+        };
+        let lower = self
+            .lower()
+            .map(|bound| bound.value().to_string())
+            .unwrap_or_else(|| "-inf".to_string());
+        let upper = self
+            .upper()
+            .map(|bound| bound.value().to_string())
+            .unwrap_or_else(|| "+inf".to_string());
+        let upper_bracket = match self.upper() {
+            Some(bound) if bound.inclusive() => "]",
+            _ => ")",
+        };
+        write!(f, "{lower_bracket}{lower}, {upper}{upper_bracket}")
+    }
+}
+
+/// A scalar range bound.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeBound {
+    value: ScalarValue,
+    inclusive: bool,
+}
+
+impl RangeBound {
+    /// Creates a scalar range bound.
+    pub fn new(value: ScalarValue, inclusive: bool) -> Self {
+        Self { value, inclusive }
+    }
+
+    /// Returns the bound value.
+    pub fn value(&self) -> &ScalarValue {
+        &self.value
+    }
+
+    /// Returns whether this bound is inclusive.
+    pub fn inclusive(&self) -> bool {
+        self.inclusive
     }
 }
 
@@ -250,7 +382,7 @@ impl Partitioning {
         use Partitioning::*;
         match self {
             RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
-            Expr(expr) => expr.partition_count(),
+            Range(range) => range.partition_count(),
         }
     }
 
@@ -374,11 +506,11 @@ impl Partitioning {
                     .collect();
                 Partitioning::Hash(normalized_exprs, *part)
             }
-            Partitioning::Expr(expr) => {
-                if let Some(projected) = expr.project(mapping, input_eq_properties) {
-                    Partitioning::Expr(projected)
+            Partitioning::Range(range) => {
+                if let Some(projected) = range.project(mapping, input_eq_properties) {
+                    Partitioning::Range(projected)
                 } else {
-                    Partitioning::UnknownPartitioning(expr.partition_count())
+                    Partitioning::UnknownPartitioning(range.partition_count())
                 }
             }
             _ => self.clone(),
@@ -398,7 +530,7 @@ impl PartialEq for Partitioning {
             {
                 true
             }
-            (Partitioning::Expr(left), Partitioning::Expr(right)) => left == right,
+            (Partitioning::Range(left), Partitioning::Range(right)) => left == right,
             _ => false,
         }
     }
@@ -939,24 +1071,47 @@ mod tests {
         Ok(())
     }
 
+    fn int_bound(value: i64, inclusive: bool) -> RangeBound {
+        RangeBound::new(ScalarValue::Int64(Some(value)), inclusive)
+    }
+
+    fn int_interval(lower: Option<i64>, upper: Option<i64>) -> RangeInterval {
+        RangeInterval::new(
+            lower.map(|value| int_bound(value, true)),
+            upper.map(|value| int_bound(value, false)),
+        )
+    }
+
+    fn range_partition(ranges: Vec<RangeInterval>) -> RangePartition {
+        RangePartition::new(ranges)
+    }
+
     #[test]
-    fn test_expr_partitioning_metadata() -> Result<()> {
+    fn test_range_partitioning_metadata() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
         let col_a: Arc<dyn PhysicalExpr> =
             Arc::new(Column::new_with_schema("a", &schema)?);
 
-        let expr_partitioning =
-            ExprPartitioning::new(vec![Arc::clone(&col_a), Arc::clone(&col_a)]);
-        let partitioning = Partitioning::Expr(expr_partitioning);
+        let range_partitioning = RangePartitioning::new(
+            vec![Arc::clone(&col_a)],
+            vec![
+                range_partition(vec![int_interval(None, Some(10))]),
+                range_partition(vec![int_interval(Some(10), None)]),
+            ],
+        );
+        let partitioning = Partitioning::Range(range_partitioning);
 
         assert_eq!(partitioning.partition_count(), 2);
-        assert_eq!(partitioning.to_string(), "Expr([a@0, a@0], 2)");
+        assert_eq!(
+            partitioning.to_string(),
+            "Range([a@0], [((-inf, 10)), ([10, +inf))], 2)"
+        );
 
         Ok(())
     }
 
     #[test]
-    fn test_expr_partitioning_project_degrades_when_expr_dropped() -> Result<()> {
+    fn test_range_partitioning_project_preserves_or_degrades() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
@@ -964,10 +1119,17 @@ mod tests {
         let col_b: Arc<dyn PhysicalExpr> =
             Arc::new(Column::new_with_schema("b", &schema)?);
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        let projection_mapping = ProjectionMapping::from_indices(&[0], &schema)?;
-        let expr_partitioning = Partitioning::Expr(ExprPartitioning::new(vec![col_b]));
+        let range_partitioning = Partitioning::Range(RangePartitioning::new(
+            vec![col_b],
+            vec![range_partition(vec![int_interval(None, Some(10))])],
+        ));
 
-        let projected = expr_partitioning.project(&projection_mapping, &eq_properties);
+        let keep_b_mapping = ProjectionMapping::from_indices(&[1], &schema)?;
+        let projected = range_partitioning.project(&keep_b_mapping, &eq_properties);
+        assert_eq!(projected.to_string(), "Range([b@0], [((-inf, 10))], 1)");
+
+        let drop_b_mapping = ProjectionMapping::from_indices(&[0], &schema)?;
+        let projected = range_partitioning.project(&drop_b_mapping, &eq_properties);
         let Partitioning::UnknownPartitioning(partition_count) = projected else {
             panic!("expected UnknownPartitioning, got {projected:?}");
         };
@@ -977,7 +1139,7 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_partition_expr_does_not_satisfy_hash_distribution() -> Result<()> {
+    fn test_multi_partition_range_does_not_satisfy_hash_distribution() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
@@ -988,14 +1150,23 @@ mod tests {
             Arc::new(Column::new_with_schema("b", &schema)?);
 
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        let expr_partitioning = Partitioning::Expr(ExprPartitioning::new(vec![
-            Arc::clone(&col_a),
-            Arc::clone(&col_b),
-        ]));
+        let range_partitioning = Partitioning::Range(RangePartitioning::new(
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            vec![
+                range_partition(vec![
+                    int_interval(None, Some(10)),
+                    int_interval(None, Some(100)),
+                ]),
+                range_partition(vec![
+                    int_interval(Some(10), None),
+                    int_interval(Some(100), None),
+                ]),
+            ],
+        ));
         let required = Distribution::HashPartitioned(vec![col_a, col_b]);
 
         assert_eq!(
-            expr_partitioning.satisfaction(&required, &eq_properties, false),
+            range_partitioning.satisfaction(&required, &eq_properties, false),
             PartitioningSatisfaction::NotSatisfied
         );
 

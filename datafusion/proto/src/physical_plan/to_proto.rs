@@ -44,7 +44,8 @@ use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{
-    ExprPartitioning, Partitioning, PhysicalExpr, WindowExpr,
+    Partitioning, PhysicalExpr, RangeBound, RangeInterval, RangePartition,
+    RangePartitioning, WindowExpr,
 };
 
 use super::{
@@ -623,9 +624,9 @@ pub fn serialize_partitioning(
                 )),
             }
         }
-        Partitioning::Expr(expr) => protobuf::Partitioning {
-            partition_method: Some(protobuf::partitioning::PartitionMethod::Expr(
-                serialize_expr_partitioning(expr, codec, proto_converter)?,
+        Partitioning::Range(range) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::Range(
+                serialize_range_partitioning(range, codec, proto_converter)?,
             )),
         },
         Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
@@ -637,17 +638,51 @@ pub fn serialize_partitioning(
     Ok(serialized_partitioning)
 }
 
-fn serialize_expr_partitioning(
-    expr: &ExprPartitioning,
+fn serialize_range_partitioning(
+    range: &RangePartitioning,
     codec: &dyn PhysicalExtensionCodec,
     proto_converter: &dyn PhysicalProtoConverterExtension,
-) -> Result<protobuf::PhysicalExprPartitioning> {
-    Ok(protobuf::PhysicalExprPartitioning {
+) -> Result<protobuf::PhysicalRangePartitioning> {
+    Ok(protobuf::PhysicalRangePartitioning {
         partition_expr: serialize_physical_exprs(
-            expr.partition_exprs(),
+            range.partition_exprs(),
             codec,
             proto_converter,
         )?,
+        partition: range
+            .partitions()
+            .iter()
+            .map(serialize_range_partition)
+            .collect::<Result<_>>()?,
+    })
+}
+
+fn serialize_range_partition(
+    partition: &RangePartition,
+) -> Result<protobuf::PhysicalRangePartition> {
+    Ok(protobuf::PhysicalRangePartition {
+        range: partition
+            .ranges()
+            .iter()
+            .map(serialize_range_interval)
+            .collect::<Result<_>>()?,
+    })
+}
+
+fn serialize_range_interval(
+    interval: &RangeInterval,
+) -> Result<protobuf::PhysicalRangeInterval> {
+    Ok(protobuf::PhysicalRangeInterval {
+        lower: interval.lower().map(serialize_range_bound).transpose()?,
+        upper: interval.upper().map(serialize_range_bound).transpose()?,
+    })
+}
+
+fn serialize_range_bound(bound: &RangeBound) -> Result<protobuf::PhysicalRangeBound> {
+    let value: datafusion_proto_common::ScalarValue = bound.value().try_into()?;
+    Ok(protobuf::PhysicalRangeBound {
+        value: Some(value),
+        inclusive: bound.inclusive(),
     })
 }
 

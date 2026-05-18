@@ -738,9 +738,9 @@ impl BatchPartitioner {
                     num_input_partitions,
                 ))
             }
-            Partitioning::Expr(_) => {
+            Partitioning::Range(_) => {
                 not_impl_err!(
-                    "Expression partitioning is not supported by RepartitionExec"
+                    "Range partitioning execution is not implemented by RepartitionExec"
                 )
             }
             other => {
@@ -1451,9 +1451,9 @@ impl ExecutionPlan for RepartitionExec {
                 }
                 Partitioning::Hash(new_partitions, *size)
             }
-            Partitioning::Expr(_) => {
+            Partitioning::Range(_) => {
                 return not_impl_err!(
-                    "Expression partitioning is not supported for projection pushdown through RepartitionExec"
+                    "Projection pushdown through RepartitionExec with range partitioning is not implemented"
                 );
             }
             others => others.clone(),
@@ -1492,9 +1492,9 @@ impl ExecutionPlan for RepartitionExec {
         if !self.maintains_input_order()[0] {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
-        if matches!(self.partitioning(), Partitioning::Expr(_)) {
+        if matches!(self.partitioning(), Partitioning::Range(_)) {
             return not_impl_err!(
-                "Expression partitioning is not supported for sort pushdown through RepartitionExec"
+                "Sort pushdown through RepartitionExec with range partitioning is not implemented"
             );
         }
 
@@ -1520,9 +1520,9 @@ impl ExecutionPlan for RepartitionExec {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
-            Expr(_) => {
+            Range(_) => {
                 return not_impl_err!(
-                    "Expression partitioning is not supported for changing RepartitionExec partition counts"
+                    "Changing RepartitionExec partition counts with range partitioning is not implemented"
                 );
             }
         };
@@ -1653,9 +1653,9 @@ impl RepartitionExec {
                     num_input_partitions,
                 )
             }
-            Partitioning::Expr(_) => {
+            Partitioning::Range(_) => {
                 return not_impl_err!(
-                    "Expression partitioning is not supported by RepartitionExec"
+                    "Range partitioning execution is not implemented by RepartitionExec"
                 );
             }
             other => {
@@ -2009,13 +2009,16 @@ mod tests {
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_physical_expr::ExprPartitioning;
+    use datafusion_physical_expr::{
+        RangeBound, RangeInterval, RangePartition, RangePartitioning,
+    };
     use insta::assert_snapshot;
 
     #[test]
@@ -2309,7 +2312,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_expr_partitioning() -> Result<()> {
+    async fn unsupported_range_partitioning() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
@@ -2319,7 +2322,16 @@ mod tests {
         let schema = batch.schema();
         let expr = col("my_awesome_field", &schema)?;
         let input = MockExec::new(vec![Ok(batch)], Arc::clone(&schema));
-        let partitioning = Partitioning::Expr(ExprPartitioning::new(vec![expr]));
+        let partitioning = Partitioning::Range(RangePartitioning::new(
+            vec![expr],
+            vec![RangePartition::new(vec![RangeInterval::new(
+                Some(RangeBound::new(
+                    ScalarValue::Utf8(Some("foo".to_string())),
+                    true,
+                )),
+                None,
+            )])],
+        ));
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning)?;
         let output_stream = exec.execute(0, task_ctx)?;
 
@@ -2328,8 +2340,9 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            result_string
-                .contains("Expression partitioning is not supported by RepartitionExec"),
+            result_string.contains(
+                "Range partitioning execution is not implemented by RepartitionExec"
+            ),
             "actual: {result_string}"
         );
 

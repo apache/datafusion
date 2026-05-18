@@ -2042,20 +2042,40 @@ pub struct PhysicalHashRepartition {
     pub partition_count: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PhysicalExprPartitioning {
+pub struct PhysicalRangePartitioning {
     #[prost(message, repeated, tag = "1")]
     pub partition_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub partition: ::prost::alloc::vec::Vec<PhysicalRangePartition>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalRangePartition {
+    #[prost(message, repeated, tag = "1")]
+    pub range: ::prost::alloc::vec::Vec<PhysicalRangeInterval>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalRangeInterval {
+    #[prost(message, optional, tag = "1")]
+    pub lower: ::core::option::Option<PhysicalRangeBound>,
+    #[prost(message, optional, tag = "2")]
+    pub upper: ::core::option::Option<PhysicalRangeBound>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalRangeBound {
+    #[prost(message, optional, tag = "1")]
+    pub value: ::core::option::Option<super::datafusion_common::ScalarValue>,
+    #[prost(bool, tag = "2")]
+    pub inclusive: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RepartitionExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
-    /// oneof partition_method {
+    /// Legacy direct partitioning fields:
     ///    uint64 round_robin = 2;
     ///    PhysicalHashRepartition hash = 3;
     ///    uint64 unknown = 4;
-    ///    PhysicalExprPartitioning expr = 5;
-    /// }
+    /// New partitioning variants are stored in `partitioning`.
     #[prost(message, optional, tag = "5")]
     pub partitioning: ::core::option::Option<Partitioning>,
     #[prost(bool, tag = "6")]
@@ -2077,7 +2097,7 @@ pub mod partitioning {
         #[prost(uint64, tag = "3")]
         Unknown(u64),
         #[prost(message, tag = "4")]
-        Expr(super::PhysicalExprPartitioning),
+        Range(super::PhysicalRangePartitioning),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

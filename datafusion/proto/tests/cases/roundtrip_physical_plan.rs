@@ -90,7 +90,8 @@ use datafusion::physical_plan::windows::{
 };
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExprPartitioning, InputOrderMode,
-    Partitioning, PhysicalExpr, SendableRecordBatchStream, Statistics, displayable,
+    Partitioning, PhysicalExpr, RangeBound, RangeInterval, RangePartition,
+    RangePartitioning, SendableRecordBatchStream, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -1809,14 +1810,19 @@ fn roundtrip_repartition_preserve_order() -> Result<()> {
 }
 
 #[test]
-fn roundtrip_expr_partitioning() -> Result<()> {
+fn roundtrip_range_partitioning() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
     let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-    let expr_partitioning =
-        Partitioning::Expr(ExprPartitioning::new(vec![col("a", &schema)?]));
+    let range_partitioning = Partitioning::Range(RangePartitioning::new(
+        vec![col("a", &schema)?],
+        vec![RangePartition::new(vec![RangeInterval::new(
+            None,
+            Some(RangeBound::new(ScalarValue::Int64(Some(10)), false)),
+        )])],
+    ));
     // RepartitionExec is used only to carry the partitioning through proto.
-    // Executing expression repartitioning is intentionally unsupported.
-    let repartition = RepartitionExec::try_new(input, expr_partitioning)?;
+    // Executing range repartitioning is intentionally unsupported.
+    let repartition = RepartitionExec::try_new(input, range_partitioning)?;
 
     roundtrip_test(Arc::new(repartition))
 }

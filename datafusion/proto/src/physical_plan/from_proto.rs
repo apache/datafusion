@@ -24,7 +24,9 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, internal_datafusion_err, not_impl_err,
+};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -49,7 +51,8 @@ use datafusion_physical_plan::expressions::{
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{
-    ExprPartitioning, Partitioning, PhysicalExpr, WindowExpr,
+    Partitioning, PhysicalExpr, RangeBound, RangeInterval, RangePartition,
+    RangePartitioning, WindowExpr,
 };
 use datafusion_proto_common::common::proto_error;
 use object_store::ObjectMeta;
@@ -634,9 +637,9 @@ pub fn parse_protobuf_partitioning(
                     proto_converter,
                 )
             }
-            Some(protobuf::partitioning::PartitionMethod::Expr(expr_partitioning)) => {
-                Ok(Some(parse_protobuf_expr_partitioning(
-                    expr_partitioning,
+            Some(protobuf::partitioning::PartitionMethod::Range(range_partitioning)) => {
+                Ok(Some(parse_protobuf_range_partitioning(
+                    range_partitioning,
                     ctx,
                     input_schema,
                     proto_converter,
@@ -653,19 +656,69 @@ pub fn parse_protobuf_partitioning(
     }
 }
 
-fn parse_protobuf_expr_partitioning(
-    expr_partitioning: &protobuf::PhysicalExprPartitioning,
+fn parse_protobuf_range_partitioning(
+    range_partitioning: &protobuf::PhysicalRangePartitioning,
     ctx: &PhysicalPlanDecodeContext<'_>,
     input_schema: &Schema,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Partitioning> {
     let partition_exprs = parse_physical_exprs(
-        &expr_partitioning.partition_expr,
+        &range_partitioning.partition_expr,
         ctx,
         input_schema,
         proto_converter,
     )?;
-    Ok(Partitioning::Expr(ExprPartitioning::new(partition_exprs)))
+    let partitions = range_partitioning
+        .partition
+        .iter()
+        .map(parse_protobuf_range_partition)
+        .collect::<Result<_>>()?;
+    Ok(Partitioning::Range(RangePartitioning::new(
+        partition_exprs,
+        partitions,
+    )))
+}
+
+fn parse_protobuf_range_partition(
+    partition: &protobuf::PhysicalRangePartition,
+) -> Result<RangePartition> {
+    Ok(RangePartition::new(
+        partition
+            .range
+            .iter()
+            .map(parse_protobuf_range_interval)
+            .collect::<Result<_>>()?,
+    ))
+}
+
+fn parse_protobuf_range_interval(
+    interval: &protobuf::PhysicalRangeInterval,
+) -> Result<RangeInterval> {
+    Ok(RangeInterval::new(
+        interval
+            .lower
+            .as_ref()
+            .map(parse_protobuf_range_bound)
+            .transpose()?,
+        interval
+            .upper
+            .as_ref()
+            .map(parse_protobuf_range_bound)
+            .transpose()?,
+    ))
+}
+
+fn parse_protobuf_range_bound(
+    bound: &protobuf::PhysicalRangeBound,
+) -> Result<RangeBound> {
+    let value = bound
+        .value
+        .as_ref()
+        .ok_or_else(|| proto_error("Missing range bound value"))?;
+    Ok(RangeBound::new(
+        ScalarValue::try_from(value)?,
+        bound.inclusive,
+    ))
 }
 
 pub fn parse_protobuf_file_scan_schema(

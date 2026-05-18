@@ -45,8 +45,10 @@ impl From<&Partitioning> for FFI_Partitioning {
                     .collect();
                 Self::Hash(exprs, *size)
             }
-            // FFI does not yet expose expression partition metadata.
-            Partitioning::Expr(expr) => Self::UnknownPartitioning(expr.partition_count()),
+            // FFI does not yet expose range partition metadata.
+            Partitioning::Range(range) => {
+                Self::UnknownPartitioning(range.partition_count())
+            }
             Partitioning::UnknownPartitioning(size) => Self::UnknownPartitioning(*size),
         }
     }

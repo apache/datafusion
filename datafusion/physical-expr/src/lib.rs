@@ -58,7 +58,10 @@ pub use analysis::{AnalysisContext, ExprBoundaries, analyze};
 pub use equivalence::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, calculate_union,
 };
-pub use partitioning::{Distribution, ExprPartitioning, Partitioning};
+pub use partitioning::{
+    Distribution, Partitioning, RangeBound, RangeInterval, RangePartition,
+    RangePartitioning,
+};
 pub use physical_expr::{
     add_offset_to_expr, add_offset_to_physical_sort_exprs, create_lex_ordering,
     create_ordering, create_physical_sort_expr, create_physical_sort_exprs,
