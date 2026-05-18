@@ -342,6 +342,7 @@ pub enum Dialect {
     Ansi,
     DuckDB,
     Databricks,
+    Spark,
 }
 
 impl AsRef<str> for Dialect {
@@ -360,6 +361,7 @@ impl AsRef<str> for Dialect {
             Self::Ansi => "ansi",
             Self::DuckDB => "duckdb",
             Self::Databricks => "databricks",
+            Self::Spark => "spark",
         }
     }
 }
@@ -382,9 +384,10 @@ impl FromStr for Dialect {
             "ansi" => Self::Ansi,
             "duckdb" => Self::DuckDB,
             "databricks" => Self::Databricks,
+            "spark" => Self::Spark,
             other => {
                 let error_message = format!(
-                    "Invalid Dialect: {other}. Expected one of: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks"
+                    "Invalid Dialect: {other}. Expected one of: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks, Spark"
                 );
                 return Err(DataFusionError::Configuration(error_message));
             }
@@ -4072,5 +4075,31 @@ mod tests {
         // Other fields should be defaults
         assert_eq!(cdc.max_chunk_size, 1024 * 1024);
         assert_eq!(cdc.norm_level, 0);
+    }
+
+    #[test]
+    fn dialect_from_str_spark() {
+        use super::Dialect;
+        use std::str::FromStr;
+
+        assert_eq!(Dialect::from_str("spark").unwrap(), Dialect::Spark);
+        assert_eq!(Dialect::from_str("Spark").unwrap(), Dialect::Spark);
+        assert_eq!(Dialect::from_str("SPARK").unwrap(), Dialect::Spark);
+    }
+
+    #[test]
+    fn dialect_spark_as_ref() {
+        use super::Dialect;
+
+        assert_eq!(Dialect::Spark.as_ref(), "spark");
+    }
+
+    #[test]
+    fn dialect_unknown_lists_spark() {
+        use super::Dialect;
+        use std::str::FromStr;
+
+        let err = Dialect::from_str("nope").unwrap_err();
+        assert!(format!("{err}").contains("Spark"));
     }
 }
