@@ -85,11 +85,10 @@ fn parquet_convert_array(
     parquet_options: &SparkParquetOptions,
 ) -> Result<ArrayRef> {
     use DataType::*;
-    let from_type = array.data_type().clone();
 
     // Strip dictionary encoding before converting; the result is rebuilt as a
     // dictionary if the target type is itself dictionary-encoded.
-    let array = match &from_type {
+    let array = match array.data_type() {
         Dictionary(key_type, value_type)
             if key_type.as_ref() == &Int32
                 && (value_type.as_ref() == &Utf8
@@ -195,7 +194,7 @@ fn parquet_convert_array(
 }
 
 /// Read the Parquet field id from arrow-rs's `PARQUET_FIELD_ID_META_KEY`.
-fn field_id(field: &Field) -> Option<i32> {
+pub(super) fn field_id(field: &Field) -> Option<i32> {
     field
         .metadata()
         .get(PARQUET_FIELD_ID_META_KEY)

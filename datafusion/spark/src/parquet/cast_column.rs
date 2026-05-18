@@ -25,14 +25,13 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, LargeListArray, ListArray, MapArray, StructArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, make_array,
+    Array, ArrayRef, LargeListArray, ListArray, MapArray, StructArray, make_array,
 };
 use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, FieldRef, Schema, TimeUnit};
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -151,39 +150,6 @@ fn relabel_array(array: ArrayRef, target_type: &DataType) -> ArrayRef {
     }
 }
 
-/// Casts a `Timestamp(Microsecond)` array to `Timestamp(Millisecond)` by
-/// dividing values by 1000. Preserves the timezone from the target type.
-fn cast_timestamp_micros_to_millis_array(
-    array: &ArrayRef,
-    target_tz: Option<Arc<str>>,
-) -> ArrayRef {
-    let micros_array = array
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .expect("Expected TimestampMicrosecondArray");
-
-    let millis_values: TimestampMillisecondArray =
-        arrow::compute::kernels::arity::unary(micros_array, |v| v / 1000);
-
-    let result = if let Some(tz) = target_tz {
-        millis_values.with_timezone(tz)
-    } else {
-        millis_values
-    };
-
-    Arc::new(result)
-}
-
-/// Casts a `Timestamp(Microsecond)` scalar to `Timestamp(Millisecond)` by
-/// dividing the value by 1000. Preserves the timezone from the target type.
-fn cast_timestamp_micros_to_millis_scalar(
-    opt_val: Option<i64>,
-    target_tz: Option<Arc<str>>,
-) -> ScalarValue {
-    let new_val = opt_val.map(|v| v / 1000);
-    ScalarValue::TimestampMillisecond(new_val, target_tz)
-}
-
 /// A column-level cast that adapts a Parquet column to its requested type
 /// using Spark semantics for nested types and a handful of primitive cases
 /// that Arrow's cast does not handle correctly for Spark (e.g. timestamp
@@ -202,6 +168,12 @@ pub struct SparkCastColumnExpr {
     /// Spark parquet options for complex nested type conversions.
     /// When present, enables [`spark_parquet_convert`] as a fallback.
     parquet_options: Option<SparkParquetOptions>,
+    /// Pre-computed `input_physical_field.data_type() == target_field.data_type()`.
+    /// Skips the per-batch recursive `DataType` comparison in [`Self::evaluate`]
+    /// for the common pass-through case (the input is structurally identical
+    /// to the target and only needs a metadata relabel — but the relabel
+    /// itself is detected separately by [`types_differ_only_in_field_names`]).
+    types_match: bool,
 }
 
 // Manually derive `PartialEq`/`Hash` because `Arc<dyn PhysicalExpr>` does not
@@ -234,12 +206,14 @@ impl SparkCastColumnExpr {
         target_field: FieldRef,
         cast_options: Option<CastOptions<'static>>,
     ) -> Self {
+        let types_match = physical_field.data_type() == target_field.data_type();
         Self {
             expr,
             input_physical_field: physical_field,
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
             parquet_options: None,
+            types_match,
         }
     }
 
@@ -273,12 +247,7 @@ impl PhysicalExpr for SparkCastColumnExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
 
-        // Use `==` (PartialEq) instead of `equals_datatype` because
-        // `equals_datatype` ignores field names in nested types (Struct,
-        // List, Map). We need to detect when field names differ (e.g.,
-        // Struct("a","b") vs Struct("c","d")) so that we can apply
-        // `spark_parquet_convert` for field-name-based selection.
-        if value.data_type() == *self.target_field.data_type() {
+        if self.types_match {
             return Ok(value);
         }
 
@@ -286,25 +255,6 @@ impl PhysicalExpr for SparkCastColumnExpr {
         let target_field = self.target_field.data_type();
 
         match (input_physical_field, target_field) {
-            // Timestamp(Microsecond) -> Timestamp(Millisecond)
-            (
-                DataType::Timestamp(TimeUnit::Microsecond, _),
-                DataType::Timestamp(TimeUnit::Millisecond, target_tz),
-            ) => match value {
-                ColumnarValue::Array(array) => {
-                    let casted =
-                        cast_timestamp_micros_to_millis_array(&array, target_tz.clone());
-                    Ok(ColumnarValue::Array(casted))
-                }
-                ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(opt_val, _)) => {
-                    let casted = cast_timestamp_micros_to_millis_scalar(
-                        opt_val,
-                        target_tz.clone(),
-                    );
-                    Ok(ColumnarValue::Scalar(casted))
-                }
-                _ => Ok(value),
-            },
             // Nested types that differ only in field names (e.g., List
             // element named "item" vs "element", or Map entries named
             // "key_value" vs "entries"). Re-label the array so the DataType
@@ -370,53 +320,12 @@ impl PhysicalExpr for SparkCastColumnExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::{
+        Int32Array, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    };
     use arrow::buffer::OffsetBuffer;
-    use arrow::datatypes::{Field, Fields};
+    use arrow::datatypes::{Field, Fields, TimeUnit};
     use datafusion_physical_expr::expressions::Column;
-
-    #[test]
-    fn test_cast_timestamp_micros_to_millis_array() {
-        let micros_array: TimestampMicrosecondArray = vec![
-            Some(1_000_000),
-            Some(2_500_000),
-            None,
-            Some(0),
-            Some(-1_000_000),
-        ]
-        .into();
-        let array_ref: ArrayRef = Arc::new(micros_array);
-
-        let result = cast_timestamp_micros_to_millis_array(&array_ref, None);
-        let millis_array = result
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .expect("Expected TimestampMillisecondArray");
-
-        assert_eq!(millis_array.len(), 5);
-        assert_eq!(millis_array.value(0), 1000);
-        assert_eq!(millis_array.value(1), 2500);
-        assert!(millis_array.is_null(2));
-        assert_eq!(millis_array.value(3), 0);
-        assert_eq!(millis_array.value(4), -1000);
-    }
-
-    #[test]
-    fn test_cast_timestamp_micros_to_millis_scalar() {
-        let result = cast_timestamp_micros_to_millis_scalar(Some(1_500_000), None);
-        assert_eq!(result, ScalarValue::TimestampMillisecond(Some(1500), None));
-
-        let null_result = cast_timestamp_micros_to_millis_scalar(None, None);
-        assert_eq!(null_result, ScalarValue::TimestampMillisecond(None, None));
-
-        let target_tz: Option<Arc<str>> = Some(Arc::from("UTC"));
-        let tz_result =
-            cast_timestamp_micros_to_millis_scalar(Some(2_000_000), target_tz.clone());
-        assert_eq!(
-            tz_result,
-            ScalarValue::TimestampMillisecond(Some(2000), target_tz)
-        );
-    }
 
     #[test]
     fn test_relabel_list_field_name() {
@@ -479,6 +388,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_micros_to_millis_array() {
+        use crate::parquet::options::EvalMode;
+
         let input_field = Arc::new(Field::new(
             "ts",
             DataType::Timestamp(TimeUnit::Microsecond, None),
@@ -495,7 +406,12 @@ mod tests {
         let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("ts", 0));
 
         let cast_expr =
-            SparkCastColumnExpr::new(col_expr, input_field, target_field, None);
+            SparkCastColumnExpr::new(col_expr, input_field, target_field, None)
+                .with_parquet_options(SparkParquetOptions::new(
+                    EvalMode::Legacy,
+                    "UTC",
+                    false,
+                ));
 
         let micros_array: TimestampMicrosecondArray =
             vec![Some(1_000_000), Some(2_000_000), None].into();

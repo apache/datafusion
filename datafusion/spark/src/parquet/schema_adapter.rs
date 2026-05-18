@@ -53,11 +53,11 @@ use datafusion_physical_expr_adapter::{
     replace_columns_with_literals,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use super::cast_column::SparkCastColumnExpr;
 use super::error::ParquetSchemaError;
 use super::options::SparkParquetOptions;
+use super::parquet_support::field_id as parse_field_id;
 
 /// Factory that creates Spark-compatible [`PhysicalExprAdapter`] instances.
 ///
@@ -86,17 +86,40 @@ impl SparkPhysicalExprAdapterFactory {
     }
 }
 
-/// Read the Parquet field id stored under arrow-rs's
-/// `PARQUET_FIELD_ID_META_KEY`.
-fn parse_field_id(field: &Field) -> Option<i32> {
-    field
-        .metadata()
-        .get(PARQUET_FIELD_ID_META_KEY)
-        .and_then(|v| v.parse::<i32>().ok())
-}
-
 fn schema_has_field_ids(schema: &SchemaRef) -> bool {
     schema.fields().iter().any(|f| parse_field_id(f).is_some())
+}
+
+/// Look up a field in `schema` by name. Honors `case_sensitive`: when false,
+/// matches case-insensitively. Returns `(index, field)` for use sites that need
+/// both.
+fn find_field<'a>(
+    schema: &'a SchemaRef,
+    name: &str,
+    case_sensitive: bool,
+) -> Option<(usize, &'a FieldRef)> {
+    if case_sensitive {
+        schema
+            .index_of(name)
+            .ok()
+            .map(|idx| (idx, &schema.fields()[idx]))
+    } else {
+        schema
+            .fields()
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.name().eq_ignore_ascii_case(name))
+    }
+}
+
+/// Build a copy of `field` renamed to `new_name`, preserving its data type,
+/// nullability, and metadata. Used by [`remap_physical_schema`] when matching
+/// physical fields to logical fields by id or by case-insensitive name.
+fn rename_field(field: &Field, new_name: &str) -> FieldRef {
+    Arc::new(
+        Field::new(new_name, field.data_type().clone(), field.is_nullable())
+            .with_metadata(field.metadata().clone()),
+    )
 }
 
 /// Remap physical schema field names to match logical schema field names.
@@ -114,14 +137,13 @@ fn schema_has_field_ids(schema: &SchemaRef) -> bool {
 fn remap_physical_schema(
     logical_schema: &SchemaRef,
     physical_schema: &SchemaRef,
-    case_sensitive: bool,
-    use_field_id: bool,
-    ignore_missing_field_id: bool,
+    options: &SparkParquetOptions,
 ) -> Result<(SchemaRef, HashMap<String, String>)> {
-    let should_match_by_id = use_field_id && schema_has_field_ids(logical_schema);
+    let case_sensitive = options.case_sensitive;
+    let should_match_by_id = options.use_field_id && schema_has_field_ids(logical_schema);
 
     if should_match_by_id
-        && !ignore_missing_field_id
+        && !options.ignore_missing_field_id
         && !schema_has_field_ids(physical_schema)
     {
         // Mirrors `ParquetReadSupport.inferSchema`'s eager check (Spark throws
@@ -186,7 +208,7 @@ fn remap_physical_schema(
                     if id_to_phys_names.contains_key(&id) {
                         None
                     } else {
-                        Some(lf.name().clone())
+                        Some(lf.name().to_ascii_lowercase())
                     }
                 })
             })
@@ -208,14 +230,7 @@ fn remap_physical_schema(
             {
                 if logical_field.name() != field.name() {
                     name_map.insert(logical_field.name().clone(), field.name().clone());
-                    return Arc::new(
-                        Field::new(
-                            logical_field.name(),
-                            field.data_type().clone(),
-                            field.is_nullable(),
-                        )
-                        .with_metadata(field.metadata().clone()),
-                    );
+                    return rename_field(field, logical_field.name());
                 }
                 return Arc::clone(field);
             }
@@ -224,16 +239,11 @@ fn remap_physical_schema(
             // ID is missing from the file. Mirrors Spark's
             // `generateFakeColumnName` in `matchIdField`.
             if should_match_by_id
-                && unmatched_id_logical_names
-                    .iter()
-                    .any(|name| name.eq_ignore_ascii_case(field.name()))
+                && unmatched_id_logical_names.contains(&field.name().to_ascii_lowercase())
             {
                 fake_counter += 1;
                 let fake_name = format!("__datafusion_unmatched_field_id_{fake_counter}");
-                return Arc::new(
-                    Field::new(fake_name, field.data_type().clone(), field.is_nullable())
-                        .with_metadata(field.metadata().clone()),
-                );
+                return rename_field(field, &fake_name);
             }
 
             // Name match. Spark's `matchIdField` does not fall through to a
@@ -248,14 +258,7 @@ fn remap_physical_schema(
                     && logical_field.name() != field.name()
                 {
                     name_map.insert(logical_field.name().clone(), field.name().clone());
-                    return Arc::new(
-                        Field::new(
-                            logical_field.name(),
-                            field.data_type().clone(),
-                            field.is_nullable(),
-                        )
-                        .with_metadata(field.metadata().clone()),
-                    );
+                    return rename_field(field, logical_field.name());
                 }
             }
 
@@ -411,17 +414,11 @@ impl PhysicalExprAdapterFactory for SparkPhysicalExprAdapterFactory {
         let needs_remap = !self.parquet_options.case_sensitive
             || (self.parquet_options.use_field_id
                 && schema_has_field_ids(&logical_file_schema));
-        let (
-            adapted_physical_schema,
-            logical_to_physical_names,
-            original_physical_schema,
-        ) = if needs_remap {
+        let (adapted_physical_schema, logical_to_physical_names) = if needs_remap {
             let (remapped, logical_to_physical) = remap_physical_schema(
                 &logical_file_schema,
                 &physical_file_schema,
-                self.parquet_options.case_sensitive,
-                self.parquet_options.use_field_id,
-                self.parquet_options.ignore_missing_field_id,
+                &self.parquet_options,
             )?;
             (
                 remapped,
@@ -430,17 +427,9 @@ impl PhysicalExprAdapterFactory for SparkPhysicalExprAdapterFactory {
                 } else {
                     Some(logical_to_physical)
                 },
-                // Keep the original physical schema for per-column
-                // duplicate detection. Only meaningful in
-                // case-insensitive mode (matches existing behavior).
-                if !self.parquet_options.case_sensitive {
-                    Some(Arc::clone(&physical_file_schema))
-                } else {
-                    None
-                },
             )
         } else {
-            (Arc::clone(&physical_file_schema), None, None)
+            (Arc::clone(&physical_file_schema), None)
         };
 
         let default_factory = DefaultPhysicalExprAdapterFactory;
@@ -451,12 +440,12 @@ impl PhysicalExprAdapterFactory for SparkPhysicalExprAdapterFactory {
 
         Ok(Arc::new(SparkPhysicalExprAdapter {
             logical_file_schema,
+            original_physical_schema: physical_file_schema,
             physical_file_schema: adapted_physical_schema,
             parquet_options: self.parquet_options.clone(),
             default_values: self.default_values.clone(),
             default_adapter,
             logical_to_physical_names,
-            original_physical_schema,
         }))
     }
 }
@@ -491,10 +480,9 @@ struct SparkPhysicalExprAdapter {
     /// names so that downstream code can find columns in the actual stream
     /// schema.
     logical_to_physical_names: Option<HashMap<String, String>>,
-    /// The original (un-remapped) physical schema, kept for per-column
-    /// duplicate detection in case-insensitive mode. Only set when
-    /// `!case_sensitive`.
-    original_physical_schema: Option<SchemaRef>,
+    /// The original (un-remapped) physical schema, used for case-insensitive
+    /// duplicate detection.
+    original_physical_schema: SchemaRef,
 }
 
 impl PhysicalExprAdapter for SparkPhysicalExprAdapter {
@@ -503,26 +491,22 @@ impl PhysicalExprAdapter for SparkPhysicalExprAdapter {
         // references a field with multiple case-insensitive matches in the
         // physical schema. Only the columns actually referenced trigger the
         // error (not the whole schema).
-        if let Some(orig_physical) = &self.original_physical_schema {
-            let mut duplicate_err: Option<DataFusionError> = None;
-            let _ = Arc::<dyn PhysicalExpr>::clone(&expr).transform(|e| {
+        if !self.parquet_options.case_sensitive {
+            // Returning `Err` from `transform` short-circuits the tree walk on
+            // the first match.
+            Arc::<dyn PhysicalExpr>::clone(&expr).transform(|e| {
                 if let Some(col) = e.downcast_ref::<Column>()
                     && let Some((req, matched)) =
-                        check_column_duplicate(col.name(), orig_physical)
+                        check_column_duplicate(col.name(), &self.original_physical_schema)
                 {
-                    duplicate_err = Some(
-                        ParquetSchemaError::DuplicateFieldCaseInsensitive {
-                            required_field_name: req,
-                            matched_fields: matched,
-                        }
-                        .into(),
-                    );
+                    return Err(ParquetSchemaError::DuplicateFieldCaseInsensitive {
+                        required_field_name: req,
+                        matched_fields: matched,
+                    }
+                    .into());
                 }
                 Ok(Transformed::no(e))
-            });
-            if let Some(err) = duplicate_err {
-                return Err(err);
-            }
+            })?;
         }
 
         // First let the default adapter handle column remapping, missing
@@ -597,43 +581,15 @@ impl SparkPhysicalExprAdapter {
                 // that schema — not the logical or physical file schemas.
                 // DataFusion's `DefaultPhysicalExprAdapter::resolve_physical_column`
                 // also resolves by name for the same reason.
-                let logical_field = if self.parquet_options.case_sensitive {
-                    self.logical_file_schema
-                        .fields()
-                        .iter()
-                        .find(|f| f.name() == col_name)
-                } else {
-                    self.logical_file_schema
-                        .fields()
-                        .iter()
-                        .find(|f| f.name().eq_ignore_ascii_case(col_name))
-                };
-                let physical_field = if self.parquet_options.case_sensitive {
-                    self.physical_file_schema
-                        .fields()
-                        .iter()
-                        .find(|f| f.name() == col_name)
-                } else {
-                    self.physical_file_schema
-                        .fields()
-                        .iter()
-                        .find(|f| f.name().eq_ignore_ascii_case(col_name))
-                };
+                let case_sensitive = self.parquet_options.case_sensitive;
+                let logical_field =
+                    find_field(&self.logical_file_schema, col_name, case_sensitive)
+                        .map(|(_, f)| f);
+                let physical_match =
+                    find_field(&self.physical_file_schema, col_name, case_sensitive);
 
-                // Remap the column index to the physical file schema so
-                // downstream evaluation reads the correct column from the
-                // parquet batch.
-                let physical_index = if self.parquet_options.case_sensitive {
-                    self.physical_file_schema.index_of(col_name).ok()
-                } else {
-                    self.physical_file_schema
-                        .fields()
-                        .iter()
-                        .position(|f| f.name().eq_ignore_ascii_case(col_name))
-                };
-
-                if let (Some(logical_field), Some(physical_field), Some(phys_idx)) =
-                    (logical_field, physical_field, physical_index)
+                if let (Some(logical_field), Some((phys_idx, physical_field))) =
+                    (logical_field, physical_match)
                 {
                     let remapped: Arc<dyn PhysicalExpr> = if column.index() != phys_idx {
                         Arc::new(Column::new(col_name, phys_idx))
@@ -954,6 +910,23 @@ impl SparkPhysicalExprAdapter {
             return Ok(expr);
         }
 
+        // Pre-compute the case-folded physical-name set so that the `is_missing`
+        // check is O(1) per default rather than O(physical_fields). For
+        // case-sensitive mode, `field_with_name` already does a HashMap lookup
+        // internally, so no pre-build is needed.
+        let lowercased_physical_names: Option<HashSet<String>> =
+            if self.parquet_options.case_sensitive {
+                None
+            } else {
+                Some(
+                    self.physical_file_schema
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().to_ascii_lowercase())
+                        .collect(),
+                )
+            };
+
         // Build owned (column_name, default_value) pairs for columns missing
         // from the physical file. For each default: filter to only columns
         // absent from the physical schema, then type-cast the value to match
@@ -966,14 +939,10 @@ impl SparkPhysicalExprAdapter {
 
                 // Only include defaults for columns missing from the physical
                 // file schema.
-                let is_missing = if self.parquet_options.case_sensitive {
-                    self.physical_file_schema.field_with_name(col_name).is_err()
+                let is_missing = if let Some(names) = &lowercased_physical_names {
+                    !names.contains(&col_name.to_ascii_lowercase())
                 } else {
-                    !self
-                        .physical_file_schema
-                        .fields()
-                        .iter()
-                        .any(|f| f.name().eq_ignore_ascii_case(col_name))
+                    self.physical_file_schema.field_with_name(col_name).is_err()
                 };
 
                 if !is_missing {
@@ -1123,7 +1092,6 @@ mod tests {
     use super::*;
 
     use std::fs::{File, create_dir_all};
-    use std::path::PathBuf;
 
     use arrow::array::{
         Array, BinaryArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
@@ -1144,12 +1112,36 @@ mod tests {
 
     use crate::parquet::options::EvalMode;
 
-    fn temp_parquet_path() -> PathBuf {
+    fn temp_parquet_path() -> String {
         let mut path = std::env::temp_dir();
         path.push("datafusion-spark-tests");
         create_dir_all(&path).unwrap();
         path.push(format!("schema-adapter-{}.parquet", rand::random::<u64>()));
-        path
+        path.into_os_string().into_string().unwrap()
+    }
+
+    /// Build a `DataSourceExec` stream over an existing Parquet file using a
+    /// `SparkPhysicalExprAdapterFactory` configured from `options`.
+    fn execute_with_factory(
+        path: String,
+        required_schema: SchemaRef,
+        options: SparkParquetOptions,
+    ) -> Result<datafusion::execution::SendableRecordBatchStream> {
+        let factory: Arc<dyn PhysicalExprAdapterFactory> =
+            Arc::new(SparkPhysicalExprAdapterFactory::new(options, None));
+
+        let parquet_source = ParquetSource::new(required_schema);
+        let files = FileGroup::new(vec![PartitionedFile::from_path(path)?]);
+        let file_scan_config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(parquet_source),
+        )
+        .with_file_groups(vec![files])
+        .with_expr_adapter(Some(factory))
+        .build();
+
+        let parquet_exec = DataSourceExec::new(Arc::new(file_scan_config));
+        parquet_exec.execute(0, Arc::new(TaskContext::default()))
     }
 
     /// Create a Parquet file containing a single batch and read it back using
@@ -1170,27 +1162,12 @@ mod tests {
         options: SparkParquetOptions,
     ) -> Result<RecordBatch> {
         let path = temp_parquet_path();
-        let path_str = path.to_str().unwrap().to_string();
         let file = File::create(&path).unwrap();
         let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
         writer.write(batch).unwrap();
         writer.close().unwrap();
 
-        let factory: Arc<dyn PhysicalExprAdapterFactory> =
-            Arc::new(SparkPhysicalExprAdapterFactory::new(options, None));
-
-        let parquet_source = ParquetSource::new(required_schema);
-        let files = FileGroup::new(vec![PartitionedFile::from_path(path_str)?]);
-        let file_scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            Arc::new(parquet_source),
-        )
-        .with_file_groups(vec![files])
-        .with_expr_adapter(Some(factory))
-        .build();
-
-        let parquet_exec = DataSourceExec::new(Arc::new(file_scan_config));
-        let mut stream = parquet_exec.execute(0, Arc::new(TaskContext::default()))?;
+        let mut stream = execute_with_factory(path, required_schema, options)?;
         stream.next().await.unwrap()
     }
 
@@ -1568,7 +1545,6 @@ mod tests {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
         let path = temp_parquet_path();
-        let path_str = path.to_str().unwrap().to_string();
         let file = File::create(&path)?;
         let writer = ArrowWriter::try_new(file, Arc::clone(&file_schema), None).unwrap();
         writer.close().unwrap();
@@ -1579,21 +1555,7 @@ mod tests {
         let mut options = SparkParquetOptions::new(EvalMode::Legacy, "UTC", false);
         options.allow_type_promotion = false;
 
-        let factory: Arc<dyn PhysicalExprAdapterFactory> =
-            Arc::new(SparkPhysicalExprAdapterFactory::new(options, None));
-
-        let parquet_source = ParquetSource::new(required_schema);
-        let files = FileGroup::new(vec![PartitionedFile::from_path(path_str)?]);
-        let file_scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            Arc::new(parquet_source),
-        )
-        .with_file_groups(vec![files])
-        .with_expr_adapter(Some(factory))
-        .build();
-
-        let parquet_exec = DataSourceExec::new(Arc::new(file_scan_config));
-        let mut stream = parquet_exec.execute(0, Arc::new(TaskContext::default()))?;
+        let mut stream = execute_with_factory(path, required_schema, options)?;
         while let Some(batch) = stream.next().await {
             let batch = batch?;
             assert_eq!(batch.num_rows(), 0);
@@ -1611,7 +1573,6 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::clone(&file_schema), vec![values])?;
 
         let path = temp_parquet_path();
-        let path_str = path.to_str().unwrap().to_string();
         let file = File::create(&path)?;
         let mut writer =
             ArrowWriter::try_new(file, Arc::clone(&file_schema), None).unwrap();
@@ -1624,21 +1585,7 @@ mod tests {
         let mut options = SparkParquetOptions::new(EvalMode::Legacy, "UTC", false);
         options.allow_type_promotion = false;
 
-        let factory: Arc<dyn PhysicalExprAdapterFactory> =
-            Arc::new(SparkPhysicalExprAdapterFactory::new(options, None));
-
-        let parquet_source = ParquetSource::new(required_schema);
-        let files = FileGroup::new(vec![PartitionedFile::from_path(path_str)?]);
-        let file_scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            Arc::new(parquet_source),
-        )
-        .with_file_groups(vec![files])
-        .with_expr_adapter(Some(factory))
-        .build();
-
-        let parquet_exec = DataSourceExec::new(Arc::new(file_scan_config));
-        let mut stream = parquet_exec.execute(0, Arc::new(TaskContext::default()))?;
+        let mut stream = execute_with_factory(path, required_schema, options)?;
         let first = stream.next().await.unwrap();
         let err =
             first.expect_err("expected ParquetSchemaConvert error on non-empty file");
@@ -1688,7 +1635,6 @@ mod tests {
             RecordBatch::try_new(Arc::clone(&file_schema), vec![col_a, col_b1, col_b2])?;
 
         let path = temp_parquet_path();
-        let path_str = path.to_str().unwrap().to_string();
         let file = File::create(&path)?;
         let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
         writer.write(&batch).unwrap();
@@ -1700,21 +1646,7 @@ mod tests {
         let mut options = SparkParquetOptions::new(EvalMode::Legacy, "UTC", false);
         options.case_sensitive = false;
 
-        let factory: Arc<dyn PhysicalExprAdapterFactory> =
-            Arc::new(SparkPhysicalExprAdapterFactory::new(options, None));
-
-        let parquet_source = ParquetSource::new(required_schema);
-        let files = FileGroup::new(vec![PartitionedFile::from_path(path_str)?]);
-        let file_scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            Arc::new(parquet_source),
-        )
-        .with_file_groups(vec![files])
-        .with_expr_adapter(Some(factory))
-        .build();
-
-        let parquet_exec = DataSourceExec::new(Arc::new(file_scan_config));
-        let mut stream = parquet_exec.execute(0, Arc::new(TaskContext::default()))?;
+        let mut stream = execute_with_factory(path, required_schema, options)?;
         let result = stream.next().await.unwrap();
 
         assert!(result.is_err());
