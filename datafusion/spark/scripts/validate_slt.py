@@ -255,7 +255,7 @@ def parse_slt(filepath: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# 3. PySpark Runner and Result Formatter
+# 2. PySpark Runner and Result Formatter
 # ---------------------------------------------------------------------------
 
 _spark_session = None
@@ -444,7 +444,7 @@ def run_statement(sql: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# 4. File Orchestration and CLI
+# 3. File Orchestration and CLI
 # ---------------------------------------------------------------------------
 
 
