@@ -365,13 +365,22 @@ impl TreeNodeRewriter for Rewriter<'_> {
 ///
 /// This avoids the `Arc::unwrap_or_clone` + `Arc::new` cycle that the
 /// ownership-based `TreeNode::rewrite` performs at every child node.
-/// When the `Arc` refcount is 1 (always true in the optimizer),
-/// `Arc::make_mut` is essentially free.
 ///
-/// The `rule.rewrite()` API takes ownership, so we bridge the `&mut` to an
-/// owned value with [`std::mem::take`]. `LogicalPlan::default()` is a cheap
-/// empty placeholder (shared empty schema, no allocation) and is overwritten
-/// with the rule's output on the very next line.
+/// # Error semantics
+///
+/// On `Err`, `*plan` is left in an **unspecified** state and must not be used.
+/// Because `rule.rewrite()` consumes the plan by value, a failing rule drops
+/// the node it was handed and the [`std::mem::take`] placeholder
+/// (`LogicalPlan::default()`, an `EmptyRelation`) is left in its place — at the
+/// root for a top-level failure, or somewhere in a subtree for a failure deeper
+/// in the recursion. The pre-rule plan is **not** recoverable here: restoring it
+/// would require cloning it before every rule invocation, which is exactly the
+/// allocation this function exists to avoid.
+///
+/// Callers must therefore discard `*plan` on `Err`, or restore it from a copy
+/// saved beforehand. [`Optimizer::optimize`] does this: with `skip_failed_rules`
+/// it restores `new_plan` from the `prev_plan` clone it already holds, and
+/// without it the error aborts the pass and the plan is dropped unobserved.
 #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn rewrite_plan_in_place(
     plan: &mut LogicalPlan,
@@ -382,6 +391,10 @@ fn rewrite_plan_in_place(
     // f_down phase
     let mut changed = false;
     if apply_order == ApplyOrder::TopDown {
+        // `rule.rewrite()` takes the plan by value, so bridge the `&mut` to an
+        // owned value with `std::mem::take`. `LogicalPlan::default()` is a cheap
+        // empty placeholder (shared empty schema, no allocation) and is
+        // overwritten with the rule's output on the next line.
         let owned = std::mem::take(plan);
         let result = rule.rewrite(owned, config)?;
         *plan = result.data;
@@ -514,6 +527,12 @@ impl Optimizer {
                             // No subqueries: use in-place rewriting
                             // with Arc::make_mut for zero-cost CoW on
                             // children, avoiding Arc unwrap/rewrap.
+                            //
+                            // On error `new_plan` is left in an unspecified
+                            // state (see `rewrite_plan_in_place`); the result
+                            // handling below discards it, restoring `prev_plan`
+                            // when `skip_failed_rules` is set or propagating
+                            // the error otherwise.
                             rewrite_plan_in_place(
                                 &mut new_plan,
                                 apply_order,

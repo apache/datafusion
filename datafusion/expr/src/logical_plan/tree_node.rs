@@ -402,6 +402,14 @@ impl LogicalPlan {
     /// When the refcount is >1, it clones the inner value first.
     ///
     /// Returns `Ok(true)` if any child was modified by `f`.
+    ///
+    /// # Error semantics
+    ///
+    /// If `f` returns `Err` for a child, this method returns that error
+    /// immediately. Children visited earlier in the same call keep whatever
+    /// modifications `f` already applied to them — they are **not** rolled
+    /// back. Callers that need the pre-call tree on error must save a copy
+    /// beforehand.
     pub fn map_children_mut<F: FnMut(&mut Self) -> Result<bool>>(
         &mut self,
         mut f: F,
