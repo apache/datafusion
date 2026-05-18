@@ -243,7 +243,7 @@ impl ScalarUDFImpl for FloorFunc {
     }
 
     fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
-        let data_type = inputs[0].data_type();
+        let data_type = self.return_type(&[inputs[0].data_type()])?;
         Interval::make_unbounded(&data_type)
     }
 
