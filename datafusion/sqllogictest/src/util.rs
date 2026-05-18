@@ -163,9 +163,15 @@ mod tests {
 
     #[test]
     fn is_spark_dialect_path_detects_subtree() {
-        assert!(is_spark_dialect_path(&PathBuf::from("spark_dialect/array/array_repeat.slt")));
-        assert!(is_spark_dialect_path(&PathBuf::from("spark_dialect/string/ascii.slt")));
-        assert!(!is_spark_dialect_path(&PathBuf::from("spark/array/array_repeat.slt")));
+        assert!(is_spark_dialect_path(&PathBuf::from(
+            "spark_dialect/array/array_repeat.slt"
+        )));
+        assert!(is_spark_dialect_path(&PathBuf::from(
+            "spark_dialect/string/ascii.slt"
+        )));
+        assert!(!is_spark_dialect_path(&PathBuf::from(
+            "spark/array/array_repeat.slt"
+        )));
         assert!(!is_spark_dialect_path(&PathBuf::from("aggregate.slt")));
     }
 }
