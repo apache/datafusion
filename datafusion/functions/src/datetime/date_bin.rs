@@ -34,7 +34,9 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow::temporal_conversions::NANOSECONDS_IN_DAY;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, not_impl_err, plan_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_err, not_impl_err, plan_err,
+};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -880,7 +882,9 @@ mod tests {
 
     use crate::datetime::date_bin::{DateBinFunc, date_bin_nanos_interval};
     use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray, TimestampSecondArray};
+    use arrow::array::{
+        Array, IntervalDayTimeArray, TimestampNanosecondArray, TimestampSecondArray,
+    };
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 
@@ -1136,7 +1140,11 @@ mod tests {
         );
 
         // source: overflow while scaling to nanoseconds (array path)
-        let input = Arc::new(vec![Some(i64::MAX)].into_iter().collect::<TimestampSecondArray>());
+        let input = Arc::new(
+            vec![Some(i64::MAX)]
+                .into_iter()
+                .collect::<TimestampSecondArray>(),
+        );
         let return_field_second = &Arc::new(Field::new(
             "f",
             DataType::Timestamp(TimeUnit::Second, None),
