@@ -46,7 +46,7 @@ async fn test_memory_limit_with_spill() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let plan = df.create_physical_plan().await.unwrap();
@@ -76,7 +76,7 @@ async fn test_no_spill_with_adequate_memory() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let plan = df.create_physical_plan().await.unwrap();
@@ -127,7 +127,7 @@ async fn test_memory_limit_enforcement() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1 desc;";
     let result = ctx.sql(query).await.unwrap().collect().await;
 
     assert!(result.is_err(), "Should fail due to memory limit");
@@ -201,7 +201,7 @@ async fn test_max_temp_directory_size_enforcement() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1 desc;";
     let result = ctx.sql(query).await.unwrap().collect().await;
 
     assert!(

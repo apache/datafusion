@@ -605,9 +605,12 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
                     if metadata.is_none() && expr.schema_name().to_string() == name {
                         expr
                     } else {
-                        Expr::Alias(
-                            Alias::new(expr, relation, name).with_metadata(metadata),
-                        )
+                        Expr::Alias(Alias {
+                            expr: Box::new(expr),
+                            relation,
+                            name,
+                            metadata,
+                        })
                     }
                 })
             }),
