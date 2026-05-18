@@ -41,8 +41,9 @@
 //! in `datafusion::expr::common::casts::is_supported_comparison_unwrap_cast`.
 //! Currently allowed families: timestamp precision widening (including
 //! cross-timezone), integer widening (including Date32↔Int32), binary
-//! widening, integer→string (Eq/NotEq only), dictionary/string,
-//! decimal widening, and integer→decimal (with sufficient precision).
+//! widening, integer→string (Eq/NotEq/IsDistinctFrom/IsNotDistinctFrom
+//! only), dictionary/string, decimal widening, and integer→decimal (with
+//! sufficient precision).
 //! The literal must round-trip exactly through both types.
 //!
 //! # Examples
@@ -361,7 +362,7 @@ mod tests {
     #[test]
     fn test_unwrap_cast_comparison_large_string() {
         let schema = expr_test_schema();
-        // Dictionary casts are not currently unwrapped.
+        // Dictionary casts between string-like types can be unwrapped.
         let dict = ScalarValue::Dictionary(
             Box::new(DataType::Int32),
             Box::new(ScalarValue::LargeUtf8(Some("value".to_owned()))),
