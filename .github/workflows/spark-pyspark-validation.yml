@@ -24,11 +24,13 @@ on:
     paths:
       - 'datafusion/spark/**'
       - 'datafusion/sqllogictest/test_files/spark/**'
+      - 'datafusion/sqllogictest/test_files/spark_dialect/**'
       - '.github/workflows/spark-pyspark-validation.yml'
   pull_request:
     paths:
       - 'datafusion/spark/**'
       - 'datafusion/sqllogictest/test_files/spark/**'
+      - 'datafusion/sqllogictest/test_files/spark_dialect/**'
       - '.github/workflows/spark-pyspark-validation.yml'
 
 permissions:
