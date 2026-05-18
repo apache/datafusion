@@ -81,7 +81,7 @@ pub struct FFI_ExecutionPlan {
     /// `datafusion_proto_common::Statistics`.
     pub partition_statistics: unsafe extern "C" fn(
         plan: &Self,
-        partition: FFI_Option<u64>,
+        partition: FFI_Option<usize>,
     ) -> FFI_Result<SVec<u8>>,
 
     /// Used to create a clone on the provider of the execution plan. This should
@@ -207,9 +207,9 @@ unsafe extern "C" fn metrics_fn_wrapper(
 
 unsafe extern "C" fn partition_statistics_fn_wrapper(
     plan: &FFI_ExecutionPlan,
-    partition: FFI_Option<u64>,
+    partition: FFI_Option<usize>,
 ) -> FFI_Result<SVec<u8>> {
-    let partition: Option<usize> = Option::<u64>::from(partition).map(|p| p as usize);
+    let partition: Option<usize> = partition.into();
     plan.inner()
         .partition_statistics(partition)
         .map(|stats| serialize_statistics(stats.as_ref()).into_iter().collect())
@@ -481,7 +481,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
         let bytes = df_result!(unsafe {
             (self.plan.partition_statistics)(
                 &self.plan,
-                partition.map(|p| p as u64).into(),
+                partition.into(),
             )
         })?;
         Ok(Arc::new(deserialize_statistics(bytes.as_slice())?))
