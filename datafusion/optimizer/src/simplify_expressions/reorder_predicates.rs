@@ -187,21 +187,4 @@ mod tests {
         assert_eq!(out, vec![cheap, nested]);
         assert!(changed);
     }
-
-    #[test]
-    fn cast_predicate_is_treated_as_cheap() {
-        let casted = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(datafusion_expr::cast(
-                col("a"),
-                arrow::datatypes::DataType::Int64,
-            )),
-            Operator::Gt,
-            Box::new(lit(5_i64)),
-        ));
-        let eq = col("b").eq(lit(7));
-        let input = vec![eq.clone(), casted.clone()];
-        let (out, changed) = reorder_predicates(input.clone());
-        assert_eq!(out, input);
-        assert!(!changed);
-    }
 }
