@@ -366,10 +366,22 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     async fn consume_dynamic_parameter(
         &self,
-        _expr: &DynamicParameter,
+        expr: &DynamicParameter,
         _input_schema: &DFSchema,
     ) -> datafusion::common::Result<Expr> {
-        not_impl_err!("Dynamic Parameter expression not supported")
+        let id = format!("${}", expr.parameter_reference + 1);
+        let field = expr
+            .r#type
+            .as_ref()
+            .map(|t| {
+                super::from_substrait_type_without_names(self, t).map(|dt| {
+                    Arc::new(datafusion::arrow::datatypes::Field::new(&id, dt, true))
+                })
+            })
+            .transpose()?;
+        Ok(Expr::Placeholder(
+            datafusion::logical_expr::expr::Placeholder::new_with_field(id, field),
+        ))
     }
 
     // Outer Schema Stack

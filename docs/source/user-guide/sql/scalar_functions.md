@@ -59,6 +59,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 - [pow](#pow)
 - [power](#power)
 - [radians](#radians)
+- [rand](#rand)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
@@ -739,6 +740,10 @@ radians(numeric_expression)
 +----------------+
 ```
 
+### `rand`
+
+_Alias of [random](#random)._
+
 ### `random`
 
 Returns a random float value in the range [0, 1).
@@ -758,6 +763,10 @@ random()
 | 0.7389238902938  |
 +------------------+
 ```
+
+#### Aliases
+
+- rand
 
 ### `round`
 
@@ -2573,7 +2582,7 @@ date_part(part, expression)
   - dow (day of the week where Sunday is 0)
   - doy (day of the year)
   - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
-  - isodow (day of the week where Monday is 0)
+  - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
@@ -3234,9 +3243,12 @@ _Alias of [current_date](#current_date)._
 
 ## Array Functions
 
+- [any_match](#any_match)
+- [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
 - [array_cat](#array_cat)
+- [array_compact](#array_compact)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
@@ -3275,16 +3287,22 @@ _Alias of [current_date](#current_date)._
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
 - [array_to_string](#array_to_string)
+- [array_transform](#array_transform)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
 - [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
+- [cosine_distance](#cosine_distance)
+- [dot_product](#dot_product)
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
+- [inner_product](#inner_product)
+- [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
+- [list_compact](#list_compact)
 - [list_concat](#list_concat)
 - [list_contains](#list_contains)
 - [list_dims](#list_dims)
@@ -3322,6 +3340,7 @@ _Alias of [current_date](#current_date)._
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
+- [list_transform](#list_transform)
 - [list_union](#list_union)
 - [list_zip](#list_zip)
 - [make_array](#make_array)
@@ -3329,6 +3348,39 @@ _Alias of [current_date](#current_date)._
 - [range](#range)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
+
+### `any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
+### `array_any_match`
+
+Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others.
+
+```sql
+any_match(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean
+
+#### Example
+
+```sql
+> select any_match([1, 2, 3], x -> x > 2);
++----------------------------------+
+| any_match([1, 2, 3], x -> x > 2) |
++----------------------------------+
+| true                             |
++----------------------------------+
+```
+
+#### Aliases
+
+- any_match
+- list_any_match
 
 ### `array_any_value`
 
@@ -3390,6 +3442,33 @@ array_append(array, element)
 ### `array_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `array_compact`
+
+Removes null values from the array.
+
+```sql
+array_compact(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_compact([1, NULL, 2, NULL, 3]) arr;
++-----------+
+| arr       |
++-----------+
+| [1, 2, 3] |
++-----------+
+```
+
+#### Aliases
+
+- list_compact
 
 ### `array_concat`
 
@@ -4346,6 +4425,34 @@ array_to_string(array, delimiter[, null_string])
 - array_join
 - list_join
 
+### `array_transform`
+
+transforms the values of an array
+
+```sql
+array_transform(array, x -> x*2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda
+
+#### Example
+
+```sql
+> select array_transform([1, 2, 3, 4, 5], x -> x*2);
++-------------------------------------------+
+| array_transform([1, 2, 3, 4, 5], x -> x*2)       |
++-------------------------------------------+
+| [2, 4, 6, 8, 10]                          |
++-------------------------------------------+
+```
+
+#### Aliases
+
+- list_transform
+
 ### `array_union`
 
 Returns an array of elements that are present in both arrays (all elements from both arrays) without duplicates.
@@ -4441,6 +4548,34 @@ cardinality(array)
 +--------------------------------------+
 ```
 
+### `cosine_distance`
+
+Returns the cosine distance between two input arrays of equal length. The cosine distance is defined as 1 - cosine_similarity, i.e. `1 - dot(a,b) / (||a|| * ||b||)`. Returns NULL if either array is NULL or contains only zeros.
+
+```sql
+cosine_distance(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select cosine_distance([1.0, 0.0], [0.0, 1.0]);
++-----------------------------------------------+
+| cosine_distance(List([1.0,0.0]),List([0.0,1.0])) |
++-----------------------------------------------+
+| 1.0                                           |
++-----------------------------------------------+
+```
+
+### `dot_product`
+
+_Alias of [inner_product](#inner_product)._
+
 ### `empty`
 
 Returns 1 for an empty array or 0 for a non-empty array.
@@ -4523,6 +4658,38 @@ generate_series(start, stop[, step])
 +------------------------------------+
 ```
 
+### `inner_product`
+
+Returns the inner product (dot product) of two input arrays of equal length, computed as `sum(array1[i] * array2[i])`. Returns NULL if either array is NULL or contains NULL elements. Returns 0.0 for two empty arrays.
+
+```sql
+inner_product(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
++-------------------------------------------------------+
+| inner_product(List([1.0,2.0,3.0]),List([4.0,5.0,6.0])) |
++-------------------------------------------------------+
+| 32.0                                                  |
++-------------------------------------------------------+
+```
+
+#### Aliases
+
+- dot_product
+
+### `list_any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
 ### `list_any_value`
 
 _Alias of [array_any_value](#array_any_value)._
@@ -4534,6 +4701,10 @@ _Alias of [array_append](#array_append)._
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `list_compact`
+
+_Alias of [array_compact](#array_compact)._
 
 ### `list_concat`
 
@@ -4682,6 +4853,10 @@ _Alias of [array_sort](#array_sort)._
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
+
+### `list_transform`
+
+_Alias of [array_transform](#array_transform)._
 
 ### `list_union`
 
@@ -5006,6 +5181,11 @@ SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
 
 SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
 ----
+[NULL]
+
+-- non-existing key
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'a');
+----
 []
 ```
 
@@ -5282,11 +5462,15 @@ union_tag(union_expression)
 ## Other Functions
 
 - [arrow_cast](#arrow_cast)
+- [arrow_field](#arrow_field)
 - [arrow_metadata](#arrow_metadata)
 - [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
+- [cast_to_type](#cast_to_type)
 - [get_field](#get_field)
+- [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
+- [with_metadata](#with_metadata)
 
 ### `arrow_cast`
 
@@ -5324,6 +5508,36 @@ arrow_cast(expression, datatype)
 +---------------------------+---------------------+
 | 2023-01-02T12:53:02+08:00 | 2023-01-02T12:53:02 |
 +---------------------------+---------------------+
+```
+
+### `arrow_field`
+
+Returns a struct containing the Arrow field information of the expression, including name, data type, nullability, and metadata.
+
+```sql
+arrow_field(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select arrow_field(1);
++-------------------------------------------------------------+
+| arrow_field(Int64(1))                                       |
++-------------------------------------------------------------+
+| {name: lit, data_type: Int64, nullable: false, metadata: {}} |
++-------------------------------------------------------------+
+
+> select arrow_field(1)['data_type'];
++-----------------------------------+
+| arrow_field(Int64(1))[data_type]  |
++-----------------------------------+
+| Int64                             |
++-----------------------------------+
 ```
 
 ### `arrow_metadata`
@@ -5405,6 +5619,37 @@ arrow_typeof(expression)
 +---------------------------+------------------------+
 ```
 
+### `cast_to_type`
+
+Casts the first argument to the data type of the second argument. Only the type of the second argument is used; its value is ignored.
+
+```sql
+cast_to_type(expression, reference)
+```
+
+#### Arguments
+
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
+
+#### Example
+
+```sql
+> select cast_to_type('42', NULL::INTEGER) as a;
++----+
+| a  |
++----+
+| 42 |
++----+
+
+> select cast_to_type(1 + 2, NULL::DOUBLE) as b;
++-----+
+| b   |
++-----+
+| 3.0 |
++-----+
+```
+
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
@@ -5457,6 +5702,32 @@ get_field(expression, field_name[, field_name2, ...])
 +--------+
 ```
 
+### `try_cast_to_type`
+
+Casts the first argument to the data type of the second argument, returning NULL if the cast fails. Only the type of the second argument is used; its value is ignored.
+
+```sql
+try_cast_to_type(expression, reference)
+```
+
+#### Arguments
+
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
+
+#### Example
+
+```sql
+> select try_cast_to_type('123', NULL::INTEGER) as a,
+         try_cast_to_type('not_a_number', NULL::INTEGER) as b;
+
++-----+------+
+| a   | b    |
++-----+------+
+| 123 | NULL |
++-----+------+
+```
+
 ### `version`
 
 Returns the version of DataFusion.
@@ -5474,4 +5745,33 @@ version()
 +--------------------------------------------+
 | Apache DataFusion 42.0.0, aarch64 on macos |
 +--------------------------------------------+
+```
+
+### `with_metadata`
+
+Attaches Arrow field metadata (key/value pairs) to the input expression. Keys must be non-empty constant strings and values must be constant strings (empty values are allowed). Existing metadata on the input field is preserved; new keys overwrite on collision. This is the inverse of `arrow_metadata`.
+
+```sql
+with_metadata(expression, key1, value1[, key2, value2, ...])
+```
+
+#### Arguments
+
+- **expression**: The expression whose output Arrow field should be annotated. Values flow through unchanged.
+- **key**: Metadata key. Must be a non-empty constant string literal.
+- **value**: Metadata value. Must be a constant string literal (may be empty).
+
+#### Example
+
+```sql
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms'), 'unit') from (values (1));
++---------------------------------------------------------------+
+| arrow_metadata(with_metadata(column1,Utf8("unit"),Utf8("ms")),Utf8("unit")) |
++---------------------------------------------------------------+
+| ms                                                            |
++---------------------------------------------------------------+
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms', 'source', 'sensor')) from (values (1));
++--------------------------+
+| {source: sensor, unit: ms} |
++--------------------------+
 ```

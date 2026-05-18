@@ -43,6 +43,7 @@ pub mod diagnostic;
 pub mod display;
 pub mod encryption;
 pub mod error;
+pub mod extensions;
 pub mod file_options;
 pub mod format;
 pub mod hash_utils;
@@ -82,7 +83,7 @@ pub use file_options::file_type::{
 pub use functional_dependencies::{
     Constraint, Constraints, Dependency, FunctionalDependence, FunctionalDependencies,
     aggregate_functional_dependencies, get_required_group_by_exprs_indices,
-    get_target_functional_dependencies,
+    get_required_sort_exprs_indices, get_target_functional_dependencies,
 };
 use hashbrown::DefaultHashBuilder;
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
@@ -114,6 +115,7 @@ pub type HashMap<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<K, V, S>;
 pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
 pub mod hash_map {
     pub use hashbrown::hash_map::Entry;
+    pub use hashbrown::hash_map::EntryRef;
 }
 pub mod hash_set {
     pub use hashbrown::hash_set::Entry;

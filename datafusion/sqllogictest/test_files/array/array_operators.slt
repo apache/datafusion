@@ -1,0 +1,134 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+### Array operators tests
+
+
+## array concatenate operator
+
+# array concatenate operator with scalars #1 (like array_concat scalar function)
+query ??
+select make_array(1, 2, 3) || make_array(4, 5, 6) || make_array(7, 8, 9), make_array([1], [2]) || make_array([3], [4]);
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
+
+# array concatenate operator with scalars #2 (like array_append scalar function)
+query ???
+select make_array(1, 2, 3) || 4, make_array(1.0, 2.0, 3.0) || 4.0, make_array('h', 'e', 'l', 'l') || 'o';
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array concatenate operator with scalars #3 (like array_prepend scalar function)
+query ???
+select 1 || make_array(2, 3, 4), 1.0 || make_array(2.0, 3.0, 4.0), 'h' || make_array('e', 'l', 'l', 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array concatenate operator with scalars #4 (mixed)
+query ?
+select 0 || [1,2,3] || 4 || [5] || [6,7];
+----
+[0, 1, 2, 3, 4, 5, 6, 7]
+
+# array concatenate operator with nd-list #5 (mixed)
+query ?
+select 0 || [1,2,3] || [[4,5]] || [[6,7,8]] || [9,10];
+----
+[[0, 1, 2, 3], [4, 5], [6, 7, 8], [9, 10]]
+
+# array concatenate operator non-valid cases
+## concat 2D with scalar is not valid
+query error
+select 0 || [1,2,3] || [[4,5]] || [[6,7,8]] || [9,10] || 11;
+
+## concat scalar with 2D is not valid
+query error
+select 0 || [[1,2,3]];
+
+# array concatenate operator with column
+
+statement ok
+CREATE TABLE array_concat_operator_table
+AS VALUES
+  (0, [1, 2, 2, 3], 4, [5, 6, 5]),
+  (-1, [4, 5, 6], 7, [8, 1, 1])
+;
+
+query ?
+select column1 || column2 || column3 || column4 from array_concat_operator_table;
+----
+[0, 1, 2, 2, 3, 4, 5, 6, 5]
+[-1, 4, 5, 6, 7, 8, 1, 1]
+
+statement ok
+drop table array_concat_operator_table;
+
+## array containment operator
+
+# array containment operator with scalars #1 (at arrow)
+query BBBBBBB
+select make_array(1,2,3) @> make_array(1,3),
+       make_array(1,2,3) @> make_array(1,4),
+       make_array([1,2], [3,4]) @> make_array([1,2]),
+       make_array([1,2], [3,4]) @> make_array([1,3]),
+       make_array([1,2], [3,4]) @> make_array([1,2], [3,4], [5,6]),
+       make_array([[1,2,3]]) @> make_array([[1]]),
+       make_array([[1,2,3]]) @> make_array([[1,2,3]]);
+----
+true false true false false false true
+
+# Make sure it is rewritten to function array_has_all()
+query TT
+explain select [1,2,3] @> [1,3];
+----
+logical_plan
+01)Projection: Boolean(true) AS array_has_all(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(1),Int64(3)))
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[true as array_has_all(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(1),Int64(3)))]
+02)--PlaceholderRowExec
+
+# array containment operator with scalars #2 (arrow at)
+query BBBBBBB
+select make_array(1,3) <@ make_array(1,2,3),
+       make_array(1,4) <@ make_array(1,2,3),
+       make_array([1,2]) <@ make_array([1,2], [3,4]),
+       make_array([1,3]) <@ make_array([1,2], [3,4]),
+       make_array([1,2], [3,4], [5,6]) <@ make_array([1,2], [3,4]),
+       make_array([[1]]) <@ make_array([[1,2,3]]),
+       make_array([[1,2,3]]) <@ make_array([[1,2,3]]);
+----
+true false true false false false true
+
+# Make sure it is rewritten to function array_has_all()
+query TT
+explain select [1,3] <@ [1,2,3];
+----
+logical_plan
+01)Projection: Boolean(true) AS array_has_all(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(1),Int64(3)))
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[true as array_has_all(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(1),Int64(3)))]
+02)--PlaceholderRowExec
+
+### Array casting tests
+
+
+
+include ./cleanup.slt.part

@@ -21,7 +21,6 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use datafusion_common::HashMap;
-use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{Result, exec_err};
@@ -97,11 +96,10 @@ impl ScalarUDFImpl for TranslateFunc {
             try_as_scalar_str(&args.args[1]),
             try_as_scalar_str(&args.args[2]),
         ) {
-            let to_graphemes: Vec<&str> = to_str.graphemes(true).collect();
+            let to_chars: Vec<char> = to_str.chars().collect();
 
-            let mut from_map: HashMap<&str, usize> = HashMap::new();
-            for (index, c) in from_str.graphemes(true).enumerate() {
-                // Ignore characters that already exist in from_map
+            let mut from_map: HashMap<char, usize> = HashMap::new();
+            for (index, c) in from_str.chars().enumerate() {
                 from_map.entry(c).or_insert(index);
             }
 
@@ -117,7 +115,7 @@ impl ScalarUDFImpl for TranslateFunc {
                     translate_with_map(
                         arr,
                         &from_map,
-                        &to_graphemes,
+                        &to_chars,
                         ascii_table.as_ref(),
                         builder,
                     )
@@ -129,7 +127,7 @@ impl ScalarUDFImpl for TranslateFunc {
                     translate_with_map(
                         arr,
                         &from_map,
-                        &to_graphemes,
+                        &to_chars,
                         ascii_table.as_ref(),
                         builder,
                     )
@@ -141,7 +139,7 @@ impl ScalarUDFImpl for TranslateFunc {
                     translate_with_map(
                         arr,
                         &from_map,
-                        &to_graphemes,
+                        &to_chars,
                         ascii_table.as_ref(),
                         builder,
                     )
@@ -215,54 +213,54 @@ where
     let from_array_iter = ArrayIter::new(from_array);
     let to_array_iter = ArrayIter::new(to_array);
 
-    // Reusable buffers to avoid allocating for each row
-    let mut from_map: HashMap<&str, usize> = HashMap::new();
-    let mut from_graphemes: Vec<&str> = Vec::new();
-    let mut to_graphemes: Vec<&str> = Vec::new();
-    let mut string_graphemes: Vec<&str> = Vec::new();
-    let mut result_graphemes: Vec<&str> = Vec::new();
+    let mut from_map: HashMap<char, usize> = HashMap::new();
+    let mut to_chars: Vec<char> = Vec::new();
+    let mut result_buf = String::new();
 
     for ((string, from), to) in string_array_iter.zip(from_array_iter).zip(to_array_iter)
     {
         match (string, from, to) {
             (Some(string), Some(from), Some(to)) => {
-                // Clear and reuse buffers
                 from_map.clear();
-                from_graphemes.clear();
-                to_graphemes.clear();
-                string_graphemes.clear();
-                result_graphemes.clear();
+                to_chars.clear();
+                result_buf.clear();
 
-                // Build from_map using reusable buffer
-                from_graphemes.extend(from.graphemes(true));
-                for (index, c) in from_graphemes.iter().enumerate() {
-                    // Ignore characters that already exist in from_map
-                    from_map.entry(*c).or_insert(index);
+                for (index, c) in from.chars().enumerate() {
+                    from_map.entry(c).or_insert(index);
                 }
 
-                // Build to_graphemes
-                to_graphemes.extend(to.graphemes(true));
+                to_chars.extend(to.chars());
 
-                // Process string and build result
-                string_graphemes.extend(string.graphemes(true));
-                for c in &string_graphemes {
-                    match from_map.get(*c) {
-                        Some(n) => {
-                            if let Some(replacement) = to_graphemes.get(*n) {
-                                result_graphemes.push(*replacement);
-                            }
-                        }
-                        None => result_graphemes.push(*c),
-                    }
-                }
+                translate_char_by_char(string, &from_map, &to_chars, &mut result_buf);
 
-                builder.append_value(&result_graphemes.concat());
+                builder.append_value(&result_buf);
             }
             _ => builder.append_null(),
         }
     }
 
     Ok(builder.finish())
+}
+
+/// Translate `input` character-by-character using `from_map` and `to_chars`,
+/// appending the result to `buf`.
+#[inline]
+fn translate_char_by_char(
+    input: &str,
+    from_map: &HashMap<char, usize>,
+    to_chars: &[char],
+    buf: &mut String,
+) {
+    for c in input.chars() {
+        match from_map.get(&c) {
+            Some(n) => {
+                if let Some(&replacement) = to_chars.get(*n) {
+                    buf.push(replacement);
+                }
+            }
+            None => buf.push(c),
+        }
+    }
 }
 
 /// Sentinel value in the ASCII translate table indicating the character should
@@ -301,11 +299,11 @@ fn build_ascii_translate_table(from: &str, to: &str) -> Option<[u8; 128]> {
 /// Optimized translate for constant `from` and `to` arguments: uses a pre-built
 /// translation map instead of rebuilding it for every row.  When an ASCII byte
 /// lookup table is provided, ASCII input rows use the lookup table; non-ASCII
-/// inputs fallback to using the map.
+/// inputs fall back to the char-based map.
 fn translate_with_map<'a, V, O>(
     string_array: V,
-    from_map: &HashMap<&str, usize>,
-    to_graphemes: &[&str],
+    from_map: &HashMap<char, usize>,
+    to_chars: &[char],
     ascii_table: Option<&[u8; 128]>,
     mut builder: O,
 ) -> Result<ArrayRef>
@@ -313,7 +311,7 @@ where
     V: ArrayAccessor<Item = &'a str>,
     O: StringLikeArrayBuilder,
 {
-    let mut result_graphemes: Vec<&str> = Vec::new();
+    let mut result_buf = String::new();
     let mut ascii_buf: Vec<u8> = Vec::new();
 
     for string in ArrayIter::new(string_array) {
@@ -335,21 +333,9 @@ where
                         std::str::from_utf8_unchecked(&ascii_buf)
                     });
                 } else {
-                    // Slow path: grapheme-based translation
-                    result_graphemes.clear();
-
-                    for c in s.graphemes(true) {
-                        match from_map.get(c) {
-                            Some(n) => {
-                                if let Some(replacement) = to_graphemes.get(*n) {
-                                    result_graphemes.push(*replacement);
-                                }
-                            }
-                            None => result_graphemes.push(c),
-                        }
-                    }
-
-                    builder.append_value(&result_graphemes.concat());
+                    result_buf.clear();
+                    translate_char_by_char(s, from_map, to_chars, &mut result_buf);
+                    builder.append_value(&result_buf);
                 }
             }
             None => builder.append_null(),
@@ -445,7 +431,7 @@ mod tests {
             StringArray
         );
         // Non-ASCII input with ASCII scalar from/to: exercises the
-        // grapheme fallback within translate_with_map.
+        // char-based fallback within translate_with_map.
         test_function!(
             TranslateFunc::new(),
             vec![

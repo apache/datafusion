@@ -2428,6 +2428,12 @@ SELECT arrow_typeof(date_trunc('hour', TIME '14:30:45'));
 ----
 Time64(ns)
 
+query error DataFusion error: Execution error: Timestamp 9223372036854775807 out of range
+SELECT date_trunc(
+  'hour',
+  arrow_cast(9223372036854775807, 'Timestamp(Second, None)')
+);
+
 # Error for granularities not valid for Time types
 query error date_trunc does not support 'day' granularity for Time types
 SELECT date_trunc('day', TIME '14:30:45');

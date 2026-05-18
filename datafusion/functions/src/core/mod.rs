@@ -21,9 +21,11 @@ use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
 pub mod arrow_cast;
+pub mod arrow_field;
 pub mod arrow_metadata;
 pub mod arrow_try_cast;
 pub mod arrowtypeof;
+pub mod cast_to_type;
 pub mod coalesce;
 pub mod expr_ext;
 pub mod getfield;
@@ -37,13 +39,17 @@ pub mod nvl2;
 pub mod overlay;
 pub mod planner;
 pub mod r#struct;
+pub mod try_cast_to_type;
 pub mod union_extract;
 pub mod union_tag;
 pub mod version;
+pub mod with_metadata;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, arrow_cast);
 make_udf_function!(arrow_try_cast::ArrowTryCastFunc, arrow_try_cast);
+make_udf_function!(cast_to_type::CastToTypeFunc, cast_to_type);
+make_udf_function!(try_cast_to_type::TryCastToTypeFunc, try_cast_to_type);
 make_udf_function!(nullif::NullIfFunc, nullif);
 make_udf_function!(nvl::NVLFunc, nvl);
 make_udf_function!(nvl2::NVL2Func, nvl2);
@@ -59,6 +65,8 @@ make_udf_function!(union_extract::UnionExtractFun, union_extract);
 make_udf_function!(union_tag::UnionTagFunc, union_tag);
 make_udf_function!(version::VersionFunc, version);
 make_udf_function!(arrow_metadata::ArrowMetadataFunc, arrow_metadata);
+make_udf_function!(with_metadata::WithMetadataFunc, with_metadata);
+make_udf_function!(arrow_field::ArrowFieldFunc, arrow_field);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -74,6 +82,14 @@ pub mod expr_fn {
     ),(
         arrow_try_cast,
         "Casts a value to a specific Arrow data type, returning NULL if the cast fails",
+        arg1 arg2
+    ),(
+        cast_to_type,
+        "Casts the first argument to the data type of the second argument",
+        arg1 arg2
+    ),(
+        try_cast_to_type,
+        "Casts the first argument to the data type of the second argument, returning NULL on failure",
         arg1 arg2
     ),(
         nvl,
@@ -92,8 +108,16 @@ pub mod expr_fn {
         "Returns the Arrow type of the input expression.",
         arg1
     ),(
+        arrow_field,
+        "Returns the Arrow field info (name, data_type, nullable, metadata) of the input expression.",
+        arg1
+    ),(
         arrow_metadata,
         "Returns the metadata of the input expression",
+        args,
+    ),(
+        with_metadata,
+        "Attaches Arrow field metadata (key/value pairs) to the input expression",
         args,
     ),(
         r#struct,
@@ -146,8 +170,12 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         nullif(),
         arrow_cast(),
+        arrow_field(),
         arrow_try_cast(),
+        cast_to_type(),
+        try_cast_to_type(),
         arrow_metadata(),
+        with_metadata(),
         nvl(),
         nvl2(),
         overlay(),

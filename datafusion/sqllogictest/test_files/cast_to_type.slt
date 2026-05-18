@@ -1,0 +1,347 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#######
+## Tests for cast_to_type function
+#######
+
+# Basic string to integer cast
+query I
+SELECT cast_to_type('42', 1::INTEGER);
+----
+42
+
+# String to double cast
+query R
+SELECT cast_to_type('3.14', 1.0::DOUBLE);
+----
+3.14
+
+# Integer to string cast
+query T
+SELECT cast_to_type(42, 'a'::VARCHAR);
+----
+42
+
+# Integer to double cast
+query R
+SELECT cast_to_type(42, 0.0::DOUBLE);
+----
+42
+
+# Same-type is a no-op
+query I
+SELECT cast_to_type(42, 0::INTEGER);
+----
+42
+
+# Second argument is a typed NULL double
+query R
+SELECT cast_to_type('3.14', NULL::DOUBLE);
+----
+3.14
+
+# Second argument is a typed NULL integer
+query I
+SELECT cast_to_type(42, NULL::INTEGER);
+----
+42
+
+# Second argument is a typed NULL string
+query T
+SELECT cast_to_type('42', NULL::VARCHAR);
+----
+42
+
+# NULL first argument
+query I
+SELECT cast_to_type(NULL, 0::INTEGER);
+----
+NULL
+
+# CASE expression as first argument
+query I
+SELECT cast_to_type(CASE WHEN true THEN '1' ELSE '2' END, NULL::INTEGER);
+----
+1
+
+# Arithmetic expression as first argument
+query R
+SELECT cast_to_type(1 + 2, NULL::DOUBLE);
+----
+3
+
+# Nested cast_to_type
+query T
+SELECT cast_to_type(cast_to_type('3.14', NULL::DOUBLE), NULL::VARCHAR);
+----
+3.14
+
+# Subquery as second argument
+query I
+SELECT cast_to_type('42', (SELECT NULL::INTEGER));
+----
+42
+
+# Column reference as second argument
+statement ok
+CREATE TABLE t1 (int_col INTEGER, text_col VARCHAR, double_col DOUBLE);
+
+statement ok
+INSERT INTO t1 VALUES (1, 'hello', 3.14), (2, 'world', 2.72);
+
+query I
+SELECT cast_to_type('99', int_col) FROM t1 LIMIT 1;
+----
+99
+
+query T
+SELECT cast_to_type(123, text_col) FROM t1 LIMIT 1;
+----
+123
+
+query R
+SELECT cast_to_type('1.5', double_col) FROM t1 LIMIT 1;
+----
+1.5
+
+# Case statement as second argument
+query I
+SELECT cast_to_type('42', CASE WHEN random() < 2 THEN 1 ELSE 0 END);
+----
+42
+
+# Use with column values as first argument
+query R
+SELECT cast_to_type(int_col, 1.0::DOUBLE) FROM t1;
+----
+1
+2
+
+# Cast column to match another column's type
+query T
+SELECT cast_to_type(int_col, text_col) FROM t1;
+----
+1
+2
+
+# Boolean cast
+query B
+SELECT cast_to_type(1, NULL::BOOLEAN);
+----
+true
+
+# String to date cast
+query D
+SELECT cast_to_type('2024-01-15', NULL::DATE);
+----
+2024-01-15
+
+# Error on invalid cast
+statement error Cannot cast string 'not_a_number' to value of Int32 type
+SELECT cast_to_type('not_a_number', NULL::INTEGER);
+
+# Error on invalid target type
+statement error Unsupported SQL type INVALID
+SELECT cast_to_type('42', NULL::INVALID);
+
+statement ok
+DROP TABLE t1;
+
+#######
+## Nullability tests for cast_to_type
+#######
+
+statement ok
+set datafusion.catalog.information_schema = true;
+
+# Non-nullable input -> non-nullable output
+statement ok
+CREATE VIEW v_cast_nonnull AS SELECT cast_to_type(42, NULL::INTEGER) as a;
+
+query TTT
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_cast_nonnull';
+----
+a Int32 NO
+
+statement ok
+DROP VIEW v_cast_nonnull;
+
+# Nullable input -> nullable output
+statement ok
+CREATE TABLE t_nullable (x INTEGER);
+
+statement ok
+INSERT INTO t_nullable VALUES (1), (NULL);
+
+statement ok
+CREATE VIEW v_cast_null AS SELECT cast_to_type(x, 1.0::DOUBLE) as a FROM t_nullable;
+
+query TTT
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_cast_null';
+----
+a Float64 YES
+
+# If we cast to the null type itself the result is nullable even if the input is not
+statement ok
+CREATE VIEW v_cast_to_null AS SELECT cast_to_type(42, null) as a;
+
+query TTT
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_cast_to_null';
+----
+a Null YES
+
+statement ok
+DROP VIEW v_cast_null;
+
+statement ok
+DROP TABLE t_nullable;
+
+#######
+## Tests for try_cast_to_type function (fallible variant returning NULL)
+#######
+
+# Basic string to integer cast
+query I
+SELECT try_cast_to_type('42', NULL::INTEGER);
+----
+42
+
+# Invalid cast returns NULL instead of error
+query I
+SELECT try_cast_to_type('not_a_number', NULL::INTEGER);
+----
+NULL
+
+# String to double cast
+query R
+SELECT try_cast_to_type('3.14', NULL::DOUBLE);
+----
+3.14
+
+# Invalid double returns NULL
+query R
+SELECT try_cast_to_type('abc', NULL::DOUBLE);
+----
+NULL
+
+# Integer to string cast (always succeeds)
+query T
+SELECT try_cast_to_type(42, NULL::VARCHAR);
+----
+42
+
+# Same-type is a no-op
+query I
+SELECT try_cast_to_type(42, 0::INTEGER);
+----
+42
+
+# NULL first argument
+query I
+SELECT try_cast_to_type(NULL, 0::INTEGER);
+----
+NULL
+
+# CASE expression as first argument
+query I
+SELECT try_cast_to_type(CASE WHEN true THEN '1' ELSE '2' END, NULL::INTEGER);
+----
+1
+
+# Arithmetic expression as first argument
+query R
+SELECT try_cast_to_type(1 + 2, NULL::DOUBLE);
+----
+3
+
+# Nested: try_cast_to_type inside cast_to_type
+query T
+SELECT cast_to_type(try_cast_to_type('3.14', NULL::DOUBLE), NULL::VARCHAR);
+----
+3.14
+
+# Subquery as second argument
+query I
+SELECT try_cast_to_type('42', (SELECT NULL::INTEGER));
+----
+42
+
+# Column reference as second argument
+statement ok
+CREATE TABLE t2 (int_col INTEGER, text_col VARCHAR);
+
+statement ok
+INSERT INTO t2 VALUES (1, 'hello'), (2, 'world');
+
+query I
+SELECT try_cast_to_type('99', int_col) FROM t2 LIMIT 1;
+----
+99
+
+query I
+SELECT try_cast_to_type(text_col, int_col) FROM t2;
+----
+NULL
+NULL
+
+# Cast column to match another column's type
+query T
+SELECT try_cast_to_type(int_col, text_col) FROM t2;
+----
+1
+2
+
+# Boolean cast
+query B
+SELECT try_cast_to_type(1, NULL::BOOLEAN);
+----
+true
+
+# String to date - valid
+query D
+SELECT try_cast_to_type('2024-01-15', NULL::DATE);
+----
+2024-01-15
+
+# String to date - invalid returns NULL
+query D
+SELECT try_cast_to_type('not_a_date', NULL::DATE);
+----
+NULL
+
+statement ok
+DROP TABLE t2;
+
+#######
+## Nullability tests for try_cast_to_type
+#######
+
+# try_cast_to_type is always nullable (cast can fail)
+statement ok
+CREATE VIEW v_trycast AS SELECT try_cast_to_type(42, 1::INTEGER) as a;
+
+query TTT
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_trycast';
+----
+a Int32 YES
+
+statement ok
+DROP VIEW v_trycast;
+
+statement ok
+set datafusion.catalog.information_schema = false;

@@ -344,10 +344,14 @@ impl ExecutionPlan for LazyMemoryExec {
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
+        // Create a fresh generator via reset_state() so that each execute()
+        // call produces an independent stream starting from the beginning.
+        let generator = self.batch_generators[partition].read().reset_state();
+
         let stream = LazyMemoryStream {
             schema: Arc::clone(&self.schema),
             projection: self.projection.clone(),
-            generator: Arc::clone(&self.batch_generators[partition]),
+            generator,
             baseline_metrics,
         };
         Ok(Box::pin(cooperative(stream)))
@@ -527,6 +531,41 @@ mod lazy_memory_tests {
             .downcast_ref::<Int64Array>()
             .unwrap();
         assert_eq!(array2.values(), &[4, 5]);
+
+        Ok(())
+    }
+
+    /// Verify that calling execute(0) twice on the same LazyMemoryExec
+    /// produces independent streams with the same data.
+    #[tokio::test]
+    async fn test_lazy_memory_exec_multiple_executions_are_independent() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let generator = TestGenerator {
+            counter: 0,
+            max_batches: 3,
+            batch_size: 2,
+            schema: Arc::clone(&schema),
+        };
+
+        let exec =
+            LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // First execution — consume all batches
+        let batches_1 = collect(exec.execute(0, Arc::clone(&task_ctx))?).await?;
+        let total_rows_1: usize = batches_1.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows_1, 6);
+
+        // Second execution — should produce the same data, not continue
+        // from where the first execution left off
+        let batches_2 = collect(exec.execute(0, Arc::clone(&task_ctx))?).await?;
+        let total_rows_2: usize = batches_2.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows_2, 6);
+
+        // Verify contents are identical
+        for (b1, b2) in batches_1.iter().zip(batches_2.iter()) {
+            assert_eq!(b1, b2);
+        }
 
         Ok(())
     }

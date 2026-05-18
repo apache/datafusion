@@ -198,24 +198,113 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     let values = array.values();
     let original_data = values.to_data();
 
-    // create default element array
-    let default_element = if let Some(default_element) = default_element {
-        default_element
-    } else {
-        let null_scalar = ScalarValue::try_from(&data_type)?;
-        null_scalar.to_array_of_size(original_data.len())?
-    };
-    let default_value_data = default_element.to_data();
+    // Track the largest per-row growth so the uniform-fill fast path can
+    // materialize one reusable fill buffer of the required size.
+    let mut max_extra: usize = 0;
+    let mut output_values_len: usize = 0;
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        if array.is_null(row_index) {
+            continue;
+        }
+        let target_count = count_array.value(row_index).to_usize().ok_or_else(|| {
+            internal_datafusion_err!("array_resize: failed to convert size to usize")
+        })?;
+        output_values_len =
+            output_values_len.checked_add(target_count).ok_or_else(|| {
+                internal_datafusion_err!("array_resize: output size overflow")
+            })?;
+        let current_len = (offset_window[1] - offset_window[0]).to_usize().unwrap();
+        if target_count > current_len {
+            max_extra = max_extra.max(target_count - current_len);
+        }
+    }
 
-    // create a mutable array to store the original data
-    let capacity = Capacities::Array(original_data.len() + default_value_data.len());
+    // The fast path is valid when at least one row grows and every row would
+    // use the same fill value.
+    let use_bulk_fill = max_extra > 0
+        && match &default_element {
+            None => true,
+            Some(fill_array) => {
+                let len = fill_array.len();
+                let null_count = fill_array.logical_null_count();
+
+                len <= 1
+                    || null_count == len
+                    || (null_count == 0 && {
+                        let first = fill_array.slice(0, 1);
+                        (1..len)
+                            .all(|i| fill_array.slice(i, 1).as_ref() == first.as_ref())
+                    })
+            }
+        };
+
+    if use_bulk_fill {
+        // Fast path: materialize one reusable fill buffer for all grown rows.
+        let fill_scalar = match &default_element {
+            None => ScalarValue::try_from(&data_type)?,
+            Some(fill_array) if fill_array.logical_null_count() == fill_array.len() => {
+                ScalarValue::try_from(&data_type)?
+            }
+            Some(fill_array) => ScalarValue::try_from_array(fill_array.as_ref(), 0)?,
+        };
+        let fill_values = fill_scalar.to_array_of_size(max_extra)?;
+        let default_value_data = fill_values.to_data();
+        build_resized_list(
+            array,
+            count_array,
+            field,
+            &original_data,
+            &default_value_data,
+            output_values_len,
+            |mutable, _, extra_count| mutable.extend(1, 0, extra_count),
+        )
+    } else {
+        // Slow path: rows may need different fill values, so append from the
+        // corresponding slot in the input fill array for each grown element.
+        let fill_values = match default_element {
+            Some(fill_values) => fill_values,
+            None => {
+                let null_scalar = ScalarValue::try_from(&data_type)?;
+                null_scalar.to_array_of_size(original_data.len())?
+            }
+        };
+        let default_value_data = fill_values.to_data();
+        build_resized_list(
+            array,
+            count_array,
+            field,
+            &original_data,
+            &default_value_data,
+            output_values_len,
+            |mutable, row_index, extra_count| {
+                for _ in 0..extra_count {
+                    mutable.extend(1, row_index, row_index + 1);
+                }
+            },
+        )
+    }
+}
+
+fn build_resized_list<O, F>(
+    array: &GenericListArray<O>,
+    count_array: &Int64Array,
+    field: &FieldRef,
+    original_data: &arrow::array::ArrayData,
+    default_value_data: &arrow::array::ArrayData,
+    output_values_len: usize,
+    mut append_fill_values: F,
+) -> Result<ArrayRef>
+where
+    O: OffsetSizeTrait + TryInto<i64>,
+    F: FnMut(&mut MutableArrayData, usize, usize),
+{
+    let capacity = Capacities::Array(output_values_len);
     let mut offsets = vec![O::usize_as(0)];
     let mut mutable = MutableArrayData::with_capacities(
-        vec![&original_data, &default_value_data],
+        vec![original_data, default_value_data],
         false,
         capacity,
     );
-
     let mut null_builder = NullBufferBuilder::new(array.len());
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
@@ -232,21 +321,13 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         let count = O::usize_as(count);
         let start = offset_window[0];
         if start + count > offset_window[1] {
-            let extra_count =
-                (start + count - offset_window[1]).try_into().map_err(|_| {
-                    internal_datafusion_err!(
-                        "array_resize: failed to convert size to i64"
-                    )
-                })?;
+            let extra_count = (start + count - offset_window[1]).to_usize().unwrap();
             let end = offset_window[1];
-            mutable.extend(0, (start).to_usize().unwrap(), (end).to_usize().unwrap());
-            // append default element
-            for _ in 0..extra_count {
-                mutable.extend(1, row_index, row_index + 1);
-            }
+            mutable.extend(0, start.to_usize().unwrap(), end.to_usize().unwrap());
+            append_fill_values(&mut mutable, row_index, extra_count);
         } else {
             let end = start + count;
-            mutable.extend(0, (start).to_usize().unwrap(), (end).to_usize().unwrap());
+            mutable.extend(0, start.to_usize().unwrap(), end.to_usize().unwrap());
         };
         offsets.push(offsets[row_index] + count);
     }

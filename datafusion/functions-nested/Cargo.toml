@@ -64,8 +64,11 @@ log = { workspace = true }
 memchr = { workspace = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true, features = ["async_tokio"] }
 rand = { workspace = true }
+# used to test array_transform
+datafusion-physical-expr = { workspace = true }
 
 [[bench]]
 harness = false
@@ -77,7 +80,7 @@ name = "array_min_max"
 
 [[bench]]
 harness = false
-name = "array_expression"
+name = "arrays_zip"
 
 [[bench]]
 harness = false
@@ -98,6 +101,10 @@ name = "map"
 [[bench]]
 harness = false
 name = "array_remove"
+
+[[bench]]
+harness = false
+name = "array_replace"
 
 [[bench]]
 harness = false
@@ -122,3 +129,11 @@ name = "array_sort"
 [[bench]]
 harness = false
 name = "string_to_array"
+
+[[bench]]
+harness = false
+name = "array_resize"
+
+[[bench]]
+harness = false
+name = "array_range"
