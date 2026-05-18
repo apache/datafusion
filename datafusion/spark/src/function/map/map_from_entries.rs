@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::function::map::utils::{
@@ -28,7 +27,8 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -54,10 +54,6 @@ impl MapFromEntries {
 }
 
 impl ScalarUDFImpl for MapFromEntries {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_from_entries"
     }
@@ -104,10 +100,7 @@ impl ScalarUDFImpl for MapFromEntries {
         Ok(Arc::new(Field::new(self.name(), map_type, nullable)))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(map_from_entries_inner, vec![])(&args.args)
     }
 }
@@ -162,7 +155,6 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::datatypes::Fields;
-    use datafusion_expr::ReturnFieldArgs;
 
     fn make_entries_field(array_nullable: bool, element_nullable: bool) -> FieldRef {
         let struct_type = DataType::Struct(Fields::from(vec![

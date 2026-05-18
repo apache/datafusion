@@ -26,7 +26,7 @@ use datafusion_expr::{
     Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 /// Wrapper around datafusion date_part function to handle
 /// Spark behavior returning day of the week 1-indexed instead of 0-indexed and different part aliases.
@@ -65,10 +65,6 @@ impl SparkDatePart {
 }
 
 impl ScalarUDFImpl for SparkDatePart {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "date_part"
     }
@@ -129,8 +125,11 @@ impl ScalarUDFImpl for SparkDatePart {
         ));
 
         match part {
-            // Add 1 for day-of-week parts to convert 0-indexed to 1-indexed
-            "dow" | "isodow" => Ok(ExprSimplifyResult::Simplified(
+            // Spark's `dayofweek` is 1..=7 (Sun=1) but df's `dow` is 0..=6
+            // (Sun=0); shift by +1. df's `isodow` already returns the
+            // PG-correct 1..=7 (Mon=1), which matches Spark's
+            // `dayofweek_iso`/`dow_iso`, so no shift is needed there.
+            "dow" => Ok(ExprSimplifyResult::Simplified(
                 date_part_expr + Expr::Literal(ScalarValue::Int32(Some(1)), None),
             )),
             _ => Ok(ExprSimplifyResult::Simplified(date_part_expr)),

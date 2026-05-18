@@ -137,6 +137,7 @@ Here are some active projects using DataFusion:
 - [Vortex] An extensible, state of the art columnar file format
 - [Telemetry](https://telemetry.sh/) Structured logging made easy
 - [Xorq](https://github.com/xorq-labs/xorq/) Xorq is a multi-engine batch transformation framework built on Ibis, DataFusion and Arrow
+- [KalamDB](https://github.com/jamals86/KalamDB) SQL-first realtime state database for AI agents, chat products, and multi-tenant SaaS.
 
 Here are some less active projects that used DataFusion:
 
@@ -185,7 +186,7 @@ provide integrations with other systems, some of which are described below:
 - [datafusion-c](https://github.com/datafusion-contrib/datafusion-c)
 - [datafusion-python](https://github.com/apache/datafusion-python)
 - [datafusion-ruby](https://github.com/datafusion-contrib/datafusion-ruby)
-- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
+- [datafusion-java](https://github.com/apache/datafusion-java)
 
 ### Integrations
 

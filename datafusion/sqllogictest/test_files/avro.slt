@@ -106,6 +106,23 @@ STORED AS AVRO
 LOCATION '../../testing/data/avro/alltypes_plain.zstandard.avro';
 
 statement ok
+CREATE EXTERNAL TABLE alltypes_plain_reordered (
+  string_col VARCHAR,
+  id INT,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS AVRO
+LOCATION '../../testing/data/avro/alltypes_plain.avro';
+
+statement ok
 CREATE EXTERNAL TABLE single_nan (
   mycol FLOAT
 )
@@ -267,3 +284,22 @@ SELECT id, string_col, int_col, bigint_col FROM alltypes_plain ORDER BY id LIMIT
 2 0 0 0
 3 1 1 10
 4 0 0 0
+
+# projection should follow column names even when external table column order differs
+query TB
+SELECT string_col, bool_col FROM alltypes_plain_reordered ORDER BY id LIMIT 2
+----
+0 true
+1 false
+
+# explain plan for reordered table projection path
+query TT
+EXPLAIN SELECT string_col, bool_col FROM alltypes_plain_reordered
+----
+logical_plan TableScan: alltypes_plain_reordered projection=[string_col, bool_col]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/alltypes_plain.avro]]}, projection=[string_col, bool_col], file_type=avro
+
+
+# Config reset
+statement ok
+reset datafusion.sql_parser.map_string_types_to_utf8view;

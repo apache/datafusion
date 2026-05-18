@@ -26,7 +26,6 @@ use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 const SORT_OPTIONS: SortOptions = SortOptions {
     // Having the smallest result first
@@ -136,10 +135,6 @@ impl GreatestLeastOperator for LeastFunc {
 }
 
 impl ScalarUDFImpl for LeastFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "least"
     }

@@ -748,7 +748,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use futures::StreamExt;
 
     fn create_test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]))

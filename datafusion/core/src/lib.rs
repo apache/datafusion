@@ -761,14 +761,13 @@
 //! [`RecordBatch`]: arrow::array::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
-
-/// DataFusion crate version
-pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
+#![doc = include_str!("optimizer_rule_reference.md")]
 
 extern crate core;
-
 #[cfg(feature = "sql")]
 extern crate sqlparser;
+/// DataFusion crate version
+pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod dataframe;
 pub mod datasource;
@@ -786,7 +785,10 @@ pub use object_store;
 pub use parquet;
 
 #[cfg(feature = "avro")]
-pub use datafusion_datasource_avro::apache_avro;
+pub use datafusion_datasource_avro::arrow_avro;
+
+#[cfg(test)]
+mod optimizer_rule_reference;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs

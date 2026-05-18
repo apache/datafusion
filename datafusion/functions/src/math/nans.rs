@@ -33,7 +33,6 @@ use datafusion_expr::{
     TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
@@ -72,9 +71,6 @@ impl IsNanFunc {
 }
 
 impl ScalarUDFImpl for IsNanFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "isnan"
     }

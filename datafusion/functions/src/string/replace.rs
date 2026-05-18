@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 
+use crate::strings::{
+    BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringWriter,
+};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
@@ -79,10 +82,6 @@ impl ReplaceFunc {
 }
 
 impl ScalarUDFImpl for ReplaceFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "replace"
     }
@@ -165,25 +164,40 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_string_view_array(&args[1])?;
     let to_array = as_string_view_array(&args[2])?;
 
-    let mut builder = GenericStringBuilder::<i32>::new();
-    let mut buffer = String::new();
+    let len = string_array.len();
+    let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(len, 0);
+    let nulls = NullBuffer::union_many([
+        string_array.nulls(),
+        from_array.nulls(),
+        to_array.nulls(),
+    ]);
 
-    for ((string, from), to) in string_array
-        .iter()
-        .zip(from_array.iter())
-        .zip(to_array.iter())
-    {
-        match (string, from, to) {
-            (Some(string), Some(from), Some(to)) => {
-                buffer.clear();
-                replace_into_string(&mut buffer, string, from, to);
-                builder.append_value(&buffer);
+    // Hoist the nulls.is_some() check out of the loop. LLVM does not always
+    // unswitch this loop on its own (the Utf8View body is large enough to
+    // exceed its cost-benefit threshold).
+    if let Some(nulls_ref) = nulls.as_ref() {
+        for i in 0..len {
+            if nulls_ref.is_null(i) {
+                builder.append_placeholder();
+                continue;
             }
-            _ => builder.append_null(),
+            // SAFETY: union of input nulls is non-null at i, so each input is too.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            apply_replace(&mut builder, string, from, to);
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: i < len, and no input has a null buffer.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            apply_replace(&mut builder, string, from, to);
         }
     }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
 /// Replaces all occurrences in string of substring from with substring to.
@@ -193,73 +207,96 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_generic_string_array::<T>(&args[1])?;
     let to_array = as_generic_string_array::<T>(&args[2])?;
 
-    let mut builder = GenericStringBuilder::<T>::new();
-    let mut buffer = String::new();
+    let len = string_array.len();
+    let mut builder = GenericStringArrayBuilder::<T>::with_capacity(len, 0);
+    let nulls = NullBuffer::union_many([
+        string_array.nulls(),
+        from_array.nulls(),
+        to_array.nulls(),
+    ]);
 
-    for ((string, from), to) in string_array
-        .iter()
-        .zip(from_array.iter())
-        .zip(to_array.iter())
-    {
-        match (string, from, to) {
-            (Some(string), Some(from), Some(to)) => {
-                buffer.clear();
-                replace_into_string(&mut buffer, string, from, to);
-                builder.append_value(&buffer);
+    // Hoist the nulls.is_some() check out of the loop. LLVM unswitches this
+    // automatically today, but kept explicit so the no-nulls fast path is not
+    // contingent on the optimizer's cost heuristic.
+    if let Some(nulls_ref) = nulls.as_ref() {
+        for i in 0..len {
+            if nulls_ref.is_null(i) {
+                builder.append_placeholder();
+                continue;
             }
-            _ => builder.append_null(),
+            // SAFETY: union of input nulls is non-null at i, so each input is too.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            apply_replace(&mut builder, string, from, to);
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: i < len, and no input has a null buffer.
+            let string = unsafe { string_array.value_unchecked(i) };
+            let from = unsafe { from_array.value_unchecked(i) };
+            let to = unsafe { to_array.value_unchecked(i) };
+            apply_replace(&mut builder, string, from, to);
         }
     }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
-/// Helper function to perform string replacement into a reusable String buffer
 #[inline]
-fn replace_into_string(buffer: &mut String, string: &str, from: &str, to: &str) {
-    if from.is_empty() {
-        // When from is empty, insert 'to' at the beginning, between each character, and at the end
-        // This matches the behavior of str::replace()
-        buffer.push_str(to);
-        for ch in string.chars() {
-            buffer.push(ch);
-            buffer.push_str(to);
-        }
-        return;
-    }
-
-    // Fast path for replacing a single ASCII character with another single ASCII character.
-    // Extends the buffer's underlying Vec<u8> directly, for performance.
-    if let ([from_byte], [to_byte]) = (from.as_bytes(), to.as_bytes())
+fn apply_replace<B: BulkNullStringArrayBuilder>(
+    builder: &mut B,
+    string: &str,
+    from: &str,
+    to: &str,
+) {
+    // Hot path: single ASCII byte → single ASCII byte. An ASCII byte (< 0x80)
+    // cannot appear inside a multi-byte UTF-8 sequence, so any multi-byte
+    // sequences in `string` pass through unchanged and output stays valid
+    // UTF-8.
+    if let (&[from_byte], &[to_byte]) = (from.as_bytes(), to.as_bytes())
         && from_byte.is_ascii()
         && to_byte.is_ascii()
     {
-        // SAFETY: Replacing an ASCII byte with another ASCII byte preserves UTF-8 validity.
+        // SAFETY: see the contract above.
         unsafe {
-            buffer.as_mut_vec().extend(
-                string
-                    .as_bytes()
-                    .iter()
-                    .map(|&b| if b == *from_byte { *to_byte } else { b }),
-            );
+            builder.append_byte_map(string.as_bytes(), |b| {
+                if b == from_byte { to_byte } else { b }
+            });
         }
         return;
     }
 
+    if from.is_empty() {
+        // Empty `from`: insert `to` before each character and at both ends.
+        builder.append_with(|w| {
+            w.write_str(to);
+            for ch in string.chars() {
+                w.write_char(ch);
+                w.write_str(to);
+            }
+        });
+        return;
+    }
+
+    builder.append_with(|w| replace_into_writer(w, string, from, to));
+}
+
+#[inline]
+fn replace_into_writer<W: StringWriter>(w: &mut W, string: &str, from: &str, to: &str) {
     let mut last_end = 0;
     for (start, _part) in string.match_indices(from) {
-        buffer.push_str(&string[last_end..start]);
-        buffer.push_str(to);
+        w.write_str(&string[last_end..start]);
+        w.write_str(to);
         last_end = start + from.len();
     }
-    buffer.push_str(&string[last_end..]);
+    w.write_str(&string[last_end..]);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::utils::test::test_function;
-    use arrow::array::Array;
     use arrow::array::LargeStringArray;
     use arrow::array::StringArray;
     use arrow::datatypes::DataType::{LargeUtf8, Utf8};

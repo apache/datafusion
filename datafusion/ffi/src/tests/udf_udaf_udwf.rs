@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow_schema::DataType;
 use datafusion_catalog::TableFunctionImpl;
+use datafusion_common::ScalarValue;
 use datafusion_expr::{
     AggregateUDF, ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    WindowUDF,
+    Volatility, WindowUDF,
 };
 use datafusion_functions::math::abs::AbsFunc;
 use datafusion_functions::math::random::RandomFunc;
@@ -48,10 +48,6 @@ pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
 struct WrappedAbs(Arc<ScalarUDF>);
 
 impl ScalarUDFImpl for WrappedAbs {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "ffi_abs"
     }
@@ -74,6 +70,44 @@ impl ScalarUDFImpl for WrappedAbs {
 
 pub(crate) extern "C" fn create_ffi_random_func() -> FFI_ScalarUDF {
     let udf: Arc<ScalarUDF> = Arc::new(RandomFunc::new().into());
+
+    udf.into()
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct TimeZoneUDF {
+    signature: Signature,
+}
+
+impl ScalarUDFImpl for TimeZoneUDF {
+    fn name(&self) -> &str {
+        "TimeZoneUDF"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(
+        &self,
+        _arg_types: &[DataType],
+    ) -> datafusion_common::Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+    ) -> datafusion_common::Result<ColumnarValue> {
+        let tz = args.config_options.execution.time_zone.clone();
+        Ok(ColumnarValue::Scalar(ScalarValue::from(tz)))
+    }
+}
+
+pub(crate) extern "C" fn create_timezone_func() -> FFI_ScalarUDF {
+    let udf: Arc<ScalarUDF> = Arc::new(ScalarUDF::from(TimeZoneUDF {
+        signature: Signature::uniform(1, vec![DataType::Utf8], Volatility::Stable),
+    }));
 
     udf.into()
 }

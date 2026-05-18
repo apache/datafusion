@@ -17,7 +17,6 @@
 
 //! math expressions
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -147,10 +146,6 @@ impl AbsFunc {
 }
 
 impl ScalarUDFImpl for AbsFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "abs"
     }

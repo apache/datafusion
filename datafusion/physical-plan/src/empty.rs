@@ -17,7 +17,6 @@
 
 //! EmptyRelation with produce_one_row=false execution plan
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
@@ -112,10 +111,6 @@ impl ExecutionPlan for EmptyExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -164,7 +159,7 @@ impl ExecutionPlan for EmptyExec {
         )?))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             assert_or_internal_err!(
                 partition < self.partitions,
@@ -191,7 +186,7 @@ impl ExecutionPlan for EmptyExec {
             });
         }
 
-        Ok(stats)
+        Ok(Arc::new(stats))
     }
 }
 

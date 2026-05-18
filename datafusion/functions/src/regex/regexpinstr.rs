@@ -25,8 +25,8 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
-    TypeSignature::Uniform, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature::Exact, TypeSignature::Uniform, Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::izip;
@@ -109,10 +109,6 @@ impl RegexpInstrFunc {
 }
 
 impl ScalarUDFImpl for RegexpInstrFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regexp_instr"
     }
@@ -125,10 +121,7 @@ impl ScalarUDFImpl for RegexpInstrFunc {
         Ok(Int64)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
 
         let len = args
@@ -449,11 +442,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
     use arrow::array::{GenericStringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::ScalarFunctionArgs;
     #[test]
     fn test_regexp_instr() {
         test_case_sensitive_regexp_instr_nulls();

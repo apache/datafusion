@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
@@ -75,10 +74,6 @@ impl CeilFunc {
 }
 
 impl ScalarUDFImpl for CeilFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "ceil"
     }

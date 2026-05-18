@@ -23,7 +23,6 @@ pub mod parquet;
 pub mod csv;
 
 use futures::Stream;
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::fs::File;
@@ -208,10 +207,6 @@ impl TestTableProvider {}
 
 #[async_trait]
 impl TableProvider for TestTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

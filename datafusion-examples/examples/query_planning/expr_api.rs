@@ -175,9 +175,10 @@ fn simplify_demo() -> Result<()> {
     // the ExecutionProps carries information needed to simplify
     // expressions, such as the current time (to evaluate `now()`
     // correctly)
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(schema)
-        .with_current_time();
+        .with_current_time()
+        .build();
     let simplifier = ExprSimplifier::new(context);
 
     // And then call the simplify_expr function:
@@ -192,14 +193,15 @@ fn simplify_demo() -> Result<()> {
 
     // here are some other examples of what DataFusion is capable of
     let schema = Schema::new(vec![make_field("i", DataType::Int64)]).to_dfschema_ref()?;
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(Arc::clone(&schema))
-        .with_current_time();
+        .with_current_time()
+        .build();
     let simplifier = ExprSimplifier::new(context);
 
     // basic arithmetic simplification
     // i + 1 + 2 => i + 3
-    // (note this is not done if the expr is (col("i") + (lit(1) + lit(2))))
+    // (note this is not done if the expr is (col("i") + lit(1) + lit(2)))
     assert_eq!(
         simplifier.simplify(col("i") + (lit(1) + lit(2)))?,
         col("i") + lit(3)
@@ -261,7 +263,7 @@ fn range_analysis_demo() -> Result<()> {
     // You can provide DataFusion any known boundaries on the values of `date`
     // (for example, maybe you know you only have data up to `2020-09-15`), but
     // in this case, let's say we don't know any boundaries beforehand so we use
-    // `try_new_unknown`
+    // `try_new_unbounded`
     let boundaries = ExprBoundaries::try_new_unbounded(&schema)?;
 
     // Now, we invoke the analysis code to perform the range analysis
@@ -554,9 +556,10 @@ fn type_coercion_demo() -> Result<()> {
     assert!(physical_expr.evaluate(&batch).is_ok());
 
     // 2. Type coercion with `ExprSimplifier::coerce`.
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(Arc::new(df_schema.clone()))
-        .with_current_time();
+        .with_current_time()
+        .build();
     let simplifier = ExprSimplifier::new(context);
     let coerced_expr = simplifier.coerce(expr.clone(), &df_schema)?;
     let physical_expr = datafusion::physical_expr::create_physical_expr(

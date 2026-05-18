@@ -54,7 +54,7 @@ More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifyin
 
 ## Optimizing Builds
 
-Here are several suggestions to get the Rust compler to produce faster code when
+Here are several suggestions to get the Rust compiler to produce faster code when
 compiling DataFusion. Note that these changes may increase compile time and
 binary size.
 
@@ -156,7 +156,7 @@ By default, Datafusion returns errors as a plain text message. You can enable mo
 such as backtraces by enabling the `backtrace` feature to your `Cargo.toml` file like this:
 
 ```toml
-datafusion = { version = "52.1.0", features = ["backtrace"]}
+datafusion = { version = "53.0.0", features = ["backtrace"]}
 ```
 
 Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#environment-variables)

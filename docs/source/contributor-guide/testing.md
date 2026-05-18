@@ -23,6 +23,37 @@ Tests are critical to ensure that DataFusion is working properly and
 is not accidentally broken during refactorings. All new features
 should have test coverage and the entire test suite is run as part of CI.
 
+## Testing Quick Start
+
+While developing a feature or bug fix, best practice is to run the smallest set
+of tests that gives confidence for your change, then expand as needed.
+
+Initially, run the tests in the crates you changed. For example, if you made changes
+to files in `datafusion-optimizer/src`, run the corresponding crate tests:
+
+```shell
+cargo test -p datafusion-optimizer
+```
+
+Then, run the `sqllogictest` suite, which provides a strong speed–coverage tradeoff for development: it runs quickly while offering broad regression coverage across most SQL behavior in DataFusion.
+
+```shell
+cargo test --profile=ci --test sqllogictests
+```
+
+Finally, before submitting a PR, run the tests for the core `datafusion` and
+`datafusion-cli` crates:
+
+```shell
+cargo test -p datafusion
+cargo test -p datafusion-cli
+```
+
+Some integration tests require optional external services such as Docker-backed
+containers and may skip when unavailable.
+
+## Testing Overview
+
 DataFusion has several levels of tests in its [Test Pyramid] and tries to follow
 the Rust standard [Testing Organization] described in [The Book].
 
@@ -154,6 +185,34 @@ tested in the same way using the [doc_comment] crate. See the end of
 [doctest]: https://doc.rust-lang.org/rust-by-example/testing/doc_testing.html
 [doc_comment]: https://docs.rs/doc-comment/latest/doc_comment
 [core/src/lib.rs]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583
+
+## Documentation Link Checks
+
+Run the internal markdown link check locally:
+
+```shell
+source ci/scripts/utils/tool_versions.sh
+cargo install lychee --locked --version "${LYCHEE_VERSION}"
+bash ci/scripts/markdown_link_check.sh
+```
+
+Notes:
+
+- The script is run with `bash` and is compatible with the default Bash on macOS (no `mapfile` dependency).
+- The CI configuration currently checks internal markdown links only. External `http(s)` and `mailto` links are excluded to avoid flaky failures.
+
+When a link is broken, lychee prints the file and URL/path that failed. For example:
+
+```text
+[docs/source/user-guide/cli/overview.md]:
+  [ERROR] file:///.../docs/source/user-guide/cli/missing-page.md | Cannot find file: File not found. Check if file exists and path is correct
+```
+
+Rust doc comments are validated by rustdoc in CI and can be checked locally with:
+
+```shell
+bash ci/scripts/rust_docs.sh
+```
 
 ## Benchmarks
 

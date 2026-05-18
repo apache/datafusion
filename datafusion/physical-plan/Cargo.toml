@@ -47,8 +47,12 @@ tokio_coop_fallback = []
 name = "datafusion_physical_plan"
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
+arrow-data = { workspace = true }
+# Spill IPC writes require lz4 and zstd codec support. Keep these features in
+# sync with the SpillCompression variants in datafusion-common so codec
+# availability is explicit in the crate that owns spill handling.
+arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
@@ -73,6 +77,7 @@ pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
 
 [dev-dependencies]
+arrow-data = { workspace = true }
 criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
@@ -107,3 +112,7 @@ required-features = ["test_utils"]
 harness = false
 name = "aggregate_vectorized"
 required-features = ["test_utils"]
+
+[[bench]]
+harness = false
+name = "dictionary_group_values"

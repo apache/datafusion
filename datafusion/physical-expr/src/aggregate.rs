@@ -38,13 +38,20 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::expressions::Column;
+use crate::physical_expr::create_physical_sort_exprs;
+use crate::planner::{create_physical_expr, create_physical_exprs};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Result, ScalarValue, assert_or_internal_err, internal_err, not_impl_err,
+    DFSchema, Result, ScalarValue, assert_or_internal_err, internal_err, not_impl_err,
 };
-use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr::{
+    AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
+};
+use datafusion_expr::{AggregateUDF, Expr, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
@@ -54,6 +61,57 @@ use datafusion_functions_aggregate_common::accumulator::{
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+#[derive(Debug, Clone)]
+struct AggregateHumanDisplay {
+    expression: String,
+    alias: Option<String>,
+}
+
+impl AggregateHumanDisplay {
+    fn try_new(
+        expression: Option<String>,
+        alias: Option<String>,
+        name: &str,
+    ) -> Result<Option<Self>> {
+        let alias = alias.filter(|alias| !alias.is_empty());
+        let Some(expression) = expression else {
+            if alias.is_some() {
+                return internal_err!(
+                    "AggregateExprBuilder::human_display must be provided when human_display_alias is set"
+                );
+            }
+            return Ok(None);
+        };
+
+        if expression.is_empty() {
+            if alias.is_some() {
+                return internal_err!(
+                    "AggregateExprBuilder::human_display must be non-empty when human_display_alias is set"
+                );
+            }
+            return Ok(None);
+        }
+
+        if let Some(alias) = alias.as_deref()
+            && alias != name
+        {
+            return internal_err!(
+                "aggregate human_display_alias must match aggregate name `{name}`: {alias}"
+            );
+        }
+
+        Ok(Some(Self { expression, alias }))
+    }
+
+    fn expression(&self) -> &str {
+        &self.expression
+    }
+
+    fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
+    }
+}
 
 /// Builder for physical [`AggregateFunctionExpr`]
 ///
@@ -65,8 +123,11 @@ pub struct AggregateExprBuilder {
     /// Physical expressions of the aggregate function
     args: Vec<Arc<dyn PhysicalExpr>>,
     alias: Option<String>,
+    output_metadata: Option<FieldMetadata>,
     /// A human readable name
-    human_display: String,
+    human_display: Option<String>,
+    /// Optional visible output alias for `human_display`.
+    human_display_alias: Option<String>,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// The physical order by expressions
@@ -85,7 +146,9 @@ impl AggregateExprBuilder {
             fun,
             args,
             alias: None,
-            human_display: String::default(),
+            output_metadata: None,
+            human_display: None,
+            human_display_alias: None,
             schema: Arc::new(Schema::empty()),
             order_bys: vec![],
             ignore_nulls: false,
@@ -126,10 +189,6 @@ impl AggregateExprBuilder {
     /// # }
     /// #
     /// # impl AggregateUDFImpl for FirstValueUdf {
-    /// #     fn as_any(&self) -> &dyn Any {
-    /// #         unimplemented!()
-    /// #     }
-    /// #
     /// #     fn name(&self) -> &str {
     /// #         unimplemented!()
     /// #     }
@@ -193,7 +252,9 @@ impl AggregateExprBuilder {
             fun,
             args,
             alias,
+            output_metadata,
             human_display,
+            human_display_alias,
             schema,
             order_bys,
             ignore_nulls,
@@ -220,7 +281,10 @@ impl AggregateExprBuilder {
             &fun.signature().type_signature,
         )?;
 
-        let return_field = fun.return_field(&input_exprs_fields)?;
+        let mut return_field = fun.return_field(&input_exprs_fields)?;
+        if let Some(output_metadata) = output_metadata {
+            return_field = output_metadata.add_to_field_ref(return_field);
+        }
         let is_nullable = fun.is_nullable();
         let name = match alias {
             None => {
@@ -230,6 +294,9 @@ impl AggregateExprBuilder {
             }
             Some(alias) => alias,
         };
+
+        let human_display =
+            AggregateHumanDisplay::try_new(human_display, human_display_alias, &name)?;
 
         let arg_fields = args
             .iter()
@@ -259,8 +326,24 @@ impl AggregateExprBuilder {
         self
     }
 
-    pub fn human_display(mut self, name: String) -> Self {
-        self.human_display = name;
+    fn output_metadata(mut self, metadata: Option<FieldMetadata>) -> Self {
+        self.output_metadata = metadata;
+        self
+    }
+
+    pub fn human_display(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        self.human_display = (!name.is_empty()).then_some(name);
+        if self.human_display.is_none() {
+            self.human_display_alias = None;
+        }
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn human_display_alias(mut self, alias: impl Into<String>) -> Self {
+        let alias = alias.into();
+        self.human_display_alias = (!alias.is_empty()).then_some(alias);
         self
     }
 
@@ -305,6 +388,234 @@ impl AggregateExprBuilder {
     }
 }
 
+#[derive(Debug, Clone)]
+struct LoweredAggregateHumanDisplay {
+    expression: String,
+    alias: Option<String>,
+}
+
+/// Result of lowering a logical aggregate expression into physical aggregate
+/// planning pieces.
+#[derive(Debug, Clone)]
+pub struct LoweredAggregate {
+    /// Physical aggregate expression that can be used by an aggregate execution
+    /// plan.
+    pub aggregate: Arc<AggregateFunctionExpr>,
+    /// Optional physical filter expression for `FILTER (WHERE ...)`.
+    pub filter: Option<Arc<dyn PhysicalExpr>>,
+    /// Physical ordering expressions from aggregate `ORDER BY`.
+    pub order_bys: Vec<PhysicalSortExpr>,
+}
+
+/// Builder for converting a logical aggregate [`Expr`] into physical aggregate
+/// planning pieces.
+///
+/// This builder handles the logical-to-physical work needed for aggregate
+/// planning: unwrapping aggregate aliases, choosing the output name, preserving
+/// user-facing display text, lowering aggregate arguments, lowering the optional
+/// filter, and lowering aggregate `ORDER BY` expressions.
+pub struct LoweredAggregateBuilder<'a> {
+    expr: &'a Expr,
+    name: Option<String>,
+    human_display: Option<LoweredAggregateHumanDisplay>,
+    output_metadata: Option<FieldMetadata>,
+    preserve_alias_metadata: bool,
+    logical_input_schema: &'a DFSchema,
+    physical_input_schema: &'a Schema,
+    execution_props: &'a ExecutionProps,
+}
+
+impl<'a> LoweredAggregateBuilder<'a> {
+    /// Create a builder for lowering `expr`.
+    ///
+    /// `logical_input_schema` is used to resolve logical expressions such as
+    /// columns, while `physical_input_schema` is the input schema used by the
+    /// physical aggregate expression.
+    pub fn new(
+        expr: &'a Expr,
+        logical_input_schema: &'a DFSchema,
+        physical_input_schema: &'a Schema,
+        execution_props: &'a ExecutionProps,
+    ) -> Self {
+        Self {
+            expr,
+            name: None,
+            human_display: None,
+            output_metadata: None,
+            preserve_alias_metadata: true,
+            logical_input_schema,
+            physical_input_schema,
+            execution_props,
+        }
+    }
+
+    /// Override the output column name for the aggregate.
+    ///
+    /// If this is not set, the builder uses the alias from `expr` when present,
+    /// or derives the physical name from the aggregate expression.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Override the human-readable display text for the aggregate.
+    ///
+    /// This is useful when a caller has already computed the exact display text
+    /// it wants to preserve. When this override is used, aliases with metadata
+    /// are still unwrapped for planning, but alias metadata is not copied to the
+    /// aggregate output field.
+    pub fn with_human_display(mut self, human_display: impl Into<String>) -> Self {
+        self.human_display = Some(LoweredAggregateHumanDisplay {
+            expression: human_display.into(),
+            alias: None,
+        });
+        self.preserve_alias_metadata = false;
+        self
+    }
+
+    /// Lower the logical aggregate expression into physical aggregate pieces.
+    pub fn build(self) -> Result<LoweredAggregate> {
+        let Self {
+            expr,
+            name,
+            human_display,
+            output_metadata,
+            preserve_alias_metadata,
+            logical_input_schema,
+            physical_input_schema,
+            execution_props,
+        } = self;
+
+        let (name, human_display, output_metadata, expr) = lower_aggregate_display(
+            expr,
+            name,
+            human_display,
+            output_metadata,
+            preserve_alias_metadata,
+        );
+
+        let Expr::AggregateFunction(AggregateFunction {
+            func,
+            params:
+                AggregateFunctionParams {
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
+        }) = &expr
+        else {
+            return internal_err!("Invalid aggregate expression '{expr:?}'");
+        };
+
+        let name = if let Some(name) = name {
+            name
+        } else {
+            physical_name(&expr)?
+        };
+
+        let physical_args =
+            create_physical_exprs(args, logical_input_schema, execution_props)?;
+        let filter = filter
+            .as_ref()
+            .map(|filter| {
+                create_physical_expr(filter, logical_input_schema, execution_props)
+            })
+            .transpose()?;
+        let order_bys =
+            create_physical_sort_exprs(order_by, logical_input_schema, execution_props)?;
+        let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
+            == NullTreatment::IgnoreNulls;
+
+        let mut builder = AggregateExprBuilder::new(func.to_owned(), physical_args)
+            .order_by(order_bys.clone())
+            .schema(Arc::new(physical_input_schema.to_owned()))
+            .alias(name)
+            .output_metadata(output_metadata)
+            .with_ignore_nulls(ignore_nulls)
+            .with_distinct(*distinct);
+
+        if let Some(human_display) = human_display {
+            builder = builder.human_display(human_display.expression);
+            if let Some(alias) = human_display.alias {
+                builder = builder.human_display_alias(alias);
+            }
+        }
+
+        Ok(LoweredAggregate {
+            aggregate: Arc::new(builder.build()?),
+            filter,
+            order_bys,
+        })
+    }
+}
+
+fn lower_aggregate_display(
+    expr: &Expr,
+    name: Option<String>,
+    human_display: Option<LoweredAggregateHumanDisplay>,
+    output_metadata: Option<FieldMetadata>,
+    preserve_alias_metadata: bool,
+) -> (
+    Option<String>,
+    Option<LoweredAggregateHumanDisplay>,
+    Option<FieldMetadata>,
+    Expr,
+) {
+    let mut expr = expr.clone();
+    let mut alias_name = None;
+    let mut alias_metadata = None;
+    while let Expr::Alias(alias) = expr {
+        if alias_name.is_none() {
+            alias_name = Some(alias.name);
+            alias_metadata = alias.metadata;
+        }
+        expr = *alias.expr;
+    }
+
+    let output_metadata = if preserve_alias_metadata {
+        output_metadata.or(alias_metadata)
+    } else {
+        output_metadata
+    };
+
+    if human_display.is_some() {
+        return (name.or(alias_name), human_display, output_metadata, expr);
+    }
+
+    match &expr {
+        Expr::AggregateFunction(_) => {
+            if let Some(alias_name) = alias_name {
+                let name = name.unwrap_or(alias_name);
+                let expression = expr.human_display().to_string();
+                let human_display = if expression.is_empty() || expression == name {
+                    LoweredAggregateHumanDisplay {
+                        expression: name.clone(),
+                        alias: None,
+                    }
+                } else {
+                    LoweredAggregateHumanDisplay {
+                        expression,
+                        alias: Some(name.clone()),
+                    }
+                };
+
+                return (Some(name), Some(human_display), output_metadata, expr);
+            }
+
+            let name = name.unwrap_or_else(|| expr.schema_name().to_string());
+            let human_display = LoweredAggregateHumanDisplay {
+                expression: expr.human_display().to_string(),
+                alias: None,
+            };
+
+            (Some(name), Some(human_display), output_metadata, expr)
+        }
+        _ => (name.or(alias_name), None, output_metadata, expr),
+    }
+}
+
 /// Physical aggregate expression of a UDAF.
 ///
 /// Instances are constructed via [`AggregateExprBuilder`].
@@ -319,7 +630,7 @@ pub struct AggregateFunctionExpr {
     /// Output column name that this expression creates
     name: String,
     /// Simplified name for `tree` explain.
-    human_display: String,
+    human_display: Option<AggregateHumanDisplay>,
     schema: Schema,
     // The physical order by expressions
     order_bys: Vec<PhysicalSortExpr>,
@@ -351,8 +662,22 @@ impl AggregateFunctionExpr {
     }
 
     /// Simplified name for `tree` explain.
-    pub fn human_display(&self) -> &str {
-        &self.human_display
+    pub fn human_display(&self) -> Option<&str> {
+        self.human_display
+            .as_ref()
+            .map(AggregateHumanDisplay::expression)
+    }
+
+    #[doc(hidden)]
+    pub fn human_display_alias(&self) -> Option<&str> {
+        self.human_display
+            .as_ref()
+            .and_then(AggregateHumanDisplay::alias)
+    }
+
+    fn return_field_metadata(&self) -> Option<FieldMetadata> {
+        let metadata = FieldMetadata::from(self.return_field.as_ref());
+        (!metadata.is_empty()).then_some(metadata)
     }
 
     /// Return if the aggregation is distinct
@@ -460,15 +785,22 @@ impl AggregateFunctionExpr {
             return Ok(None);
         };
 
-        AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
-            .order_by(self.order_bys.clone())
-            .schema(Arc::new(self.schema.clone()))
-            .alias(self.name().to_string())
-            .with_ignore_nulls(self.ignore_nulls)
-            .with_distinct(self.is_distinct)
-            .with_reversed(self.is_reversed)
-            .build()
-            .map(Some)
+        let mut builder =
+            AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
+                .order_by(self.order_bys.clone())
+                .schema(Arc::new(self.schema.clone()))
+                .alias(self.name().to_string())
+                .output_metadata(self.return_field_metadata())
+                .with_ignore_nulls(self.ignore_nulls)
+                .with_distinct(self.is_distinct)
+                .with_reversed(self.is_reversed);
+        if let Some(human_display) = self.human_display() {
+            builder = builder.human_display(human_display);
+        }
+        if let Some(alias) = self.human_display_alias() {
+            builder = builder.human_display_alias(alias);
+        }
+        builder.build().map(Some)
     }
 
     /// Creates accumulator implementation that supports retract
@@ -586,23 +918,54 @@ impl AggregateFunctionExpr {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
+                let was_aliased = self.human_display_alias().is_some();
                 let mut name = self.name().to_string();
+                let mut human_display = self.human_display.clone();
+                // Reversing display follows two paths:
+                // - aliased display keeps the output `name` unchanged and rewrites only
+                //   the lowered expression in `human_display`.
+                // - non-aliased display rewrites the canonical `name`, and rewrites
+                //   `human_display` only when present.
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if self.fun().name() != reverse_udf.name() {
+                if !was_aliased && self.fun().name() != reverse_udf.name() {
                     replace_order_by_clause(&mut name);
                 }
-                replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
+                if !was_aliased {
+                    replace_fn_name_clause(
+                        &mut name,
+                        self.fun.name(),
+                        reverse_udf.name(),
+                    );
+                }
 
-                AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
-                    .order_by(self.order_bys.iter().map(|e| e.reverse()).collect())
-                    .schema(Arc::new(self.schema.clone()))
-                    .alias(name)
-                    .with_ignore_nulls(self.ignore_nulls)
-                    .with_distinct(self.is_distinct)
-                    .with_reversed(!self.is_reversed)
-                    .build()
-                    .ok()
+                if let Some(human_display) = human_display.as_mut() {
+                    if self.fun().name() != reverse_udf.name() {
+                        replace_order_by_clause(&mut human_display.expression);
+                    }
+                    replace_fn_name_clause(
+                        &mut human_display.expression,
+                        self.fun.name(),
+                        reverse_udf.name(),
+                    );
+                }
+
+                let mut builder =
+                    AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
+                        .order_by(self.order_bys.iter().map(|e| e.reverse()).collect())
+                        .schema(Arc::new(self.schema.clone()))
+                        .alias(name)
+                        .output_metadata(self.return_field_metadata())
+                        .with_ignore_nulls(self.ignore_nulls)
+                        .with_distinct(self.is_distinct)
+                        .with_reversed(!self.is_reversed);
+                if let Some(human_display) = human_display {
+                    builder = builder.human_display(human_display.expression);
+                    if let Some(alias) = human_display.alias {
+                        builder = builder.human_display_alias(alias);
+                    }
+                }
+                builder.build().ok()
             }
         }
     }
@@ -757,5 +1120,86 @@ fn replace_order_by_clause(order_by: &mut String) {
 }
 
 fn replace_fn_name_clause(aggr_name: &mut String, fn_name_old: &str, fn_name_new: &str) {
-    *aggr_name = aggr_name.replace(fn_name_old, fn_name_new);
+    if let Some(rest) = aggr_name.strip_prefix(fn_name_old) {
+        *aggr_name = format!("{fn_name_new}{rest}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::HashMap;
+
+    use arrow::datatypes::Field;
+    use datafusion_common::metadata::FieldMetadata;
+    use datafusion_expr::{col, test::function_stub::sum};
+
+    fn aggregate_test_schema() -> Result<(Schema, DFSchema)> {
+        let schema = Schema::new(vec![Field::new("column1", DataType::Int64, true)]);
+        let logical_schema = DFSchema::try_from(schema.clone())?;
+        Ok((schema, logical_schema))
+    }
+
+    fn test_metadata() -> FieldMetadata {
+        FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]))
+    }
+
+    fn aggregate_alias_with_metadata() -> Expr {
+        sum(col("column1")).alias_with_metadata("agg", Some(test_metadata()))
+    }
+
+    #[test]
+    fn lowered_aggregate_builder_unwraps_alias_with_metadata() -> Result<()> {
+        let (schema, logical_schema) = aggregate_test_schema()?;
+        let expr = aggregate_alias_with_metadata();
+
+        let lowered = LoweredAggregateBuilder::new(
+            &expr,
+            &logical_schema,
+            &schema,
+            &ExecutionProps::new(),
+        )
+        .build()?;
+
+        assert_eq!(lowered.aggregate.name(), "agg");
+        assert_eq!(lowered.aggregate.human_display_alias(), Some("agg"));
+        assert_eq!(
+            lowered.aggregate.field().metadata().get("some_key"),
+            Some(&"some_value".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn lowered_aggregate_builder_display_override_skips_alias_metadata() -> Result<()> {
+        let (schema, logical_schema) = aggregate_test_schema()?;
+        let expr = aggregate_alias_with_metadata();
+
+        let lowered = LoweredAggregateBuilder::new(
+            &expr,
+            &logical_schema,
+            &schema,
+            &ExecutionProps::new(),
+        )
+        .with_human_display(expr.human_display().to_string())
+        .build()?;
+
+        assert_eq!(lowered.aggregate.name(), "agg");
+        assert_eq!(lowered.aggregate.human_display_alias(), None);
+        assert!(
+            lowered
+                .aggregate
+                .field()
+                .metadata()
+                .get("some_key")
+                .is_none()
+        );
+
+        Ok(())
+    }
 }

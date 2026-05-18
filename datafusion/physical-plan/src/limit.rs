@@ -17,7 +17,6 @@
 
 //! Defines the LIMIT plan
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -155,10 +154,6 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -239,10 +234,9 @@ impl ExecutionPlan for GlobalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(partition)?
-            .with_fetch(self.fetch, self.skip, 1)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -348,10 +342,6 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -421,10 +411,9 @@ impl ExecutionPlan for LocalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(partition)?
-            .with_fetch(Some(self.fetch), 0, 1)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        Ok(Arc::new(stats.with_fetch(Some(self.fetch), 0, 1)?))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -576,7 +565,6 @@ mod tests {
     use arrow::array::RecordBatchOptions;
     use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::col;
 
     #[tokio::test]
@@ -803,9 +791,12 @@ mod tests {
             row_number_inexact_statistics_for_global_limit(5, Some(10)).await?;
         assert_eq!(row_count, Precision::Inexact(10));
 
+        // Input was Inexact, so an `nr <= skip` outcome must remain Inexact:
+        // the inexact estimate could be wrong, so we cannot promote 0 to
+        // Exact.
         let row_count =
             row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
-        assert_eq!(row_count, Precision::Exact(0));
+        assert_eq!(row_count, Precision::Inexact(0));
 
         let row_count =
             row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;

@@ -21,7 +21,8 @@
 mod table;
 pub use datafusion_catalog_listing::helpers;
 pub use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
-pub use datafusion_datasource::{
-    FileRange, ListingTableUrl, PartitionedFile, PartitionedFileStream,
-};
+// Keep for backwards compatibility until removed
+#[expect(deprecated)]
+pub use datafusion_datasource::PartitionedFileStream;
+pub use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile};
 pub use table::ListingTableConfigExt;

@@ -32,7 +32,7 @@ permissions:
 jobs:
   analyze:
     name: Analyze Actions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: read
       security-events: write
@@ -45,11 +45,11 @@ jobs:
         persist-credentials: false
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@c793b717bc78562f491db7b0e93a3a178b099162 # v4
+      uses: github/codeql-action/init@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v4
       with:
         languages: actions
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@c793b717bc78562f491db7b0e93a3a178b099162 # v4
+      uses: github/codeql-action/analyze@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v4
       with:
         category: "/language:actions"

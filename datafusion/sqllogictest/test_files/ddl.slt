@@ -711,6 +711,47 @@ c1 Null 0
 c2 Null 1
 c3 Null 2
 
+# Creating an external table over a location with no files and without an
+# explicit schema should error rather than producing a 0-column table that
+# fails with a confusing "column not found" error at query time.
+statement error DataFusion error: Error during planning: No files found at .*\. Cannot infer schema from an empty location; either add data files or declare an explicit schema for the table\.
+CREATE EXTERNAL TABLE empty_dir_parquet STORED AS PARQUET LOCATION 'test_files/scratch/ddl/empty_dir/';
+
+statement error DataFusion error: Error during planning: No files found at .*\. Cannot infer schema from an empty location; either add data files or declare an explicit schema for the table\.
+CREATE EXTERNAL TABLE empty_dir_csv STORED AS CSV LOCATION 'test_files/scratch/ddl/empty_dir/' OPTIONS ('format.has_header' 'true');
+
+statement error DataFusion error: Error during planning: No files found at .*\. Cannot infer schema from an empty location; either add data files or declare an explicit schema for the table\.
+CREATE EXTERNAL TABLE empty_dir_json STORED AS JSON LOCATION 'test_files/scratch/ddl/empty_dir/';
+
+# Providing an explicit schema for the same empty location is still allowed,
+# so users can pre-declare a table to be populated later via INSERT.
+statement ok
+CREATE EXTERNAL TABLE empty_dir_with_schema(x int) STORED AS PARQUET LOCATION 'test_files/scratch/ddl/empty_dir/';
+
+query I
+select * from empty_dir_with_schema;
+----
+
+statement ok
+drop table empty_dir_with_schema;
+
+# Once a file is written to the directory, schema inference works as before.
+statement ok
+COPY (values (1), (2), (3)) TO 'test_files/scratch/ddl/empty_dir_filled/' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE filled_dir_inferred STORED AS PARQUET LOCATION 'test_files/scratch/ddl/empty_dir_filled/';
+
+query I rowsort
+select * from filled_dir_inferred;
+----
+1
+2
+3
+
+statement ok
+drop table filled_dir_inferred;
+
 
 ## should allow any type of exprs as values
 statement ok

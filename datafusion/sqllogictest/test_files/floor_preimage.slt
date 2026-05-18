@@ -300,6 +300,10 @@ logical_plan
 01)Filter: test_data.float_val < Float64(6)
 02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
 
+# Config reset
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
 ##########
 ## Cleanup
 ##########

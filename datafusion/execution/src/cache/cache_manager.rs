@@ -507,15 +507,12 @@ impl CacheManagerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::DefaultListFilesCache;
 
     /// Test to verify that TTL is preserved when not explicitly set in config.
     /// This fixes issue #19396 where TTL was being unset from DefaultListFilesCache
     /// when CacheManagerConfig::list_files_cache_ttl was not set explicitly.
     #[test]
     fn test_ttl_preserved_when_not_set_in_config() {
-        use std::time::Duration;
-
         // Create a cache with TTL = 1 second
         let list_file_cache =
             DefaultListFilesCache::new(1024, Some(Duration::from_secs(1)));
@@ -553,8 +550,6 @@ mod tests {
     /// Test to verify that TTL can still be overridden when explicitly set in config.
     #[test]
     fn test_ttl_overridden_when_set_in_config() {
-        use std::time::Duration;
-
         // Create a cache with TTL = 1 second
         let list_file_cache =
             DefaultListFilesCache::new(1024, Some(Duration::from_secs(1)));

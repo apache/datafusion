@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{RecordBatch, StringArray};
@@ -207,10 +206,6 @@ impl Default for JsonGetStr {
 }
 
 impl ScalarUDFImpl for JsonGetStr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "json_get_str"
     }
@@ -316,20 +311,16 @@ impl ShreddedJsonRewriter {
         expr: Arc<dyn PhysicalExpr>,
         physical_file_schema: &Schema,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+        if let Some(func) = expr.downcast_ref::<ScalarFunctionExpr>()
             && func.name() == "json_get_str"
             && func.args().len() == 2
         {
             // Get the key from the first argument
-            if let Some(literal) = func.args()[0]
-                .as_any()
-                .downcast_ref::<expressions::Literal>()
+            if let Some(literal) = func.args()[0].downcast_ref::<expressions::Literal>()
                 && let ScalarValue::Utf8(Some(field_name)) = literal.value()
             {
                 // Get the column from the second argument
-                if let Some(column) = func.args()[1]
-                    .as_any()
-                    .downcast_ref::<expressions::Column>()
+                if let Some(column) = func.args()[1].downcast_ref::<expressions::Column>()
                 {
                     let column_name = column.name();
                     // Check if there's a flat column with underscore prefix

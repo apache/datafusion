@@ -24,7 +24,6 @@ use datafusion_expr::{
     TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
@@ -85,10 +84,6 @@ impl Default for ArrowMetadataFunc {
 }
 
 impl ScalarUDFImpl for ArrowMetadataFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "arrow_metadata"
     }

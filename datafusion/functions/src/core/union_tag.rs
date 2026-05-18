@@ -63,10 +63,6 @@ impl UnionTagFunc {
 }
 
 impl ScalarUDFImpl for UnionTagFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "union_tag"
     }

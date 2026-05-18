@@ -737,7 +737,6 @@ pub fn get_tanh_doc() -> &'static Documentation {
 #[cfg(test)]
 mod tests {
     use arrow::compute::SortOptions;
-    use datafusion_common::Result;
 
     use super::*;
 

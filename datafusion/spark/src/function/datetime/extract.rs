@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::ArrayRef;
 use arrow::compute::{DatePart, date_part};
 use arrow::datatypes::DataType;
@@ -60,10 +58,6 @@ impl SparkHour {
 }
 
 impl ScalarUDFImpl for SparkHour {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "hour"
     }
@@ -111,10 +105,6 @@ impl SparkMinute {
 }
 
 impl ScalarUDFImpl for SparkMinute {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "minute"
     }
@@ -162,10 +152,6 @@ impl SparkSecond {
 }
 
 impl ScalarUDFImpl for SparkSecond {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "second"
     }

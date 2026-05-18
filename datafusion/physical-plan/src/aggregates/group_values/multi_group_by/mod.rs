@@ -29,8 +29,7 @@ use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
 };
-use ahash::RandomState;
-use arrow::array::{Array, ArrayRef};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
@@ -40,6 +39,7 @@ use arrow::datatypes::{
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
     UInt64Type,
 };
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
@@ -82,7 +82,7 @@ pub trait GroupColumn: Send + Sync {
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     );
 
     /// The vectorized version `append_val`
@@ -224,7 +224,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
 
 /// Buffers to store intermediate results in `vectorized_append`
 /// and `vectorized_equal_to`, for reducing memory allocation
-#[derive(Default)]
 struct VectorizedOperationBuffers {
     /// The `vectorized append` row indices buffer
     append_row_indices: Vec<usize>,
@@ -235,8 +234,8 @@ struct VectorizedOperationBuffers {
     /// The `vectorized_equal_to` group indices buffer
     equal_to_group_indices: Vec<usize>,
 
-    /// The `vectorized_equal_to` result buffer
-    equal_to_results: Vec<bool>,
+    /// The `vectorized_equal_to` result buffer (bitmask)
+    equal_to_results: BooleanBufferBuilder,
 
     /// The buffer for storing row indices found not equal to
     /// exist groups in `group_values` in `vectorized_equal_to`.
@@ -244,12 +243,23 @@ struct VectorizedOperationBuffers {
     remaining_row_indices: Vec<usize>,
 }
 
+impl Default for VectorizedOperationBuffers {
+    fn default() -> Self {
+        Self {
+            append_row_indices: Vec::new(),
+            equal_to_row_indices: Vec::new(),
+            equal_to_group_indices: Vec::new(),
+            equal_to_results: BooleanBufferBuilder::new(0),
+            remaining_row_indices: Vec::new(),
+        }
+    }
+}
+
 impl VectorizedOperationBuffers {
     fn clear(&mut self) {
         self.append_row_indices.clear();
         self.equal_to_row_indices.clear();
         self.equal_to_group_indices.clear();
-        self.equal_to_results.clear();
         self.remaining_row_indices.clear();
     }
 }
@@ -499,7 +509,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .equal_to_group_indices
             .clear();
 
-        let mut group_values_len = self.group_values[0].len();
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self
                 .map
@@ -508,7 +517,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             let Some((_, group_index_view)) = entry else {
                 // 1. Bucket not found case
                 // Build `new inlined group index view`
-                let current_group_idx = group_values_len;
+                let current_group_idx = self.group_values[0].len()
+                    + self.vectorized_operation_buffers.append_row_indices.len();
                 let group_index_view =
                     GroupIndexView::new_inlined(current_group_idx as u64);
 
@@ -528,7 +538,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 // Set group index to row in `groups`
                 groups[row] = current_group_idx;
 
-                group_values_len += 1;
                 continue;
             };
 
@@ -615,15 +624,16 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         // 1. Perform `vectorized_equal_to` for `rows` in `vectorized_equal_to_group_indices`
         //    and `group_indices` in `vectorized_equal_to_group_indices`
-        let mut equal_to_results =
-            mem::take(&mut self.vectorized_operation_buffers.equal_to_results);
-        equal_to_results.clear();
-        equal_to_results.resize(
-            self.vectorized_operation_buffers
-                .equal_to_group_indices
-                .len(),
-            true,
+        let n = self
+            .vectorized_operation_buffers
+            .equal_to_group_indices
+            .len();
+        let mut equal_to_results = mem::replace(
+            &mut self.vectorized_operation_buffers.equal_to_results,
+            BooleanBufferBuilder::new(0),
         );
+        equal_to_results.truncate(0);
+        equal_to_results.append_n(n, true);
 
         for (col_idx, group_col) in self.group_values.iter().enumerate() {
             group_col.vectorized_equal_to(
@@ -643,7 +653,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .iter()
             .enumerate()
         {
-            let equal_to_result = equal_to_results[idx];
+            let equal_to_result = equal_to_results.get_bit(idx);
 
             // Equal to case, set the `group_indices` to `rows` in `groups`
             if equal_to_result {

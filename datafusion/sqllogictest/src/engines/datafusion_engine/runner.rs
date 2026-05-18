@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::{path::PathBuf, time::Duration};
 
 use super::{DFSqlLogicTestError, error::Result, normalize};
@@ -38,15 +39,28 @@ pub struct DataFusion {
     relative_path: PathBuf,
     pb: ProgressBar,
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    default_config: HashMap<String, Option<String>>,
+    config_change_errors: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 impl DataFusion {
     pub fn new(ctx: SessionContext, relative_path: PathBuf, pb: ProgressBar) -> Self {
+        let default_config = ctx
+            .state()
+            .config()
+            .options()
+            .entries()
+            .iter()
+            .map(|e| (e.key.clone(), e.value.clone()))
+            .collect();
+
         Self {
             ctx,
             relative_path,
             pb,
             currently_executing_sql_tracker: CurrentlyExecutingSqlTracker::default(),
+            default_config,
+            config_change_errors: None,
         }
     }
 
@@ -54,13 +68,19 @@ impl DataFusion {
     ///
     /// This is useful for logging and debugging purposes.
     pub fn with_currently_executing_sql_tracker(
-        self,
+        mut self,
         currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     ) -> Self {
-        Self {
-            currently_executing_sql_tracker,
-            ..self
-        }
+        self.currently_executing_sql_tracker = currently_executing_sql_tracker;
+        self
+    }
+
+    pub fn with_config_change_errors(
+        mut self,
+        config_change_errors: Arc<Mutex<Vec<String>>>,
+    ) -> Self {
+        self.config_change_errors = Some(config_change_errors);
+        self
     }
 
     fn update_slow_count(&self) {
@@ -77,6 +97,43 @@ impl DataFusion {
 
         self.pb
             .set_message(format!("{} - {} took > 500 ms", split[0], current_count));
+    }
+
+    pub fn validate_config_unchanged(&mut self) -> Result<()> {
+        let mut changed = false;
+        let mut message = format!(
+            "SLT file {} left modified configuration",
+            self.relative_path.display()
+        );
+
+        for entry in self.ctx.state().config().options().entries() {
+            let default_entry = self.default_config.remove(&entry.key);
+
+            if let Some(default_entry) = default_entry
+                && default_entry.as_ref() != entry.value.as_ref()
+            {
+                changed = true;
+
+                let default = default_entry.as_deref().unwrap_or("NULL");
+                let current = entry.value.as_deref().unwrap_or("NULL");
+
+                message
+                    .push_str(&format!("\n  {}: {} -> {}", entry.key, default, current));
+            }
+        }
+
+        for (key, value) in &self.default_config {
+            changed = true;
+
+            let default = value.as_deref().unwrap_or("NULL");
+            message.push_str(&format!("\n  {key}: {default} -> NULL"));
+        }
+
+        if changed {
+            Err(DFSqlLogicTestError::Other(message))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -132,7 +189,14 @@ impl sqllogictest::AsyncDB for DataFusion {
         tokio::time::sleep(dur).await;
     }
 
-    async fn shutdown(&mut self) {}
+    /// Shutdown and check no DataFusion configuration has changed during test
+    async fn shutdown(&mut self) {
+        if let Some(config_change_errors) = self.config_change_errors.clone()
+            && let Err(error) = self.validate_config_unchanged()
+        {
+            config_change_errors.lock().unwrap().push(error.to_string());
+        }
+    }
 }
 
 async fn run_query(
@@ -154,5 +218,33 @@ async fn run_query(
         Ok(DBOutput::StatementComplete(0))
     } else {
         Ok(DBOutput::Rows { types, rows })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqllogictest::AsyncDB;
+
+    #[tokio::test]
+    async fn validate_config_unchanged_detects_modified_config() {
+        let ctx = SessionContext::new();
+        let default_batch_size = ctx.state().config().options().execution.batch_size;
+        let mut runner =
+            DataFusion::new(ctx, PathBuf::from("test.slt"), ProgressBar::hidden());
+
+        <DataFusion as AsyncDB>::run(
+            &mut runner,
+            "SET datafusion.execution.batch_size = 2048",
+        )
+        .await
+        .unwrap();
+
+        let error = runner.validate_config_unchanged().unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("test.slt left modified configuration"));
+        assert!(message.contains("datafusion.execution.batch_size"));
+        assert!(message.contains(&format!("{default_batch_size} -> 2048")));
     }
 }

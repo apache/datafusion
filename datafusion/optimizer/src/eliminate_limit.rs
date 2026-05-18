@@ -97,7 +97,6 @@ mod tests {
         col,
         logical_plan::{JoinType, builder::LogicalPlanBuilder},
     };
-    use std::sync::Arc;
 
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::push_down_limit::PushDownLimit;

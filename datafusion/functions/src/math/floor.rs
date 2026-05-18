@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
@@ -115,10 +114,6 @@ macro_rules! preimage_bounds {
 }
 
 impl ScalarUDFImpl for FloorFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "floor"
     }

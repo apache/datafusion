@@ -436,6 +436,11 @@ SELECT upper(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
 FOO
 
 query T
+SELECT upper(arrow_cast(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)'))
+----
+FOO
+
+query T
 SELECT upper('árvore ação αβγ')
 ----
 ÁRVORE AÇÃO ΑΒΓ
@@ -444,6 +449,26 @@ query T
 SELECT upper(arrow_cast('árvore ação αβγ', 'Dictionary(Int32, Utf8)'))
 ----
 ÁRVORE AÇÃO ΑΒΓ
+
+query T
+SELECT arrow_typeof(upper('foo'))
+----
+Utf8
+
+query T
+SELECT arrow_typeof(upper(arrow_cast('foo', 'LargeUtf8')))
+----
+LargeUtf8
+
+query T
+SELECT arrow_typeof(upper(arrow_cast('foo', 'Utf8View')))
+----
+Utf8View
+
+query T
+SELECT arrow_typeof(upper(arrow_cast(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)')))
+----
+Utf8View
 
 query T
 SELECT btrim('   foo  ')
@@ -491,6 +516,11 @@ SELECT lower(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'))
 foobar
 
 query T
+SELECT lower(arrow_cast(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)'))
+----
+foobar
+
+query T
 SELECT lower('ÁRVORE AÇÃO ΑΒΓ')
 ----
 árvore ação αβγ
@@ -499,6 +529,26 @@ query T
 SELECT lower(arrow_cast('ÁRVORE AÇÃO ΑΒΓ', 'Dictionary(Int32, Utf8)'))
 ----
 árvore ação αβγ
+
+query T
+SELECT arrow_typeof(lower('FOObar'))
+----
+Utf8
+
+query T
+SELECT arrow_typeof(lower(arrow_cast('FOObar', 'LargeUtf8')))
+----
+LargeUtf8
+
+query T
+SELECT arrow_typeof(lower(arrow_cast('FOObar', 'Utf8View')))
+----
+Utf8View
+
+query T
+SELECT arrow_typeof(lower(arrow_cast(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)')))
+----
+Utf8View
 
 query T
 SELECT ltrim('   foo')
@@ -657,10 +707,11 @@ CREATE TABLE over_test(
   ('Txxxxas', NULL, 2, 4)
 ;
 
+# If the start position is past the end, OVERLAY appends the replacement.
 query T
 SELECT overlay(str placing characters from pos for len) from over_test
 ----
-abc
+123abc
 qwertyasdfg
 ijkz
 Thomas
@@ -672,7 +723,7 @@ NULL
 query T
 SELECT overlay(str placing characters from pos) from over_test
 ----
-abc
+123abc
 qwertyasdfg
 ijk
 Thomxas
@@ -685,7 +736,7 @@ NULL
 query T
 SELECT overlay(arrow_cast(str, 'Utf8View') placing arrow_cast(characters, 'Utf8View') from pos for len) from over_test
 ----
-abc
+123abc
 qwertyasdfg
 ijkz
 Thomas
@@ -697,7 +748,7 @@ NULL
 query T
 SELECT overlay(arrow_cast(str, 'Utf8View') placing arrow_cast(characters, 'Utf8View') from pos) from over_test
 ----
-abc
+123abc
 qwertyasdfg
 ijk
 Thomxas
@@ -706,11 +757,95 @@ NULL
 Thomxas
 NULL
 
+# overlay uses character positions for non-ASCII input.
+statement ok
+CREATE TABLE over_unicode_test(
+  str TEXT,
+  characters TEXT,
+  pos INT,
+  len INT
+) as VALUES
+  ('aébc', 'X', 3, 1),
+  ('aébc', 'ZZ', 2, 2),
+  ('αβγδ', 'XY', 3, 2)
+;
+
+query T
+SELECT overlay(str placing characters from pos for len) FROM over_unicode_test
+----
+aéXc
+aZZc
+αβXY
+
+# Same non-ASCII cases with Utf8View inputs.
+query T
+SELECT overlay(arrow_cast(str, 'Utf8View') placing arrow_cast(characters, 'Utf8View') from pos for len) FROM over_unicode_test
+----
+aéXc
+aZZc
+αβXY
+
+# Same non-ASCII cases with LargeUtf8 inputs.
+query T
+SELECT overlay(arrow_cast(str, 'LargeUtf8') placing arrow_cast(characters, 'LargeUtf8') from pos for len) FROM over_unicode_test
+----
+aéXc
+aZZc
+αβXY
+
+statement ok
+DROP TABLE over_unicode_test
+
+# overlay edge cases that match PostgreSQL behavior.
+
+# Start past the end appends the replacement.
+query T
+SELECT overlay('abc' placing 'X' from 5 for 1)
+----
+abcX
+
+# Start positions must be positive.
+statement error negative substring length not allowed
+SELECT overlay('abc' placing 'X' from 0 for 1)
+
+statement error negative substring length not allowed
+SELECT overlay('abc' placing 'X' from -1 for 1)
+
+# Negative count keeps the suffix from before the start position.
+query T
+SELECT overlay('abc' placing 'XY' from 2 for -1)
+----
+aXYabc
+
+# Count 0 inserts without deleting input characters.
+query T
+SELECT overlay('abc' placing 'XY' from 2 for 0)
+----
+aXYbc
+
+# Count larger than the remaining input replaces through the end.
+query T
+SELECT overlay('abc' placing 'XY' from 2 for 100)
+----
+aXY
+
+# Empty replacement deletes the selected input characters.
+query T
+SELECT overlay('abc' placing '' from 2 for 1)
+----
+ac
+
 # Verify that multiple calls to volatile functions like `random()` are not combined / optimized away
 query B
 SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random()+1 r1, random()+1 r2) WHERE r1 > 0 AND r2 > 0)
 ----
 false
+
+# Verify that rand() is accepted as an alias for random()
+query TB
+SELECT arrow_typeof(rand()), rand() >= 0 AND rand() < 1
+----
+Float64 true
 
 #######
 # verify that random() returns a different value for each row
