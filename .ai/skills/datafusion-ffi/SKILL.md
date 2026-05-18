@@ -41,9 +41,16 @@ A new `FFI_X` for trait `X` must follow this template. Use `FFI_TableProvider` (
 #[derive(Debug)]
 pub struct FFI_X {
     // One unsafe extern "C" fn per trait method (see § "Method coverage" below).
+    // Always populate this — calling through `Arc<dyn Trait>` dispatches to the
+    // override if there is one, else to the trait default. The producer side
+    // gets the right answer either way without the consumer needing to know.
     some_method: unsafe extern "C" fn(this: &Self, ...) -> FFI_Result<...>,
 
-    // Optional capability — None when the producer does not implement it.
+    // `Option<fn>` is correct ONLY when the producer's `new()` takes an
+    // explicit capability flag (see `FFI_TableProvider::new`'s
+    // `can_support_pushdown_filters: bool`). Do not use `Option<fn>` as a
+    // proxy for "is the trait default in effect?" — `Arc<dyn Trait>` does not
+    // expose that.
     optional_method: Option<unsafe extern "C" fn(&Self, ...) -> FFI_Result<...>>,
 
     // Codec only if the trait moves Exprs/Plans across the boundary.
@@ -176,14 +183,16 @@ See `test_ffi_table_provider_local_bypass` and `test_round_trip_ffi_table_provid
 
 When adding or auditing an `FFI_X`, **enumerate every method on the wrapped trait, including defaulted ones**, and for each one decide:
 
-| Category                                                                              | Action                                                          |
-| ------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Required method (no default)                                                          | Mandatory `unsafe extern "C" fn` field.                         |
-| Defaulted, plausible override (statistics, distribution, ordering, simplify, DML, …)  | Add it. Use `Option<fn>` so older producers can ship `None`.    |
-| Defaulted, deprecated or vestigial                                                    | Document the skip in a `// FFI omitted: …` comment.             |
-| Defaulted, derived purely from other methods already plumbed                          | Skip — but call out the derivation in a comment.                |
+| Category                                                                              | Action                                                                                                                                |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Required method (no default)                                                          | Mandatory `unsafe extern "C" fn` field.                                                                                               |
+| Defaulted, plausible override (statistics, distribution, ordering, simplify, DML, …)  | Mandatory `unsafe extern "C" fn` field — same as a required method. The wrapper body calls `inner.method(...)` and `Arc<dyn Trait>` dispatch picks override-or-default for free. |
+| Defaulted, deprecated or vestigial                                                    | Document the skip in a `// FFI omitted: …` comment.                                                                                   |
+| Defaulted, derived purely from other methods already plumbed                          | Skip — but call out the derivation in a comment.                                                                                      |
 
-For `Option<fn>` fields, the producer constructor takes a `bool` (or a typed enum) that decides whether to populate the slot; the consumer impl checks `match self.0.opt_fn { Some(f) => ..., None => trait_default }`. `FFI_TableProvider::supports_filters_pushdown` is the reference.
+**Do not use `Option<fn>` just because the underlying trait has a default.** `Arc<dyn Trait>` erases override-vs-default info, so the producer side cannot know whether to populate the slot. Always plumb the fn pointer; the wrapper body invokes the trait method and dynamic dispatch does the right thing.
+
+`Option<fn>` is reserved for **capability flags driven by an explicit argument to the producer's constructor** — e.g. `FFI_TableProvider::new(can_support_pushdown_filters: bool, …)` lets the caller opt out of pushdown entirely, suppressing the FFI hop for known-unsupported tables. If you cannot point to a constructor argument that turns the slot on/off, the field should not be `Option<fn>`.
 
 ### Known gaps to close
 
@@ -196,7 +205,7 @@ A current audit (2026-05) flags these missing-default forwardings. Treat new PRs
 - **`FFI_SchemaProvider`** — missing: `owner_name`, `table_type` (cheap-path), `register_table`, `deregister_table`.
 - **`FFI_Accumulator`** — missing: `retract_batch` + `supports_retract_batch` exposure, which breaks window aggregates that opt in to retraction.
 
-When *closing* a gap, prefer `Option<fn>` over an unconditional fn pointer. Even an `Option<fn>` addition reorders the struct layout — still an ABI break. Mark `api-change`; consumers detect via the `version()` extern at load time and must recompile against the new DataFusion major.
+When *closing* a gap, add the fn pointer unconditionally — the wrapper body calls the trait method on the inner `Arc<dyn Trait>` and Rust's dynamic dispatch picks the producer's override or falls back to the default. Use `Option<fn>` only when the new method also gains a corresponding capability flag on the producer's `new()`. Either way the layout changes, so the PR is an ABI break: mark `api-change`, do not back-port to `branch-<major>`, and the workspace major bump in the next release makes the `version()` extern surface the change to consumers at load time.
 
 ### How to enumerate defaults
 
