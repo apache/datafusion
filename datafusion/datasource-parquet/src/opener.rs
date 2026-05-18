@@ -23,8 +23,8 @@ use crate::push_decoder::{DecoderBuilderConfig, PushDecoderStreamState};
 use crate::row_filter::{RowFilterGenerator, build_projection_read_plan};
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
-    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
-    apply_file_schema_type_coercions, coerce_int96_to_resolution_with_tz,
+    Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -784,12 +784,13 @@ impl MetadataLoadedParquetOpen {
         }
 
         if let Some(ref coerce) = prepared.coerce_int96
-            && let Some(merged) = coerce_int96_to_resolution_with_tz(
+            && let Some(merged) = Int96Coercer::new(
                 reader_metadata.parquet_schema(),
                 &physical_file_schema,
                 coerce,
-                prepared.coerce_int96_tz.as_ref(),
             )
+            .with_timezone(prepared.coerce_int96_tz.clone())
+            .coerce()
         {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -1755,6 +1756,10 @@ mod test {
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
                 coerce_int96: self.coerce_int96,
+                // No tests currently exercise coerce_int96_tz; the existing
+                // coerce_int96 tests all expect the legacy `Timestamp(_, None)`
+                // output. If a future test needs to set a timezone, add a
+                // builder setter analogous to with_coerce_int96.
                 coerce_int96_tz: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,

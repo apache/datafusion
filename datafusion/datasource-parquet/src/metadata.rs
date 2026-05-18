@@ -18,7 +18,7 @@
 //! [`DFParquetMetadata`] for fetching Parquet file metadata, statistics
 //! and schema information.
 
-use crate::{apply_file_schema_type_coercions, coerce_int96_to_resolution_with_tz};
+use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::and;
 use arrow::compute::kernels::cmp::eq;
@@ -227,12 +227,9 @@ impl<'a> DFParquetMetadata<'a> {
             .coerce_int96
             .as_ref()
             .and_then(|time_unit| {
-                coerce_int96_to_resolution_with_tz(
-                    file_metadata.schema_descr(),
-                    &schema,
-                    time_unit,
-                    self.coerce_int96_tz.as_ref(),
-                )
+                Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit)
+                    .with_timezone(self.coerce_int96_tz.clone())
+                    .coerce()
             })
             .unwrap_or(schema);
         Ok(schema)
