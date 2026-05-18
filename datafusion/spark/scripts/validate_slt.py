@@ -107,6 +107,8 @@ class QueryRecord:
     rowsort: bool
     line_number: int
     in_ansi_block: bool = False
+    skip_engines: set[str] = field(default_factory=set)
+    only_engines: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -118,6 +120,8 @@ class ErrorRecord:
     line_number: int
     kind: str = "query"  # "query" or "statement"
     in_ansi_block: bool = False
+    skip_engines: set[str] = field(default_factory=set)
+    only_engines: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -127,6 +131,8 @@ class StatementRecord:
     sql: str
     line_number: int
     in_ansi_block: bool = False
+    skip_engines: set[str] = field(default_factory=set)
+    only_engines: set[str] = field(default_factory=set)
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +148,23 @@ def parse_slt(filepath: str) -> list:
     records = []
     i = 0
     in_ansi_mode = False
+    pending_skip: set[str] = set()
+    pending_only: set[str] = set()
 
     while i < len(lines):
         line = lines[i].rstrip("\n")
+
+        m = re.match(r"^skipif\s+(\S+)\s*$", line)
+        if m:
+            pending_skip.add(m.group(1).strip())
+            i += 1
+            continue
+
+        m = re.match(r"^onlyif\s+(\S+)\s*$", line)
+        if m:
+            pending_only.add(m.group(1).strip())
+            i += 1
+            continue
 
         # Skip blank lines and comments
         if not line.strip() or line.strip().startswith("#"):
@@ -176,6 +196,10 @@ def parse_slt(filepath: str) -> list:
                     in_ansi_block=in_ansi_mode,
                 )
             )
+            records[-1].skip_engines = pending_skip
+            records[-1].only_engines = pending_only
+            pending_skip = set()
+            pending_only = set()
             continue
 
         # statement error <pattern>
@@ -203,6 +227,10 @@ def parse_slt(filepath: str) -> list:
                     in_ansi_block=in_ansi_mode,
                 )
             )
+            records[-1].skip_engines = pending_skip
+            records[-1].only_engines = pending_only
+            pending_skip = set()
+            pending_only = set()
             continue
 
         # statement ok
@@ -241,6 +269,10 @@ def parse_slt(filepath: str) -> list:
                     sql=sql, line_number=line_num, in_ansi_block=in_ansi_mode
                 )
             )
+            records[-1].skip_engines = pending_skip
+            records[-1].only_engines = pending_only
+            pending_skip = set()
+            pending_only = set()
             continue
 
         # query <TYPE_CODES> [rowsort]
@@ -288,6 +320,10 @@ def parse_slt(filepath: str) -> list:
                     in_ansi_block=in_ansi_mode,
                 )
             )
+            records[-1].skip_engines = pending_skip
+            records[-1].only_engines = pending_only
+            pending_skip = set()
+            pending_only = set()
             continue
 
         # Unknown line, skip
@@ -952,6 +988,23 @@ def process_file(
     rel_path = os.path.relpath(filepath)
 
     for record in records:
+        # Honor skipif/onlyif against this engine's name (we're the Spark runner).
+        engine = "spark"
+        if engine in record.skip_engines:
+            result.skipped += 1
+            if show_skipped:
+                result.skipped_details.append(
+                    f"  Line {record.line_number}: skipped (skipif {engine})"
+                )
+            continue
+        if record.only_engines and engine not in record.only_engines:
+            result.skipped += 1
+            if show_skipped:
+                result.skipped_details.append(
+                    f"  Line {record.line_number}: skipped (onlyif not {engine})"
+                )
+            continue
+
         # Skip ANSI mode blocks
         if record.in_ansi_block:
             result.skipped += 1
