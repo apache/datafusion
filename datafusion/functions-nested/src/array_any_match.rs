@@ -81,7 +81,7 @@ impl Default for ArrayAnyMatch {
 impl ArrayAnyMatch {
     pub fn new() -> Self {
         Self {
-            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+            signature: HigherOrderSignature::exact(1, 1, Volatility::Immutable),
             aliases: vec![String::from("any_match"), String::from("list_any_match")],
         }
     }
@@ -117,14 +117,8 @@ impl HigherOrderUDF for ArrayAnyMatch {
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let list = if arg_types.len() == 1 {
-            &arg_types[0]
-        } else {
-            return plan_err!(
-                "{} function requires 1 value argument, got {}",
-                self.name(),
-                arg_types.len()
-            );
+        let [list] = arg_types else {
+            unreachable!("arity enforced by Exact signature")
         };
 
         let coerced = match list {

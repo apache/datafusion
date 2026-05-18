@@ -73,6 +73,10 @@ pub enum HigherOrderTypeSignature {
     VariadicAny,
     /// The specified number of lambdas or arguments with arbitrary types.
     Any(usize),
+    /// Exactly the specified number of value arguments and lambda arguments, in any order,
+    /// with arbitrary types. DataFusion will call [`HigherOrderUDF::coerce_value_types`]
+    /// to prepare the value argument types.
+    Exact { values: usize, lambdas: usize },
 }
 
 /// Provides information necessary for calling a higher order function.
@@ -132,6 +136,18 @@ impl HigherOrderSignature {
     pub fn any(arg_count: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: HigherOrderTypeSignature::Any(arg_count),
+            volatility,
+            coerce_values_for_lambdas: false,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
+        }
+    }
+
+    /// Exactly the specified number of value arguments and lambda arguments, with
+    /// arbitrary types. DataFusion will call [`HigherOrderUDF::coerce_value_types`]
+    /// to prepare the value argument types.
+    pub fn exact(values: usize, lambdas: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: HigherOrderTypeSignature::Exact { values, lambdas },
             volatility,
             coerce_values_for_lambdas: false,
             lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,

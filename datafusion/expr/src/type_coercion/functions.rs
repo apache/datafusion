@@ -230,6 +230,64 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
 
             Ok(current_fields.to_vec())
         }
+        HigherOrderTypeSignature::Exact { values, lambdas } => {
+            let actual_values = current_fields
+                .iter()
+                .filter(|f| matches!(f, ValueOrLambda::Value(_)))
+                .count();
+            let actual_lambdas = current_fields
+                .iter()
+                .filter(|f| matches!(f, ValueOrLambda::Lambda(_)))
+                .count();
+
+            if actual_values != values || actual_lambdas != lambdas {
+                let name = func.name();
+                return plan_err!(
+                    "The function '{name}' expected {values} value argument(s) and {lambdas} lambda(s) but received {actual_values} value argument(s) and {actual_lambdas} lambda(s)"
+                );
+            }
+
+            let arg_types = current_fields
+                .iter()
+                .filter_map(|p| match p {
+                    ValueOrLambda::Value(field) => Some(field.data_type().clone()),
+                    ValueOrLambda::Lambda(_) => None,
+                })
+                .collect::<Vec<_>>();
+
+            let coerced_types = func.coerce_value_types(&arg_types)?;
+
+            if coerced_types.len() != arg_types.len() {
+                return plan_err!(
+                    "{} coerce_value_types should have returned {} items but returned {}",
+                    func.name(),
+                    arg_types.len(),
+                    coerced_types.len()
+                );
+            }
+
+            let mut coerced_types = coerced_types.into_iter();
+
+            current_fields
+                .iter()
+                .map(|current_field| match current_field {
+                    ValueOrLambda::Value(field) => {
+                        let data_type = coerced_types.next().ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "coerced_types len should have been checked above"
+                            )
+                        })?;
+
+                        Ok(ValueOrLambda::Value(Arc::new(
+                            field.as_ref().clone().with_data_type(data_type),
+                        )))
+                    }
+                    ValueOrLambda::Lambda(lambda) => {
+                        Ok(ValueOrLambda::Lambda(lambda.clone()))
+                    }
+                })
+                .collect()
+        }
     }
 }
 
