@@ -77,7 +77,10 @@ impl Default for ArrayTransform {
 impl ArrayTransform {
     pub fn new() -> Self {
         Self {
-            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_transform")],
         }
     }
@@ -97,11 +100,9 @@ impl HigherOrderUDF for ArrayTransform {
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let list = if arg_types.len() == 1 {
-            &arg_types[0]
-        } else {
+        let [list] = arg_types else {
             return plan_err!(
-                "{} function requires 1 value arguments, got {}",
+                "{} function requires 1 value argument, got {}",
                 self.name(),
                 arg_types.len()
             );
@@ -130,7 +131,10 @@ impl HigherOrderUDF for ArrayTransform {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
+        let [list, _] = take_function_args(self.name(), fields)?;
+        let ValueOrLambda::Value(list) = list else {
+            return plan_err!("{} expects a value as first argument", self.name());
+        };
 
         let field = match list.data_type() {
             DataType::List(field) => field,
@@ -149,7 +153,11 @@ impl HigherOrderUDF for ArrayTransform {
         &self,
         args: HigherOrderReturnFieldArgs,
     ) -> Result<Arc<Field>> {
-        let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
+        let [ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)] =
+            take_function_args(self.name(), args.arg_fields)?
+        else {
+            return plan_err!("{} expects a value followed by a lambda", self.name());
+        };
 
         //TODO: should metadata be copied into the transformed array?
 
@@ -171,7 +179,11 @@ impl HigherOrderUDF for ArrayTransform {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
+        let [list, lambda] = take_function_args(self.name(), &args.args)?;
+        let (ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)) = (list, lambda)
+        else {
+            return plan_err!("{} expects a value followed by a lambda", self.name());
+        };
 
         let list_array = list.to_array(args.number_rows)?;
 
@@ -263,22 +275,6 @@ impl HigherOrderUDF for ArrayTransform {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-}
-
-fn value_lambda_pair<'a, V: Debug, L: Debug>(
-    name: &str,
-    args: &'a [ValueOrLambda<V, L>],
-) -> Result<(&'a V, &'a L)> {
-    let [value, lambda] = take_function_args(name, args)?;
-
-    let (ValueOrLambda::Value(value), ValueOrLambda::Lambda(lambda)) = (value, lambda)
-    else {
-        return plan_err!(
-            "{name} expects a value followed by a lambda, got {value:?} and {lambda:?}"
-        );
-    };
-
-    Ok((value, lambda))
 }
 
 #[cfg(test)]
