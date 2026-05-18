@@ -360,6 +360,8 @@ fn try_perfect_list_zip(args: &[ArrayRef]) -> Result<Option<ArrayRef>> {
     let offsets = first.offsets().clone();
     let values_len = first.values().len();
 
+    // Reusing the child arrays is only valid when every list uses the exact
+    // same row boundaries and exposes the same total number of child values.
     for arr in &list_arrays {
         if arr.len() != num_rows
             || arr.values().len() != values_len
