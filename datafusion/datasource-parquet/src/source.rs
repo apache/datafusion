@@ -585,6 +585,7 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
+            pruning_setup_cache: Arc::default(),
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
         }))
     }
