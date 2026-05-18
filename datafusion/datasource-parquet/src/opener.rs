@@ -1768,13 +1768,13 @@ async fn load_page_index<T: AsyncFileReader>(
 #[cfg(test)]
 mod test {
     use super::{ConstantColumns, ParquetMorselizer, constant_columns_from_stats};
-    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess};
+    use crate::{DefaultParquetFileReaderFactory, ParquetAccessPlan, RowGroupAccess};
     use arrow::array::RecordBatch;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, internal_err,
-        record_batch, stats::Precision,
+        ColumnStatistics, Result, ScalarValue, Statistics, internal_err, record_batch,
+        stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema};
@@ -2174,7 +2174,7 @@ mod test {
     async fn write_parquet(
         store: Arc<dyn ObjectStore>,
         filename: &str,
-        batch: arrow::record_batch::RecordBatch,
+        batch: RecordBatch,
     ) -> usize {
         write_parquet_batches(store, filename, vec![batch], None).await
     }
@@ -2183,7 +2183,7 @@ mod test {
     async fn write_parquet_batches(
         store: Arc<dyn ObjectStore>,
         filename: &str,
-        batches: Vec<arrow::record_batch::RecordBatch>,
+        batches: Vec<RecordBatch>,
         props: Option<WriterProperties>,
     ) -> usize {
         let mut out = BytesMut::new().writer();
@@ -2227,7 +2227,7 @@ mod test {
         );
         let predicate = logical2physical(&col("a").gt(lit(0i64)), &table_schema);
 
-        let opener = ParquetOpenerBuilder::new()
+        let morselizer = ParquetMorselizerBuilder::new()
             .with_store(Arc::clone(&store))
             .with_schema(table_schema)
             .with_projection_indices(&[0])
@@ -2240,7 +2240,7 @@ mod test {
             PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
         ];
         for file in files {
-            let stream = opener.open(file).unwrap().await.unwrap();
+            let stream = open_file(&morselizer, file).await.unwrap();
             let (num_batches, num_rows) = count_batches_and_rows(stream).await;
             assert_eq!(num_batches, 1);
             assert_eq!(num_rows, 3);
@@ -2272,7 +2272,7 @@ mod test {
         );
         let predicate = logical2physical(&col("a").gt(lit(0i64)), &table_schema);
 
-        let opener = ParquetOpenerBuilder::new()
+        let morselizer = ParquetMorselizerBuilder::new()
             .with_store(Arc::clone(&store))
             .with_schema(table_schema)
             .with_projection_indices(&[0])
@@ -2285,7 +2285,7 @@ mod test {
             PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
         ];
         for file in files {
-            let stream = opener.open(file).unwrap().await.unwrap();
+            let stream = open_file(&morselizer, file).await.unwrap();
             let (num_batches, num_rows) = count_batches_and_rows(stream).await;
             assert_eq!(num_batches, 1);
             assert_eq!(num_rows, 3);
@@ -2317,7 +2317,7 @@ mod test {
         );
         let predicate = logical2physical(&col("a").gt(lit(0i64)), &table_schema);
 
-        let opener = ParquetOpenerBuilder::new()
+        let morselizer = ParquetMorselizerBuilder::new()
             .with_store(Arc::clone(&store))
             .with_schema(table_schema)
             .with_projection_indices(&[0])
@@ -2330,7 +2330,7 @@ mod test {
             PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
         ];
         for file in files {
-            let stream = opener.open(file).unwrap().await.unwrap();
+            let stream = open_file(&morselizer, file).await.unwrap();
             let (num_batches, num_rows) = count_batches_and_rows(stream).await;
             assert_eq!(num_batches, 1);
             assert_eq!(num_rows, 3);
