@@ -1906,13 +1906,13 @@ mod tests {
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
-    use datafusion_expr::expr::{LambdaVariable, WildcardOptions};
+    use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
         ColumnarValue, HigherOrderUDF, LambdaParametersProgress, ScalarFunctionArgs,
         ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, WindowFrame,
         WindowFunctionDefinition, case, cast, col, cube, exists, grouping_set,
-        interval_datetime_lit, interval_year_month_lit, lambda, lit, not, not_exists,
-        out_ref_col, placeholder, rollup, table_scan, try_cast, when,
+        interval_datetime_lit, interval_year_month_lit, lambda, lambda_var, lit, not,
+        not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast, when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
@@ -2088,16 +2088,7 @@ mod tests {
             (
                 Expr::HigherOrderFunction(HigherOrderFunction::new(
                     Arc::new(DummyHigherOrderUDF),
-                    vec![
-                        col("a"),
-                        lambda(
-                            ["v"],
-                            -Expr::LambdaVariable(LambdaVariable::new(
-                                "v".to_string(),
-                                Some(Arc::new(Field::new("", DataType::Null, true))),
-                            )),
-                        ),
-                    ],
+                    vec![col("a"), lambda(["v"], -lambda_var("v"))],
                 )),
                 r#"dummy_higher_order_function(a, (v) -> -v)"#,
             ),
