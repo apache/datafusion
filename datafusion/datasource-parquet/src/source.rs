@@ -32,6 +32,7 @@ use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::morsel::Morselizer;
 
+use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
@@ -52,6 +53,7 @@ use datafusion_physical_plan::filter_pushdown::{
 };
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use log::warn;
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
@@ -562,7 +564,20 @@ impl FileSource for ParquetSource {
             .global
             .coerce_int96_tz
             .as_ref()
-            .map(|tz| Arc::<str>::from(tz.as_str()));
+            .map(|tz| {
+                tz.parse::<Tz>().map_err(|e| {
+                    DataFusionError::Configuration(format!(
+                        "Invalid parquet coerce_int96_tz {tz:?}: {e}"
+                    ))
+                })?;
+                Ok::<_, DataFusionError>(Arc::<str>::from(tz.as_str()))
+            })
+            .transpose()?;
+        if coerce_int96_tz.is_some() && coerce_int96.is_none() {
+            warn!(
+                "coerce_int96_tz is set but coerce_int96 is not; the timezone will be ignored"
+            );
+        }
 
         Ok(Box::new(ParquetMorselizer {
             partition_index: partition,

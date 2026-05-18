@@ -1904,6 +1904,66 @@ mod tests {
     }
 
     #[test]
+    fn coerce_int96_to_resolution_with_tz_applies_timezone() {
+        // Same input schema as `coerce_int96_to_resolution_with_mixed_timestamps`, but with a
+        // non-empty `timezone` argument. Only c0 (the INT96 column) should pick up the timezone;
+        // the other timestamp columns must keep whatever timezone they were declared with.
+        let spark_schema = "
+        message spark_schema {
+          optional int96 c0;
+          optional int64 c1 (TIMESTAMP(NANOS,true));
+          optional int64 c2 (TIMESTAMP(NANOS,false));
+          optional int64 c3 (TIMESTAMP(MILLIS,true));
+          optional int64 c4 (TIMESTAMP(MILLIS,false));
+          optional int64 c5 (TIMESTAMP(MICROS,true));
+          optional int64 c6 (TIMESTAMP(MICROS,false));
+        }
+        ";
+
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+        let tz: Arc<str> = Arc::from("UTC");
+        let result = coerce_int96_to_resolution_with_tz(
+            &descr,
+            &arrow_schema,
+            &TimeUnit::Microsecond,
+            Some(&tz),
+        )
+        .unwrap();
+
+        let expected_schema = Schema::new(vec![
+            Field::new(
+                "c0",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new(
+                "c1",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c2", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            Field::new(
+                "c3",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c4", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new(
+                "c5",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c6", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        ]);
+
+        assert_eq!(result, expected_schema);
+    }
+
+    #[test]
     fn coerce_int96_to_resolution_with_nested_types() {
         // This schema is derived from Comet's CometFuzzTestSuite ParquetGenerator only using int96
         // primitive types with generateStruct, generateArray, and generateMap set to true, with one
