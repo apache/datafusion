@@ -77,7 +77,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(crate) fn build_binary_expr(
         &self,
-        op: BinaryOperator,
+        op: &BinaryOperator,
         left: Expr,
         right: Expr,
     ) -> Result<Expr> {
