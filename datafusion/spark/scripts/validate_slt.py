@@ -38,61 +38,6 @@ from pathlib import Path
 from typing import Optional
 
 # ---------------------------------------------------------------------------
-# Arrow type -> Spark type mapping
-# ---------------------------------------------------------------------------
-ARROW_TO_SPARK_TYPE = {
-    "Int8": "TINYINT",
-    "Int16": "SMALLINT",
-    "Int32": "INT",
-    "Int64": "BIGINT",
-    "UInt8": "SMALLINT",
-    "UInt16": "INT",
-    "UInt32": "BIGINT",
-    "UInt64": "BIGINT",
-    "Float16": "FLOAT",
-    "Float32": "FLOAT",
-    "Float64": "DOUBLE",
-    "Utf8": "STRING",
-    "Boolean": "BOOLEAN",
-    "Binary": "BINARY",
-    "Date32": "DATE",
-    "Date64": "DATE",
-    "Utf8View": "STRING",
-    "LargeUtf8": "STRING",
-    "BinaryView": "BINARY",
-    "LargeBinary": "BINARY",
-}
-
-# DataFusion cast type -> Spark type mapping
-DF_TO_SPARK_CAST_TYPE = {
-    "TINYINT": "TINYINT",
-    "SMALLINT": "SMALLINT",
-    "INT": "INT",
-    "INTEGER": "INT",
-    "BIGINT": "BIGINT",
-    "FLOAT": "FLOAT",
-    "REAL": "FLOAT",
-    "DOUBLE": "DOUBLE",
-    "STRING": "STRING",
-    "VARCHAR": "STRING",
-    "TEXT": "STRING",
-    "BOOLEAN": "BOOLEAN",
-    "BINARY": "BINARY",
-    "DATE": "DATE",
-    "TIMESTAMP": "TIMESTAMP",
-    # PostgreSQL-style aliases used in some .slt files
-    "FLOAT8": "DOUBLE",
-    "FLOAT4": "FLOAT",
-    "INT8": "BIGINT",
-    "INT4": "INT",
-    "INT2": "SMALLINT",
-    "BYTEA": "BINARY",
-}
-
-# Pre-compiled regex for Decimal Arrow types in arrow_cast
-_DECIMAL_ARROW_RE = re.compile(r"Decimal(?:32|64|128|256)\((\d+),\s*(\d+)\)")
-
-# ---------------------------------------------------------------------------
 # SLT record types
 # ---------------------------------------------------------------------------
 
@@ -106,7 +51,6 @@ class QueryRecord:
     expected: list[str]
     rowsort: bool
     line_number: int
-    in_ansi_block: bool = False
     skip_engines: set[str] = field(default_factory=set)
     only_engines: set[str] = field(default_factory=set)
 
@@ -119,7 +63,6 @@ class ErrorRecord:
     sql: str
     line_number: int
     kind: str = "query"  # "query" or "statement"
-    in_ansi_block: bool = False
     skip_engines: set[str] = field(default_factory=set)
     only_engines: set[str] = field(default_factory=set)
 
@@ -130,7 +73,6 @@ class StatementRecord:
 
     sql: str
     line_number: int
-    in_ansi_block: bool = False
     skip_engines: set[str] = field(default_factory=set)
     only_engines: set[str] = field(default_factory=set)
 
@@ -147,7 +89,6 @@ def parse_slt(filepath: str) -> list:
 
     records = []
     i = 0
-    in_ansi_mode = False
     pending_skip: set[str] = set()
     pending_only: set[str] = set()
 
@@ -193,7 +134,6 @@ def parse_slt(filepath: str) -> list:
                     sql="\n".join(sql_lines),
                     line_number=line_num,
                     kind="query",
-                    in_ansi_block=in_ansi_mode,
                 )
             )
             records[-1].skip_engines = pending_skip
@@ -224,7 +164,6 @@ def parse_slt(filepath: str) -> list:
                     sql="\n".join(sql_lines),
                     line_number=line_num,
                     kind="statement",
-                    in_ansi_block=in_ansi_mode,
                 )
             )
             records[-1].skip_engines = pending_skip
@@ -250,24 +189,8 @@ def parse_slt(filepath: str) -> list:
                 i += 1
             sql = "\n".join(sql_lines)
 
-            # Track ANSI mode from statements
-            if re.search(
-                r"set\s+datafusion\.execution\.enable_ansi_mode\s*=\s*true",
-                sql,
-                re.IGNORECASE,
-            ):
-                in_ansi_mode = True
-            elif re.search(
-                r"set\s+datafusion\.execution\.enable_ansi_mode\s*=\s*false",
-                sql,
-                re.IGNORECASE,
-            ):
-                in_ansi_mode = False
-
             records.append(
-                StatementRecord(
-                    sql=sql, line_number=line_num, in_ansi_block=in_ansi_mode
-                )
+                StatementRecord(sql=sql, line_number=line_num)
             )
             records[-1].skip_engines = pending_skip
             records[-1].only_engines = pending_only
@@ -317,7 +240,6 @@ def parse_slt(filepath: str) -> list:
                     expected=expected,
                     rowsort=rowsort,
                     line_number=line_num,
-                    in_ansi_block=in_ansi_mode,
                 )
             )
             records[-1].skip_engines = pending_skip
@@ -330,353 +252,6 @@ def parse_slt(filepath: str) -> list:
         i += 1
 
     return records
-
-
-# ---------------------------------------------------------------------------
-# 2. SQL Translator (DataFusion -> PySpark)
-# ---------------------------------------------------------------------------
-
-
-def _translate_cast_type(df_type: str) -> Optional[str]:
-    """Map a DataFusion type name to a Spark SQL type name."""
-    upper = df_type.upper().strip()
-    # Direct match
-    if upper in DF_TO_SPARK_CAST_TYPE:
-        return DF_TO_SPARK_CAST_TYPE[upper]
-    # DECIMAL(p, s) - skip if precision > 38 (Spark max)
-    if upper.startswith("DECIMAL"):
-        m = re.match(r"DECIMAL\(\s*(\d+)", upper)
-        if m and int(m.group(1)) > 38:
-            raise _SkipQuery(f"Decimal precision {m.group(1)} exceeds Spark max of 38")
-        return df_type  # pass through
-    # Unknown type - skip rather than produce a misleading test failure
-    raise _SkipQuery(f"unsupported cast type: {df_type}")
-
-
-class _SkipQuery(Exception):
-    """Signal that a query should be skipped."""
-
-    pass
-
-
-def _replace_arrow_cast_nested(sql: str) -> str:
-    """Replace arrow_cast(...) handling nested parentheses properly."""
-    result = []
-    i = 0
-    while i < len(sql):
-        if sql[i:].startswith("arrow_cast("):
-            start = i
-            i += len("arrow_cast(")
-            depth = 1
-            inner_start = i
-            while i < len(sql) and depth > 0:
-                if sql[i] == "(":
-                    depth += 1
-                elif sql[i] == ")":
-                    depth -= 1
-                i += 1
-            inner = sql[inner_start : i - 1]
-
-            # Find the last top-level comma (outside parens and quotes)
-            depth = 0
-            in_quote: Optional[str] = None
-            last_comma = -1
-            for idx, ch in enumerate(inner):
-                if ch in ("'", '"') and in_quote is None:
-                    in_quote = ch
-                elif ch == in_quote:
-                    in_quote = None
-                elif not in_quote:
-                    if ch == "(":
-                        depth += 1
-                    elif ch == ")":
-                        depth -= 1
-                    elif ch == "," and depth == 0:
-                        last_comma = idx
-
-            if last_comma == -1:
-                result.append(sql[start:i])
-                continue
-
-            expr = inner[:last_comma].strip()
-            arrow_type_raw = inner[last_comma + 1 :].strip().strip("'\"")
-
-            if arrow_type_raw.startswith(("Dictionary(", "LargeList(", "FixedSizeList(", "List(")):
-                raise _SkipQuery(f"unsupported Arrow type: {arrow_type_raw}")
-
-            # Decimal32(p,s), Decimal64(p,s), Decimal128(p,s), Decimal256(p,s) -> DECIMAL(p,s)
-            decimal_match = _DECIMAL_ARROW_RE.match(arrow_type_raw)
-            if decimal_match:
-                p, s = decimal_match.group(1), decimal_match.group(2)
-                if int(p) > 38:
-                    raise _SkipQuery(f"Decimal precision {p} exceeds Spark max of 38")
-                spark_type = f"DECIMAL({p}, {s})"
-            else:
-                spark_type = ARROW_TO_SPARK_TYPE.get(arrow_type_raw)
-            if spark_type is None:
-                raise _SkipQuery(f"unmapped Arrow type: {arrow_type_raw}")
-
-            result.append(f"CAST({expr} AS {spark_type})")
-        else:
-            result.append(sql[i])
-            i += 1
-
-    return "".join(result)
-
-
-def _translate_casts(sql: str) -> str:
-    """Translate DataFusion :: cast syntax to Spark CAST() syntax."""
-    # Order matters: most specific patterns first
-
-    result = sql
-    changed = True
-    while changed:
-        changed = False
-
-        # 1. Parenthesized expressions: (expr)::TYPE
-        # Walk through looking for ):: and then find matching (
-        i = 0
-        while i < len(result):
-            if result[i] == ")" and result[i + 1 : i + 3] == "::":
-                # Walk backwards to find matching (
-                depth = 0
-                j = i
-                while j >= 0:
-                    if result[j] == ")":
-                        depth += 1
-                    elif result[j] == "(":
-                        depth -= 1
-                        if depth == 0:
-                            break
-                    j -= 1
-                if j >= 0 and depth == 0:
-                    # Check if ( is preceded by a function name
-                    func_start = j
-                    while func_start > 0 and (result[func_start - 1].isalnum() or result[func_start - 1] == "_"):
-                        func_start -= 1
-
-                    paren_expr = result[j + 1 : i]
-                    # Extract type after ::
-                    type_start = i + 3
-                    type_end = type_start
-                    while type_end < len(result) and (
-                        result[type_end].isalnum() or result[type_end] == "_"
-                    ):
-                        type_end += 1
-                    # Check for DECIMAL(p,s) style
-                    if type_end < len(result) and result[type_end] == "(":
-                        paren_depth = 1
-                        type_end += 1
-                        while type_end < len(result) and paren_depth > 0:
-                            if result[type_end] == "(":
-                                paren_depth += 1
-                            elif result[type_end] == ")":
-                                paren_depth -= 1
-                            type_end += 1
-
-                    cast_type = result[i + 3 : type_end]
-                    spark_type = _translate_cast_type(cast_type)
-
-                    if func_start < j:
-                        # func(...)::TYPE -> CAST(func(...) AS TYPE)
-                        func_call = result[func_start : i + 1]
-                        replacement = f"CAST({func_call} AS {spark_type})"
-                        result = result[:func_start] + replacement + result[type_end:]
-                    else:
-                        # (expr)::TYPE -> CAST(expr AS TYPE)
-                        replacement = f"CAST({paren_expr} AS {spark_type})"
-                        result = result[:j] + replacement + result[type_end:]
-                    changed = True
-                    break
-            i += 1
-        if changed:
-            continue
-
-        # 2. String literals: 'val'::TYPE (handles escaped quotes like 'Andy''s')
-        m = re.search(r"'((?:[^']|'')*)'::(\w+(?:\([^)]*\))?)", result)
-        if m:
-            cast_type = m.group(2)
-            spark_type = _translate_cast_type(cast_type)
-            replacement = f"CAST('{m.group(1)}' AS {spark_type})"
-            result = result[: m.start()] + replacement + result[m.end() :]
-            changed = True
-            continue
-
-        # 3. Numbers (including negative, scientific notation): -?123::TYPE or 1.23e10::TYPE
-        m = re.search(r"(?<![.\w])(-?\d+\.?\d*(?:[eE][+-]?\d+)?)::(\w+(?:\([^)]*\))?)", result)
-        if m:
-            cast_type = m.group(2)
-            spark_type = _translate_cast_type(cast_type)
-            replacement = f"CAST({m.group(1)} AS {spark_type})"
-            result = result[: m.start()] + replacement + result[m.end() :]
-            changed = True
-            continue
-
-        # 4. NULL::TYPE
-        m = re.search(r"\bNULL::(\w+(?:\([^)]*\))?(?:\[\])?)", result, re.IGNORECASE)
-        if m:
-            cast_type = m.group(1)
-            # Handle array types like int[]
-            if cast_type.endswith("[]"):
-                # Skip - Spark doesn't have this syntax
-                raise _SkipQuery(f"unsupported cast type: {cast_type}")
-            spark_type = _translate_cast_type(cast_type)
-            replacement = f"CAST(NULL AS {spark_type})"
-            result = result[: m.start()] + replacement + result[m.end() :]
-            changed = True
-            continue
-
-        # 5. Identifiers: col::TYPE
-        m = re.search(r"(?<![:\w])(\w+)::(\w+(?:\([^)]*\))?)", result)
-        if m:
-            ident = m.group(1)
-            cast_type = m.group(2)
-            spark_type = _translate_cast_type(cast_type)
-            replacement = f"CAST({ident} AS {spark_type})"
-            result = result[: m.start()] + replacement + result[m.end() :]
-            changed = True
-            continue
-
-    return result
-
-
-def _translate_make_array(sql: str) -> str:
-    """Translate make_array(...) -> array(...)."""
-    return sql.replace("make_array(", "array(")
-
-
-def _translate_array_literals(sql: str) -> str:
-    """Translate SQL array literal syntax [...] -> array(...).
-
-    Handles nested arrays like [[1,2],[3,4]] -> array(array(1,2),array(3,4)).
-    Only translates square brackets that are array literals, not array subscripts
-    like column[0]. Skips content inside string literals.
-    """
-    result = []
-    i = 0
-    while i < len(sql):
-        # Skip string literals (handling escaped quotes like 'Andy''s')
-        if sql[i] == "'":
-            result.append(sql[i])
-            i += 1
-            while i < len(sql):
-                if sql[i] == "'" and i + 1 < len(sql) and sql[i + 1] == "'":
-                    result.append(sql[i])
-                    result.append(sql[i + 1])
-                    i += 2
-                elif sql[i] == "'":
-                    break
-                else:
-                    result.append(sql[i])
-                    i += 1
-            if i < len(sql):
-                result.append(sql[i])
-                i += 1
-            continue
-        if sql[i] == "[":
-            # Check if this is an array subscript (preceded by identifier or ])
-            if i > 0 and (sql[i - 1].isalnum() or sql[i - 1] == "_" or sql[i - 1] == ")"):
-                result.append(sql[i])
-                i += 1
-                continue
-            # Array literal: find matching ]
-            depth = 1
-            i += 1
-            inner_start = i
-            while i < len(sql) and depth > 0:
-                if sql[i] == "[":
-                    depth += 1
-                elif sql[i] == "]":
-                    depth -= 1
-                i += 1
-            inner = sql[inner_start : i - 1]
-            # Recursively translate nested array literals
-            inner = _translate_array_literals(inner)
-            result.append(f"array({inner})")
-        else:
-            result.append(sql[i])
-            i += 1
-    return "".join(result)
-
-
-def _translate_decimal_literals(sql: str) -> str:
-    """Translate DECIMAL(p,s) 'value' literal syntax -> CAST('value' AS DECIMAL(p,s))."""
-    return re.sub(
-        r"DECIMAL\((\d+\s*,\s*\d+)\)\s+'([^']*)'",
-        r"CAST('\2' AS DECIMAL(\1))",
-        sql,
-        flags=re.IGNORECASE,
-    )
-
-
-def _translate_column_names(sql: str) -> str:
-    """Translate DataFusion column1/column2 names to PySpark col1/col2."""
-    return re.sub(r"\bcolumn(\d+)\b", r"col\1", sql)
-
-
-# Type aliases that appear in CAST() expressions but aren't standard Spark SQL
-_TYPE_ALIAS_PATTERN = re.compile(
-    r"\bCAST\((.+?)\s+AS\s+(FLOAT8|FLOAT4|INT8|INT4|INT2|BYTEA)\b",
-    re.IGNORECASE,
-)
-
-
-def _translate_type_aliases_in_cast(sql: str) -> str:
-    """Translate non-standard type aliases inside CAST() expressions."""
-    def replace_alias(m):
-        expr = m.group(1)
-        alias = m.group(2).upper()
-        spark_type = DF_TO_SPARK_CAST_TYPE.get(alias, alias)
-        return f"CAST({expr} AS {spark_type}"
-    return _TYPE_ALIAS_PATTERN.sub(replace_alias, sql)
-
-
-def translate_sql(sql: str) -> tuple[str, Optional[str]]:
-    """Translate DataFusion SQL to PySpark SQL.
-
-    Returns (translated_sql, skip_reason). If skip_reason is not None,
-    the query should be skipped.
-    """
-    # Skip queries using DataFusion-specific functions
-    if "spark_cast(" in sql.lower():
-        return sql, "uses spark_cast()"
-    if "arrow_typeof(" in sql.lower():
-        return sql, "uses arrow_typeof()"
-    # bitwise_not is DataFusion's name; Spark uses bitnot() or ~ operator
-    if "bitwise_not(" in sql.lower():
-        return sql, "uses bitwise_not() (DataFusion-specific name)"
-    # Skip DataFusion config statements
-    if re.search(r"set\s+datafusion\.", sql, re.IGNORECASE):
-        return sql, "DataFusion config statement"
-
-    try:
-        result = sql
-
-        # Translate arrow_cast first (before :: casts)
-        if "arrow_cast(" in result:
-            result = _replace_arrow_cast_nested(result)
-
-        # Translate :: cast syntax
-        result = _translate_casts(result)
-
-        # Translate make_array
-        result = _translate_make_array(result)
-
-        # Translate array literal syntax [...] -> array(...)
-        result = _translate_array_literals(result)
-
-        # Translate DECIMAL(p,s) 'value' literal syntax -> CAST('value' AS DECIMAL(p,s))
-        result = _translate_decimal_literals(result)
-
-        # Translate column1/column2 -> col1/col2 (PySpark naming for VALUES columns)
-        result = _translate_column_names(result)
-
-        # Translate type aliases inside CAST() expressions (e.g., CAST(x AS FLOAT8) -> CAST(x AS DOUBLE))
-        result = _translate_type_aliases_in_cast(result)
-
-        return result, None
-    except _SkipQuery as e:
-        return sql, str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -982,10 +557,8 @@ def process_file(
     result = FileResult(filepath=filepath)
     records = parse_slt(filepath)
 
-    # Track tables created with untranslatable SQL
+    # Track tables created with SQL that failed to execute
     skip_tables: set[str] = set()
-
-    rel_path = os.path.relpath(filepath)
 
     for record in records:
         # Honor skipif/onlyif against this engine's name (we're the Spark runner).
@@ -1005,33 +578,8 @@ def process_file(
                 )
             continue
 
-        # Skip ANSI mode blocks
-        if record.in_ansi_block:
-            result.skipped += 1
-            if show_skipped:
-                result.skipped_details.append(
-                    f"  Line {record.line_number}: skipped (ANSI mode block)"
-                )
-            continue
-
         if isinstance(record, StatementRecord):
-            # Translate and execute DDL statements
-            translated, skip_reason = translate_sql(record.sql)
-            if skip_reason:
-                # Check if this creates a table - track it
-                create_match = re.search(
-                    r"CREATE\s+TABLE\s+(\w+)", record.sql, re.IGNORECASE
-                )
-                if create_match:
-                    skip_tables.add(create_match.group(1).lower())
-                result.skipped += 1
-                if show_skipped:
-                    result.skipped_details.append(
-                        f"  Line {record.line_number}: skipped ({skip_reason})"
-                    )
-                continue
-
-            err = run_statement(translated)
+            err = run_statement(record.sql)
             if err:
                 if verbose:
                     print(
@@ -1058,17 +606,8 @@ def process_file(
                     )
                 continue
 
-            translated, skip_reason = translate_sql(record.sql)
-            if skip_reason:
-                result.skipped += 1
-                if show_skipped:
-                    result.skipped_details.append(
-                        f"  Line {record.line_number}: skipped ({skip_reason})"
-                    )
-                continue
-
             num_cols = len(record.type_codes)
-            actual, err = run_query(translated, num_cols)
+            actual, err = run_query(record.sql, num_cols)
 
             if err:
                 # Unresolved function/routine means this Spark version
@@ -1083,7 +622,7 @@ def process_file(
                 result.failed += 1
                 result.errors.append(
                     f"  Line {record.line_number}: PySpark error: {err}\n"
-                    f"    SQL: {translated}"
+                    f"    SQL: {record.sql}"
                 )
                 continue
 
@@ -1097,25 +636,15 @@ def process_file(
                 result.errors.append(
                     f"  Line {record.line_number}: MISMATCH\n"
                     f"    SQL: {record.sql}\n"
-                    f"    Translated: {translated}\n"
                     f"{detail}"
                 )
 
         elif isinstance(record, ErrorRecord):
             # For error queries, verify Spark also throws
-            translated, skip_reason = translate_sql(record.sql)
-            if skip_reason:
-                result.skipped += 1
-                if show_skipped:
-                    result.skipped_details.append(
-                        f"  Line {record.line_number}: skipped ({skip_reason})"
-                    )
-                continue
-
             if record.kind == "query":
-                _, err = run_query(translated, 1)
+                _, err = run_query(record.sql, 1)
             else:
-                err = run_statement(translated)
+                err = run_statement(record.sql)
 
             if err:
                 result.passed += 1
@@ -1243,7 +772,7 @@ def main():
 
     script_dir = Path(__file__).resolve().parent
     repo_root = script_dir.parent.parent.parent
-    default_test_dir = repo_root / "datafusion" / "sqllogictest" / "test_files" / "spark"
+    default_test_dir = repo_root / "datafusion" / "sqllogictest" / "test_files" / "spark_dialect"
     default_known_failures = script_dir / "known-failures.txt"
 
     parser.add_argument(
@@ -1267,7 +796,7 @@ def main():
     args = parser.parse_args()
 
     # Load known failure entries (version conditions resolved after Spark init)
-    if args.known_failures.lower() == "none":
+    if args.known_failures.lower() == "none" or not os.path.exists(args.known_failures):
         known_failure_entries: list[_KnownFailureEntry] = []
     else:
         known_failure_entries = load_known_failures(args.known_failures)
@@ -1340,11 +869,11 @@ def main():
         f"{total_skipped} skipped, {total_known_failures} known failures"
     )
     if failed_files:
-        print(f"\nUnexpected failures:")
+        print("\nUnexpected failures:")
         for f in failed_files:
             print(f"  {f}")
     if known_failure_files and args.verbose:
-        print(f"\nKnown failures (skipped):")
+        print("\nKnown failures (skipped):")
         for f in known_failure_files:
             print(f"  {f}")
     print()
