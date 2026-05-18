@@ -31,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use super::decimal::{apply_decimal_op, ceil_decimal_value};
+use super::decimal::{apply_decimal_to_integral_op, ceil_decimal_value};
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -147,7 +147,7 @@ impl ScalarUDFImpl for CeilFunc {
                 return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
             }
             DataType::Decimal32(precision, scale) => {
-                apply_decimal_op::<Decimal32Type, _>(
+                apply_decimal_to_integral_op::<Decimal32Type, _>(
                     &value,
                     *precision,
                     *scale,
@@ -156,7 +156,7 @@ impl ScalarUDFImpl for CeilFunc {
                 )?
             }
             DataType::Decimal64(precision, scale) => {
-                apply_decimal_op::<Decimal64Type, _>(
+                apply_decimal_to_integral_op::<Decimal64Type, _>(
                     &value,
                     *precision,
                     *scale,
@@ -165,7 +165,7 @@ impl ScalarUDFImpl for CeilFunc {
                 )?
             }
             DataType::Decimal128(precision, scale) => {
-                apply_decimal_op::<Decimal128Type, _>(
+                apply_decimal_to_integral_op::<Decimal128Type, _>(
                     &value,
                     *precision,
                     *scale,
@@ -174,7 +174,7 @@ impl ScalarUDFImpl for CeilFunc {
                 )?
             }
             DataType::Decimal256(precision, scale) => {
-                apply_decimal_op::<Decimal256Type, _>(
+                apply_decimal_to_integral_op::<Decimal256Type, _>(
                     &value,
                     *precision,
                     *scale,

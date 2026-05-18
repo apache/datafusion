@@ -35,7 +35,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use num_traits::{CheckedAdd, Float, One};
 
-use super::decimal::{apply_decimal_op, floor_decimal_value};
+use super::decimal::{apply_decimal_to_integral_op, floor_decimal_value};
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -187,7 +187,7 @@ impl ScalarUDFImpl for FloorFunc {
                 return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
             }
             DataType::Decimal32(precision, scale) => {
-                apply_decimal_op::<Decimal32Type, _>(
+                apply_decimal_to_integral_op::<Decimal32Type, _>(
                     &value,
                     *precision,
                     *scale,
@@ -196,7 +196,7 @@ impl ScalarUDFImpl for FloorFunc {
                 )?
             }
             DataType::Decimal64(precision, scale) => {
-                apply_decimal_op::<Decimal64Type, _>(
+                apply_decimal_to_integral_op::<Decimal64Type, _>(
                     &value,
                     *precision,
                     *scale,
@@ -205,7 +205,7 @@ impl ScalarUDFImpl for FloorFunc {
                 )?
             }
             DataType::Decimal128(precision, scale) => {
-                apply_decimal_op::<Decimal128Type, _>(
+                apply_decimal_to_integral_op::<Decimal128Type, _>(
                     &value,
                     *precision,
                     *scale,
@@ -214,7 +214,7 @@ impl ScalarUDFImpl for FloorFunc {
                 )?
             }
             DataType::Decimal256(precision, scale) => {
-                apply_decimal_op::<Decimal256Type, _>(
+                apply_decimal_to_integral_op::<Decimal256Type, _>(
                     &value,
                     *precision,
                     *scale,

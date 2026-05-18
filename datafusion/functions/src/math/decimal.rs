@@ -23,7 +23,7 @@ use arrow::error::ArrowError;
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::{DataFusionError, Result};
 
-pub(super) fn apply_decimal_op<T, F>(
+pub(super) fn apply_decimal_to_integral_op<T, F>(
     array: &ArrayRef,
     precision: u8,
     scale: i8,
