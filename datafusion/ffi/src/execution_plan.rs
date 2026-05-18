@@ -212,7 +212,7 @@ unsafe extern "C" fn partition_statistics_fn_wrapper(
     let partition: Option<usize> = partition.into();
     plan.inner()
         .partition_statistics(partition)
-        .map(|stats| serialize_statistics(stats.as_ref()).into_iter().collect())
+        .map(|stats| SVec::from(serialize_statistics(stats.as_ref()).as_slice()))
         .into()
 }
 
