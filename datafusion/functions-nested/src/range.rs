@@ -538,23 +538,20 @@ fn retrieve_range_args(
     Some((start, stop, step))
 }
 
-/// Upper bound on the number of `i64` elements a range may materialize at
-/// once. `Vec::reserve` panics with "capacity overflow" when the requested
-/// allocation exceeds `isize::MAX` bytes, so cap the count at the same limit
-/// and return an error rather than panicking on user-supplied SQL.
-const MAX_RANGE_ELEMENTS: u64 = isize::MAX as u64 / size_of::<i64>() as u64;
-
 /// Reserve space for `count` more elements, returning an error when the
-/// resulting allocation would exceed what `Vec` can hold.
+/// allocation would overflow `Vec`'s capacity limit or the allocator
+/// rejects it, rather than panicking on user-supplied SQL.
 fn reserve_range_capacity(values: &mut Vec<i64>, count: u64) -> Result<()> {
-    if count > MAX_RANGE_ELEMENTS {
-        return exec_err!(
-            "Range too large to materialize: would produce {count} elements \
-             (max {MAX_RANGE_ELEMENTS})"
-        );
-    }
-    values.reserve(count as usize);
-    Ok(())
+    let count_usize = usize::try_from(count).map_err(|_| {
+        exec_datafusion_err!(
+            "Range too large to materialize: would produce {count} elements"
+        )
+    })?;
+    values.try_reserve(count_usize).map_err(|e| {
+        exec_datafusion_err!(
+            "Range too large to materialize: failed to allocate {count} elements: {e}"
+        )
+    })
 }
 
 /// Generate integer range values directly into the provided buffer.
