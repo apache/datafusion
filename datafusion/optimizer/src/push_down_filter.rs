@@ -44,7 +44,7 @@ use datafusion_expr::{
 };
 
 use crate::optimizer::ApplyOrder;
-use crate::simplify_expressions::simplify_predicates;
+use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
     ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
 };
@@ -778,16 +778,16 @@ impl OptimizerRule for PushDownFilter {
             return push_down_join(join, None);
         };
 
-        let plan_schema = Arc::clone(plan.schema());
-
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
         };
+        let plan_schema = Arc::clone(filter.input.schema());
 
         let predicate = split_conjunction_owned(filter.predicate.clone());
         let old_predicate_len = predicate.len();
         let new_predicates =
             with_debug_timing("simplify_predicates", || simplify_predicates(predicate))?;
+
         if log_enabled!(Level::Debug) {
             debug!(
                 "push_down_filter: simplify_predicates old_count={}, new_count={}",
@@ -795,7 +795,14 @@ impl OptimizerRule for PushDownFilter {
                 new_predicates.len()
             );
         }
-        if old_predicate_len != new_predicates.len() {
+
+        // Place cheap predicates before expensive ones, so the `AND`
+        // evaluator's right-side short-circuit can skip evaluating expensive
+        // predicates on rows that have already been filtered out.
+        let (new_predicates, reorder_changed) = reorder_predicates(new_predicates);
+
+        let count_changed = old_predicate_len != new_predicates.len();
+        if count_changed || reorder_changed {
             let Some(new_predicate) = conjunction(new_predicates) else {
                 // new_predicates is empty - remove the filter entirely
                 // Return the child plan without the filter
