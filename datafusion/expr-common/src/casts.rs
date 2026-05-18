@@ -174,7 +174,7 @@ fn is_supported_comparison_unwrap_operator(op: Operator) -> bool {
 ///   (e.g. `FixedSizeBinary(n) -> Binary`).
 ///   Binary narrowing or FixedSizeBinary length changes are NOT allowed.
 /// - Integer → String (e.g. `Int32 -> Utf8`): equality-like ops only
-///   (Eq/NotEq/IsDistinctFrom). Inequality blocked because string
+///   (Eq/NotEq/IsDistinctFrom/IsNotDistinctFrom). Inequality blocked because string
 ///   ordering differs from integer ordering. String→Integer NEVER allowed.
 /// - Dictionary/String family (Utf8/LargeUtf8/Utf8View/Dictionary):
 ///   any direction allowed — string literals can't overflow and the
@@ -241,21 +241,21 @@ fn is_integer_widening_safe(from: &DataType, to: &DataType) -> bool {
 
 /// Returns true for binary widening casts that preserve comparison semantics.
 ///
-/// Allowed: `FixedSizeBinary` → `Binary` (fixed-size is a subset of
-/// variable-length binary; values don't change).
+/// Allowed: identity casts and `FixedSizeBinary` → `Binary` (fixed-size is a
+/// subset of variable-length binary; values don't change).
 ///
 /// NOT allowed: `Binary` → `FixedSizeBinary` (narrowing), FixedSizeBinary
 /// length changes, or any other binary type transitions.
 fn is_binary_widening_safe(from: &DataType, to: &DataType) -> bool {
     use DataType::*;
-    matches!(
-        (from, to),
+    match (from, to) {
         // FixedSizeBinary → Binary: always safe (widening)
-        (FixedSizeBinary(_), Binary)
-            // Identity
-            | (FixedSizeBinary(_), FixedSizeBinary(_))
-            | (Binary, Binary)
-    )
+        (FixedSizeBinary(_), Binary) => true,
+        // Identity casts
+        (Binary, Binary) => true,
+        (FixedSizeBinary(from_len), FixedSizeBinary(to_len)) => from_len == to_len,
+        _ => false,
+    }
 }
 
 /// Returns true when `from` is an integer type and `to` is a string type.
@@ -998,6 +998,14 @@ mod tests {
             Operator::IsNotDistinctFrom,
             ScalarValue::Int32(Some(123)),
         );
+        // IsDistinctFrom: allowed for Int→String when literal round-trips
+        expect_comparison_unwrap_with_op(
+            ScalarValue::Utf8(Some("123".to_string())),
+            DataType::Int32,
+            DataType::Utf8,
+            Operator::IsDistinctFrom,
+            ScalarValue::Int32(Some(123)),
+        );
         expect_no_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("0123".to_string())),
             DataType::Int32,
@@ -1009,6 +1017,13 @@ mod tests {
             DataType::Int32,
             DataType::Utf8,
             Operator::IsNotDistinctFrom,
+        );
+        // IsDistinctFrom blocked when literal doesn't round-trip
+        expect_no_comparison_unwrap_with_op(
+            ScalarValue::Utf8(Some("0123".to_string())),
+            DataType::Int32,
+            DataType::Utf8,
+            Operator::IsDistinctFrom,
         );
         expect_no_comparison_unwrap_with_op(
             ScalarValue::Utf8(Some("123".to_string())),
@@ -1034,10 +1049,45 @@ mod tests {
             op,
         ));
 
+        // Cross-timezone unwrap works for non-UTC timezones too (e.g. +08:00).
+        let tz_plus8 = Some("+08:00".into());
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, tz_plus8),
+            op,
+        ));
+
         assert!(!is_supported_comparison_unwrap_cast(
             &DataType::Duration(TimeUnit::Millisecond),
             &DataType::Duration(TimeUnit::Nanosecond),
             op,
+        ));
+
+        // Binary widening / identity
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Binary,
+            &DataType::Binary,
+            op
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::FixedSizeBinary(4),
+            &DataType::Binary,
+            op
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::FixedSizeBinary(4),
+            &DataType::FixedSizeBinary(4),
+            op
+        ));
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::FixedSizeBinary(4),
+            &DataType::FixedSizeBinary(8),
+            op
+        ));
+        assert!(!is_supported_comparison_unwrap_cast(
+            &DataType::Binary,
+            &DataType::FixedSizeBinary(4),
+            op
         ));
 
         // Integer widening: same-sign
@@ -1112,6 +1162,17 @@ mod tests {
             &DataType::UInt64,
             &DataType::LargeUtf8,
             Operator::Eq
+        ));
+        // Integer→String: IsDistinctFrom / IsNotDistinctFrom are also safe
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::Int32,
+            &DataType::Utf8,
+            Operator::IsDistinctFrom
+        ));
+        assert!(is_supported_comparison_unwrap_cast(
+            &DataType::UInt64,
+            &DataType::Utf8,
+            Operator::IsNotDistinctFrom
         ));
         // Integer→String: blocked with Lt (inequality ordering differs)
         // String→Integer: NOT allowed

@@ -290,9 +290,20 @@ mod tests {
         let expected = col("c1").eq(lit(123i32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
-        // cast(c1, UTF8) != '123': Int→String is allowed for equality-like ops (Eq/NotEq/IsDistinctFrom)
+        // cast(c1, UTF8) != '123': Int→String is allowed for equality-like ops (Eq/NotEq/IsDistinctFrom/IsNotDistinctFrom)
         let expr_input = cast(col("c1"), DataType::Utf8).not_eq(lit("123"));
         let expected = col("c1").not_eq(lit(123i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c1, UTF8) IS DISTINCT FROM '123': Int→String also allowed for IsDistinctFrom
+        let expr_input = is_distinct_from(cast(col("c1"), DataType::Utf8), lit("123"));
+        let expected = is_distinct_from(col("c1"), lit(123i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c1, UTF8) IS NOT DISTINCT FROM '123': Int→String also allowed for IsNotDistinctFrom
+        let expr_input =
+            is_not_distinct_from(cast(col("c1"), DataType::Utf8), lit("123"));
+        let expected = is_not_distinct_from(col("c1"), lit(123i32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
         // Comparison against NULL is still folded by general simplification.
@@ -564,6 +575,20 @@ mod tests {
             Some(1666612093000000000),
             None,
         )));
+        assert_eq!(optimize_test(expr_lt, &schema), expected);
+    }
+
+    #[test]
+    /// Cross-timezone unwrap works for non-UTC timezones (e.g. +08:00).
+    fn test_unwrap_cast_cross_timezone_non_utc() {
+        let schema = expr_test_schema();
+        // Cast from None → +08:00 with precision widening (ms → ns).
+        let tz = Some("+08:00".into());
+        let cast_type = DataType::Timestamp(TimeUnit::Nanosecond, tz.clone());
+        // 1000ms = 1_000_000_000ns at a boundary, so round-trips exactly.
+        let lit_ns = lit(ScalarValue::TimestampNanosecond(Some(1_000_000_000), tz));
+        let expr_lt = try_cast(col("ts_millis_none"), cast_type).lt(lit_ns);
+        let expected = col("ts_millis_none").lt(lit_timestamp_millis_none(1000));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
@@ -845,6 +870,14 @@ mod tests {
             op,
             right: Box::new(right),
         })
+    }
+
+    fn is_distinct_from(left: Expr, right: Expr) -> Expr {
+        binary_expr(left, Operator::IsDistinctFrom, right)
+    }
+
+    fn is_not_distinct_from(left: Expr, right: Expr) -> Expr {
+        binary_expr(left, Operator::IsNotDistinctFrom, right)
     }
 
     fn timestamp_nano_none_type() -> DataType {

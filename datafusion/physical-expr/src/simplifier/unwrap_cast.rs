@@ -474,6 +474,39 @@ mod tests {
     }
 
     #[test]
+    fn test_unwrap_cross_timezone_timestamp_cast() {
+        // Cross-timezone unwrap should work for non-UTC timezones (e.g. +08:00).
+        // Timestamps store UTC epoch internally, so timezone label is just for display.
+        let tz = Some("+08:00".into());
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        )]);
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
+            None,
+        ));
+        // 1000ms = 1_000_000_000ns at a boundary, so round-trips exactly.
+        let literal_expr = lit(ScalarValue::TimestampNanosecond(Some(1_000_000_000), tz));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Lt, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        assert!(result.transformed);
+
+        let optimized_binary = result.data.downcast_ref::<BinaryExpr>().unwrap();
+        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(
+            right_literal.value(),
+            &ScalarValue::TimestampMillisecond(Some(1000), None)
+        );
+    }
+
+    #[test]
     fn test_unwrap_lossy_decimal_precision_casts() {
         let schema = Schema::new(vec![Field::new(
             "decimal_col",
