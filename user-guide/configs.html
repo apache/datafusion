@@ -1049,27 +1049,31 @@ example, to set and reset <code class="docutils literal notranslate"><span class
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>datafusion.runtime.list_files_cache_limit</p></td>
+<tr class="row-even"><td><p>datafusion.runtime.file_statistics_cache_limit</p></td>
+<td><p>20M</p></td>
+<td><p>Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or ‘0’ for 0. Example: ‘2G’ for 2 gigabytes.</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.runtime.list_files_cache_limit</p></td>
 <td><p>1M</p></td>
 <td><p>Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or ‘0’ for 0. Example: ‘2G’ for 2 gigabytes.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.runtime.list_files_cache_ttl</p></td>
+<tr class="row-even"><td><p>datafusion.runtime.list_files_cache_ttl</p></td>
 <td><p>NULL</p></td>
 <td><p>TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: ‘2m’ for 2 minutes.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.runtime.max_temp_directory_size</p></td>
+<tr class="row-odd"><td><p>datafusion.runtime.max_temp_directory_size</p></td>
 <td><p>100G</p></td>
 <td><p>Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or ‘0’ for 0. Example: ‘2G’ for 2 gigabytes.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.runtime.memory_limit</p></td>
+<tr class="row-even"><td><p>datafusion.runtime.memory_limit</p></td>
 <td><p>NULL</p></td>
 <td><p>Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or ‘0’ for 0. Example: ‘2G’ for 2 gigabytes.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.runtime.metadata_cache_limit</p></td>
+<tr class="row-odd"><td><p>datafusion.runtime.metadata_cache_limit</p></td>
 <td><p>50M</p></td>
 <td><p>Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or ‘0’ for 0. Example: ‘2G’ for 2 gigabytes.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.runtime.temp_directory</p></td>
+<tr class="row-even"><td><p>datafusion.runtime.temp_directory</p></td>
 <td><p>NULL</p></td>
 <td><p>The path to the temporary file directory.</p></td>
 </tr>

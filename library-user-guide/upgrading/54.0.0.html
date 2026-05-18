@@ -1084,6 +1084,34 @@ move the borrow behind an interior-mutability primitive such as <code class="doc
 or <code class="docutils literal notranslate"><span class="pre">Arc&lt;OnceLock&lt;_&gt;&gt;</span></code>.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/21803">PR #21803</a> for details.</p>
 </section>
+<section id="file-statistics-cache-is-now-memory-limited-and-managed-by-the-cachemanager">
+<h3>File statistics cache is now memory-limited and managed by the <code class="docutils literal notranslate"><span class="pre">CacheManager</span></code><a class="headerlink" href="#file-statistics-cache-is-now-memory-limited-and-managed-by-the-cachemanager" title="Link to this heading">#</a></h3>
+<p>The file statistics cache used by <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> is now memory-limited and
+centrally managed through the <code class="docutils literal notranslate"><span class="pre">CacheManager</span></code>.</p>
+<p>To configure the cache size use the <code class="docutils literal notranslate"><span class="pre">file_statistics_cache_limit</span></code> setting:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">runtime</span><span class="p">.</span><span class="n">file_statistics_cache_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;10M&#39;</span>
+</pre></div>
+</div>
+<p>To disable the file statistics cache, set the limit to 0.</p>
+<p>The file statistics cache is no longer created inside the <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code>.
+Instead, it is created within the <code class="docutils literal notranslate"><span class="pre">CacheManager</span></code> and must be passed to the <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code>.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who want to limit the memory usage of the file statistics cache.</p></li>
+<li><p>Users who want to disable the file statistics cache.</p></li>
+<li><p>Users who want to create a <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> programmatically with a file statistics cache.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Disable the cache by setting the configuration value to 0:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">runtime</span><span class="p">.</span><span class="n">file_statistics_cache_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;0&#39;</span>
+</pre></div>
+</div>
+<p>Use the file statistics cache provided by the <code class="docutils literal notranslate"><span class="pre">CacheManager</span></code> when initializing a new <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">ListingTable</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">config</span><span class="p">)</span><span class="o">?</span>
+<span class="w">  </span><span class="p">.</span><span class="n">with_cache</span><span class="p">(</span><span class="n">ctx</span><span class="p">.</span><span class="n">runtime_env</span><span class="p">().</span><span class="n">cache_manager</span><span class="p">.</span><span class="n">get_file_statistic_cache</span><span class="p">())</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -1161,6 +1189,7 @@ or <code class="docutils literal notranslate"><span class="pre">Arc&lt;OnceLock&
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#arrays-zip-struct-field-names-changed"><code class="docutils literal notranslate"><span class="pre">arrays_zip</span></code> struct field names changed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default"><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#memorypool-now-requires-static-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">MemoryPool</span></code> now requires <code class="docutils literal notranslate"><span class="pre">'static</span></code> (adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#file-statistics-cache-is-now-memory-limited-and-managed-by-the-cachemanager">File statistics cache is now memory-limited and managed by the <code class="docutils literal notranslate"><span class="pre">CacheManager</span></code></a></li>
 </ul>
 </li>
 </ul>

@@ -716,3 +716,42 @@ move the borrow behind an interior-mutability primitive such as `Arc<Mutex<_>>`
 or `Arc<OnceLock<_>>`.
 
 See [PR #21803](https://github.com/apache/datafusion/pull/21803) for details.
+
+[20047]: https://github.com/apache/datafusion/pull/20047
+
+### File statistics cache is now memory-limited and managed by the `CacheManager`
+
+The file statistics cache used by `ListingTable` is now memory-limited and
+centrally managed through the `CacheManager`.
+
+To configure the cache size use the `file_statistics_cache_limit` setting:
+
+```sql
+SET datafusion.runtime.file_statistics_cache_limit = '10M'
+```
+
+To disable the file statistics cache, set the limit to 0.
+
+The file statistics cache is no longer created inside the `ListingTable`.
+Instead, it is created within the `CacheManager` and must be passed to the `ListingTable`.
+
+**Who is affected:**
+
+- Users who want to limit the memory usage of the file statistics cache.
+- Users who want to disable the file statistics cache.
+- Users who want to create a `ListingTable` programmatically with a file statistics cache.
+
+**Migration guide:**
+
+Disable the cache by setting the configuration value to 0:
+
+```sql
+SET datafusion.runtime.file_statistics_cache_limit = '0'
+```
+
+Use the file statistics cache provided by the `CacheManager` when initializing a new `ListingTable`:
+
+```rust,ignore
+ListingTable::try_new(config)?
+  .with_cache(ctx.runtime_env().cache_manager.get_file_statistic_cache())
+```
