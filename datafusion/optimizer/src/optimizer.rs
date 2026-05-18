@@ -52,6 +52,7 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
+use crate::request_statistics::RequestStatistics;
 use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -305,6 +306,11 @@ impl Optimizer {
             Arc::new(ExtractLeafExpressions::new()),
             Arc::new(PushDownLeafProjections::new()),
             Arc::new(OptimizeProjections::new()),
+            // Run last: annotates each `TableScan` with the stats the
+            // surrounding (now-stable) plan shape would benefit from.
+            // The physical planner threads these into
+            // `ScanArgs::with_statistics_requests`.
+            Arc::new(RequestStatistics::new()),
         ];
 
         Self::with_rules(rules)

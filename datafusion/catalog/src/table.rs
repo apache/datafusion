@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use datafusion_common::{Constraints, Statistics, not_impl_err};
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
+use datafusion_expr::statistics::StatisticsRequest;
 
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
@@ -406,6 +407,7 @@ pub struct ScanArgs<'a> {
     filters: Option<&'a [Expr]>,
     projection: Option<&'a [usize]>,
     limit: Option<usize>,
+    statistics_requests: &'a [StatisticsRequest],
 }
 
 impl<'a> ScanArgs<'a> {
@@ -466,6 +468,32 @@ impl<'a> ScanArgs<'a> {
     /// Returns the row limit, or `None` if no limit was specified.
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+
+    /// Set a list of statistics the caller would like the provider to
+    /// answer if it can do so cheaply.
+    ///
+    /// Typical sources a provider may answer from:
+    /// * Parquet thrift footers (Min/Max/NullCount/RowCount, exact)
+    /// * An external metadata catalog (Delta/Iceberg/Hudi manifests,
+    ///   Hive-Metastore-style stats columns)
+    /// * Cached / materialized stats columns
+    ///
+    /// Providers surface their answers on a per-file basis via
+    /// `PartitionedFile::satisfied_stats` (a sparse map keyed by the
+    /// same `StatisticsRequest`). Anything the provider can't answer
+    /// is simply omitted — consumers treat a missing key as "absent".
+    /// The contract is "answer what's free, leave the rest off the
+    /// map": providers MUST NOT do expensive scans purely to satisfy
+    /// these requests.
+    pub fn with_statistics_requests(mut self, requests: &'a [StatisticsRequest]) -> Self {
+        self.statistics_requests = requests;
+        self
+    }
+
+    /// Get the statistics requests. Empty if none were set.
+    pub fn statistics_requests(&self) -> &'a [StatisticsRequest] {
+        self.statistics_requests
     }
 }
 

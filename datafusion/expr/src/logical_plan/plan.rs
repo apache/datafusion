@@ -2780,6 +2780,12 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Statistics the planner would like the provider to answer for this
+    /// scan (typically derived from the surrounding plan shape — e.g.
+    /// Min/Max for sort keys, DistinctCount for join keys). Threaded into
+    /// `ScanArgs::with_statistics_requests` at physical planning time.
+    /// Empty by default.
+    pub statistics_requests: Vec<datafusion_expr_common::statistics::StatisticsRequest>,
 }
 
 impl Debug for TableScan {
@@ -2901,7 +2907,18 @@ impl TableScan {
             projected_schema,
             filters,
             fetch,
+            statistics_requests: Vec::new(),
         })
+    }
+
+    /// Attach a list of statistics requests for the optimizer-aware
+    /// stats-collection path. See [`Self::statistics_requests`].
+    pub fn with_statistics_requests(
+        mut self,
+        statistics_requests: Vec<datafusion_expr_common::statistics::StatisticsRequest>,
+    ) -> Self {
+        self.statistics_requests = statistics_requests;
+        self
     }
 }
 
@@ -5139,6 +5156,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
+            statistics_requests: Vec::new(),
         }));
         let col = schema.field_names()[0].clone();
 
@@ -5169,6 +5187,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
+            statistics_requests: Vec::new(),
         }));
         let col = schema.field_names()[0].clone();
 

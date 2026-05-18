@@ -58,6 +58,7 @@ use chrono::TimeZone;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_datafusion_err};
 use datafusion_common::{ScalarValue, Statistics};
+use datafusion_expr::statistics::SatisfiedStatistics;
 use datafusion_physical_expr::LexOrdering;
 use futures::{Stream, StreamExt};
 use object_store::{GetOptions, GetRange, ObjectStore};
@@ -146,6 +147,18 @@ pub struct PartitionedFile {
     /// When set via [`Self::with_statistics`], partition column statistics are automatically
     /// computed from [`Self::partition_values`] with exact min/max/null_count/distinct_count.
     pub statistics: Option<Arc<Statistics>>,
+    /// Sparse, request-keyed stats answered by the provider for this file.
+    ///
+    /// Only entries for non-`Absent` answers are present, so memory scales
+    /// with the *count of stats actually requested* rather than the table's
+    /// column count. Used in tandem with — not in place of —
+    /// [`Self::statistics`]: existing consumers that read the dense
+    /// `Statistics` keep working; new consumers (e.g. `FilePruner` in
+    /// `datafusion-pruning`) prefer this sparse map when it's
+    /// populated. Providers that store stats out-of-band (Delta/Iceberg/Hudi
+    /// manifests, Hive Metastore, custom catalogs) can populate this
+    /// directly without rebuilding a full dense `Statistics`.
+    pub satisfied_stats: Option<Arc<SatisfiedStatistics>>,
     /// The known lexicographical ordering of the rows in this file, if any.
     ///
     /// This describes how the data within the file is sorted with respect to one or more
@@ -178,6 +191,7 @@ impl PartitionedFile {
             partition_values: vec![],
             range: None,
             statistics: None,
+            satisfied_stats: None,
             ordering: None,
             extensions: FileExtensions::new(),
             metadata_size_hint: None,
@@ -191,6 +205,7 @@ impl PartitionedFile {
             partition_values: vec![],
             range: None,
             statistics: None,
+            satisfied_stats: None,
             ordering: None,
             extensions: FileExtensions::new(),
             metadata_size_hint: None,
@@ -210,6 +225,7 @@ impl PartitionedFile {
             partition_values: vec![],
             range: Some(FileRange { start, end }),
             statistics: None,
+            satisfied_stats: None,
             ordering: None,
             extensions: FileExtensions::new(),
             metadata_size_hint: None,
@@ -358,6 +374,21 @@ impl PartitionedFile {
         self.ordering = ordering;
         self
     }
+
+    /// Attach a sparse map of provider-answered statistics for this file.
+    ///
+    /// Used by table providers that store per-file stats out-of-band
+    /// (Delta/Iceberg/Hudi manifests, Hive Metastore, custom catalogs)
+    /// and want to surface them without reconstructing a full dense
+    /// [`Statistics`]. Consumers (e.g. `FilePruner`) prefer this map
+    /// when [`Self::statistics`] is not set.
+    pub fn with_satisfied_stats(
+        mut self,
+        satisfied_stats: Arc<SatisfiedStatistics>,
+    ) -> Self {
+        self.satisfied_stats = Some(satisfied_stats);
+        self
+    }
 }
 
 impl From<ObjectMeta> for PartitionedFile {
@@ -367,6 +398,7 @@ impl From<ObjectMeta> for PartitionedFile {
             partition_values: vec![],
             range: None,
             statistics: None,
+            satisfied_stats: None,
             ordering: None,
             extensions: FileExtensions::new(),
             metadata_size_hint: None,
@@ -564,6 +596,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                     byte_size: Precision::Absent,
                 }],
             })),
+            satisfied_stats: None,
             ordering: None,
             extensions: FileExtensions::new(),
             metadata_size_hint: None,

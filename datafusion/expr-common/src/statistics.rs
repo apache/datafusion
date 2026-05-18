@@ -1694,3 +1694,121 @@ mod tests {
         all_ops.into_iter().collect()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Query-aware statistics request / response.
+//
+// A small extension to the existing `Statistics` model: instead of
+// "give me everything you have for every column", a caller can ask for
+// a specific list of stats by name. Providers that have something
+// cheap to offer (parquet thrift footers, an external catalog, cached
+// metadata) answer the entries they can; everything else comes back
+// `Absent`. Callers (optimizer rules, layered helpers, etc.) decide
+// what to do with the gaps.
+//
+// See `TableProvider::scan_with_args`
+// (`ScanArgs::with_statistics_requests` / `ScanResult::statistics`)
+// for the table-level handshake, and `PartitionedFile::satisfied_stats`
+// for the per-file one.
+// ---------------------------------------------------------------------------
+
+use datafusion_common::Column;
+use datafusion_common::stats::Precision;
+
+/// What stat does the caller want?
+///
+/// Each variant maps onto a field of
+/// [`datafusion_common::Statistics`] / [`datafusion_common::ColumnStatistics`]
+/// so providers that already populate one can answer the other
+/// trivially. The companion [`StatisticsValue`] is paired 1:1 with
+/// the request in the response. Whether a value is exact or estimated
+/// is encoded in the returned [`Precision`] wrapper, not in the
+/// request kind itself — `DistinctCount` covers both an exact distinct
+/// count from a metadata catalog and an HLL-style estimate from a
+/// sampled scan.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum StatisticsRequest {
+    /// Smallest non-null value of `column`.
+    Min(Column),
+    /// Largest non-null value of `column`.
+    Max(Column),
+    /// Number of NULLs in `column`.
+    NullCount(Column),
+    /// Number of distinct values in `column` (exact or estimated).
+    DistinctCount(Column),
+    /// Sum of values in `column` (numerics, widened per
+    /// `ColumnStatistics::sum_value`).
+    Sum(Column),
+    /// Encoded/output byte size of `column`.
+    ByteSize(Column),
+    /// Number of rows in the container (table / file).
+    RowCount,
+    /// Total byte size of the container's output.
+    TotalByteSize,
+}
+
+/// Response value paired 1:1 with an inbound [`StatisticsRequest`].
+///
+/// Variants are intentionally schema-agnostic: a provider answering
+/// `Min(c)` returns `Scalar(Precision::Exact(ScalarValue::...))` with
+/// the column's natural type; `RowCount` / `NullCount` / `DistinctCount`
+/// return `Scalar(Precision::*(ScalarValue::UInt64(...)))`. The
+/// `Distribution` variant carries a richly-typed [`Distribution`] for
+/// providers that have one to surface.
+#[derive(Debug, Clone)]
+pub enum StatisticsValue {
+    /// A single scalar value.
+    Scalar(Precision<ScalarValue>),
+    /// A typed probability distribution. Boxed so the enum stays small —
+    /// `Distribution` is significantly larger than the other variants.
+    Distribution(Box<Distribution>),
+    /// Provider can't (or won't) answer this request. The caller
+    /// decides whether to fall back to another mechanism.
+    Absent,
+}
+
+impl StatisticsValue {
+    /// Convenience: an `Exact` scalar response.
+    pub fn exact(value: ScalarValue) -> Self {
+        Self::Scalar(Precision::Exact(value))
+    }
+    /// Convenience: an `Inexact` scalar response.
+    pub fn inexact(value: ScalarValue) -> Self {
+        Self::Scalar(Precision::Inexact(value))
+    }
+}
+
+/// Sparse map of stats answers, keyed by request. Used as the storage for
+/// per-file answers (see `PartitionedFile::satisfied_stats`) and as the
+/// internal representation for adapters that consume request-driven
+/// stats. Only entries the provider actually answered are present, so
+/// memory scales with what was asked rather than with table width.
+pub type SatisfiedStatistics =
+    std::collections::HashMap<StatisticsRequest, StatisticsValue>;
+
+#[cfg(test)]
+mod stats_request_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn statistics_request_is_hashable_keyable() {
+        // Sanity: two equal `StatisticsRequest`s hash equal and round-trip
+        // through a HashMap, so they can be used as keys (e.g. for the
+        // sparse `PartitionedFile::satisfied_stats` map).
+        let r1 = StatisticsRequest::Min(Column::new_unqualified("c"));
+        let r2 = StatisticsRequest::Min(Column::new_unqualified("c"));
+        assert_eq!(r1, r2);
+        let mut map: HashMap<StatisticsRequest, StatisticsValue> = HashMap::new();
+        map.insert(
+            r1.clone(),
+            StatisticsValue::exact(ScalarValue::Int64(Some(7))),
+        );
+        match map.get(&r2) {
+            Some(StatisticsValue::Scalar(Precision::Exact(ScalarValue::Int64(
+                Some(7),
+            )))) => {}
+            other => panic!("unexpected lookup: {other:?}"),
+        }
+    }
+}

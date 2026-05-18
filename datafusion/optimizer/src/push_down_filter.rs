@@ -3168,6 +3168,7 @@ mod tests {
             projection,
             source: Arc::new(test_provider),
             fetch: None,
+            statistics_requests: Vec::new(),
         });
 
         Ok(LogicalPlanBuilder::from(table_scan))
