@@ -916,7 +916,7 @@ config_namespace! {
         /// Arrow type to be timezone-aware (e.g. for Spark `TimestampType`
         /// semantics) should set this to `"UTC"`. No effect when `coerce_int96`
         /// is `None`.
-        pub coerce_int96_tz: Option<String>, default = None
+        pub coerce_int96_tz: Option<String>, transform = str::to_lowercase, default = None
 
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
