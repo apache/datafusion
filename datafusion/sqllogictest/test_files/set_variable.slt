@@ -342,14 +342,14 @@ SET datafusion.runtime.memory_limit = '1K'
 
 # This query should fail with low memory
 statement error Not enough memory to continue external sort
-EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1 DESC
 
 statement ok
 RESET datafusion.runtime.memory_limit
 
 # This query should succeed after resetting memory limit
 statement ok
-EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1 DESC
 
 statement ok
 SET datafusion.runtime.list_files_cache_limit = '1K'
