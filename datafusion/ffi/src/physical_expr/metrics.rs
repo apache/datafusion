@@ -215,12 +215,8 @@ impl From<FFI_Metric> for Metric {
         let labels: Vec<Label> = m.labels.into_iter().map(Label::from).collect();
         let partition: Option<usize> = m.partition.into();
         let category: Option<FFI_MetricCategory> = m.metric_category.into();
-        let mut metric = Metric::new_with_labels(
-            m.value.into(),
-            partition,
-            labels,
-        )
-        .with_type(m.metric_type.into());
+        let mut metric = Metric::new_with_labels(m.value.into(), partition, labels)
+            .with_type(m.metric_type.into());
         if let Some(c) = category {
             metric = metric.with_category(c.into());
         }

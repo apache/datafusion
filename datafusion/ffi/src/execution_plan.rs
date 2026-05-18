@@ -479,10 +479,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let bytes = df_result!(unsafe {
-            (self.plan.partition_statistics)(
-                &self.plan,
-                partition.into(),
-            )
+            (self.plan.partition_statistics)(&self.plan, partition.into())
         })?;
         Ok(Arc::new(deserialize_statistics(bytes.as_slice())?))
     }
