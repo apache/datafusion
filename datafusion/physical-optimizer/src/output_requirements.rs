@@ -63,7 +63,9 @@ impl OutputRequirements {
     /// Create a new rule which works in `Add` mode; i.e. it simply adds a
     /// top-level [`OutputRequirementExec`] into the physical plan to keep track
     /// of global ordering and distribution requirements if there are any.
-    /// Note that this rule should run at the beginning.
+    /// Note that this rule should run at the beginning. It is idempotent: when
+    /// invoked on a plan that is already topped by an `OutputRequirementExec`,
+    /// it returns the plan unchanged.
     pub fn new_add_mode() -> Self {
         Self {
             mode: RuleMode::Add,
@@ -357,7 +359,15 @@ impl PhysicalOptimizerRule for OutputRequirements {
 
 /// This functions adds ancillary `OutputRequirementExec` to the physical plan, so that
 /// global requirements are not lost during optimization.
+///
+/// Idempotent: if the plan is already topped by an `OutputRequirementExec`, it
+/// is returned unchanged so that re-running this rule (as adaptive execution
+/// in datafusion-ballista AQE does after every completed stage, see
+/// datafusion-ballista#1359) does not stack wrappers.
 fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    if plan.downcast_ref::<OutputRequirementExec>().is_some() {
+        return Ok(plan);
+    }
     let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
     if is_changed {
         Ok(new_plan)
