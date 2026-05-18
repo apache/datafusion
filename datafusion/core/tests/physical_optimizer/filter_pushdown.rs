@@ -3374,3 +3374,44 @@ fn test_filter_pushdown_through_sort_with_projection() {
     "
     );
 }
+
+/// `FilterPushdown::new_post_optimization()` must be idempotent. When applied
+/// to a HashJoinExec, the rule installs a dynamic filter on the probe-side
+/// scan; before the fix in `HashJoinExec::gather_filters_for_pushdown`, every
+/// invocation created a *new* `DynamicFilterPhysicalExpr` and ANDed it onto
+/// the probe side's existing predicate, producing
+/// `DynamicFilter AND DynamicFilter AND ...` after N passes.
+///
+/// AQE (datafusion-ballista#1359) re-runs the optimizer chain after every
+/// completed stage, so this would compound indefinitely without the guard.
+#[test]
+fn post_phase_is_idempotent_on_hash_join() {
+    use crate::physical_optimizer::test_utils::{
+        hash_join_exec, parquet_exec, schema,
+    };
+    use datafusion_common::JoinType;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+    use datafusion_physical_plan::get_plan_string;
+    use datafusion_physical_plan::joins::utils::JoinOn;
+
+    let s = schema();
+    let left = parquet_exec(Arc::clone(&s));
+    let right = parquet_exec(Arc::clone(&s));
+    let join_on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()),
+        Arc::new(Column::new_with_schema("a", &right.schema()).unwrap()),
+    )];
+    let plan = hash_join_exec(left, right, join_on, None, &JoinType::Inner).unwrap();
+
+    let config = ConfigOptions::new();
+    let rule = FilterPushdown::new_post_optimization();
+    let once = rule.optimize(plan, &config).unwrap();
+    let twice = rule.optimize(Arc::clone(&once), &config).unwrap();
+
+    assert_eq!(
+        get_plan_string(&once),
+        get_plan_string(&twice),
+        "second invocation of FilterPushdown::new_post_optimization mutated the plan",
+    );
+}
