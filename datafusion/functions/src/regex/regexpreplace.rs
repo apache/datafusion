@@ -42,7 +42,8 @@ use datafusion_expr::{
     Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
-use regex::Regex;
+use regex::{CaptureLocations, Regex};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -199,6 +200,80 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
     CAPTURE_GROUPS_RE_LOCK
         .replace_all(replacement, "$${$1}")
         .into_owned()
+}
+
+struct ShortRegex {
+    /// Shortened anchored regex used to extract capture group 1 directly.
+    /// See [`try_build_short_extract_regex`] for details.
+    short_re: Regex,
+    /// Reusable capture locations for `short_re` to avoid per-row allocation.
+    locs: CaptureLocations,
+}
+
+/// Holds the normal compiled regex together with the optional fast path used
+/// for `regexp_replace(str, '^...(capture)...*$', '\1')`.
+struct OptimizedRegex {
+    /// Full regex used for the normal replacement path and as a correctness fallback.
+    re: Regex,
+    /// Precomputed state for the direct-extraction fast path, when applicable.
+    short_re: Option<ShortRegex>,
+}
+
+impl OptimizedRegex {
+    /// Builds any reusable state needed by the extraction fast path.
+    ///
+    /// The fast path is only enabled for single replacements where the pattern
+    /// and replacement satisfy [`try_build_short_extract_regex`].
+    fn new(re: Regex, limit: usize, pattern: &str, replacement: &str) -> Self {
+        let short_re = if limit == 1 {
+            try_build_short_extract_regex(pattern, replacement)
+        } else {
+            None
+        };
+
+        let short_re = short_re.map(|short_re| {
+            let locs = short_re.capture_locations();
+            ShortRegex { short_re, locs }
+        });
+
+        Self { re, short_re }
+    }
+
+    /// Applies the direct-extraction fast path when it preserves the result of
+    /// `Regex::replacen`; otherwise falls back to the full regex replacement.
+    fn replacen<'a>(
+        &mut self,
+        val: &'a str,
+        limit: usize,
+        replacement: &str,
+    ) -> Cow<'a, str> {
+        // If this pattern is not eligible for direct extraction, use the full regex.
+        let Some(ShortRegex { short_re, locs }) = self.short_re.as_mut() else {
+            return self.re.replacen(val, limit, replacement);
+        };
+
+        // If the shortened regex does not match, the original anchored regex would
+        // also leave the input unchanged.
+        if short_re.captures_read(locs, val).is_none() {
+            return Cow::Borrowed(val);
+        };
+
+        // `captures_read` succeeded, so the overall shortened match is present.
+        let match_end = locs.get(0).unwrap().1;
+        if memchr(b'\n', &val.as_bytes()[match_end..]).is_some() {
+            // If there is a newline after the match, we can't use the short
+            // regex since it won't match across lines. Fall back to the full
+            // regex replacement.
+            return self.re.replacen(val, limit, replacement);
+        };
+        // The fast path only applies to `${1}` replacements, so the result is
+        // either capture group 1 or the empty string if that group did not match.
+        if let Some((start, end)) = locs.get(1) {
+            Cow::Borrowed(&val[start..end])
+        } else {
+            Cow::Borrowed("")
+        }
+    }
 }
 
 /// For anchored patterns like `^...(capture)....*$` where the replacement
@@ -442,7 +517,7 @@ macro_rules! fetch_string_arg {
 /// hold a single Regex object for the replace operation. This also speeds
 /// up the pre-processing time of the replacement string, since it only
 /// needs to processed once.
-fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
+fn regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let array_size = args[0].len();
@@ -477,13 +552,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     // with rust ones.
     let replacement = regex_replace_posix_groups(replacement);
 
-    // For anchored patterns like ^...(capture)....*$, build a shorter
-    // regex and use captures_read for direct extraction.
-    let short_re = if limit == 1 {
-        try_build_short_extract_regex(&pattern, &replacement)
-    } else {
-        None
-    };
+    let mut opt_re = OptimizedRegex::new(re, limit, &pattern, &replacement);
 
     let string_array_type = args[0].data_type();
     match string_array_type {
@@ -501,37 +570,13 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
             let mut new_offsets = BufferBuilder::<T>::new(string_array.len() + 1);
             new_offsets.append(T::zero());
 
-            if let Some(ref short_re) = short_re {
-                let mut locs = short_re.capture_locations();
-                string_array.iter().for_each(|val| {
-                    if let Some(val) = val {
-                        if short_re.captures_read(&mut locs, val).is_some() {
-                            let match_end = locs.get(0).unwrap().1;
-                            if memchr(b'\n', &val.as_bytes()[match_end..]).is_none() {
-                                if let Some((start, end)) = locs.get(1) {
-                                    vals.append_slice(&val.as_bytes()[start..end]);
-                                }
-                            } else {
-                                // Newline in remainder: .*$ wouldn't match without 's' flag
-                                let result =
-                                    re.replacen(val, limit, replacement.as_str());
-                                vals.append_slice(result.as_bytes());
-                            }
-                        } else {
-                            vals.append_slice(val.as_bytes());
-                        }
-                    }
-                    new_offsets.append(T::from_usize(vals.len()).unwrap());
-                });
-            } else {
-                string_array.iter().for_each(|val| {
-                    if let Some(val) = val {
-                        let result = re.replacen(val, limit, replacement.as_str());
-                        vals.append_slice(result.as_bytes());
-                    }
-                    new_offsets.append(T::from_usize(vals.len()).unwrap());
-                });
-            }
+            string_array.iter().for_each(|val| {
+                if let Some(val) = val {
+                    let result = opt_re.replacen(val, limit, replacement.as_str());
+                    vals.append_slice(result.as_bytes());
+                }
+                new_offsets.append(T::from_usize(vals.len()).unwrap());
+            });
 
             let data = ArrayDataBuilder::new(GenericStringArray::<T>::DATA_TYPE)
                 .len(string_array.len())
@@ -546,39 +591,12 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
 
             let mut builder = StringViewBuilder::with_capacity(string_view_array.len());
 
-            if let Some(ref short_re) = short_re {
-                let mut locs = short_re.capture_locations();
-                for val in string_view_array.iter() {
-                    if let Some(val) = val {
-                        if short_re.captures_read(&mut locs, val).is_some() {
-                            let match_end = locs.get(0).unwrap().1;
-                            if memchr(b'\n', &val.as_bytes()[match_end..]).is_none() {
-                                if let Some((start, end)) = locs.get(1) {
-                                    builder.append_value(&val[start..end]);
-                                } else {
-                                    builder.append_value("");
-                                }
-                            } else {
-                                // Newline in remainder: .*$ wouldn't match without 's' flag
-                                let result =
-                                    re.replacen(val, limit, replacement.as_str());
-                                builder.append_value(result);
-                            }
-                        } else {
-                            builder.append_value(val);
-                        }
-                    } else {
-                        builder.append_null();
-                    }
-                }
-            } else {
-                for val in string_view_array.iter() {
-                    if let Some(val) = val {
-                        let result = re.replacen(val, limit, replacement.as_str());
-                        builder.append_value(result);
-                    } else {
-                        builder.append_null();
-                    }
+            for val in string_view_array.iter() {
+                if let Some(val) = val {
+                    let result = opt_re.replacen(val, limit, replacement.as_str());
+                    builder.append_value(result.as_ref());
+                } else {
+                    builder.append_null();
                 }
             }
 
@@ -655,7 +673,7 @@ fn specialize_regexp_replace<T: OffsetSizeTrait>(
                     arg.to_array(expansion_len)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            _regexp_replace_static_pattern_replace::<T>(&args)
+            regexp_replace_static_pattern_replace::<T>(&args)
         }
 
         // If there are no specialized implementations, we'll fall back to the
@@ -789,7 +807,7 @@ mod tests {
                 let replacements = <$T>::from(replacement);
                 let expected = <$T>::from(expected);
 
-                let re = _regexp_replace_static_pattern_replace::<$O>(&[
+                let re = regexp_replace_static_pattern_replace::<$O>(&[
                     Arc::new(values),
                     Arc::new(patterns),
                     Arc::new(replacements),
@@ -834,7 +852,7 @@ mod tests {
                 let flags = StringArray::from(vec!["i"; 5]);
                 let expected = <$T>::from(expected);
 
-                let re = _regexp_replace_static_pattern_replace::<$O>(&[
+                let re = regexp_replace_static_pattern_replace::<$O>(&[
                     Arc::new(values),
                     Arc::new(patterns),
                     Arc::new(replacements),
@@ -866,7 +884,7 @@ mod tests {
         let replacements = StringArray::from(vec!["foo"; 5]);
         let expected = StringArray::from(vec![None::<&str>; 5]);
 
-        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+        let re = regexp_replace_static_pattern_replace::<i32>(&[
             Arc::new(values),
             Arc::new(patterns),
             Arc::new(replacements),
@@ -883,7 +901,7 @@ mod tests {
         let replacements = StringArray::from(Vec::<Option<&str>>::new());
         let expected = StringArray::from(Vec::<Option<&str>>::new());
 
-        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+        let re = regexp_replace_static_pattern_replace::<i32>(&[
             Arc::new(values),
             Arc::new(patterns),
             Arc::new(replacements),
@@ -901,7 +919,7 @@ mod tests {
         let flags = StringArray::from(vec![None::<&str>; 5]);
         let expected = StringArray::from(vec![None::<&str>; 5]);
 
-        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+        let re = regexp_replace_static_pattern_replace::<i32>(&[
             Arc::new(values),
             Arc::new(patterns),
             Arc::new(replacements),
@@ -920,7 +938,7 @@ mod tests {
         let patterns = StringArray::from(vec!["["; 5]);
         let replacements = StringArray::from(vec!["foo"; 5]);
 
-        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+        let re = regexp_replace_static_pattern_replace::<i32>(&[
             Arc::new(values),
             Arc::new(patterns),
             Arc::new(replacements),
@@ -957,7 +975,7 @@ mod tests {
             Some("c"),
         ]);
 
-        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+        let re = regexp_replace_static_pattern_replace::<i32>(&[
             Arc::new(values),
             Arc::new(patterns),
             Arc::new(replacements),
@@ -985,7 +1003,7 @@ mod tests {
         let replacements = StringArray::from(vec!["foo"; 1]);
         let expected = StringArray::from(vec![Some("b"), None, Some("foo"), None, None]);
 
-        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+        let re = regexp_replace_static_pattern_replace::<i32>(&[
             Arc::new(values),
             Arc::new(patterns),
             Arc::new(replacements),

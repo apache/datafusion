@@ -17,7 +17,6 @@
 
 //! CteWorkTable implementation used for recursive queries
 
-use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -65,10 +64,6 @@ impl CteWorkTable {
 
 #[async_trait]
 impl TableProvider for CteWorkTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }

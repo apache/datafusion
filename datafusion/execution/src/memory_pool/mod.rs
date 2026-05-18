@@ -19,6 +19,8 @@
 //! help with allocation accounting.
 
 use datafusion_common::{Result, internal_datafusion_err};
+use std::any::Any;
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
@@ -181,7 +183,10 @@ pub use pool::*;
 ///
 /// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
 ///   providing better error messages on the largest memory users.
-pub trait MemoryPool: Send + Sync + std::fmt::Debug {
+pub trait MemoryPool: Any + Send + Sync + std::fmt::Debug + Display {
+    /// Return pool name
+    fn name(&self) -> &str;
+
     /// Registers a new [`MemoryConsumer`]
     ///
     /// Note: Subsequent calls to [`Self::grow`] must be made to reserve memory
@@ -220,6 +225,18 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     }
 }
 
+impl dyn MemoryPool {
+    /// Returns `true` if this pool is of type `T`.
+    pub fn is<T: MemoryPool>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this pool to a concrete type `T`.
+    pub fn downcast_ref<T: MemoryPool>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// Memory limit of `MemoryPool`
 pub enum MemoryLimit {
     Infinite,
@@ -232,7 +249,7 @@ pub enum MemoryLimit {
 /// [`MemoryReservation`] in a [`MemoryPool`]. All allocations are registered to
 /// a particular `MemoryConsumer`;
 ///
-/// Each `MemoryConsumer` is identifiable by a process-unique id, and is therefor not cloneable,
+/// Each `MemoryConsumer` is identifiable by a process-unique id, and is therefore not cloneable,
 /// If you want a clone of a `MemoryConsumer`, you should look into [`MemoryConsumer::clone_with_new_id`],
 /// but note that this `MemoryConsumer` may be treated as a separate entity based on the used pool,
 /// and is only guaranteed to share the name and inner properties.
@@ -597,6 +614,18 @@ mod tests {
         assert_eq!(r1.size(), 3);
         assert_eq!(r2.size(), 25);
         assert_eq!(pool.reserved(), 28);
+    }
+
+    #[test]
+    fn test_downcast() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(50));
+
+        assert!(pool.is::<GreedyMemoryPool>());
+        assert!(!pool.is::<UnboundedMemoryPool>());
+
+        let greedy: &GreedyMemoryPool = pool.downcast_ref().unwrap();
+        assert_eq!(greedy.reserved(), 0);
+        assert!(pool.downcast_ref::<UnboundedMemoryPool>().is_none());
     }
 
     #[test]

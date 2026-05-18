@@ -41,6 +41,7 @@ use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator};
 use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
@@ -235,6 +236,18 @@ pub(super) struct BufferedBatch {
     pub null_joined: Vec<usize>,
     /// Size estimation used for reserving / releasing memory
     pub size_estimation: usize,
+    /// Memory footprint of `join_arrays` cached at construction time.
+    /// Used during spill to track the residual memory that remains after
+    /// the main batch is written to disk.
+    pub join_arrays_mem: usize,
+    /// Actual amount tracked in the memory reservation for this batch.
+    ///
+    /// - `InMemory`: equals `size_estimation` (full batch + join_arrays + metadata)
+    /// - `Spilled`: equals `join_arrays_mem` (join key arrays stay in memory)
+    ///
+    /// Invariant: `free_reservation()` shrinks by exactly this amount, so we never
+    /// shrink by more than we grew.
+    pub reserved_amount: usize,
     /// Tracks filter outcomes for buffered rows in full outer joins.
     /// Indexed by absolute row position within the batch. See [`FilterState`].
     pub join_filter_status: Vec<FilterState>,
@@ -258,11 +271,13 @@ impl BufferedBatch {
         // + worst case null_joined (as vector capacity * element size)
         // + Range size
         // + size of this estimation
+        let join_arrays_mem: usize = join_arrays
+            .iter()
+            .map(|arr| arr.get_array_memory_size())
+            .sum();
+
         let size_estimation = batch.get_array_memory_size()
-            + join_arrays
-                .iter()
-                .map(|arr| arr.get_array_memory_size())
-                .sum::<usize>()
+            + join_arrays_mem
             + batch.num_rows().next_power_of_two() * size_of::<usize>()
             + size_of::<Range<usize>>()
             + size_of::<usize>();
@@ -274,6 +289,8 @@ impl BufferedBatch {
             join_arrays,
             null_joined: vec![],
             size_estimation,
+            join_arrays_mem,
+            reserved_amount: 0,
             join_filter_status: vec![FilterState::Unvisited; num_rows],
             num_rows,
         }
@@ -919,6 +936,10 @@ impl MaterializingSortMergeJoinStream {
                         return Poll::Pending;
                     }
                     Poll::Ready(None) => {
+                        // Release the streamed input pipeline's resources.
+                        let streamed_schema = self.streamed.schema();
+                        self.streamed =
+                            Box::pin(EmptyRecordBatchStream::new(streamed_schema));
                         self.streamed_state = StreamedState::Exhausted;
                     }
                     Poll::Ready(Some(batch)) => {
@@ -947,18 +968,16 @@ impl MaterializingSortMergeJoinStream {
         }
     }
 
-    fn free_reservation(&mut self, buffered_batch: &BufferedBatch) -> Result<()> {
-        // Shrink memory usage for in-memory batches only
-        if let BufferedBatchState::InMemory(_) = buffered_batch.batch {
-            self.reservation
-                .try_shrink(buffered_batch.size_estimation)?;
+    fn free_reservation(&mut self, buffered_batch: &BufferedBatch) {
+        if buffered_batch.reserved_amount > 0 {
+            self.reservation.shrink(buffered_batch.reserved_amount);
         }
-        Ok(())
     }
 
     fn allocate_reservation(&mut self, mut buffered_batch: BufferedBatch) -> Result<()> {
         match self.reservation.try_grow(buffered_batch.size_estimation) {
             Ok(_) => {
+                buffered_batch.reserved_amount = buffered_batch.size_estimation;
                 self.join_metrics
                     .peak_mem_used()
                     .set_max(self.reservation.size());
@@ -978,6 +997,22 @@ impl MaterializingSortMergeJoinStream {
                             .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
 
                         buffered_batch.batch = BufferedBatchState::Spilled(spill_file);
+
+                        // Join key arrays remain in memory after the batch is
+                        // spilled — the comparator needs them for key boundary
+                        // detection. Force-grow the reservation so the pool
+                        // reflects actual memory usage even if this pushes
+                        // pool.reserved() above the configured limit. This is
+                        // safe because the memory is physically consumed and
+                        // not tracking it would let other operators over-allocate
+                        // against a stale pool view.
+                        let join_arrays_mem = buffered_batch.join_arrays_mem;
+                        self.reservation.grow(join_arrays_mem);
+                        buffered_batch.reserved_amount = join_arrays_mem;
+                        self.join_metrics
+                            .peak_mem_used()
+                            .set_max(self.reservation.size());
+
                         Ok(())
                     }
                     _ => internal_err!("Buffered batch has empty body"),
@@ -1006,7 +1041,7 @@ impl MaterializingSortMergeJoinStream {
                                 self.buffered_data.batches.pop_front()
                             {
                                 self.produce_buffered_not_matched(&mut buffered_batch)?;
-                                self.free_reservation(&buffered_batch)?;
+                                self.free_reservation(&buffered_batch);
                                 head_changed = true;
                             }
                         } else {
@@ -1033,6 +1068,10 @@ impl MaterializingSortMergeJoinStream {
                         return Poll::Pending;
                     }
                     Poll::Ready(None) => {
+                        // Release the buffered input pipeline's resources.
+                        let buffered_schema = self.buffered.schema();
+                        self.buffered =
+                            Box::pin(EmptyRecordBatchStream::new(buffered_schema));
                         self.buffered_state = BufferedState::Exhausted;
                         return Poll::Ready(None);
                     }
@@ -1076,6 +1115,11 @@ impl MaterializingSortMergeJoinStream {
                                 return Poll::Pending;
                             }
                             Poll::Ready(None) => {
+                                // Release the buffered input pipeline's resources.
+                                let buffered_schema = self.buffered.schema();
+                                self.buffered = Box::pin(EmptyRecordBatchStream::new(
+                                    buffered_schema,
+                                ));
                                 self.buffered_state = BufferedState::Ready;
                             }
                             Poll::Ready(Some(batch)) => {
@@ -1423,27 +1467,22 @@ impl MaterializingSortMergeJoinStream {
                     .evaluate(&filter_batch)?
                     .into_array(filter_batch.num_rows())?;
 
-                let pre_mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+                let filter_result_mask =
+                    datafusion_common::cast::as_boolean_array(&filter_result)?;
 
-                let mask = if pre_mask.null_count() > 0 {
-                    compute::prep_null_mask_filter(pre_mask)
+                // Convert NULL filter results to false — NULL means "not satisfied"
+                // per SQL semantics, same as Left/Right outer joins.
+                let mask = if filter_result_mask.null_count() > 0 {
+                    compute::prep_null_mask_filter(filter_result_mask)
                 } else {
-                    pre_mask.clone()
+                    filter_result_mask.clone()
                 };
 
                 if needs_deferred_filtering(&self.filter, self.join_type) {
-                    // Full join uses pre_mask (preserving nulls) for
-                    // get_corrected_filter_mask; other outer joins use mask.
-                    let mask_to_use = if self.join_type != JoinType::Full {
-                        &mask
-                    } else {
-                        pre_mask
-                    };
-
                     self.joined_record_batches.push_batch_with_filter_metadata(
                         output_batch,
                         &combined_left_indices,
-                        mask_to_use,
+                        &mask,
                         self.streamed_batch_counter.load(Relaxed),
                         self.join_type,
                     );
@@ -1468,7 +1507,7 @@ impl MaterializingSortMergeJoinStream {
                             let idx = right.value(i) as usize;
                             match buffered_batch.join_filter_status[idx] {
                                 FilterState::SomePassed => {}
-                                _ if pre_mask.value(offset + i) => {
+                                _ if mask.value(offset + i) => {
                                     buffered_batch.join_filter_status[idx] =
                                         FilterState::SomePassed;
                                 }
@@ -1501,7 +1540,7 @@ impl MaterializingSortMergeJoinStream {
     /// gathers columns across sources. A null-row sentinel at source index 0
     /// handles null right indices (unmatched streamed rows).
     fn materialize_right_columns(
-        &self,
+        &mut self,
         matched_chunks: &[(usize, UInt64Array, UInt64Array)],
         total_matched_rows: usize,
     ) -> Result<Vec<ArrayRef>> {
@@ -1516,6 +1555,19 @@ impl MaterializingSortMergeJoinStream {
                     matched_chunks.iter().map(|c| &c.2 as &dyn Array).collect();
                 as_uint64_array(&compute::concat(&refs)?)?.clone()
             };
+
+            let spill_reservation = self.reservation.new_empty();
+            if matches!(
+                &self.buffered_data.batches[first_batch_idx].batch,
+                BufferedBatchState::Spilled(_)
+            ) {
+                spill_reservation
+                    .grow(self.buffered_data.batches[first_batch_idx].size_estimation);
+                self.join_metrics
+                    .peak_mem_used()
+                    .set_max(self.reservation.size() + spill_reservation.size());
+            }
+
             return fetch_right_columns_by_idxs(
                 &self.buffered_data,
                 first_batch_idx,
@@ -1549,24 +1601,33 @@ impl MaterializingSortMergeJoinStream {
         }
 
         let num_right_cols = self.buffered_schema.fields().len();
-        let mut right_columns = Vec::with_capacity(num_right_cols);
 
         // Read each source batch once (spilled batches require disk I/O).
-        let source_data: Vec<Option<RecordBatch>> = source_batches
-            .iter()
-            .map(|&idx| {
-                let bb = &self.buffered_data.batches[idx];
-                match &bb.batch {
-                    BufferedBatchState::InMemory(batch) => Some(batch.clone()),
-                    BufferedBatchState::Spilled(spill_file) => {
-                        let file = BufReader::new(File::open(spill_file.path()).ok()?);
-                        let reader = StreamReader::try_new(file, None).ok()?;
-                        reader.into_iter().next()?.ok()
-                    }
+        // Track memory for each spilled batch at the point of deserialization
+        // so the pool reflects actual usage as it grows.
+        let spill_reservation = self.reservation.new_empty();
+        let mut source_data: Vec<Option<RecordBatch>> =
+            Vec::with_capacity(source_batches.len());
+        for &idx in &source_batches {
+            let bb = &self.buffered_data.batches[idx];
+            match &bb.batch {
+                BufferedBatchState::InMemory(batch) => {
+                    source_data.push(Some(batch.clone()));
                 }
-            })
-            .collect();
+                BufferedBatchState::Spilled(spill_file) => {
+                    spill_reservation.grow(bb.size_estimation);
+                    self.join_metrics
+                        .peak_mem_used()
+                        .set_max(self.reservation.size() + spill_reservation.size());
 
+                    let file = BufReader::new(File::open(spill_file.path())?);
+                    let reader = StreamReader::try_new(file, None)?;
+                    source_data.push(reader.into_iter().next().transpose()?);
+                }
+            }
+        }
+
+        let mut right_columns = Vec::with_capacity(num_right_cols);
         for col_idx in 0..num_right_cols {
             let dtype = self.buffered_schema.field(col_idx).data_type();
             let null_array = new_null_array(dtype, 1);
@@ -1585,7 +1646,6 @@ impl MaterializingSortMergeJoinStream {
                     }
                 }
             }
-
             right_columns.push(interleave(&source_arrays, &interleave_indices)?);
         }
 

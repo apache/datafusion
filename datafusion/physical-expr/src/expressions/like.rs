@@ -22,7 +22,7 @@ use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::apply_cmp;
 use std::hash::Hash;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 // Like expression
 #[derive(Debug, Eq)]
@@ -105,10 +105,6 @@ impl std::fmt::Display for LikeExpr {
 }
 
 impl PhysicalExpr for LikeExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(DataType::Boolean)
     }

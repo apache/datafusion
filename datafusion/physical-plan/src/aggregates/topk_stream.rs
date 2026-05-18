@@ -26,6 +26,7 @@ use crate::aggregates::{
     evaluate_many,
 };
 use crate::metrics::BaselineMetrics;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
@@ -205,6 +206,9 @@ impl Stream for GroupedTopKAggregateStream {
                 }
                 // inner is done, emit all rows and switch to producing output
                 None => {
+                    // Release the input pipeline's resources before emitting.
+                    let input_schema = self.input.schema();
+                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     if self.priority_map.is_empty() {
                         trace!("partition {} emit None", self.partition);
                         return Poll::Ready(None);
