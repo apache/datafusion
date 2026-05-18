@@ -24550,9 +24550,15 @@ impl serde::Serialize for Unnest {
         if !self.exprs.is_empty() {
             len += 1;
         }
+        if self.outer {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.Unnest", len)?;
         if !self.exprs.is_empty() {
             struct_ser.serialize_field("exprs", &self.exprs)?;
+        }
+        if self.outer {
+            struct_ser.serialize_field("outer", &self.outer)?;
         }
         struct_ser.end()
     }
@@ -24565,11 +24571,13 @@ impl<'de> serde::Deserialize<'de> for Unnest {
     {
         const FIELDS: &[&str] = &[
             "exprs",
+            "outer",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Exprs,
+            Outer,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24592,6 +24600,7 @@ impl<'de> serde::Deserialize<'de> for Unnest {
                     {
                         match value {
                             "exprs" => Ok(GeneratedField::Exprs),
+                            "outer" => Ok(GeneratedField::Outer),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24612,6 +24621,7 @@ impl<'de> serde::Deserialize<'de> for Unnest {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut exprs__ = None;
+                let mut outer__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Exprs => {
@@ -24620,10 +24630,17 @@ impl<'de> serde::Deserialize<'de> for Unnest {
                             }
                             exprs__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Outer => {
+                            if outer__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outer"));
+                            }
+                            outer__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(Unnest {
                     exprs: exprs__.unwrap_or_default(),
+                    outer: outer__.unwrap_or_default(),
                 })
             }
         }

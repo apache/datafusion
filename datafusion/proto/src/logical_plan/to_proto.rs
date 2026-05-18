@@ -562,9 +562,10 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Negative(expr)),
             }
         }
-        Expr::Unnest(Unnest { expr }) => {
+        Expr::Unnest(Unnest { expr, outer }) => {
             let expr = protobuf::Unnest {
                 exprs: vec![serialize_expr(expr.as_ref(), codec)?],
+                outer: *outer,
             };
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Unnest(expr)),

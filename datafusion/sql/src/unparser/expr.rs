@@ -2402,6 +2402,7 @@ mod tests {
                         name: "array_col".to_string(),
                         spans: Spans::new(),
                     })),
+                    outer: false,
                 }),
                 r#"UNNEST("table".array_col)"#,
             ),

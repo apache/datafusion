@@ -570,7 +570,10 @@ pub fn parse_expr(
             if exprs.len() != 1 {
                 return Err(proto_error("Unnest must have exactly one expression"));
             }
-            Ok(Expr::Unnest(Unnest::new(exprs.swap_remove(0))))
+            Ok(Expr::Unnest(Unnest {
+                expr: Box::new(exprs.swap_remove(0)),
+                outer: unnest.outer,
+            }))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
