@@ -141,6 +141,10 @@ pub fn is_spark_path(relative_path: &Path) -> bool {
     relative_path.starts_with("spark/")
 }
 
+pub fn is_spark_dialect_path(relative_path: &Path) -> bool {
+    relative_path.starts_with("spark_dialect/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +159,13 @@ mod tests {
         let expected = vec!["bar <slt:ignore>".to_string()];
 
         assert!(!df_value_validator(value_normalizer, &actual, &expected));
+    }
+
+    #[test]
+    fn is_spark_dialect_path_detects_subtree() {
+        assert!(is_spark_dialect_path(&PathBuf::from("spark_dialect/array/array_repeat.slt")));
+        assert!(is_spark_dialect_path(&PathBuf::from("spark_dialect/string/ascii.slt")));
+        assert!(!is_spark_dialect_path(&PathBuf::from("spark/array/array_repeat.slt")));
+        assert!(!is_spark_dialect_path(&PathBuf::from("aggregate.slt")));
     }
 }
