@@ -142,7 +142,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let RawBinaryExpr { op, left, right } = binary_expr;
-        self.build_binary_expr(op, left, right)
+        self.build_binary_expr(&op, left, right)
     }
 
     pub fn sql_to_expr_with_alias(

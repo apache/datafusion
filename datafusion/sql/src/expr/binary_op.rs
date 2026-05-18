@@ -81,7 +81,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         left: Expr,
         right: Expr,
     ) -> Result<Expr> {
-        if op == BinaryOperator::PGExp {
+        if matches!(op, BinaryOperator::PGExp) {
             let fun_name = "power";
             let fun = self
                 .context_provider
@@ -100,7 +100,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
-            self.parse_sql_binary_op(&op)?,
+            self.parse_sql_binary_op(op)?,
             Box::new(right),
         )))
     }
