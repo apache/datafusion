@@ -1756,10 +1756,9 @@ mod test {
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
                 coerce_int96: self.coerce_int96,
-                // No tests currently exercise coerce_int96_tz; the existing
-                // coerce_int96 tests all expect the legacy `Timestamp(_, None)`
-                // output. If a future test needs to set a timezone, add a
-                // builder setter analogous to with_coerce_int96.
+                // End-to-end coercion behavior (including timezone) is
+                // covered by parquet.slt. No opener-level test currently
+                // needs a non-default value here.
                 coerce_int96_tz: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,

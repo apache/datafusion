@@ -508,6 +508,19 @@ pub(crate) fn parse_coerce_int96_string(
     }
 }
 
+/// Validates that `tz` is a parseable IANA timezone and returns it as an
+/// `Arc<str>` for use in `Timestamp(_, Some(tz))` types.
+pub(crate) fn parse_coerce_int96_tz_string(
+    tz: &str,
+) -> datafusion_common::Result<Arc<str>> {
+    tz.parse::<Tz>().map_err(|e| {
+        DataFusionError::Configuration(format!(
+            "Invalid parquet coerce_int96_tz {tz:?}: {e}"
+        ))
+    })?;
+    Ok(Arc::<str>::from(tz))
+}
+
 /// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
 impl From<ParquetSource> for Arc<dyn FileSource> {
     fn from(source: ParquetSource) -> Self {
@@ -564,14 +577,7 @@ impl FileSource for ParquetSource {
             .global
             .coerce_int96_tz
             .as_ref()
-            .map(|tz| {
-                tz.parse::<Tz>().map_err(|e| {
-                    DataFusionError::Configuration(format!(
-                        "Invalid parquet coerce_int96_tz {tz:?}: {e}"
-                    ))
-                })?;
-                Ok::<_, DataFusionError>(Arc::<str>::from(tz.as_str()))
-            })
+            .map(|tz| parse_coerce_int96_tz_string(tz))
             .transpose()?;
         if coerce_int96_tz.is_some() && coerce_int96.is_none() {
             warn!(
