@@ -32,8 +32,14 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err};
-use datafusion_expr::Expr;
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::{
+    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
+    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit, Projection,
+    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, Union, Unnest,
+    Window,
+};
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
@@ -360,6 +366,121 @@ impl TreeNodeRewriter for Rewriter<'_> {
     }
 }
 
+/// Applies `f` to each child (input) of `plan` in place, using
+/// [`Arc::make_mut`] for copy-on-write semantics on `Arc<LogicalPlan>`
+/// children. When the `Arc` refcount is 1 (the common case here)
+/// `Arc::make_mut` hands out a `&mut` without cloning; when it is >1 the
+/// inner value is cloned first.
+///
+/// Returns `Ok(true)` if any child was modified by `f`.
+///
+/// This is deliberately private to the optimizer rather than a method on
+/// [`LogicalPlan`]: it is an implementation detail of in-place rewriting, and
+/// the `Arc::make_mut` approach does not generalize to the other tree types
+/// (`Expr` children are `Box`ed; `PhysicalExpr`/`ExecutionPlan` children are
+/// `Arc<dyn _>`, which `Arc::make_mut` cannot handle). If `TreeNode` ever
+/// grows an in-place traversal this logic can move there.
+///
+/// # Error semantics
+///
+/// If `f` returns `Err` for a child, that error is returned immediately;
+/// children visited earlier keep whatever modifications `f` already applied
+/// to them — they are **not** rolled back.
+fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
+    plan: &mut LogicalPlan,
+    mut f: F,
+) -> Result<bool> {
+    Ok(match plan {
+        LogicalPlan::Projection(Projection { input, .. })
+        | LogicalPlan::Filter(Filter { input, .. })
+        | LogicalPlan::Repartition(Repartition { input, .. })
+        | LogicalPlan::Window(Window { input, .. })
+        | LogicalPlan::Aggregate(Aggregate { input, .. })
+        | LogicalPlan::Sort(Sort { input, .. })
+        | LogicalPlan::Limit(Limit { input, .. })
+        | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. })
+        | LogicalPlan::Analyze(Analyze { input, .. })
+        | LogicalPlan::Dml(DmlStatement { input, .. })
+        | LogicalPlan::Copy(CopyTo { input, .. })
+        | LogicalPlan::Unnest(Unnest { input, .. }) => f(Arc::make_mut(input))?,
+        LogicalPlan::Subquery(Subquery { subquery, .. }) => f(Arc::make_mut(subquery))?,
+        LogicalPlan::Join(Join { left, right, .. }) => {
+            let l = f(Arc::make_mut(left))?;
+            let r = f(Arc::make_mut(right))?;
+            l || r
+        }
+        LogicalPlan::Union(Union { inputs, .. }) => {
+            let mut changed = false;
+            for input in inputs {
+                changed |= f(Arc::make_mut(input))?;
+            }
+            changed
+        }
+        LogicalPlan::Distinct(Distinct::All(input)) => f(Arc::make_mut(input))?,
+        LogicalPlan::Distinct(Distinct::On(DistinctOn { input, .. })) => {
+            f(Arc::make_mut(input))?
+        }
+        LogicalPlan::Explain(Explain { plan, .. }) => f(Arc::make_mut(plan))?,
+        LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+            input,
+            ..
+        }))
+        | LogicalPlan::Ddl(DdlStatement::CreateView(CreateView { input, .. })) => {
+            f(Arc::make_mut(input))?
+        }
+        LogicalPlan::RecursiveQuery(RecursiveQuery {
+            static_term,
+            recursive_term,
+            ..
+        }) => {
+            let s = f(Arc::make_mut(static_term))?;
+            let r = f(Arc::make_mut(recursive_term))?;
+            s || r
+        }
+        LogicalPlan::Statement(Statement::Prepare(p)) => f(Arc::make_mut(&mut p.input))?,
+        LogicalPlan::Extension(Extension { node }) => {
+            let inputs = node.inputs();
+            if inputs.is_empty() {
+                false
+            } else {
+                // Extension nodes don't expose mutable children,
+                // fall back to the ownership-based API
+                let mut changed = false;
+                let exprs = node.expressions();
+                let new_inputs: Vec<LogicalPlan> = inputs
+                    .into_iter()
+                    .map(|input| {
+                        let mut plan = input.clone();
+                        if f(&mut plan)? {
+                            changed = true;
+                        }
+                        Ok(plan)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if changed {
+                    *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
+                }
+                changed
+            }
+        }
+        // plans without inputs
+        LogicalPlan::TableScan { .. }
+        | LogicalPlan::EmptyRelation { .. }
+        | LogicalPlan::Values { .. }
+        | LogicalPlan::DescribeTable(_)
+        | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
+        | LogicalPlan::Ddl(DdlStatement::DropTable(_))
+        | LogicalPlan::Ddl(DdlStatement::DropView(_))
+        | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
+        | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
+        | LogicalPlan::Statement(_) => false,
+    })
+}
+
 /// Rewrites a plan tree in place using `Arc::make_mut` for
 /// copy-on-write semantics on `Arc<LogicalPlan>` children.
 ///
@@ -406,7 +527,7 @@ fn rewrite_plan_in_place(
     }
 
     // Recurse into children using Arc::make_mut (zero-cost when refcount == 1)
-    changed |= plan.map_children_mut(|child| {
+    changed |= map_children_mut(plan, |child| {
         rewrite_plan_in_place(child, apply_order, rule, config)
     })?;
 
