@@ -25,6 +25,7 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod access_plan;
+mod bloom_filter;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
