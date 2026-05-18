@@ -136,14 +136,9 @@ select NULL <> ALL(make_array(1, 2, 3));
 ----
 NULL
 
-# All-NULL arrays: returns NULL
+# All-NULL arrays with `=` or order operators: returns NULL
 query B
 select 5 = ALL(make_array(NULL::INT, NULL::INT));
-----
-NULL
-
-query B
-select 5 <> ALL(make_array(NULL::INT, NULL::INT));
 ----
 NULL
 
@@ -167,26 +162,34 @@ select 5 <= ALL(make_array(NULL::INT, NULL::INT));
 ----
 NULL
 
-# Mixed NULL + non-NULL (non-NULL elements satisfy, but NULLs present → NULL)
+# All-NULL array with `<>` ALL: returns TRUE
+# (`<> ALL` desugars via `array_has`, which treats NULL elements as absent.)
+query B
+select 5 <> ALL(make_array(NULL::INT, NULL::INT));
+----
+true
+
+# Mixed NULL + non-NULL where non-NULLs satisfy the condition: returns TRUE
+# (NULLs are ignored, mirroring `array_min`/`array_max`.)
 query B
 select 5 > ALL(make_array(3, NULL));
 ----
-NULL
+true
 
 query B
 select 5 >= ALL(make_array(5, NULL));
 ----
-NULL
+true
 
 query B
 select 1 < ALL(make_array(3, NULL));
 ----
-NULL
+true
 
 query B
 select 1 <= ALL(make_array(1, NULL));
 ----
-NULL
+true
 
 # Mixed NULL + non-NULL (not satisfying condition → FALSE wins over NULL)
 query B
