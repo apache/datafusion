@@ -1109,6 +1109,34 @@ Instead, it is created within the <code class="docutils literal notranslate"><sp
 <p>Use the file statistics cache provided by the <code class="docutils literal notranslate"><span class="pre">CacheManager</span></code> when initializing a new <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code>:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">ListingTable</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">config</span><span class="p">)</span><span class="o">?</span>
 <span class="w">  </span><span class="p">.</span><span class="n">with_cache</span><span class="p">(</span><span class="n">ctx</span><span class="p">.</span><span class="n">runtime_env</span><span class="p">().</span><span class="n">cache_manager</span><span class="p">.</span><span class="n">get_file_statistic_cache</span><span class="p">())</span>
+<span class="p">[#</span><span class="mi">21075</span><span class="p">]:</span><span class="w"> </span><span class="nc">https</span><span class="p">:</span><span class="c1">//github.com/apache/datafusion/pull/21075</span>
+
+<span class="p">###</span><span class="w"> </span><span class="err">`</span><span class="n">UnionsToFilter</span><span class="err">`</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="n">disabled</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">default</span>
+
+<span class="n">The</span><span class="w"> </span><span class="err">`</span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">enable_unions_to_filter</span><span class="err">`</span><span class="w"> </span><span class="n">option</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="n">defaults</span><span class="w"> </span><span class="n">to</span>
+<span class="err">`</span><span class="kc">false</span><span class="err">`</span><span class="p">.</span><span class="w"> </span><span class="n">When</span><span class="w"> </span><span class="n">enabled</span><span class="p">,</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="n">rewrites</span><span class="w"> </span><span class="err">`</span><span class="n">UNION</span><span class="w"> </span><span class="n">DISTINCT</span><span class="err">`</span><span class="w"> </span><span class="n">branches</span><span class="w"> </span><span class="n">that</span><span class="w"> </span><span class="n">read</span><span class="w"> </span><span class="n">the</span>
+<span class="n">same</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">differ</span><span class="w"> </span><span class="n">only</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">filter</span><span class="w"> </span><span class="n">predicates</span><span class="w"> </span><span class="n">into</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">single</span><span class="w"> </span><span class="n">scan</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">a</span>
+<span class="n">combined</span><span class="w"> </span><span class="err">`</span><span class="n">OR</span><span class="err">`</span><span class="w"> </span><span class="n">predicate</span><span class="p">:</span>
+<span class="err">```</span><span class="n">sql</span>
+<span class="o">--</span><span class="w"> </span><span class="n">Before</span><span class="p">:</span><span class="w"> </span><span class="nc">two</span><span class="w"> </span><span class="n">separate</span><span class="w"> </span><span class="n">scans</span>
+<span class="n">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="n">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
+<span class="n">UNION</span>
+<span class="n">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="n">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+
+<span class="o">--</span><span class="w"> </span><span class="n">After</span><span class="p">:</span><span class="w"> </span><span class="nc">one</span><span class="w"> </span><span class="n">scan</span>
+<span class="n">SELECT</span><span class="w"> </span><span class="n">DISTINCT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="n">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="n">OR</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+</pre></div>
+</div>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Queries using <code class="docutils literal notranslate"><span class="pre">UNION</span></code> against the same table with different filter
+conditions may benefit from enabling this rule.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Enable the rule when your <code class="docutils literal notranslate"><span class="pre">UNION</span></code> queries scan the same large table
+multiple times with different predicates. Avoid it when the data source handles individual equality predicates more efficiently than
+a combined <code class="docutils literal notranslate"><span class="pre">OR</span></code> (e.g., index-backed sources).</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">enable_unions_to_filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
