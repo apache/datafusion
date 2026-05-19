@@ -121,6 +121,13 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         })
     }
 
+    /// Some literal patterns can make regex compilation too expensive during
+    /// planning. Skip constant folding so the cost is paid at execution time.
+    /// See https://github.com/apache/datafusion/issues/22185.
+    fn should_const_evaluate(&self) -> bool {
+        false
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         match args.as_slice() {

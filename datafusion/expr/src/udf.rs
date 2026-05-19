@@ -309,6 +309,11 @@ impl ScalarUDF {
         self.inner.short_circuits()
     }
 
+    /// See [`ScalarUDFImpl::should_const_evaluate`].
+    pub fn should_const_evaluate(&self) -> bool {
+        self.inner.should_const_evaluate()
+    }
+
     /// Computes the output interval for a [`ScalarUDF`], given the input
     /// intervals.
     ///
@@ -856,6 +861,15 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// lazily.
     fn short_circuits(&self) -> bool {
         false
+    }
+
+    /// Returns `true` (the default) if the simplifier may evaluate this
+    /// function when all arguments are constants. Override to `false` for
+    /// functions whose literal arguments can make planning-time evaluation too
+    /// expensive, such as regex functions that compile user-provided patterns.
+    /// Returning `false` defers evaluation to execution time.
+    fn should_const_evaluate(&self) -> bool {
+        true
     }
 
     /// Determines which of the arguments passed to this function are evaluated eagerly
