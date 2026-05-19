@@ -75,6 +75,15 @@ impl RowGroupAccessPlanFilter {
         self.access_plan
     }
 
+    /// Returns a reference to the inner access plan.
+    ///
+    /// Test-only accessor used by the shared assertion helpers in
+    /// [`crate::test_util`].
+    #[cfg(test)]
+    pub(crate) fn access_plan(&self) -> &ParquetAccessPlan {
+        &self.access_plan
+    }
+
     /// Returns the is_fully_matched vector.
     pub fn is_fully_matched(&self) -> &Vec<bool> {
         self.access_plan.fully_matched()
@@ -519,6 +528,7 @@ mod tests {
 
     use super::*;
     use crate::reader::ParquetFileReader;
+    use crate::test_util::ExpectedPruning;
 
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
@@ -1523,54 +1533,6 @@ mod tests {
             .with_expect_none_pruned()
             .run(col(r#""string_col""#).eq(lit("0")))
             .await
-    }
-
-    // What row groups are expected to be left after pruning
-    #[derive(Debug)]
-    enum ExpectedPruning {
-        All,
-        /// Only the specified row groups are expected to REMAIN (not what is pruned)
-        Some(Vec<usize>),
-        None,
-    }
-
-    impl ExpectedPruning {
-        /// asserts that the pruned row group match this expectation
-        fn assert(&self, row_groups: &RowGroupAccessPlanFilter) {
-            let num_row_groups = row_groups.access_plan.len();
-            assert!(num_row_groups > 0);
-            let num_pruned = (0..num_row_groups)
-                .filter_map(|i| {
-                    if row_groups.access_plan.should_scan(i) {
-                        None
-                    } else {
-                        Some(1)
-                    }
-                })
-                .sum::<usize>();
-
-            match self {
-                Self::All => {
-                    assert_eq!(
-                        num_row_groups, num_pruned,
-                        "Expected all row groups to be pruned, but got {row_groups:?}"
-                    );
-                }
-                ExpectedPruning::None => {
-                    assert_eq!(
-                        num_pruned, 0,
-                        "Expected no row groups to be pruned, but got {row_groups:?}"
-                    );
-                }
-                ExpectedPruning::Some(expected) => {
-                    let actual = row_groups.access_plan.row_group_indexes();
-                    assert_eq!(
-                        expected, &actual,
-                        "Unexpected row groups pruned. Expected {expected:?}, got {actual:?}"
-                    );
-                }
-            }
-        }
     }
 
     fn assert_pruned(row_groups: RowGroupAccessPlanFilter, expected: ExpectedPruning) {

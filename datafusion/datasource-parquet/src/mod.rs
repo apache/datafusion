@@ -40,6 +40,8 @@ mod sink;
 mod sort;
 pub mod source;
 mod supported_predicates;
+#[cfg(test)]
+mod test_util;
 mod writer;
 
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
