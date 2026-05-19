@@ -37,6 +37,8 @@ pub mod file_groups;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
+#[cfg(not(target_arch = "wasm32"))]
+mod listing_glob;
 pub mod memory;
 pub mod morsel;
 pub mod projection;

@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::listing_glob::split_glob_expression;
 use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::CachedFileList;
@@ -479,33 +481,6 @@ impl std::fmt::Display for ListingTableUrl {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-const GLOB_START_CHARS: [char; 3] = ['?', '*', '['];
-
-/// Splits `path` at the first path segment containing a glob expression, returning
-/// `None` if no glob expression found.
-///
-/// Path delimiters are determined using [`std::path::is_separator`] which
-/// permits `/` as a path delimiter even on Windows platforms.
-#[cfg(not(target_arch = "wasm32"))]
-fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
-    let mut last_separator = 0;
-
-    for (byte_idx, char) in path.char_indices() {
-        if GLOB_START_CHARS.contains(&char) {
-            if last_separator == 0 {
-                return Some((".", path));
-            }
-            return Some(path.split_at(last_separator));
-        }
-
-        if std::path::is_separator(char) {
-            last_separator = byte_idx + char.len_utf8();
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,41 +602,6 @@ mod tests {
 
         let path = Path::from("other/bar/partition/foo.parquet");
         assert!(url.strip_prefix(&path).is_none());
-    }
-
-    #[test]
-    fn test_split_glob() {
-        fn test(input: &str, expected: Option<(&str, &str)>) {
-            assert_eq!(
-                split_glob_expression(input),
-                expected,
-                "testing split_glob_expression with {input}"
-            );
-        }
-
-        // no glob patterns
-        test("/", None);
-        test("/a.txt", None);
-        test("/a", None);
-        test("/a/", None);
-        test("/a/b", None);
-        test("/a/b/", None);
-        test("/a/b.txt", None);
-        test("/a/b/c.txt", None);
-        // glob patterns, thus we build the longest path (os-specific)
-        test("*.txt", Some((".", "*.txt")));
-        test("/*.txt", Some(("/", "*.txt")));
-        test("/a/*b.txt", Some(("/a/", "*b.txt")));
-        test("/a/*/b.txt", Some(("/a/", "*/b.txt")));
-        test("/a/b/[123]/file*.txt", Some(("/a/b/", "[123]/file*.txt")));
-        test("/a/b*.txt", Some(("/a/", "b*.txt")));
-        test("/a/b/**/c*.txt", Some(("/a/b/", "**/c*.txt")));
-
-        // https://github.com/apache/datafusion/issues/2465
-        test(
-            "/a/b/c//alltypes_plain*.parquet",
-            Some(("/a/b/c//", "alltypes_plain*.parquet")),
-        );
     }
 
     #[test]
