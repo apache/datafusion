@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`PushDownTopKThroughJoin`] pushes TopK (Sort with fetch) through outer joins
+//! [`PushDownTopKThroughJoin`] pushes TopK (Sort with fetch) through joins
+//! whose preserved side is known.
 //!
-//! When a `Sort` with a fetch limit sits above an outer join and all sort
+//! When a `Sort` with a fetch limit sits above such a join and all sort
 //! expressions come from the **preserved** side, this rule inserts a copy
 //! of the `Sort(fetch)` on that input to reduce the number of rows
 //! entering the join.
@@ -28,6 +29,13 @@
 //!   left rows.
 //! - The same reasoning applies symmetrically for RIGHT JOIN and right-side
 //!   columns.
+//! - A CROSS JOIN preserves every row from both sides (Cartesian product).
+//!   The top-N by one side's columns must come from the top-N rows of that
+//!   side, since each surviving row is duplicated by the other side's row
+//!   count.
+//! - LEFT MARK / RIGHT MARK joins emit exactly one record per row of the
+//!   marked side (with an extra mark column), so that side is fully
+//!   preserved and pushdown applies symmetrically to LEFT / RIGHT joins.
 //!
 //! The top-level sort is kept for correctness since a 1-to-many join can
 //! produce more than N output rows from N input rows.
@@ -64,9 +72,17 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::{Expr, SortExpr};
 
-/// Optimization rule that pushes TopK (Sort with fetch) through
-/// LEFT / RIGHT outer joins when all sort expressions come from
-/// the preserved side.
+/// Which child of a join is being treated as the preserved side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+}
+
+/// Optimization rule that pushes TopK (Sort with fetch) through joins
+/// that have a known preserved side (LEFT / RIGHT outer,
+/// LEFT MARK / RIGHT MARK, or CROSS) when all sort expressions come
+/// from a preserved side.
 ///
 /// See module-level documentation for details.
 #[derive(Default, Debug)]
@@ -124,18 +140,30 @@ impl OptimizerRule for PushDownTopKThroughJoin {
             }
         };
 
-        // Only outer joins where the preserved side is known.
-        // Semi/Anti joins are excluded: not all preserved-side rows appear in
-        // the output (only matched/unmatched rows do), so pushing fetch=N to
-        // the preserved child can drop rows that would have survived the filter.
+        // Determine which side(s) of the join are preserved.
         //
-        // Non-equijoin filters in the ON clause are safe: outer joins guarantee
-        // all preserved-side rows appear in the output regardless of the filter.
-        // The filter only controls matching (which non-preserved rows pair up),
-        // not which preserved rows survive.
-        let preserved_is_left = match join.join_type {
-            JoinType::Left => true,
-            JoinType::Right => false,
+        // - LEFT / LeftMark: only left preserved (and only left appears in
+        //   the output schema for LEFT, or left + mark column for LeftMark).
+        // - RIGHT / RightMark: symmetric.
+        // - CROSS JOIN (represented as Inner with no `on` keys and no filter):
+        //   every row from both sides appears in the output (Cartesian
+        //   product), so we can push to whichever side has all the sort cols.
+        //
+        // For LEFT/RIGHT, non-equijoin filters in the ON clause are safe:
+        // outer joins guarantee all preserved-side rows appear in the output
+        // regardless of the filter, and the non-preserved side never appears
+        // as a standalone unmatched row.
+        //
+        // For Inner joins (cross-join detection), the filter check is strict
+        // (`filter.is_none()`). When an Inner join has a filter, that filter
+        // can drop rows from either side, so pushing fetch=N may select rows
+        // that get filtered out while discarding rows that would have matched.
+        let preserved_candidates: &[Side] = match join.join_type {
+            JoinType::Left | JoinType::LeftMark => &[Side::Left],
+            JoinType::Right | JoinType::RightMark => &[Side::Right],
+            JoinType::Inner if join.on.is_empty() && join.filter.is_none() => {
+                &[Side::Left, Side::Right]
+            }
             _ => return Ok(Transformed::no(plan)),
         };
 
@@ -173,24 +201,25 @@ impl OptimizerRule for PushDownTopKThroughJoin {
             return Ok(Transformed::no(plan));
         }
 
-        let preserved_schema = if preserved_is_left {
-            join.left.schema()
-        } else {
-            join.right.schema()
-        };
-        let preserved_cols = schema_columns(preserved_schema);
-
-        let all_from_preserved = resolved_sort_exprs
-            .iter()
-            .all(|sort_expr| has_all_column_refs(&sort_expr.expr, &preserved_cols));
-        if !all_from_preserved {
+        // Pick the first preserved-side candidate whose schema contains all
+        // referenced sort columns. For LEFT/RIGHT this is the fixed side;
+        // for CROSS we try both.
+        let Some(preserved_side) = preserved_candidates.iter().copied().find(|&side| {
+            let schema = match side {
+                Side::Left => join.left.schema(),
+                Side::Right => join.right.schema(),
+            };
+            let cols = schema_columns(schema);
+            resolved_sort_exprs
+                .iter()
+                .all(|se| has_all_column_refs(&se.expr, &cols))
+        }) else {
             return Ok(Transformed::no(plan));
-        }
+        };
 
-        let preserved_child = if preserved_is_left {
-            &join.left
-        } else {
-            &join.right
+        let preserved_child = match preserved_side {
+            Side::Left => &join.left,
+            Side::Right => &join.right,
         };
 
         // Scan deep inside the preserved child (through SubqueryAlias and
@@ -281,10 +310,9 @@ impl OptimizerRule for PushDownTopKThroughJoin {
 
         // Reconstruct the join with the new child
         let mut new_join = join.clone();
-        if preserved_is_left {
-            new_join.left = new_preserved_child;
-        } else {
-            new_join.right = new_preserved_child;
+        match preserved_side {
+            Side::Left => new_join.left = new_preserved_child,
+            Side::Right => new_join.right = new_preserved_child,
         }
 
         // Rebuild the tree: join → intermediate nodes → top-level sort
@@ -614,6 +642,162 @@ mod test {
           Inner Join: t1.a = t2.a
             TableScan: t1
             TableScan: t2
+        "
+        )
+    }
+
+    /// CROSS JOIN sorted by left-side columns → pushed to left child.
+    #[test]
+    fn topk_pushed_to_left_of_cross_join() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .cross_join(LogicalPlanBuilder::from(t2).build()?)?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Cross Join:
+            Sort: t1.b ASC NULLS LAST, fetch=3
+              TableScan: t1
+            TableScan: t2
+        "
+        )
+    }
+
+    /// CROSS JOIN sorted by right-side columns → pushed to right child.
+    #[test]
+    fn topk_pushed_to_right_of_cross_join() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .cross_join(LogicalPlanBuilder::from(t2).build()?)?
+            .sort_with_limit(vec![col("t2.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t2.b ASC NULLS LAST, fetch=3
+          Cross Join:
+            TableScan: t1
+            Sort: t2.b ASC NULLS LAST, fetch=3
+              TableScan: t2
+        "
+        )
+    }
+
+    /// CROSS JOIN sorted by columns from both sides → no pushdown.
+    #[test]
+    fn topk_not_pushed_for_cross_join_mixed_side_sort() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .cross_join(LogicalPlanBuilder::from(t2).build()?)?
+            .sort_with_limit(
+                vec![(col("t1.b") + col("t2.b")).sort(true, false)],
+                Some(3),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.b + t2.b ASC NULLS LAST, fetch=3
+          Cross Join:
+            TableScan: t1
+            TableScan: t2
+        "
+        )
+    }
+
+    /// Inner join with no equi-keys but a non-empty filter: the filter can
+    /// drop rows from either side, so pushing fetch=N can produce fewer
+    /// output rows than the unpushed plan.
+    #[test]
+    fn topk_not_pushed_for_inner_with_filter_no_on() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_on(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Inner,
+                vec![col("t1.b").gt(col("t2.b"))],
+            )?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Inner Join:  Filter: t1.b > t2.b
+            TableScan: t1
+            TableScan: t2
+        "
+        )
+    }
+
+    /// LEFT MARK join: one record per left row (with extra mark column),
+    /// so left is fully preserved → pushdown to left.
+    #[test]
+    fn topk_pushed_to_left_of_left_mark_join() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::LeftMark,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          LeftMark Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=3
+              TableScan: t1
+            TableScan: t2
+        "
+        )
+    }
+
+    /// RIGHT MARK join: symmetric to LeftMark.
+    #[test]
+    fn topk_pushed_to_right_of_right_mark_join() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::RightMark,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![col("t2.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t2.b ASC NULLS LAST, fetch=3
+          RightMark Join: t1.a = t2.a
+            TableScan: t1
+            Sort: t2.b ASC NULLS LAST, fetch=3
+              TableScan: t2
         "
         )
     }
