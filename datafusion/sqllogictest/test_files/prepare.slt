@@ -88,6 +88,38 @@ EXECUTE my_plan('j%');
 statement ok
 DEALLOCATE my_plan
 
+# Allow prepare $1 IN (subquery)
+statement ok
+PREPARE my_plan AS SELECT id FROM person WHERE $1 IN (SELECT age FROM person);
+
+query I rowsort
+EXECUTE my_plan(20);
+----
+1
+
+query I rowsort
+EXECUTE my_plan(99);
+----
+
+statement ok
+DEALLOCATE my_plan
+
+# Allow prepare $1 NOT IN (subquery)
+statement ok
+PREPARE my_plan AS SELECT id FROM person WHERE $1 NOT IN (SELECT age FROM person);
+
+query I rowsort
+EXECUTE my_plan(99);
+----
+1
+
+query I rowsort
+EXECUTE my_plan(20);
+----
+
+statement ok
+DEALLOCATE my_plan
+
 # Check for missing parameters
 statement ok
 PREPARE my_plan AS SELECT * FROM person WHERE id < $1;
