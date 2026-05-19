@@ -1126,11 +1126,20 @@ physical_plan
 02)│       CrossJoinExec       ├──────────────┐
 03)└─────────────┬─────────────┘              │
 04)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-05)│       DataSourceExec      ││       DataSourceExec      │
+05)│       RepartitionExec     ││       DataSourceExec      │
 06)│    --------------------   ││    --------------------   │
-07)│          files: 1         ││          files: 1         │
-08)│        format: csv        ││      format: parquet      │
-09)└───────────────────────────┘└───────────────────────────┘
+07)│ partition_count(in->out): ││          files: 1         │
+08)│           1 -> 4          ││       format: parquet     │
+09)|                           ||                           |
+10)|  partitioning_scheme:     ||                           |
+11)│     RoundRobinBatch(4)    ││                           │
+12)└─────────────┬─────────────┘└───────────────────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: csv        │
+18)└───────────────────────────┘
 
 # Query with sort merge join.
 statement ok
