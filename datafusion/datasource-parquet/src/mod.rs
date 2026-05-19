@@ -25,6 +25,7 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod access_plan;
+mod bloom_filter;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
@@ -39,6 +40,8 @@ mod sink;
 mod sort;
 pub mod source;
 mod supported_predicates;
+#[cfg(test)]
+mod test_util;
 mod writer;
 
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
