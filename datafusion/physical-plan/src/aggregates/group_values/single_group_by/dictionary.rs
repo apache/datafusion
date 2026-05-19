@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use crate::hash_utils::RandomState;
+//use crate::hash_utils::RandomState;
+use ahash::random_state::RandomState;
 use arrow::array::{
     Array, ArrayRef, DictionaryArray, LargeStringArray, LargeStringBuilder, ListArray,
     ListBuilder, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
