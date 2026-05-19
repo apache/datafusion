@@ -4443,9 +4443,9 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
 05)--------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
 06)----------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
-07)------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[alias2, alias3]
+07)------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[sum(aggregate_test_100.c3) as alias2, max(aggregate_test_100.c4) as alias3]
 08)--------------RepartitionExec: partitioning=Hash([c1@0, alias1@1], 8), input_partitions=8
-09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1, c2@1 as alias1], aggr=[alias2, alias3]
+09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1, c2@1 as alias1], aggr=[sum(aggregate_test_100.c3) as alias2, max(aggregate_test_100.c4) as alias3]
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], file_type=csv, has_header=true
 

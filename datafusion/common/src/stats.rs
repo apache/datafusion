@@ -553,10 +553,12 @@ impl Statistics {
                 num_rows: Precision::Inexact(nr),
                 ..
             } => {
-                // Here, the inexact case gives us an upper bound on the number of rows.
+                // Here, the inexact case gives us an estimate of the number of rows.
                 if nr <= skip {
-                    // All input data will be skipped:
-                    Precision::Exact(0)
+                    // All input data will be skipped. Preserve the exactness of
+                    // the input estimate: if the input was inexact, the
+                    // resulting zero is also inexact.
+                    check_num_rows(Some(0), self.num_rows.is_exact().unwrap())
                 } else if nr <= fetch_val && skip == 0 {
                     // If the input does not reach the `fetch` globally, and `skip`
                     // is zero (meaning the input and output are identical), return
@@ -2334,6 +2336,22 @@ mod tests {
         assert_eq!(result.num_rows, Precision::Exact(0));
         // When ratio is 0/100 = 0, byte size should be 0
         assert_eq!(result.total_byte_size, Precision::Inexact(0));
+    }
+
+    #[test]
+    fn test_with_fetch_skip_all_rows_inexact() {
+        // When the input num_rows is Inexact (an upper-bound estimate), an
+        // `nr <= skip` outcome must remain Inexact: the estimate could be
+        // wrong, so we cannot promote 0 to Exact.
+        let original_stats = Statistics {
+            num_rows: Precision::Inexact(0),
+            total_byte_size: Precision::Inexact(0),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
+
+        assert_eq!(result.num_rows, Precision::Inexact(0));
     }
 
     #[test]

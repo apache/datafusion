@@ -548,6 +548,17 @@ impl RatioMetrics {
     pub fn total(&self) -> usize {
         self.total.load(Ordering::Relaxed)
     }
+
+    /// Return the strategy used to merge two [`RatioMetrics`] values
+    pub fn merge_strategy(&self) -> &RatioMergeStrategy {
+        &self.merge_strategy
+    }
+
+    /// Whether `Display` for this metric appends the raw `(part/total)` numbers
+    /// alongside the percentage
+    pub fn display_raw_values(&self) -> bool {
+        self.display_raw_values
+    }
 }
 
 impl PartialEq for RatioMetrics {
@@ -1010,7 +1021,14 @@ impl MetricValue {
             Self::SpilledBytes(_) => 11,
             Self::SpilledRows(_) => 12,
             Self::CurrentMemoryUsage(_) => 13,
-            Self::Count { .. } => 14,
+            Self::Count { name, .. } => match name.as_ref() {
+                // This Parquet page-index metric is a plain Count because it
+                // records pages that skipped page-index evaluation, not a
+                // pruned/matched pair. Keep it grouped with the other
+                // page-index pruning metrics in EXPLAIN output.
+                "page_index_pages_skipped_by_fully_matched" => 8,
+                _ => 14,
+            },
             Self::Gauge { .. } => 15,
             Self::Time { .. } => 16,
             Self::Ratio { .. } => 17,

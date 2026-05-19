@@ -53,6 +53,25 @@ PREPARE my_plan(INT, INT) AS SELECT 1 + $1;
 statement error SQL error: ParserError
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1;
 
+# EXEC/EXECUTE with parentheses but no statement name must error instead of panic
+statement error EXECUTE statement requires a name
+EXEC();
+
+statement error EXECUTE statement requires a name
+EXEC('');
+
+statement error EXECUTE statement requires a name
+EXEC('any-string');
+
+statement error EXECUTE statement requires a name
+EXEC(unknown_column);
+
+statement error EXECUTE statement requires a name
+EXECUTE();
+
+statement error EXECUTE statement requires a name
+EXEC ('a');
+
 # #######################
 # Test prepare and execute statements
 

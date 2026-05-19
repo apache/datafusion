@@ -48,7 +48,7 @@ use datafusion_sql::sqlparser::parser::Parser;
 use insta::assert_snapshot;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // enable logging so RUST_LOG works
     let _ = env_logger::try_init();

@@ -68,7 +68,7 @@ pub(crate) mod test_util {
         // Each batch writes to their own file
         let files: Vec<_> = batches
             .into_iter()
-            .zip(tmp_files.into_iter())
+            .zip(tmp_files)
             .map(|(batch, mut output)| {
                 let mut builder = parquet::file::properties::WriterProperties::builder();
                 if multi_page {

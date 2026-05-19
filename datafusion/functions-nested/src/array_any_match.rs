@@ -20,11 +20,14 @@
 use arrow::{
     array::{Array, AsArray, BooleanArray, BooleanBuilder, new_null_array},
     buffer::NullBuffer,
+    compute::take_arrays,
     datatypes::{ArrowNativeType, DataType, Field, FieldRef},
 };
 use datafusion_common::{
     Result, exec_datafusion_err, exec_err, plan_err,
-    utils::{adjust_offsets_for_slice, list_values, take_function_args},
+    utils::{
+        adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
+    },
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
@@ -78,7 +81,10 @@ impl Default for ArrayAnyMatch {
 impl ArrayAnyMatch {
     pub fn new() -> Self {
         Self {
-            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("any_match"), String::from("list_any_match")],
         }
     }
@@ -114,9 +120,7 @@ impl HigherOrderUDF for ArrayAnyMatch {
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let list = if arg_types.len() == 1 {
-            &arg_types[0]
-        } else {
+        let [list] = arg_types else {
             return plan_err!(
                 "{} function requires 1 value argument, got {}",
                 self.name(),
@@ -147,15 +151,15 @@ impl HigherOrderUDF for ArrayAnyMatch {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let [list, _lambda] = take_function_args(self.name(), fields)?;
+        let [list, _] = take_function_args(self.name(), fields)?;
+        let ValueOrLambda::Value(list) = list else {
+            return plan_err!("{} expects a value as first argument", self.name());
+        };
 
-        let field = match list {
-            ValueOrLambda::Value(f) => match f.data_type() {
-                DataType::List(field) => field,
-                DataType::LargeList(field) => field,
-                other => return plan_err!("expected list, got {other}"),
-            },
-            _ => return plan_err!("{} expected a value as first argument", self.name()),
+        let field = match list.data_type() {
+            DataType::List(field) => field,
+            DataType::LargeList(field) => field,
+            other => return plan_err!("expected list, got {other}"),
         };
 
         Ok(LambdaParametersProgress::Complete(vec![vec![Arc::clone(
@@ -167,15 +171,18 @@ impl HigherOrderUDF for ArrayAnyMatch {
         &self,
         args: HigherOrderReturnFieldArgs,
     ) -> Result<Arc<Field>> {
-        let [list, _lambda] = take_function_args(self.name(), args.arg_fields)?;
-        let nullable = matches!(list, ValueOrLambda::Value(f) if f.is_nullable());
+        let [ValueOrLambda::Value(list), _] =
+            take_function_args(self.name(), args.arg_fields)?
+        else {
+            return plan_err!("{} expects a value as first argument", self.name());
+        };
+        let nullable = list.is_nullable();
         Ok(Arc::new(Field::new("", DataType::Boolean, nullable)))
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let [list, lambda] = take_function_args(self.name(), &args.args)?;
-
-        let (ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)) = (list, lambda)
+        let [ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)] =
+            take_function_args(self.name(), &args.args)?
         else {
             return exec_err!("{} expects a value followed by a lambda", self.name());
         };
@@ -196,7 +203,10 @@ impl HigherOrderUDF for ArrayAnyMatch {
         let values_param = || Ok(Arc::clone(&list_values));
 
         let predicate_results = lambda
-            .evaluate(&[&values_param])?
+            .evaluate(&[&values_param], |arrays| {
+                let indices = list_values_row_number(&list_array)?;
+                Ok(take_arrays(arrays, &indices, None)?)
+            })?
             .into_array(list_values.len())?;
 
         let predicate_bool = predicate_results
