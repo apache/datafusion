@@ -268,14 +268,7 @@ fn apply_replace<B: BulkNullStringArrayBuilder>(
     }
 
     if from.is_empty() {
-        // Empty `from`: insert `to` before each character and at both ends.
-        builder.append_with(|w| {
-            w.write_str(to);
-            for ch in string.chars() {
-                w.write_char(ch);
-                w.write_str(to);
-            }
-        });
+        builder.append_value(string);
         return;
     }
 
