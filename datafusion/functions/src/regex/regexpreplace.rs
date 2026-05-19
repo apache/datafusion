@@ -202,12 +202,27 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
         .into_owned()
 }
 
-struct ShortRegex {
-    /// Shortened anchored regex used to extract capture group 1 directly.
-    /// See [`try_build_short_extract_regex`] for details.
-    short_re: Regex,
-    /// Reusable capture locations for `short_re` to avoid per-row allocation.
-    locs: CaptureLocations,
+/// Fast-path state used in place of [`Regex::replacen`] for patterns matching
+/// [`OptimizedRegex`]'s direct-extraction shape.
+enum ShortRegex {
+    /// Generic shortened-regex extractor for patterns of the form
+    /// `^...(capture)....*$` with replacement `${1}`. The trailing `.*$` is
+    /// stripped and `captures_read` is used to find capture group 1 directly,
+    /// avoiding `expand()` and any `String` allocation.
+    ShortenedRegex {
+        re: Regex,
+        locs: CaptureLocations,
+    },
+    /// Specialized memchr-based extractor for the common subset of the above
+    /// where the regex up to the capture is a finite set of literal byte
+    /// prefixes, the capture is `[^X]+` for a single ASCII byte `X`, and the
+    /// capture is followed by `X.*$`. See
+    /// [`try_recognize_literal_prefix_capture`] for the recognized shape.
+    ///
+    /// ClickBench Q28's `^https?://(?:www\.)?([^/]+)/.*$` is the motivating
+    /// instance: `prefixes = ["https://www.", "http://www.", "https://", "http://"]`,
+    /// `terminator = b'/'`.
+    LiteralPrefixCapture(LiteralPrefixCaptureSpec),
 }
 
 /// Holds the normal compiled regex together with the optional fast path used
@@ -231,11 +246,6 @@ impl OptimizedRegex {
             None
         };
 
-        let short_re = short_re.map(|short_re| {
-            let locs = short_re.capture_locations();
-            ShortRegex { short_re, locs }
-        });
-
         Self { re, short_re }
     }
 
@@ -248,50 +258,337 @@ impl OptimizedRegex {
         replacement: &str,
     ) -> Cow<'a, str> {
         // If this pattern is not eligible for direct extraction, use the full regex.
-        let Some(ShortRegex { short_re, locs }) = self.short_re.as_mut() else {
+        let Some(short_re) = self.short_re.as_mut() else {
             return self.re.replacen(val, limit, replacement);
         };
 
-        // If the shortened regex does not match, the original anchored regex would
-        // also leave the input unchanged.
-        if short_re.captures_read(locs, val).is_none() {
-            return Cow::Borrowed(val);
-        };
+        match short_re {
+            ShortRegex::ShortenedRegex { re: short_re, locs } => {
+                // If the shortened regex does not match, the original anchored regex would
+                // also leave the input unchanged.
+                if short_re.captures_read(locs, val).is_none() {
+                    return Cow::Borrowed(val);
+                };
 
-        // `captures_read` succeeded, so the overall shortened match is present.
-        let match_end = locs.get(0).unwrap().1;
-        if memchr(b'\n', &val.as_bytes()[match_end..]).is_some() {
-            // If there is a newline after the match, we can't use the short
-            // regex since it won't match across lines. Fall back to the full
-            // regex replacement.
-            return self.re.replacen(val, limit, replacement);
-        };
-        // The fast path only applies to `${1}` replacements, so the result is
-        // either capture group 1 or the empty string if that group did not match.
-        if let Some((start, end)) = locs.get(1) {
-            Cow::Borrowed(&val[start..end])
-        } else {
-            Cow::Borrowed("")
+                // `captures_read` succeeded, so the overall shortened match is present.
+                let match_end = locs.get(0).unwrap().1;
+                if memchr(b'\n', &val.as_bytes()[match_end..]).is_some() {
+                    // If there is a newline after the match, we can't use the short
+                    // regex since it won't match across lines. Fall back to the full
+                    // regex replacement.
+                    return self.re.replacen(val, limit, replacement);
+                };
+                // The fast path only applies to `${1}` replacements, so the result is
+                // either capture group 1 or the empty string if that group did not match.
+                if let Some((start, end)) = locs.get(1) {
+                    Cow::Borrowed(&val[start..end])
+                } else {
+                    Cow::Borrowed("")
+                }
+            }
+            ShortRegex::LiteralPrefixCapture(spec) => {
+                let Some((start, end, match_end)) =
+                    spec.extract(val.as_bytes())
+                else {
+                    return Cow::Borrowed(val);
+                };
+
+                if memchr(b'\n', &val.as_bytes()[match_end..]).is_some() {
+                    // Same single-line safety as the shortened-regex path: `.*$`
+                    // in the original anchored pattern doesn't cross `\n`, so
+                    // hand off to the full regex when trailing content has one.
+                    return self.re.replacen(val, limit, replacement);
+                }
+
+                Cow::Borrowed(&val[start..end])
+            }
         }
     }
 }
 
 /// For anchored patterns like `^...(capture)....*$` where the replacement
-/// is `\1`, build a shorter regex (stripping trailing `.*$`) and use
-/// `captures_read` with `CaptureLocations` for direct extraction — no
-/// `expand()`, no `String` allocation.
-/// This pattern appears in ClickBench Q28: which uses a regexp like
-/// `^https?://(?:www\.)?([^/]+)/.*$`
-fn try_build_short_extract_regex(pattern: &str, replacement: &str) -> Option<Regex> {
+/// is `\1`, build the fastest available direct-extraction state.
+///
+/// Two shapes are recognized:
+///
+/// 1. `^<literal-prefix-set>([^X]+)X.*$` with replacement `${1}`, where the
+///    prefix reduces to a finite set of byte literals and `X` is a single
+///    ASCII byte. Handled by [`LiteralPrefixCaptureSpec`] with a `memchr`
+///    terminator scan — no regex engine involvement per row.
+/// 2. Any other `^...(capture)....*$` with replacement `${1}`: the trailing
+///    `.*$` is stripped and the resulting shortened regex is run with
+///    `captures_read` against reusable `CaptureLocations`.
+///
+/// ClickBench Q28's `^https?://(?:www\.)?([^/]+)/.*$` matches shape 1.
+fn try_build_short_extract_regex(pattern: &str, replacement: &str) -> Option<ShortRegex> {
     if replacement != "${1}" || !pattern.starts_with('^') || !pattern.ends_with(".*$") {
         return None;
     }
+
+    if let Some(spec) = try_recognize_literal_prefix_capture(pattern) {
+        return Some(ShortRegex::LiteralPrefixCapture(spec));
+    }
+
     let short = &pattern[..pattern.len() - 3];
     let re = Regex::new(short).ok()?;
     if re.captures_len() != 2 {
         return None;
     }
-    Some(re)
+    let locs = re.capture_locations();
+    Some(ShortRegex::ShortenedRegex { re, locs })
+}
+
+/// Bound on enumerated prefix variants. Each `(?:...)?` doubles the count and
+/// each `(a|b|c)` multiplies it, so this caps the explosion for adversarial
+/// patterns. ClickBench Q28's pattern produces 4 variants.
+const MAX_PREFIX_VARIANTS: usize = 32;
+
+/// Precomputed state for the `^<prefix-set>([^X]+)X.*$` → `${1}` fast path.
+#[derive(Debug)]
+struct LiteralPrefixCaptureSpec {
+    /// Distinct literal byte prefixes the input must start with, sorted
+    /// longest-first so a single linear scan acts greedily.
+    prefixes: Vec<Box<[u8]>>,
+    /// Single ASCII byte that ends the capture (also the literal that must
+    /// follow the capture in the original regex).
+    terminator: u8,
+}
+
+impl LiteralPrefixCaptureSpec {
+    /// Returns `(capture_start, capture_end, match_end)` where `match_end`
+    /// points past the terminator, or `None` if the input doesn't match.
+    ///
+    /// Prefixes are tried longest-first to mimic greedy matching, but we
+    /// fall back to shorter alternatives if the greedy choice leaves no
+    /// room for the capture. That mirrors the full regex's backtracking
+    /// behavior for cases like `http://www./path` against
+    /// `^https?://(?:www\.)?([^/]+)/.*$`, where the regex prefers to leave
+    /// `www.` outside the optional so the capture is non-empty.
+    fn extract(&self, bytes: &[u8]) -> Option<(usize, usize, usize)> {
+        for prefix in &self.prefixes {
+            if !bytes.starts_with(prefix) {
+                continue;
+            }
+            let capture_start = prefix.len();
+            let Some(terminator_offset) =
+                memchr(self.terminator, &bytes[capture_start..])
+            else {
+                continue;
+            };
+            if terminator_offset == 0 {
+                // `[^X]+` requires at least one byte; try a shorter prefix.
+                continue;
+            }
+            let capture_end = capture_start + terminator_offset;
+            return Some((capture_start, capture_end, capture_end + 1));
+        }
+        None
+    }
+}
+
+/// Recognizes the `^<prefix-set>([^X]+)X.*$` shape with default flags (no
+/// `(?i)`, `(?m)`, etc. — those would alter the byte-level interpretation
+/// we rely on).
+fn try_recognize_literal_prefix_capture(
+    pattern: &str,
+) -> Option<LiteralPrefixCaptureSpec> {
+    use regex_syntax::hir::{Hir, HirKind, Look};
+
+    let hir = regex_syntax::parse(pattern).ok()?;
+    let HirKind::Concat(parts) = hir.kind() else {
+        return None;
+    };
+
+    let mut iter = parts.iter();
+
+    // 1. `^` (start of text — multiline `(?m)` would give StartLF instead).
+    if !matches!(iter.next()?.kind(), HirKind::Look(Look::Start)) {
+        return None;
+    }
+
+    // 2. Literal prefix segments up to (but not including) the capture.
+    let mut prefixes: Vec<Vec<u8>> = vec![Vec::new()];
+    let capture: &Hir = loop {
+        let part = iter.next()?;
+        if matches!(part.kind(), HirKind::Capture(_)) {
+            break part;
+        }
+        prefix_extend_variants(&mut prefixes, part)?;
+        if prefixes.len() > MAX_PREFIX_VARIANTS {
+            return None;
+        }
+    };
+
+    // 3. Capture must be group 1 wrapping `[^X]+` (greedy, 1+) for a single
+    //    ASCII byte X.
+    let HirKind::Capture(cap) = capture.kind() else {
+        unreachable!()
+    };
+    if cap.index != 1 {
+        return None;
+    }
+    let terminator = capture_terminator_byte(&cap.sub)?;
+
+    // 4. Literal terminator matching the excluded byte.
+    let HirKind::Literal(lit) = iter.next()?.kind() else {
+        return None;
+    };
+    if lit.0.as_ref() != [terminator] {
+        return None;
+    }
+
+    // 5. `.*` (any byte except `\n`, zero or more).
+    if !is_dot_star(iter.next()?) {
+        return None;
+    }
+
+    // 6. `$` and nothing after.
+    if !matches!(iter.next()?.kind(), HirKind::Look(Look::End)) {
+        return None;
+    }
+    if iter.next().is_some() {
+        return None;
+    }
+
+    // Dedupe + sort longest-first so the runtime probe is greedy.
+    prefixes.sort();
+    prefixes.dedup();
+    let mut prefixes: Vec<Box<[u8]>> = prefixes
+        .into_iter()
+        .map(Vec::into_boxed_slice)
+        .collect();
+    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
+
+    Some(LiteralPrefixCaptureSpec {
+        prefixes,
+        terminator,
+    })
+}
+
+/// Extend the accumulator with one prefix segment. Returns `None` if the
+/// segment isn't a finite literal shape (literal / concat / alternation /
+/// `?`-optional combination of those).
+fn prefix_extend_variants(
+    variants: &mut Vec<Vec<u8>>,
+    hir: &regex_syntax::hir::Hir,
+) -> Option<()> {
+    use regex_syntax::hir::HirKind;
+
+    match hir.kind() {
+        HirKind::Literal(lit) => {
+            for v in variants.iter_mut() {
+                v.extend_from_slice(&lit.0);
+            }
+            Some(())
+        }
+        HirKind::Concat(parts) => {
+            for part in parts {
+                prefix_extend_variants(variants, part)?;
+                if variants.len() > MAX_PREFIX_VARIANTS {
+                    return None;
+                }
+            }
+            Some(())
+        }
+        HirKind::Repetition(rep) if rep.min == 0 && rep.max == Some(1) => {
+            // `X?` → either nothing or X. Duplicate the accumulator and
+            // append X to one copy.
+            let mut with_x = variants.clone();
+            prefix_extend_variants(&mut with_x, &rep.sub)?;
+            if variants.len() + with_x.len() > MAX_PREFIX_VARIANTS {
+                return None;
+            }
+            variants.extend(with_x);
+            Some(())
+        }
+        HirKind::Alternation(branches) => {
+            let base = std::mem::take(variants);
+            for branch in branches {
+                let mut local = base.clone();
+                prefix_extend_variants(&mut local, branch)?;
+                if variants.len() + local.len() > MAX_PREFIX_VARIANTS {
+                    return None;
+                }
+                variants.extend(local);
+            }
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+/// Capture must be a greedy `[^X]+` over a single ASCII byte X.
+fn capture_terminator_byte(hir: &regex_syntax::hir::Hir) -> Option<u8> {
+    use regex_syntax::hir::HirKind;
+
+    let HirKind::Repetition(rep) = hir.kind() else {
+        return None;
+    };
+    if rep.min < 1 || rep.max.is_some() || !rep.greedy {
+        return None;
+    }
+    let HirKind::Class(class) = rep.sub.kind() else {
+        return None;
+    };
+    single_excluded_ascii_byte(class)
+}
+
+/// `.*` for default-flag regexes: any byte except `\n`, zero or more, greedy.
+fn is_dot_star(hir: &regex_syntax::hir::Hir) -> bool {
+    use regex_syntax::hir::HirKind;
+
+    let HirKind::Repetition(rep) = hir.kind() else {
+        return false;
+    };
+    if rep.min != 0 || rep.max.is_some() || !rep.greedy {
+        return false;
+    }
+    let HirKind::Class(class) = rep.sub.kind() else {
+        return false;
+    };
+    single_excluded_ascii_byte(class) == Some(b'\n')
+}
+
+/// Returns `Some(b)` iff `class` matches every Unicode codepoint or byte
+/// except a single ASCII byte `b`. We require ASCII because the runtime
+/// matcher uses `memchr` over byte slices.
+fn single_excluded_ascii_byte(class: &regex_syntax::hir::Class) -> Option<u8> {
+    use regex_syntax::hir::Class;
+
+    match class {
+        Class::Unicode(uc) => {
+            let ranges = uc.ranges();
+            if ranges.len() != 2 {
+                return None;
+            }
+            let (r0, r1) = (&ranges[0], &ranges[1]);
+            if (r0.start() as u32) != 0 || (r1.end() as u32) != 0x10FFFF {
+                return None;
+            }
+            let gap_start = r0.end() as u32 + 1;
+            let gap_end = r1.start() as u32 - 1;
+            if gap_start != gap_end || gap_start > 0x7F {
+                return None;
+            }
+            Some(gap_start as u8)
+        }
+        Class::Bytes(bc) => {
+            let ranges = bc.ranges();
+            if ranges.len() != 2 {
+                return None;
+            }
+            let (r0, r1) = (&ranges[0], &ranges[1]);
+            if r0.start() != 0 || r1.end() != 0xFF {
+                return None;
+            }
+            let gap_start = r0.end() as u16 + 1;
+            let gap_end = r1.start() as u16 - 1;
+            if gap_start != gap_end || gap_start > 0x7F {
+                return None;
+            }
+            Some(gap_start as u8)
+        }
+    }
 }
 
 /// Replaces substring(s) matching a PCRE-like regular expression.
@@ -1011,5 +1308,130 @@ mod tests {
         .unwrap();
         assert_eq!(re.as_ref(), &expected);
         assert_eq!(re.null_count(), 3);
+    }
+
+    /// Assert that the fast path was selected for `pattern`.
+    fn assert_literal_prefix_capture(
+        pattern: &str,
+        expected_prefixes: &[&[u8]],
+        expected_terminator: u8,
+    ) {
+        let spec =
+            try_recognize_literal_prefix_capture(pattern).unwrap_or_else(|| {
+                panic!("expected literal-prefix recognizer to accept {pattern}")
+            });
+        assert_eq!(spec.terminator, expected_terminator, "pattern {pattern}");
+        let actual: Vec<&[u8]> = spec.prefixes.iter().map(|p| &p[..]).collect();
+        assert_eq!(actual, expected_prefixes, "pattern {pattern}");
+    }
+
+    /// Run the optimized path and the full regex on every value and confirm they
+    /// agree. Acts as a generic differential test for the fast path.
+    fn assert_optimized_matches_regex(pattern: &str, values: &[&str]) {
+        let re = Regex::new(pattern).unwrap();
+        let mut opt = OptimizedRegex::new(re.clone(), 1, pattern, "${1}");
+        for value in values {
+            let expected = re.replacen(value, 1, "${1}");
+            let actual = opt.replacen(value, 1, "${1}");
+            assert_eq!(actual, expected, "pattern {pattern}, value {value:?}");
+        }
+    }
+
+    #[test]
+    fn literal_prefix_recognizer_accepts_clickbench_q28() {
+        assert_literal_prefix_capture(
+            r"^https?://(?:www\.)?([^/]+)/.*$",
+            &[
+                b"https://www.",
+                b"http://www.",
+                b"https://",
+                b"http://",
+            ],
+            b'/',
+        );
+    }
+
+    #[test]
+    fn literal_prefix_recognizer_accepts_single_literal() {
+        assert_literal_prefix_capture(r"^foo:([^,]+),.*$", &[b"foo:"], b',');
+    }
+
+    #[test]
+    fn literal_prefix_recognizer_accepts_alternation() {
+        // Equal-length prefixes end up in dedupe (alphabetical) order after
+        // the descending-length sort, which is stable.
+        assert_literal_prefix_capture(
+            r"^(?:foo|bar|baz):([^/]+)/.*$",
+            &[b"bar:", b"baz:", b"foo:"],
+            b'/',
+        );
+    }
+
+    #[test]
+    fn literal_prefix_recognizer_rejects_non_anchored() {
+        assert!(try_recognize_literal_prefix_capture(r"https?://([^/]+)/.*$").is_none());
+    }
+
+    #[test]
+    fn literal_prefix_recognizer_rejects_unbounded_prefix() {
+        assert!(
+            try_recognize_literal_prefix_capture(r"^.+?:([^/]+)/.*$").is_none()
+        );
+    }
+
+    #[test]
+    fn literal_prefix_recognizer_rejects_non_ascii_terminator() {
+        assert!(
+            try_recognize_literal_prefix_capture(r"^a([^\u{0080}]+)\u{0080}.*$")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn literal_prefix_recognizer_rejects_case_insensitive() {
+        // `(?i)` folds the negated class to two bytes, which would break the
+        // single-byte memchr terminator assumption.
+        assert!(
+            try_recognize_literal_prefix_capture(r"^(?i)foo:([^a]+)a.*$")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn literal_prefix_fast_path_matches_full_regex_for_q28_pattern() {
+        assert_optimized_matches_regex(
+            r"^https?://(?:www\.)?([^/]+)/.*$",
+            &[
+                "http://example.com/path",
+                "https://www.example.com/path",
+                "http://www./path",
+                "http://wwww.example.com/path",
+                "http://example.com/path\nnext",
+                "http://example.com/path\n",
+                "http://exa\nmple.com/path",
+                "https://example.com",
+                "ftp://example.com/path",
+                "http:///path",
+                "",
+                "/",
+                "http://example.com/",
+            ],
+        );
+    }
+
+    #[test]
+    fn literal_prefix_fast_path_matches_full_regex_for_alternation_pattern() {
+        assert_optimized_matches_regex(
+            r"^(?:foo|bar|baz):([^/]+)/.*$",
+            &[
+                "foo:one/two",
+                "bar:value/",
+                "baz:x/y/z",
+                "qux:one/two",
+                "foo:/empty",
+                "foo:abc",
+                "",
+            ],
+        );
     }
 }

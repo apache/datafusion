@@ -2194,6 +2194,7 @@ dependencies = [
  "num-traits",
  "rand 0.9.4",
  "regex",
+ "regex-syntax",
  "sha2",
  "tokio",
  "uuid",
