@@ -950,10 +950,21 @@ impl DefaultPhysicalPlanner {
                     );
                 }
 
+                let prefer_window_agg_exec = session_state
+                    .config_options()
+                    .optimizer
+                    .prefer_window_agg_exec;
                 let logical_schema = node.schema();
                 let window_expr = window_expr
                     .iter()
-                    .map(|e| create_window_expr(e, logical_schema, execution_props))
+                    .map(|e| {
+                        create_window_expr_with_preference(
+                            e,
+                            logical_schema,
+                            execution_props,
+                            prefer_window_agg_exec,
+                        )
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
                 let can_repartition = session_state.config().target_partitions() > 1
@@ -963,7 +974,7 @@ impl DefaultPhysicalPlanner {
                     window_expr.iter().all(|e| e.uses_bounded_memory());
                 // If all window expressions can run with bounded memory,
                 // choose the bounded window variant:
-                if uses_bounded_memory {
+                if uses_bounded_memory && !prefer_window_agg_exec {
                     Arc::new(BoundedWindowAggExec::try_new(
                         window_expr,
                         input_exec,
@@ -2411,6 +2422,24 @@ pub fn create_window_expr_with_name(
     logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
+    create_window_expr_with_name_and_preference(
+        e,
+        name,
+        logical_schema,
+        execution_props,
+        false,
+    )
+}
+
+/// Create a window expression with a name from a logical expression, optionally
+/// preferring expressions that are optimized for [`WindowAggExec`].
+pub fn create_window_expr_with_name_and_preference(
+    e: &Expr,
+    name: impl Into<String>,
+    logical_schema: &DFSchema,
+    execution_props: &ExecutionProps,
+    prefer_window_agg_exec: bool,
+) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
     let physical_schema = Arc::clone(logical_schema.inner());
     match e {
@@ -2451,7 +2480,7 @@ pub fn create_window_expr_with_name(
                 .map(|f| create_physical_expr(f, logical_schema, execution_props))
                 .transpose()?;
 
-            windows::create_window_expr(
+            windows::create_window_expr_with_preference(
                 fun,
                 name,
                 &physical_args,
@@ -2462,6 +2491,7 @@ pub fn create_window_expr_with_name(
                 ignore_nulls,
                 *distinct,
                 physical_filter,
+                prefer_window_agg_exec,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),
@@ -2474,6 +2504,17 @@ pub fn create_window_expr(
     logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
+    create_window_expr_with_preference(e, logical_schema, execution_props, false)
+}
+
+/// Create a window expression from a logical expression or an alias, optionally
+/// preferring expressions that are optimized for [`WindowAggExec`].
+pub fn create_window_expr_with_preference(
+    e: &Expr,
+    logical_schema: &DFSchema,
+    execution_props: &ExecutionProps,
+    prefer_window_agg_exec: bool,
+) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
         Expr::Alias(alias) => (
@@ -2482,7 +2523,13 @@ pub fn create_window_expr(
         ),
         _ => (e.schema_name().to_string(), e.clone()),
     };
-    create_window_expr_with_name(&e, name, logical_schema, execution_props)
+    create_window_expr_with_name_and_preference(
+        &e,
+        name,
+        logical_schema,
+        execution_props,
+        prefer_window_agg_exec,
+    )
 }
 
 type AggregateExprWithOptionalArgs = (

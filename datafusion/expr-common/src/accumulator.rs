@@ -17,9 +17,55 @@
 
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{Result, ScalarValue, internal_err};
 use std::fmt::Debug;
+
+/// Describes a row-based sliding window batch for accumulator-level vectorized
+/// evaluation.
+///
+/// `output_start..output_end` identifies the rows owned by the caller. The
+/// input arrays passed to [`Accumulator::evaluate_window_batch`] must also include
+/// any preceding and following halo rows needed to evaluate those output rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowBatchArgs {
+    pub output_start: usize,
+    pub output_end: usize,
+    pub preceding: usize,
+    pub following: usize,
+}
+
+impl WindowBatchArgs {
+    pub fn new(
+        output_start: usize,
+        output_end: usize,
+        preceding: usize,
+        following: usize,
+    ) -> Self {
+        Self {
+            output_start,
+            output_end,
+            preceding,
+            following,
+        }
+    }
+
+    pub fn output_len(&self) -> usize {
+        self.output_end.saturating_sub(self.output_start)
+    }
+
+    pub fn validate(&self, input_len: usize) -> Result<()> {
+        if self.output_start > self.output_end || self.output_end > input_len {
+            return internal_err!(
+                "invalid window batch output range {}..{} for input length {}",
+                self.output_start,
+                self.output_end,
+                input_len
+            );
+        }
+        Ok(())
+    }
+}
 
 /// Tracks an aggregate function's state.
 ///
@@ -57,6 +103,27 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// and `update_batch` adds each of the input values to the
     /// running sum.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
+
+    /// Return true when this accumulator implements vectorized sliding-window
+    /// evaluation.
+    fn supports_window_batch(&self) -> bool {
+        false
+    }
+
+    /// Vectorized evaluation for row-based sliding window workloads.
+    ///
+    /// Returns one evaluated output value for each row in
+    /// `args.output_start..args.output_end`. Implementations should use the
+    /// optional filter mask while building the output, treating false and null
+    /// filter rows as excluded.
+    fn evaluate_window_batch(
+        &self,
+        _values: &[ArrayRef],
+        _filter: Option<&BooleanArray>,
+        _args: WindowBatchArgs,
+    ) -> Result<Option<ArrayRef>> {
+        Ok(None)
+    }
 
     /// Returns the final aggregate value.
     ///

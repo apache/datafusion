@@ -295,6 +295,30 @@ fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
 }
 
 #[tokio::test]
+async fn prefer_window_agg_exec_config() -> Result<()> {
+    assert!(!SessionConfig::new().prefer_window_agg_exec());
+    let config = SessionConfig::new()
+        .with_target_partitions(1)
+        .set_bool("datafusion.optimizer.prefer_window_agg_exec", true);
+    assert!(config.prefer_window_agg_exec());
+    let ctx = SessionContext::new_with_config(config);
+    register_aggregate_csv(&ctx).await?;
+
+    let dataframe = ctx
+        .sql(
+            "SELECT SUM(c9) OVER (ORDER BY c1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) \
+             FROM aggregate_test_100",
+        )
+        .await?;
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+
+    assert_contains!(&formatted, "WindowAggExec");
+    assert_not_contains!(&formatted, "BoundedWindowAggExec");
+    Ok(())
+}
+
+#[tokio::test]
 async fn nyc() -> Result<()> {
     // schema for nyxtaxi csv files
     let schema = Schema::new(vec![
