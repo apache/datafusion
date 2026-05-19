@@ -153,18 +153,17 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 }
 
                 let mut all_subqueries = vec![];
-                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
-                // Expr contains Arc with interior mutability but is intentionally used as hash key
-                let mut expr_to_rewrite_expr_map = HashMap::new();
-                let mut alias_to_expr_map: HashMap<String, Expr> = HashMap::new();
-                for expr in projection.expr.iter() {
-                    let (subqueries, rewrite_exprs) =
+                let mut alias_to_index: HashMap<String, usize> = HashMap::new();
+                let mut rewrite_exprs: Vec<Expr> =
+                    Vec::with_capacity(projection.expr.len());
+                for (idx, expr) in projection.expr.iter().enumerate() {
+                    let (subqueries, rewrite_expr) =
                         self.extract_subquery_exprs(expr, config.alias_generator())?;
                     for (_, alias) in &subqueries {
-                        alias_to_expr_map.insert(alias.clone(), expr.clone());
+                        alias_to_index.insert(alias.clone(), idx);
                     }
                     all_subqueries.extend(subqueries);
-                    expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
+                    rewrite_exprs.push(rewrite_expr);
                 }
                 assert_or_internal_err!(
                     !all_subqueries.is_empty(),
@@ -178,10 +177,9 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     {
                         cur_input = optimized_subquery;
                         if !expr_check_map.is_empty()
-                            && let Some(expr) = alias_to_expr_map.get(&alias)
-                            && let Some(rewrite_expr) = expr_to_rewrite_expr_map.get(expr)
+                            && let Some(&idx) = alias_to_index.get(&alias)
                         {
-                            let new_expr = rewrite_expr
+                            let new_expr = rewrite_exprs[idx]
                                 .clone()
                                 .transform_up(|expr| {
                                     // replace column references with entry in map, if it exists
@@ -195,7 +193,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                     }
                                 })
                                 .data()?;
-                            expr_to_rewrite_expr_map.insert(expr, new_expr);
+                            rewrite_exprs[idx] = new_expr;
                         }
                     } else {
                         // if we can't handle all of the subqueries then bail for now
@@ -204,14 +202,13 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 }
 
                 let mut proj_exprs = vec![];
-                for expr in projection.expr.iter() {
+                for (expr, new_expr) in projection.expr.iter().zip(rewrite_exprs) {
                     let old_expr_name = expr.schema_name().to_string();
-                    let new_expr = expr_to_rewrite_expr_map.get(expr).unwrap();
                     let new_expr_name = new_expr.schema_name().to_string();
                     if new_expr_name != old_expr_name {
-                        proj_exprs.push(new_expr.clone().alias(old_expr_name))
+                        proj_exprs.push(new_expr.alias(old_expr_name))
                     } else {
-                        proj_exprs.push(new_expr.clone());
+                        proj_exprs.push(new_expr);
                     }
                 }
                 let new_plan = LogicalPlanBuilder::from(cur_input)
