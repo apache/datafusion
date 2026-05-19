@@ -131,15 +131,15 @@ mod tests {
 
         let extensions = Extensions::default();
         let session_state = SessionContext::new().state();
-        let (_names, consumer) =
-            DefaultSubstraitConsumer::new(&extensions, &session_state)
-                .with_lambda_parameters(
-                    &[Type {
-                        kind: Some(Kind::I64(I64::default())),
-                    }],
-                    DFSchema::empty_ref(),
-                )
-                .unwrap();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+        let _names = consumer
+            .push_lambda_parameters(
+                &[Type {
+                    kind: Some(Kind::I64(I64::default())),
+                }],
+                DFSchema::empty_ref(),
+            )
+            .unwrap();
 
         let err =
             from_field_reference(&consumer, &lambda_field_ref, DFSchema::empty_ref())

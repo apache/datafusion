@@ -32,16 +32,15 @@ pub async fn from_lambda(
         return substrait_err!("Lambda expression without parameters is not allowed");
     };
 
-    let (names, consumer_with_parameters) =
-        consumer.with_lambda_parameters(&parameters.types, input_schema)?;
+    let names = consumer.push_lambda_parameters(&parameters.types, input_schema)?;
 
     let Some(body) = expr.body.as_ref() else {
         return substrait_err!("Lambda expression without body is not allowed");
     };
 
-    let body = consumer_with_parameters
-        .consume_expression(body, input_schema)
-        .await?;
+    let body = consumer.consume_expression(body, input_schema).await?;
+
+    consumer.pop_lambda_parameters();
 
     Ok(lambda(names, body))
 }

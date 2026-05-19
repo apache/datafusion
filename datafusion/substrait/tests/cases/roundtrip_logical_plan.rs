@@ -2034,7 +2034,7 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
     assert_snapshot!(
     plan,
     @"
-    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p2) -> p2 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
+    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p3) -> p3 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
       TableScan: data3 projection=[p1]
     "
     );

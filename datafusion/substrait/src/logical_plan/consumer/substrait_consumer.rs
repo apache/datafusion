@@ -103,25 +103,20 @@ use substrait::proto::{
 ///         self.state.as_ref()
 ///     }
 ///
-///     fn with_lambda_parameters(
+///     fn push_lambda_parameters(
 ///        &self,
 ///        lambda_parameters: &[Type],
 ///        input_schema: &DFSchema,
-///    ) -> datafusion::common::Result<(Vec<String>, Self)> {
-///        let (names, lambda_consumer) = self.lambda_consumer.with_lambda_parameters(
+///    ) -> datafusion::common::Result<Vec<String>> {
+///        self.lambda_consumer.push_lambda_parameters(
 ///            self,
 ///            lambda_parameters,
 ///            input_schema,
-///        )?;
+///        )
+///    }
 ///
-///        Ok((
-///            names,
-///            Self {
-///                extensions: self.extensions.clone(),
-///                state: self.state.clone(),
-///                lambda_consumer,
-///            },
-///        ))
+///     fn pop_lambda_parameters(&self) {
+///        self.lambda_consumer.pop_lambda_parameters();
 ///    }
 ///
 ///    fn lambda_variable(
@@ -529,16 +524,20 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     // Lambda related methods
 
-    /// Returns a new instance of this consumer which includes the given `lambda_parameters` and the names they got assigned
+    /// Push the given lambda parameters onto the stack when entering a lambda and
+    /// returns the names they got assigned
     ///
     /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaConsumer] and forward this method to it
-    fn with_lambda_parameters(
+    fn push_lambda_parameters(
         &self,
         _lambda_parameters: &[Type],
         _input_schema: &DFSchema,
-    ) -> datafusion::common::Result<(Vec<String>, Self)> {
-        not_impl_err!("SubstraitConsumer::with_lambda_parameters")
+    ) -> datafusion::common::Result<Vec<String>> {
+        not_impl_err!("SubstraitConsumer::push_lambda_parameters")
     }
+
+    /// Pop lambda parameters from the stack when leaving a lambda.
+    fn pop_lambda_parameters(&self) {}
 
     /// Returns an expression corresponding to the lambda variable with the given field_idx within the lambda it originates from,
     /// at the lambda `step_outs` of the current scope
@@ -667,26 +666,17 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
         Ok(LogicalPlan::Extension(Extension { node: plan }))
     }
 
-    fn with_lambda_parameters(
+    fn push_lambda_parameters(
         &self,
         lambda_parameters: &[Type],
         input_schema: &DFSchema,
-    ) -> datafusion::common::Result<(Vec<String>, Self)> {
-        let (names, lambda_consumer) = self.lambda_consumer.with_lambda_parameters(
-            self,
-            lambda_parameters,
-            input_schema,
-        )?;
+    ) -> datafusion::common::Result<Vec<String>> {
+        self.lambda_consumer
+            .push_lambda_parameters(self, lambda_parameters, input_schema)
+    }
 
-        Ok((
-            names,
-            Self {
-                extensions: self.extensions,
-                state: self.state,
-                outer_schemas: RwLock::new(self.outer_schemas.read().unwrap().clone()),
-                lambda_consumer,
-            },
-        ))
+    fn pop_lambda_parameters(&self) {
+        self.lambda_consumer.pop_lambda_parameters()
     }
 
     fn lambda_variable(
@@ -702,6 +692,10 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
 ///
 /// Can be embedded into a custom [SubstraitConsumer] to implement them
 pub struct DefaultSubstraitLambdaConsumer {
+    inner: RwLock<DefaultSubstraitLambdaConsumerInner>,
+}
+
+struct DefaultSubstraitLambdaConsumerInner {
     /// Parameters of the lambdas currently in scope, ordered from innermost
     /// to outermost. Index 0 is the lambda being consumed; higher indices
     /// are enclosing lambdas, matching the `steps_out` value used by
@@ -719,26 +713,28 @@ impl Default for DefaultSubstraitLambdaConsumer {
 impl DefaultSubstraitLambdaConsumer {
     pub fn new() -> Self {
         Self {
-            lambda_parameters: VecDeque::new(),
-            next_lambda_parameter: 0,
+            inner: RwLock::new(DefaultSubstraitLambdaConsumerInner {
+                lambda_parameters: VecDeque::new(),
+                next_lambda_parameter: 0,
+            }),
         }
     }
 
-    pub fn with_lambda_parameters(
+    pub fn push_lambda_parameters(
         &self,
         consumer: &impl SubstraitConsumer,
         lambda_parameters: &[Type],
         input_schema: &DFSchema,
-    ) -> datafusion::common::Result<(Vec<String>, Self)> {
-        let mut next_lambda_parameter = self.next_lambda_parameter;
+    ) -> datafusion::common::Result<Vec<String>> {
+        let mut inner = self.inner.write().unwrap();
 
         let lambda_parameters = lambda_parameters
             .iter()
             .map(|ty| {
                 let (assigned_number, default_name) =
-                    next_lambda_parameter_name(next_lambda_parameter, input_schema);
+                    next_lambda_parameter_name(inner.next_lambda_parameter, input_schema);
 
-                next_lambda_parameter = assigned_number + 1;
+                inner.next_lambda_parameter = assigned_number + 1;
 
                 Ok(field_from_substrait_type_without_names(consumer, ty)?
                     .renamed(&default_name))
@@ -747,17 +743,13 @@ impl DefaultSubstraitLambdaConsumer {
 
         let names = lambda_parameters.iter().map(|f| f.name().clone()).collect();
 
-        let mut new_lambda_parameters = self.lambda_parameters.clone();
+        inner.lambda_parameters.push_front(lambda_parameters);
 
-        new_lambda_parameters.push_front(lambda_parameters);
+        Ok(names)
+    }
 
-        Ok((
-            names,
-            Self {
-                lambda_parameters: new_lambda_parameters,
-                next_lambda_parameter,
-            },
-        ))
+    pub fn pop_lambda_parameters(&self) {
+        self.inner.write().unwrap().lambda_parameters.pop_front();
     }
 
     pub fn lambda_variable(
@@ -765,10 +757,12 @@ impl DefaultSubstraitLambdaConsumer {
         steps_out: usize,
         field_idx: usize,
     ) -> datafusion::common::Result<Expr> {
-        let Some(lambda_parameters) = &self.lambda_parameters.get(steps_out) else {
+        let lambda_parameters = &self.inner.read().unwrap().lambda_parameters;
+
+        let Some(lambda_parameters) = lambda_parameters.get(steps_out) else {
             return substrait_err!(
                 "No lambda at {steps_out} steps out, got only {}",
-                self.lambda_parameters.len()
+                lambda_parameters.len()
             );
         };
 

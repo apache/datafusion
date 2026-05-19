@@ -306,7 +306,7 @@ mod tests {
         assert_snapshot!(
         plan,
         @"
-        Projection: array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_concat(array_transform2(p0, (p3, p4) -> p3 * p2 * p4), array_transform2(p0, (p3, p4) -> p3 * p2 * p4))) AS array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_concat(array_transform2(v,(v, j) -> v * i * j),array_transform2(v,(v, j) -> v * i * j)))
+        Projection: array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_concat(array_transform2(p0, (p3, p4) -> p3 * p2 * p4), array_transform2(p0, (p5, p6) -> p5 * p2 * p6))) AS array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_concat(array_transform2(v,(v, j) -> v * i * j),array_transform2(v,(v, j) -> v * i * j)))
           TableScan: data3
         "
         );
