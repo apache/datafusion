@@ -21,7 +21,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
-use crate::expressions::{Column, Literal};
+use crate::expressions::{CastExpr, Column, Literal};
 use crate::scalar_function::ScalarFunctionExpr;
 use crate::utils::collect_columns;
 
@@ -714,15 +714,49 @@ impl ProjectionExprs {
                     }
                 }
             } else {
-                // TODO stats: estimate more statistics from expressions
-                // (expressions should compute their statistics themselves)
-                ColumnStatistics::new_unknown()
+                project_column_statistics_through_expr(
+                    expr.as_ref(),
+                    &stats.column_statistics,
+                )
             };
             column_statistics.push(col_stats);
         }
         stats.calculate_total_byte_size(output_schema);
         stats.column_statistics = column_statistics;
         Ok(stats)
+    }
+}
+
+/// Propagate column statistics through CAST projections. Other expressions
+/// return unknown — generalizing via [`PhysicalExpr::evaluate_bounds`] is
+/// unsafe for aggregate folding since many impls (e.g. `sin`) return a fixed
+/// envelope rather than tight bounds on the actual inputs.
+fn project_column_statistics_through_expr(
+    expr: &dyn PhysicalExpr,
+    column_stats: &[ColumnStatistics],
+) -> ColumnStatistics {
+    if let Some(col) = expr.downcast_ref::<Column>() {
+        return column_stats[col.index()].clone();
+    }
+    let Some(cast_expr) = expr.downcast_ref::<CastExpr>() else {
+        return ColumnStatistics::new_unknown();
+    };
+    let inner_stats =
+        project_column_statistics_through_expr(cast_expr.expr.as_ref(), column_stats);
+    let target_type = cast_expr.cast_type();
+    ColumnStatistics {
+        min_value: inner_stats
+            .min_value
+            .cast_to(target_type)
+            .unwrap_or(Precision::Absent),
+        max_value: inner_stats
+            .max_value
+            .cast_to(target_type)
+            .unwrap_or(Precision::Absent),
+        null_count: inner_stats.null_count,
+        distinct_count: inner_stats.distinct_count,
+        sum_value: Precision::Absent,
+        byte_size: Precision::Absent,
     }
 }
 
@@ -1256,7 +1290,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::equivalence::{EquivalenceProperties, convert_to_orderings};
-    use crate::expressions::{BinaryExpr, col};
+    use crate::expressions::{BinaryExpr, CastExpr, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExprRef, ScalarFunctionExpr};
 
@@ -2786,6 +2820,38 @@ pub(crate) mod tests {
         assert_eq!(
             output_stats.column_statistics[1].distinct_count,
             Precision::Exact(1)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_with_cast() -> Result<()> {
+        let input_stats = get_stats();
+        let input_schema = get_schema();
+
+        // SELECT CAST(col0 AS Int32) AS casted
+        let projection = ProjectionExprs::new(vec![ProjectionExpr {
+            expr: Arc::new(CastExpr::new(
+                Arc::new(Column::new("col0", 0)),
+                DataType::Int32,
+                None,
+            )),
+            alias: "casted".to_string(),
+        }]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        assert_eq!(
+            output_stats.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(-4)))
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(21)))
         );
 
         Ok(())

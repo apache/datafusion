@@ -297,6 +297,53 @@ physical_plan
 04)--ProjectionExec: expr=[name@0 || _new as name]
 05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
+# unions_to_filter is disabled by default
+
+statement ok
+set datafusion.optimizer.enable_unions_to_filter = false;
+
+query TT
+EXPLAIN SELECT id, name FROM t1 WHERE id = 1 UNION SELECT id, name FROM t1 WHERE id = 2
+----
+logical_plan
+01)Aggregate: groupBy=[[id, name]], aggr=[[]]
+02)--Union
+03)----Filter: t1.id = Int32(1)
+04)------TableScan: t1 projection=[id, name]
+05)----Filter: t1.id = Int32(2)
+06)------TableScan: t1 projection=[id, name]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+05)--------UnionExec
+06)----------FilterExec: id@0 = 1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----------FilterExec: id@0 = 2
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.enable_unions_to_filter = true;
+
+query TT
+EXPLAIN SELECT id, name FROM t1 WHERE id = 1 UNION SELECT id, name FROM t1 WHERE id = 2
+----
+logical_plan
+01)Aggregate: groupBy=[[id, name]], aggr=[[]]
+02)--Filter: t1.id = Int32(1) OR t1.id = Int32(2)
+03)----TableScan: t1 projection=[id, name]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------FilterExec: id@0 = 1 OR id@0 = 2
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.enable_unions_to_filter = false;
+
 # Make sure to choose a small batch size to introduce parallelism to the plan.
 statement ok
 set datafusion.execution.batch_size = 2;

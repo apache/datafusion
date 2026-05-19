@@ -73,6 +73,10 @@ pub enum HigherOrderTypeSignature {
     VariadicAny,
     /// The specified number of lambdas or arguments with arbitrary types.
     Any(usize),
+    /// Exactly the specified arguments in the given order, with arbitrary types.
+    /// DataFusion will call [`HigherOrderUDF::coerce_value_types`] to prepare the value
+    /// argument types.
+    Exact(Vec<ValueOrLambda<(), ()>>),
 }
 
 /// Provides information necessary for calling a higher order function.
@@ -132,6 +136,28 @@ impl HigherOrderSignature {
     pub fn any(arg_count: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: HigherOrderTypeSignature::Any(arg_count),
+            volatility,
+            coerce_values_for_lambdas: false,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
+        }
+    }
+
+    /// Exactly the specified arguments in the given order, with arbitrary types.
+    /// DataFusion will call [`HigherOrderUDF::coerce_value_types`] to prepare the value
+    /// argument types.
+    ///
+    /// # Example
+    /// A function that takes one value argument followed by one lambda:
+    /// ```
+    /// # use datafusion_expr::{HigherOrderSignature, ValueOrLambda, Volatility};
+    /// let sig = HigherOrderSignature::exact(
+    ///     vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+    ///     Volatility::Immutable,
+    /// );
+    /// ```
+    pub fn exact(args: Vec<ValueOrLambda<(), ()>>, volatility: Volatility) -> Self {
+        Self {
+            type_signature: HigherOrderTypeSignature::Exact(args),
             volatility,
             coerce_values_for_lambdas: false,
             lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
@@ -406,7 +432,7 @@ pub struct HigherOrderReturnFieldArgs<'a> {
 }
 
 /// An argument to a higher order function
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ValueOrLambda<V, L> {
     /// A value with associated data
     Value(V),
