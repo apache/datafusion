@@ -18,9 +18,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-#[cfg(test)]
-use std::collections::HashMap;
-
 use super::{ParquetAccessPlan, ParquetFileMetrics};
 // Re-exported so the existing `crate::row_group_filter::BloomFilterStatistics`
 // path keeps resolving for in-crate callers (e.g. `opener`).
@@ -1735,7 +1732,8 @@ mod tests {
             BloomFilterStatistics::new,
         );
         for idx in pruned_row_groups.row_group_indexes() {
-            let mut column_sbbf = HashMap::with_capacity(parquet_columns.len());
+            let mut bloom_filters =
+                BloomFilterStatistics::with_capacity(parquet_columns.len());
             for (column_name, column_idx, physical_type) in &parquet_columns {
                 let bf = match builder
                     .get_row_group_column_bloom_filter(idx, *column_idx)
@@ -1749,9 +1747,9 @@ mod tests {
                         continue;
                     }
                 };
-                column_sbbf.insert(column_name.clone(), (bf, *physical_type));
+                bloom_filters.insert(column_name.clone(), bf, *physical_type);
             }
-            row_group_bloom_filters[idx] = BloomFilterStatistics { column_sbbf };
+            row_group_bloom_filters[idx] = bloom_filters;
         }
         pruned_row_groups.prune_by_bloom_filters(
             pruning_predicate,

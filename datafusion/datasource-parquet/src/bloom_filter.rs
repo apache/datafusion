@@ -39,7 +39,7 @@ pub(crate) struct BloomFilterStatistics {
     /// Value:
     /// * [`Sbbf`] (Bloom filter),
     /// * Parquet physical [`Type`] needed to evaluate  literals against the filter
-    pub(crate) column_sbbf: HashMap<String, (Sbbf, Type)>,
+    column_sbbf: HashMap<String, (Sbbf, Type)>,
 }
 
 impl BloomFilterStatistics {
