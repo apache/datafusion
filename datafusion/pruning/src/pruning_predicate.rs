@@ -4823,28 +4823,167 @@ mod tests {
     // `build_like_match()` must honor `\` escapes when scanning the pattern for
     // wildcards.
     #[test]
-    fn prune_utf8_like_escaped_underscore() {
+    fn prune_utf8_like_escaped_chars() {
         let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
         let statistics = TestStatistics::new().with(
             "s1",
             ContainerStats::new_utf8(
-                vec![Some("foo_aaa"), Some("bar"), Some("foo")], // min
-                vec![Some("foo_zzz"), Some("baz"), Some("foozzz")], // max
+                vec![
+                    Some("foo_aaa"),
+                    Some(r#"foo\aaa"#),
+                    Some("foo"),
+                    Some("bar"),
+                    Some("foo%aaa"),
+                    Some("%foo_aaa"),
+                ], // min
+                vec![
+                    Some("foo_zzz"),
+                    Some(r#"foo\zzz"#),
+                    Some("foozzz"),
+                    Some("baz"),
+                    Some("foo%zzz"),
+                    Some("%foo_zzz"),
+                ], // max
             ),
         );
 
-        let expr = col("s1").like(lit("foo\\_%"));
+        let expr = col("s1").like(lit(r#"foo\_%"#));
         #[rustfmt::skip]
         let expected_ret = &[
             // s1 ["foo_aaa", "foo_zzz"] => every value starts with literal
             // "foo_" and matches the pattern; must keep.
             true,
-            // s1 ["bar", "baz"] => no values can start with "foo_"; safe to
-            // prune.
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
             false,
             // s1 ["foo", "foozzz"] => stats don't prove "foo_" is or isn't in
             // range; must conservatively keep.
             true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit(r#"foo\\%"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => every value starts with literal
+            // "foo\" and matches the pattern; must keep.
+            true,
+            // s1 ["foo", "foozzz"] => stats don't prove "foo\" is or isn't in
+            // range; must conservatively keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit(r#"foo\%%"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo", "foozzz"] => range straddles "foo%"; must keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => every value starts with literal
+            // "foo%" and matches the pattern; must keep.
+            true,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        // No wildcard after escapes: pattern reduces to an equality check on
+        // the literal "foo_".
+        let expr = col("s1").like(lit(r#"foo\_"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo", "foozzz"] => "foo_" is within the range; must keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        // Leading escaped `%`: prefix is "%foo" (non-empty), so the guard
+        // for "all wildcards" must NOT bail out here.
+        let expr = col("s1").like(lit(r#"\%foo%"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo", "foozzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => every value starts with literal
+            // "%foo" and matches the pattern; must keep.
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        // Two escaped wildcards, no real wildcard: equality on "foo%_".
+        let expr = col("s1").like(lit(r#"foo\%\_"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo", "foozzz"] => "foo%_" is within the range; must keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        // Escaped backslash followed by more literal chars before the
+        // wildcard: prefix is "foo\bar".
+        let expr = col("s1").like(lit(r#"foo\\bar%"#));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo\aaa", "foo\zzz"] => range straddles "foo\bar"; must
+            // keep.
+            true,
+            // s1 ["foo", "foozzz"] => range straddles "foo\bar"; must keep.
+            true,
+            // s1 ["bar", "baz"] => no rows can pass (not keep)
+            false,
+            // s1 ["foo%aaa", "foo%zzz"] => no rows can pass (not keep)
+            false,
+            // s1 ["%foo_aaa", "%foo_zzz"] => no rows can pass (not keep)
+            false,
         ];
         prune_with_expr(expr, &schema, &statistics, expected_ret);
     }
