@@ -71,6 +71,7 @@ use std::any::Any;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
+use arrow::datatypes::SchemaRef;
 
 /// User-defined per-file extension data, keyed by concrete Rust type.
 ///
@@ -163,12 +164,15 @@ pub struct PartitionedFile {
     /// The estimated size of the parquet metadata, in bytes
     pub metadata_size_hint: Option<usize>,
     pub table_reference: Option<TableReference>,
+    /// A user-provided arrow schema for the file.
+    pub arrow_schema: Option<SchemaRef>,
 }
 
 impl PartitionedFile {
     /// Create a simple file without metadata or partition
     pub fn new(path: impl Into<String>, size: u64) -> Self {
         Self {
+            arrow_schema: None,
             object_meta: ObjectMeta {
                 location: Path::from(path.into()),
                 last_modified: chrono::Utc.timestamp_nanos(0),
@@ -189,6 +193,7 @@ impl PartitionedFile {
     /// Create a file from a known ObjectMeta without partition
     pub fn new_from_meta(object_meta: ObjectMeta) -> Self {
         Self {
+            arrow_schema: None,
             object_meta,
             partition_values: vec![],
             range: None,
@@ -203,6 +208,7 @@ impl PartitionedFile {
     /// Create a file range without metadata or partition
     pub fn new_with_range(path: String, size: u64, start: i64, end: i64) -> Self {
         Self {
+            arrow_schema: None,
             object_meta: ObjectMeta {
                 location: Path::from(path),
                 last_modified: chrono::Utc.timestamp_nanos(0),
@@ -219,6 +225,12 @@ impl PartitionedFile {
             table_reference: None,
         }
         .with_range(start, end)
+    }
+
+    /// Provide an arrow schema for the file.
+    pub fn with_arrow_schema(mut self, schema: SchemaRef) -> Self {
+        self.arrow_schema = Some(schema);
+        self
     }
 
     /// Attach partition values to this file.
@@ -376,6 +388,7 @@ impl From<ObjectMeta> for PartitionedFile {
     fn from(object_meta: ObjectMeta) -> Self {
         PartitionedFile {
             object_meta,
+            arrow_schema: None,
             partition_values: vec![],
             range: None,
             statistics: None,
@@ -556,6 +569,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
         let max = (base + range_size) as f64;
 
         let file = PartitionedFile {
+            arrow_schema: None,
             object_meta: ObjectMeta {
                 location: Path::from(format!("file_{i}.parquet")),
                 last_modified: chrono::Utc::now(),
