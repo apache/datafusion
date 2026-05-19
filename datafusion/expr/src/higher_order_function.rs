@@ -153,7 +153,6 @@ impl HigherOrderSignature {
         Self {
             type_signature: HigherOrderTypeSignature::Exact(args),
             volatility,
-            coerce_values_for_lambdas: false,
             lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
         }
     }
