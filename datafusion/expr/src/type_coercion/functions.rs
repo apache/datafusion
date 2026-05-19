@@ -230,6 +230,78 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
 
             Ok(current_fields.to_vec())
         }
+        HigherOrderTypeSignature::Exact(ref expected) => {
+            if current_fields.len() != expected.len() {
+                let name = func.name();
+                let expected_len = expected.len();
+                let actual_len = current_fields.len();
+                return plan_err!(
+                    "The function '{name}' expected {expected_len} argument(s) but received {actual_len}"
+                );
+            }
+
+            for (i, (actual, expected)) in
+                current_fields.iter().zip(expected.iter()).enumerate()
+            {
+                match (actual, expected) {
+                    (ValueOrLambda::Value(_), ValueOrLambda::Value(_)) => {}
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Lambda(_)) => {}
+                    (ValueOrLambda::Value(_), ValueOrLambda::Lambda(_)) => {
+                        let name = func.name();
+                        return plan_err!(
+                            "The function '{name}' expected a lambda at position {i} but received a value"
+                        );
+                    }
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Value(_)) => {
+                        let name = func.name();
+                        return plan_err!(
+                            "The function '{name}' expected a value at position {i} but received a lambda"
+                        );
+                    }
+                }
+            }
+
+            let arg_types = current_fields
+                .iter()
+                .filter_map(|p| match p {
+                    ValueOrLambda::Value(field) => Some(field.data_type().clone()),
+                    ValueOrLambda::Lambda(_) => None,
+                })
+                .collect::<Vec<_>>();
+
+            let coerced_types = func.coerce_value_types(&arg_types)?;
+
+            if coerced_types.len() != arg_types.len() {
+                return plan_err!(
+                    "{} coerce_value_types should have returned {} items but returned {}",
+                    func.name(),
+                    arg_types.len(),
+                    coerced_types.len()
+                );
+            }
+
+            let mut coerced_types = coerced_types.into_iter();
+
+            current_fields
+                .iter()
+                .map(|current_field| match current_field {
+                    ValueOrLambda::Value(field) => {
+                        let data_type = coerced_types.next().ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "coerced_types len should have been checked above"
+                            )
+                        })?;
+
+                        Ok(ValueOrLambda::Value(Arc::new(
+                            field.as_ref().clone().with_data_type(data_type),
+                        )))
+                    }
+                    ValueOrLambda::Lambda(lambda) => {
+                        Ok(ValueOrLambda::Lambda(lambda.clone()))
+                    }
+                })
+                .collect()
+        }
     }
 }
 
@@ -2024,6 +2096,90 @@ mod tests {
         assert_contains!(
             err.to_string(),
             "The function 'mock_higher_order_function' expected 1 arguments but received 0"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_exact_signature() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
+            coerced_value_types: vec![DataType::new_large_list(DataType::Int32, false)],
+        };
+
+        let new_fields = value_fields_with_higher_order_udf(
+            &[
+                ValueOrLambda::Value(Arc::new(Field::new_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false,
+                ))),
+                ValueOrLambda::Lambda(()),
+            ],
+            &fun,
+        )
+        .unwrap();
+
+        // type coercion applied: List(Int32) -> LargeList(Int32)
+        assert_eq!(
+            new_fields,
+            vec![
+                ValueOrLambda::Value(Arc::new(Field::new_large_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false
+                ))),
+                ValueOrLambda::Lambda(()),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_higher_order_function_exact_signature_wrong_value_count() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
+            coerced_value_types: vec![],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(
+            &[ValueOrLambda::Lambda(()), ValueOrLambda::Lambda(())],
+            &fun,
+        )
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "expected a value at position 0 but received a lambda"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_exact_signature_wrong_lambda_count() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
+            coerced_value_types: vec![],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(
+            &[
+                ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, false))),
+                ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, false))),
+            ],
+            &fun,
+        )
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "expected a lambda at position 1 but received a value"
         );
     }
 }

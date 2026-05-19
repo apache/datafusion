@@ -326,7 +326,9 @@ impl ExternalAggrConfig {
         let config = ListingTableConfig::new(table_path).with_listing_options(options);
         let config = config.infer_schema(&state).await?;
 
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        Ok(Arc::new(ListingTable::try_new(config)?.with_cache(
+            ctx.runtime_env().cache_manager.get_file_statistic_cache(),
+        )))
     }
 
     fn iterations(&self) -> usize {

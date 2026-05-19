@@ -826,6 +826,10 @@ select
 ----
 39 Decimal128(2, 1)
 
+# factorial negative (PostgreSQL-compatible domain error)
+query error DataFusion error: Execution error: factorial of a negative number is undefined
+select factorial(-1);
+
 # factorial overflow
 query error DataFusion error: Execution error: Overflow happened on FACTORIAL\(350943270\)
 select FACTORIAL(350943270);
