@@ -1348,6 +1348,13 @@ config_namespace! {
         /// closer to the leaf table scans, and push those projections down
         /// towards the leaf nodes.
         pub enable_leaf_expression_pushdown: bool, default = true
+
+        /// When set to true, the logical optimizer will rewrite `UNION DISTINCT` branches that
+        /// read from the same source and differ only by filter predicates into a single branch
+        /// with a combined filter. This optimization is conservative and only applies when the
+        /// branches share the same source and compatible wrapper nodes such as identical
+        /// projections or aliases.
+        pub enable_unions_to_filter: bool, default = false
     }
 }
 
