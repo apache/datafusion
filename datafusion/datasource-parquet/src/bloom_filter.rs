@@ -190,3 +190,371 @@ impl PruningStatistics for BloomFilterStatistics {
         Some(BooleanArray::from(vec![contains]))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use crate::reader::ParquetFileReader;
+    use crate::test_util::ExpectedPruning;
+    use crate::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccessPlanFilter};
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::Result;
+    use datafusion_expr::{Expr, col, lit};
+    use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_pruning::PruningPredicate;
+    use object_store::ObjectStoreExt;
+    use parquet::arrow::ParquetRecordBatchStreamBuilder;
+    use parquet::arrow::async_reader::ParquetObjectReader;
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_simple_expr() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_all_pruned()
+            // generate pruning predicate `(String = "Hello_Not_exists")`
+            .run(col(r#""String""#).eq(lit("Hello_Not_Exists")))
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_multiple_expr() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_all_pruned()
+            // generate pruning predicate `(String = "Hello_Not_exists" OR String = "Hello_Not_exists2")`
+            .run(
+                lit("1").eq(lit("1")).and(
+                    col(r#""String""#)
+                        .eq(lit("Hello_Not_Exists"))
+                        .or(col(r#""String""#).eq(lit("Hello_Not_Exists2"))),
+                ),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_multiple_expr_view() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_all_pruned()
+            // generate pruning predicate `(String = "Hello_Not_exists" OR String = "Hello_Not_exists2")`
+            .run(
+                lit("1").eq(lit("1")).and(
+                    col(r#""String""#)
+                        .eq(Expr::Literal(
+                            ScalarValue::Utf8View(Some(String::from("Hello_Not_Exists"))),
+                            None,
+                        ))
+                        .or(col(r#""String""#).eq(Expr::Literal(
+                            ScalarValue::Utf8View(Some(String::from(
+                                "Hello_Not_Exists2",
+                            ))),
+                            None,
+                        ))),
+                ),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_sql_in() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "data_index_bloom_encoding_stats.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate
+        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
+
+        let expr = col(r#""String""#).in_list(
+            (1..25)
+                .map(|i| lit(format!("Hello_Not_Exists{i}")))
+                .collect::<Vec<_>>(),
+            false,
+        );
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+        )
+        .await
+        .unwrap();
+        assert!(
+            pruned_row_groups
+                .access_plan()
+                .row_group_indexes()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_value() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_none_pruned()
+            // generate pruning predicate `(String = "Hello")`
+            .run(col(r#""String""#).eq(lit("Hello")))
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_2_values() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_none_pruned()
+            // generate pruning predicate `(String = "Hello") OR (String = "the quick")`
+            .run(
+                col(r#""String""#)
+                    .eq(lit("Hello"))
+                    .or(col(r#""String""#).eq(lit("the quick"))),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_3_values() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_none_pruned()
+            // generate pruning predicate `(String = "Hello") OR (String = "the quick") OR (String = "are you")`
+            .run(
+                col(r#""String""#)
+                    .eq(lit("Hello"))
+                    .or(col(r#""String""#).eq(lit("the quick")))
+                    .or(col(r#""String""#).eq(lit("are you"))),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_3_values_view() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_none_pruned()
+            // generate pruning predicate `(String = "Hello") OR (String = "the quick") OR (String = "are you")`
+            .run(
+                col(r#""String""#)
+                    .eq(Expr::Literal(
+                        ScalarValue::Utf8View(Some(String::from("Hello"))),
+                        None,
+                    ))
+                    .or(col(r#""String""#).eq(Expr::Literal(
+                        ScalarValue::Utf8View(Some(String::from("the quick"))),
+                        None,
+                    )))
+                    .or(col(r#""String""#).eq(Expr::Literal(
+                        ScalarValue::Utf8View(Some(String::from("are you"))),
+                        None,
+                    ))),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_or_not_eq() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_none_pruned()
+            // generate pruning predicate `(String = "foo") OR (String != "bar")`
+            .run(
+                col(r#""String""#)
+                    .not_eq(lit("foo"))
+                    .or(col(r#""String""#).not_eq(lit("bar"))),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_without_bloom_filter() {
+        // generate pruning predicate on a column without a bloom filter
+        BloomFilterTest::new_all_types()
+            .with_expect_none_pruned()
+            .run(col(r#""string_col""#).eq(lit("0")))
+            .await
+    }
+
+    struct BloomFilterTest {
+        file_name: String,
+        schema: Schema,
+        // which row groups are expected to be left after pruning
+        post_pruning_row_groups: ExpectedPruning,
+    }
+
+    impl BloomFilterTest {
+        /// Return a test for data_index_bloom_encoding_stats.parquet
+        /// Note the values in the `String` column are:
+        /// ```sql
+        /// > select * from './parquet-testing/data/data_index_bloom_encoding_stats.parquet';
+        /// +-----------+
+        /// | String    |
+        /// +-----------+
+        /// | Hello     |
+        /// | This is   |
+        /// | a         |
+        /// | test      |
+        /// | How       |
+        /// | are you   |
+        /// | doing     |
+        /// | today     |
+        /// | the quick |
+        /// | brown fox |
+        /// | jumps     |
+        /// | over      |
+        /// | the lazy  |
+        /// | dog       |
+        /// +-----------+
+        /// ```
+        fn new_data_index_bloom_encoding_stats() -> Self {
+            Self {
+                file_name: String::from("data_index_bloom_encoding_stats.parquet"),
+                schema: Schema::new(vec![Field::new("String", DataType::Utf8, false)]),
+                post_pruning_row_groups: ExpectedPruning::None,
+            }
+        }
+
+        // Return a test for alltypes_plain.parquet
+        fn new_all_types() -> Self {
+            Self {
+                file_name: String::from("alltypes_plain.parquet"),
+                schema: Schema::new(vec![Field::new(
+                    "string_col",
+                    DataType::Utf8,
+                    false,
+                )]),
+                post_pruning_row_groups: ExpectedPruning::None,
+            }
+        }
+
+        /// Expect all row groups to be pruned
+        pub fn with_expect_all_pruned(mut self) -> Self {
+            self.post_pruning_row_groups = ExpectedPruning::All;
+            self
+        }
+
+        /// Expect all row groups not to be pruned
+        pub fn with_expect_none_pruned(mut self) -> Self {
+            self.post_pruning_row_groups = ExpectedPruning::None;
+            self
+        }
+
+        /// Prune this file using the specified expression and check that the expected row groups are left
+        async fn run(self, expr: Expr) {
+            let Self {
+                file_name,
+                schema,
+                post_pruning_row_groups,
+            } = self;
+
+            let testdata = datafusion_common::test_util::parquet_test_data();
+            let path = format!("{testdata}/{file_name}");
+            let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+            let expr = logical2physical(&expr, &schema);
+            let pruning_predicate =
+                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+            let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+                &file_name,
+                data,
+                &pruning_predicate,
+            )
+            .await
+            .unwrap();
+
+            post_pruning_row_groups.assert(&pruned_row_groups);
+        }
+    }
+
+    /// Evaluates the pruning predicate on the specified row groups and returns the row groups that are left
+    async fn test_row_group_bloom_filter_pruning_predicate(
+        file_name: &str,
+        data: bytes::Bytes,
+        pruning_predicate: &PruningPredicate,
+    ) -> Result<RowGroupAccessPlanFilter> {
+        use datafusion_datasource::PartitionedFile;
+        use object_store::ObjectMeta;
+
+        let object_meta = ObjectMeta {
+            location: object_store::path::Path::parse(file_name).expect("creating path"),
+            last_modified: chrono::DateTime::from(std::time::SystemTime::now()),
+            size: data.len() as u64,
+            e_tag: None,
+            version: None,
+        };
+        let in_memory = object_store::memory::InMemory::new();
+        in_memory
+            .put(&object_meta.location, data.into())
+            .await
+            .expect("put parquet file into in memory object store");
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics =
+            ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
+        let inner =
+            ParquetObjectReader::new(Arc::new(in_memory), object_meta.location.clone())
+                .with_file_size(object_meta.size);
+
+        let partitioned_file = PartitionedFile::new_from_meta(object_meta);
+
+        let reader = ParquetFileReader {
+            inner,
+            file_metrics: file_metrics.clone(),
+            partitioned_file,
+        };
+        let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+
+        let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());
+        let mut pruned_row_groups = RowGroupAccessPlanFilter::new(access_plan);
+        let literal_columns = pruning_predicate.literal_columns();
+        let parquet_columns: Vec<_> = literal_columns
+            .into_iter()
+            .filter_map(|column_name| {
+                let (column_idx, _) = parquet::arrow::parquet_column(
+                    builder.parquet_schema(),
+                    pruning_predicate.schema(),
+                    &column_name,
+                )?;
+                Some((
+                    column_name.to_string(),
+                    column_idx,
+                    builder.parquet_schema().column(column_idx).physical_type(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let mut row_group_bloom_filters =
+            Vec::with_capacity(builder.metadata().num_row_groups());
+        row_group_bloom_filters.resize_with(
+            builder.metadata().num_row_groups(),
+            BloomFilterStatistics::new,
+        );
+        for idx in pruned_row_groups.row_group_indexes() {
+            let mut bloom_filters =
+                BloomFilterStatistics::with_capacity(parquet_columns.len());
+            for (column_name, column_idx, physical_type) in &parquet_columns {
+                let bf = match builder
+                    .get_row_group_column_bloom_filter(idx, *column_idx)
+                    .await
+                {
+                    Ok(Some(bf)) => bf,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        log::debug!("Ignoring error reading bloom filter: {e}");
+                        file_metrics.predicate_evaluation_errors.add(1);
+                        continue;
+                    }
+                };
+                bloom_filters.insert(column_name.clone(), bf, *physical_type);
+            }
+            row_group_bloom_filters[idx] = bloom_filters;
+        }
+        pruned_row_groups.prune_by_bloom_filters(
+            pruning_predicate,
+            &file_metrics,
+            &row_group_bloom_filters,
+        );
+
+        Ok(pruned_row_groups)
+    }
+}
