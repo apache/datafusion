@@ -27,7 +27,7 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use itertools::Itertools;
 
 use crate::parquet::Unit::RowGroup;
-use crate::parquet::{ContextWithParquet, Scenario};
+use crate::parquet::{ContextWithParquet, Scenario, zero_if_metric_absent};
 use datafusion_expr::{col, lit};
 struct RowGroupPruningTest {
     scenario: Scenario,
@@ -136,33 +136,51 @@ impl RowGroupPruningTest {
 
         println!("{}", output.description());
         assert_eq!(
-            output.predicate_evaluation_errors(),
+            zero_if_metric_absent(
+                output.predicate_evaluation_errors(),
+                self.expected_errors
+            ),
             self.expected_errors,
             "mismatched predicate_evaluation error"
         );
         assert_eq!(
-            output.row_groups_matched_statistics(),
+            zero_if_metric_absent(
+                output.row_groups_matched_statistics(),
+                self.expected_row_group_matched_by_statistics
+            ),
             self.expected_row_group_matched_by_statistics,
             "mismatched row_groups_matched_statistics",
         );
         assert_eq!(
-            output.row_groups_pruned_statistics(),
+            zero_if_metric_absent(
+                output.row_groups_pruned_statistics(),
+                self.expected_row_group_pruned_by_statistics
+            ),
             self.expected_row_group_pruned_by_statistics,
             "mismatched row_groups_pruned_statistics",
         );
         assert_eq!(
-            output.files_ranges_pruned_statistics(),
+            zero_if_metric_absent(
+                output.files_ranges_pruned_statistics(),
+                self.expected_files_pruned_by_statistics
+            ),
             self.expected_files_pruned_by_statistics,
             "mismatched files_ranges_pruned_statistics",
         );
         let bloom_filter_metrics = output.row_groups_bloom_filter();
         assert_eq!(
-            bloom_filter_metrics.as_ref().map(|pm| pm.total_matched()),
+            zero_if_metric_absent(
+                bloom_filter_metrics.as_ref().map(|pm| pm.total_matched()),
+                self.expected_row_group_matched_by_bloom_filter
+            ),
             self.expected_row_group_matched_by_bloom_filter,
             "mismatched row_groups_matched_bloom_filter",
         );
         assert_eq!(
-            bloom_filter_metrics.map(|pm| pm.total_pruned()),
+            zero_if_metric_absent(
+                bloom_filter_metrics.map(|pm| pm.total_pruned()),
+                self.expected_row_group_pruned_by_bloom_filter
+            ),
             self.expected_row_group_pruned_by_bloom_filter,
             "mismatched row_groups_pruned_bloom_filter",
         );
@@ -196,32 +214,50 @@ impl RowGroupPruningTest {
 
         println!("{}", output.description());
         assert_eq!(
-            output.predicate_evaluation_errors(),
+            zero_if_metric_absent(
+                output.predicate_evaluation_errors(),
+                self.expected_errors
+            ),
             self.expected_errors,
             "mismatched predicate_evaluation error"
         );
         assert_eq!(
-            output.row_groups_matched_statistics(),
+            zero_if_metric_absent(
+                output.row_groups_matched_statistics(),
+                self.expected_row_group_matched_by_statistics
+            ),
             self.expected_row_group_matched_by_statistics,
             "mismatched row_groups_matched_statistics",
         );
         assert_eq!(
-            output.row_groups_fully_matched_statistics(),
+            zero_if_metric_absent(
+                output.row_groups_fully_matched_statistics(),
+                self.expected_row_group_fully_matched_by_statistics
+            ),
             self.expected_row_group_fully_matched_by_statistics,
             "mismatched row_groups_fully_matched_statistics",
         );
         assert_eq!(
-            output.row_groups_pruned_statistics(),
+            zero_if_metric_absent(
+                output.row_groups_pruned_statistics(),
+                self.expected_row_group_pruned_by_statistics
+            ),
             self.expected_row_group_pruned_by_statistics,
             "mismatched row_groups_pruned_statistics",
         );
         assert_eq!(
-            output.files_ranges_pruned_statistics(),
+            zero_if_metric_absent(
+                output.files_ranges_pruned_statistics(),
+                self.expected_files_pruned_by_statistics
+            ),
             self.expected_files_pruned_by_statistics,
             "mismatched files_ranges_pruned_statistics",
         );
         assert_eq!(
-            output.limit_pruned_row_groups(),
+            zero_if_metric_absent(
+                output.limit_pruned_row_groups(),
+                self.expected_limit_pruned_row_groups
+            ),
             self.expected_limit_pruned_row_groups,
             "mismatched limit_pruned_row_groups",
         );
@@ -343,7 +379,10 @@ async fn prune_date64() {
 
     println!("{}", output.description());
     // This should prune out groups  without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(
+        zero_if_metric_absent(output.predicate_evaluation_errors(), Some(0)),
+        Some(0)
+    );
     // 'dates' table has 4 row groups, and only the first one is matched by the predicate
     assert_eq!(output.row_groups_matched_statistics(), Some(1));
     assert_eq!(output.row_groups_pruned_statistics(), Some(3));
@@ -383,9 +422,15 @@ async fn prune_disabled() {
     println!("{}", output.description());
 
     // This should not prune any
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(
+        zero_if_metric_absent(output.predicate_evaluation_errors(), Some(0)),
+        Some(0)
+    );
     assert_eq!(output.row_groups_matched(), Some(4));
-    assert_eq!(output.row_groups_pruned(), Some(0));
+    assert_eq!(
+        zero_if_metric_absent(output.row_groups_pruned(), Some(0)),
+        Some(0)
+    );
     assert_eq!(
         output.result_rows,
         expected_rows,

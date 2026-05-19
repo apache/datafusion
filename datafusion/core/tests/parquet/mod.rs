@@ -267,6 +267,20 @@ impl TestOutput {
     }
 }
 
+pub(crate) fn zero_if_metric_absent(
+    actual: Option<usize>,
+    expected: Option<usize>,
+) -> Option<usize> {
+    // Lazy parquet metrics may represent zero as an absent metric. Tests that
+    // specifically enforce lazy-skipping zero metrics live with the metrics
+    // implementation; these integration tests only compare scan behavior.
+    if expected == Some(0) {
+        Some(actual.unwrap_or(0))
+    } else {
+        actual
+    }
+}
+
 /// Creates an execution context that has an external table "t"
 /// registered pointing at a parquet file made with `make_test_file`
 /// and the appropriate scenario

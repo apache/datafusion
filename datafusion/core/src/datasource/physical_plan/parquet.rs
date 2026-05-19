@@ -892,8 +892,11 @@ mod tests {
             .await;
         // There should be no predicate evaluation errors
         let metrics = rt.parquet_exec.metrics().unwrap();
-        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
-        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 0);
+        assert_eq!(
+            get_value_or_zero(&metrics, "predicate_evaluation_errors"),
+            0
+        );
+        assert_eq!(get_value_or_zero(&metrics, "pushdown_rows_matched"), 0);
         assert_eq!(rt.batches.unwrap().len(), 0);
 
         // Predicate should prune no row groups
@@ -905,8 +908,11 @@ mod tests {
             .await;
         // There should be no predicate evaluation errors
         let metrics = rt.parquet_exec.metrics().unwrap();
-        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
-        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 0);
+        assert_eq!(
+            get_value_or_zero(&metrics, "predicate_evaluation_errors"),
+            0
+        );
+        assert_eq!(get_value_or_zero(&metrics, "pushdown_rows_matched"), 0);
         let read = rt
             .batches
             .unwrap()
@@ -934,7 +940,10 @@ mod tests {
             .await;
         // There should be no predicate evaluation errors
         let metrics = rt.parquet_exec.metrics().unwrap();
-        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(
+            get_value_or_zero(&metrics, "predicate_evaluation_errors"),
+            0
+        );
         assert_eq!(rt.batches.unwrap().len(), 0);
 
         // Predicate should prune no row groups
@@ -946,7 +955,10 @@ mod tests {
             .await;
         // There should be no predicate evaluation errors
         let metrics = rt.parquet_exec.metrics().unwrap();
-        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(
+            get_value_or_zero(&metrics, "predicate_evaluation_errors"),
+            0
+        );
         let read = rt
             .batches
             .unwrap()
@@ -986,7 +998,10 @@ mod tests {
             .await;
         // There should be no predicate evaluation errors and we keep 1 row
         let metrics = rt.parquet_exec.metrics().unwrap();
-        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(
+            get_value_or_zero(&metrics, "predicate_evaluation_errors"),
+            0
+        );
         let read = rt
             .batches
             .unwrap()
@@ -994,7 +1009,10 @@ mod tests {
             .map(|b| b.num_rows())
             .sum::<usize>();
         assert_eq!(read, 1, "Expected 1 rows to match the predicate");
-        assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 0);
+        assert_eq!(
+            get_value_or_zero(&metrics, "row_groups_pruned_statistics"),
+            0
+        );
         assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
         assert_eq!(get_value(&metrics, "page_index_pages_pruned"), 1);
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
@@ -1012,7 +1030,10 @@ mod tests {
             .await;
         // There should be no predicate evaluation errors and we keep 0 rows
         let metrics = rt.parquet_exec.metrics().unwrap();
-        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(
+            get_value_or_zero(&metrics, "predicate_evaluation_errors"),
+            0
+        );
         let read = rt
             .batches
             .unwrap()
@@ -2145,6 +2166,18 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn get_value_or_zero(metrics: &MetricsSet, metric_name: &str) -> usize {
+        metrics
+            .sum_by_name(metric_name)
+            .map(|v| match v {
+                MetricValue::PruningMetrics {
+                    pruning_metrics, ..
+                } => pruning_metrics.pruned(),
+                _ => v.as_usize(),
+            })
+            .unwrap_or(0)
     }
 
     fn get_pruning_metric(metrics: &MetricsSet, metric_name: &str) -> (usize, usize) {

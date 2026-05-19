@@ -544,9 +544,17 @@ impl<'a> TestCase<'a> {
             PushdownExpected::None
         };
 
-        let pushdown_rows_pruned = get_value(&metrics, "pushdown_rows_pruned");
+        let pushdown_rows_pruned = match pushdown_expected {
+            PushdownExpected::None => {
+                metric_value_or_zero(&metrics, "pushdown_rows_pruned")
+            }
+            PushdownExpected::Some => {
+                expect_metric_value(&metrics, "pushdown_rows_pruned")
+            }
+        };
+        let pushdown_rows_matched =
+            metric_value_or_zero(&metrics, "pushdown_rows_matched");
         println!("  pushdown_rows_pruned: {pushdown_rows_pruned}");
-        let pushdown_rows_matched = get_value(&metrics, "pushdown_rows_matched");
         println!("  pushdown_rows_matched: {pushdown_rows_matched}");
 
         match pushdown_expected {
@@ -562,11 +570,6 @@ impl<'a> TestCase<'a> {
             }
         };
 
-        let (page_index_rows_pruned, page_index_rows_matched) =
-            get_pruning_metrics(&metrics, "page_index_rows_pruned");
-        println!(" page_index_rows_pruned: {page_index_rows_pruned}");
-        println!(" page_index_rows_matched: {page_index_rows_matched}");
-
         let page_index_filtering_expected = if scan_options.enable_page_index {
             self.page_index_filtering_expected
         } else {
@@ -577,9 +580,17 @@ impl<'a> TestCase<'a> {
 
         match page_index_filtering_expected {
             PageIndexFilteringExpected::None => {
+                let (page_index_rows_pruned, page_index_rows_matched) =
+                    pruning_metrics_or_zero(&metrics, "page_index_rows_pruned");
+                println!(" page_index_rows_pruned: {page_index_rows_pruned}");
+                println!(" page_index_rows_matched: {page_index_rows_matched}");
                 assert_eq!(page_index_rows_pruned, 0);
             }
             PageIndexFilteringExpected::Some => {
+                let (page_index_rows_pruned, page_index_rows_matched) =
+                    expect_pruning_metrics(&metrics, "page_index_rows_pruned");
+                println!(" page_index_rows_pruned: {page_index_rows_pruned}");
+                println!(" page_index_rows_matched: {page_index_rows_matched}");
                 assert!(
                     page_index_rows_pruned > 0,
                     "Expected to filter rows via page index but none were",
@@ -591,7 +602,19 @@ impl<'a> TestCase<'a> {
     }
 }
 
-fn get_pruning_metrics(metrics: &MetricsSet, metric_name: &str) -> (usize, usize) {
+fn pruning_metrics_or_zero(metrics: &MetricsSet, metric_name: &str) -> (usize, usize) {
+    get_pruning_metrics(metrics, metric_name, true)
+}
+
+fn expect_pruning_metrics(metrics: &MetricsSet, metric_name: &str) -> (usize, usize) {
+    get_pruning_metrics(metrics, metric_name, false)
+}
+
+fn get_pruning_metrics(
+    metrics: &MetricsSet,
+    metric_name: &str,
+    allow_missing: bool,
+) -> (usize, usize) {
     match metrics.sum_by_name(metric_name) {
         Some(MetricValue::PruningMetrics {
             pruning_metrics, ..
@@ -599,21 +622,35 @@ fn get_pruning_metrics(metrics: &MetricsSet, metric_name: &str) -> (usize, usize
         Some(_) => {
             panic!("Metric '{metric_name}' is not a pruning metric in\n\n{metrics:#?}")
         }
-        None => panic!(
-            "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
-        ),
+        None if allow_missing => (0, 0),
+        None => panic!("Expected metric '{metric_name}' not found in\n\n{metrics:#?}"),
     }
 }
 
-fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
+fn metric_value_or_zero(metrics: &MetricsSet, metric_name: &str) -> usize {
+    get_value(metrics, metric_name, true)
+}
+
+fn expect_metric_value(metrics: &MetricsSet, metric_name: &str) -> usize {
+    get_value(metrics, metric_name, false)
+}
+
+fn metric_value_for_expected(
+    metrics: &MetricsSet,
+    metric_name: &str,
+    expected: usize,
+) -> usize {
+    get_value(metrics, metric_name, expected == 0)
+}
+
+fn get_value(metrics: &MetricsSet, metric_name: &str, allow_missing: bool) -> usize {
     match metrics.sum_by_name(metric_name) {
         Some(MetricValue::PruningMetrics {
             pruning_metrics, ..
         }) => pruning_metrics.pruned(),
         Some(v) => v.as_usize(),
-        None => panic!(
-            "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
-        ),
+        None if allow_missing => 0,
+        None => panic!("Expected metric '{metric_name}' not found in\n\n{metrics:#?}"),
     }
 }
 
@@ -736,11 +773,19 @@ impl PredicateCacheTest {
 
         // verify the predicate cache metrics
         assert_eq!(
-            get_value(&metrics, "predicate_cache_inner_records"),
+            metric_value_for_expected(
+                &metrics,
+                "predicate_cache_inner_records",
+                expected_inner_records
+            ),
             expected_inner_records
         );
         assert_eq!(
-            get_value(&metrics, "predicate_cache_records"),
+            metric_value_for_expected(
+                &metrics,
+                "predicate_cache_records",
+                expected_records
+            ),
             expected_records
         );
         Ok(())

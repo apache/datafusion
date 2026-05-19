@@ -48,6 +48,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Gauge};
 
+use crate::ParquetFileMetrics;
 use crate::access_plan::PreparedAccessPlan;
 use crate::row_filter::ParquetReadPlan;
 
@@ -120,6 +121,11 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) predicate_cache_inner_records: Gauge,
     pub(crate) predicate_cache_records: Gauge,
     pub(crate) baseline_metrics: BaselineMetrics,
+    /// Keeps the parquet file metrics registration guard alive until this
+    /// stream finishes. The decoder and row filters update cloned metric
+    /// handles while streaming; dropping this early would register metrics
+    /// before those updates are recorded.
+    pub(crate) _file_metrics: ParquetFileMetrics,
 }
 
 impl PushDecoderStreamState {

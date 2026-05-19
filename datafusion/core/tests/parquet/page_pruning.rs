@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::parquet::Unit::Page;
-use crate::parquet::{ContextWithParquet, Scenario};
+use crate::parquet::{ContextWithParquet, Scenario, zero_if_metric_absent};
 
 use arrow::array::{Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -238,8 +238,14 @@ async fn test_prune(
             .await;
 
     println!("{}", output.description());
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_pages_pruned(), expected_row_pages_pruned);
+    assert_eq!(
+        zero_if_metric_absent(output.predicate_evaluation_errors(), expected_errors),
+        expected_errors
+    );
+    assert_eq!(
+        zero_if_metric_absent(output.row_pages_pruned(), expected_row_pages_pruned),
+        expected_row_pages_pruned
+    );
     assert_eq!(
         output.result_rows,
         expected_results,
@@ -360,7 +366,10 @@ async fn prune_date64() {
 
     println!("{}", output.description());
     // This should prune out groups  without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(
+        zero_if_metric_absent(output.predicate_evaluation_errors(), Some(0)),
+        Some(0)
+    );
     assert_eq!(output.row_pages_pruned(), Some(15));
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }

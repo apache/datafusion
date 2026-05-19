@@ -84,7 +84,7 @@ async fn skip_all() {
     .await;
 
     // Verify that skipping all row groups skips reading any data at all
-    let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
+    let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap_or(0);
     assert_eq!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
 }
 

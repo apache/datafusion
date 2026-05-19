@@ -25,6 +25,42 @@ use datafusion::physical_plan::metrics::Timestamp;
 use datafusion_common::format::{ExplainAnalyzeCategories, MetricCategory, MetricType};
 use object_store::path::Path;
 
+async fn page_pruning_parquet_context() -> (SessionContext, TempDir) {
+    use parquet::arrow::arrow_writer::ArrowWriter;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
+
+    let temp_dir = TempDir::new().unwrap();
+    let parquet_path = temp_dir.path().join("page_pruning.parquet");
+
+    let ids = Int64Array::from((0..100).collect::<Vec<i64>>());
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids)]).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(100))
+        .set_data_page_row_count_limit(10)
+        .set_write_batch_size(10)
+        .set_bloom_filter_enabled(true)
+        .set_statistics_enabled(EnabledStatistics::Page)
+        .build();
+    let file = File::create(&parquet_path).unwrap();
+    let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let config = SessionConfig::new().with_parquet_page_index_pruning(true);
+    let ctx = SessionContext::new_with_config(config);
+    ctx.register_parquet(
+        "page_pruning",
+        parquet_path.to_str().unwrap(),
+        ParquetReadOptions::default(),
+    )
+    .await
+    .expect("register page pruning parquet table");
+
+    (ctx, temp_dir)
+}
+
 #[tokio::test]
 async fn explain_analyze_baseline_metrics() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
@@ -269,15 +305,8 @@ async fn explain_analyze_level() {
 
 #[tokio::test]
 async fn explain_analyze_level_datasource_parquet() {
-    let table_name = "tpch_lineitem_small";
-    let parquet_path = "tests/data/tpch_lineitem_small.parquet";
-    let sql = format!("EXPLAIN ANALYZE SELECT * FROM {table_name}");
-
-    // Register test parquet file into context
-    let ctx = SessionContext::new();
-    ctx.register_parquet(table_name, parquet_path, ParquetReadOptions::default())
-        .await
-        .expect("register parquet table for explain analyze test");
+    let (ctx, _temp_dir) = page_pruning_parquet_context().await;
+    let sql = "EXPLAIN ANALYZE SELECT * FROM page_pruning WHERE id = 5";
 
     for (level, needle, should_contain) in [
         (MetricType::Summary, "metadata_load_time", true),
@@ -285,7 +314,7 @@ async fn explain_analyze_level_datasource_parquet() {
         (MetricType::Dev, "metadata_load_time", true),
         (MetricType::Dev, "page_index_eval_time", true),
     ] {
-        let plan = collect_plan_with_context(&sql, &ctx, level).await;
+        let plan = collect_plan_with_context(sql, &ctx, level).await;
 
         assert_eq!(
             plan.contains(needle),
@@ -868,17 +897,16 @@ async fn csv_explain_analyze_order_by() {
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn parquet_explain_analyze() {
-    let ctx = SessionContext::new();
-    register_alltypes_parquet(&ctx).await;
+    let (ctx, _temp_dir) = page_pruning_parquet_context().await;
 
-    let sql = "EXPLAIN ANALYZE select id, float_col, timestamp_col from alltypes_plain where timestamp_col > to_timestamp('2009-02-01T00:00:00'); ";
+    let sql = "EXPLAIN ANALYZE SELECT id FROM page_pruning WHERE id = 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();
 
     // should contain aggregated stats
-    assert_contains!(&formatted, "output_rows=8");
+    assert_contains!(&formatted, "output_rows=1");
     assert_contains!(
         &formatted,
         "row_groups_pruned_bloom_filter=1 total \u{2192} 1 matched"
@@ -888,21 +916,24 @@ async fn parquet_explain_analyze() {
         "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
     );
     assert_contains!(&formatted, "output_rows_skew=0%");
-    assert_contains!(&formatted, "scan_efficiency_ratio=13.99%");
+    assert_contains!(&formatted, "scan_efficiency_ratio=");
+    assert_contains!(&formatted, "page_index_pages_pruned=");
+    assert_contains!(&formatted, "page_index_rows_pruned=");
 
     // The order of metrics is expected to be the same as the actual pruning order
-    // (file-> row-group -> page)
+    // (file -> row-group -> page).
     let i_file = formatted.find("files_ranges_pruned_statistics").unwrap();
     let i_rowgroup_stat = formatted.find("row_groups_pruned_statistics").unwrap();
     let i_rowgroup_bloomfilter =
         formatted.find("row_groups_pruned_bloom_filter").unwrap();
-    let i_page_rows = formatted.find("page_index_rows_pruned").unwrap();
     let i_page_pages = formatted.find("page_index_pages_pruned").unwrap();
+    let i_page_rows = formatted.find("page_index_rows_pruned").unwrap();
 
     assert!(
         (i_file < i_rowgroup_stat)
             && (i_rowgroup_stat < i_rowgroup_bloomfilter)
-            && (i_rowgroup_bloomfilter < i_page_pages && i_page_pages < i_page_rows),
+            && (i_rowgroup_bloomfilter < i_page_pages)
+            && (i_page_pages < i_page_rows),
         "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
     );
 }

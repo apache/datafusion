@@ -1245,6 +1245,7 @@ impl RowGroupsPrunedParquetOpen {
             predicate_cache_inner_records,
             predicate_cache_records,
             baseline_metrics: prepared.baseline_metrics,
+            _file_metrics: prepared.file_metrics,
         }
         .into_stream();
 
@@ -1261,7 +1262,6 @@ impl RowGroupsPrunedParquetOpen {
         }
     }
 }
-
 type ConstantColumns = HashMap<String, ScalarValue>;
 
 /// Extract constant column values from statistics, keyed by column name in the logical file schema.
