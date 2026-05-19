@@ -1417,7 +1417,7 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        ColumnStatistics, DataFusionError, ScalarValue, Statistics, internal_err,
+        ColumnStatistics, ScalarValue, Statistics, internal_err,
         record_batch, stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
