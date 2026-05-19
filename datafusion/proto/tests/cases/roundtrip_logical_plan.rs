@@ -77,8 +77,8 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, NullTreatment,
-    ScalarFunction, Unnest, WildcardOptions,
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, LambdaVariable, Like,
+    NullTreatment, ScalarFunction, Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -2657,12 +2657,12 @@ fn dummy_higher_order_function_args() -> Vec<Expr> {
         &[ScalarValue::Int32(Some(1))],
         &DataType::Int32,
     ));
-    let lambda_var_with_field = Expr::LambdaVariable(expr::LambdaVariable::new(
+    let lambda_var_with_field = Expr::LambdaVariable(LambdaVariable::new(
         "x".to_string(),
         Some(Arc::new(Field::new("x", DataType::Int32, true))),
     ));
     let lambda_var_without_field =
-        Expr::LambdaVariable(expr::LambdaVariable::new("x".to_string(), None));
+        Expr::LambdaVariable(LambdaVariable::new("x".into(), None));
     let lambda = lambda(["x"], lambda_var_with_field + lambda_var_without_field);
     vec![Expr::Literal(list, None), lambda]
 }

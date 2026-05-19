@@ -691,23 +691,18 @@ physical_plan
 21)│       AND CURRENT ROW     │
 22)└─────────────┬─────────────┘
 23)┌─────────────┴─────────────┐
-24)│          SortExec         │
+24)│       ProjectionExec      │
 25)│    --------------------   │
-26)│    v1@0 ASC NULLS LAST    │
+26)│         v1: value         │
 27)└─────────────┬─────────────┘
 28)┌─────────────┴─────────────┐
-29)│       ProjectionExec      │
+29)│       LazyMemoryExec      │
 30)│    --------------------   │
-31)│         v1: value         │
-32)└─────────────┬─────────────┘
-33)┌─────────────┴─────────────┐
-34)│       LazyMemoryExec      │
-35)│    --------------------   │
-36)│     batch_generators:     │
-37)│ generate_series: start=1, │
-38)│    end=1000, batch_size   │
-39)│           =8192           │
-40)└───────────────────────────┘
+31)│     batch_generators:     │
+32)│ generate_series: start=1, │
+33)│    end=1000, batch_size   │
+34)│           =8192           │
+35)└───────────────────────────┘
 
 query TT
 explain select 
@@ -1792,6 +1787,19 @@ physical_plan
 # Test explain tree for PlaceholderRowExec
 query TT
 EXPLAIN select count(*) from (values ('a', 'b'), ('c', 'd')) as t (c1, c2)
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        count(*): 2        │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│     PlaceholderRowExec    │
+08)└───────────────────────────┘
+
+query TT
+EXPLAIN select count(*) from (values ('a', 'b'), ('c', 'd')) as t (c1, c2) order by 1 limit 10
 ----
 physical_plan
 01)┌───────────────────────────┐

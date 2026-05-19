@@ -48,7 +48,7 @@ use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 
 use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
-    PhysicalProtoConverterExtension,
+    PhysicalProtoConverterExtension, encode_human_display_alias,
 };
 use crate::protobuf::{
     self, PhysicalLambdaVariableExprNode, PhysicalSortExprNode,
@@ -73,6 +73,12 @@ pub fn serialize_physical_aggr_expr(
     let name = aggr_expr.fun().name().to_string();
     let mut buf = Vec::new();
     codec.try_encode_udaf(aggr_expr.fun(), &mut buf)?;
+    let human_display = match (aggr_expr.human_display(), aggr_expr.human_display_alias())
+    {
+        (Some(display), Some(alias)) => encode_human_display_alias(display, alias),
+        (Some(display), None) => display.to_string(),
+        (None, _) => String::new(),
+    };
     Ok(protobuf::PhysicalExprNode {
         expr_id: None,
         expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
@@ -83,7 +89,7 @@ pub fn serialize_physical_aggr_expr(
                 distinct: aggr_expr.is_distinct(),
                 ignore_nulls: aggr_expr.ignore_nulls(),
                 fun_definition: (!buf.is_empty()).then_some(buf),
-                human_display: aggr_expr.human_display().to_string(),
+                human_display,
             },
         )),
     })

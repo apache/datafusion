@@ -316,11 +316,13 @@ fn dummy_higher_order_function_call(hof: Arc<dyn HigherOrderUDF>) -> Expr {
         &[ScalarValue::Int32(Some(1))],
         &DataType::Int32,
     ));
-    let lambda_var = Expr::LambdaVariable(LambdaVariable::new(
+    let lambda_var_with_field = Expr::LambdaVariable(LambdaVariable::new(
         "x".to_string(),
         Some(Arc::new(Field::new("x", DataType::Int32, true))),
     ));
-    let lambda = lambda(["x"], lambda_var);
+    let lambda_var_without_field =
+        Expr::LambdaVariable(LambdaVariable::new("x".into(), None));
+    let lambda = lambda(["x"], lambda_var_with_field + lambda_var_without_field);
     Expr::HigherOrderFunction(HigherOrderFunction::new(
         hof,
         vec![Expr::Literal(list, None), lambda],
@@ -366,11 +368,13 @@ fn test_higher_order_serialization_roundtrip() {
         &[ScalarValue::Int32(Some(1))],
         &DataType::Int32,
     ));
-    let lambda_var = Expr::LambdaVariable(LambdaVariable::new(
+    let lambda_var_with_field = Expr::LambdaVariable(LambdaVariable::new(
         "x".to_string(),
         Some(Arc::new(Field::new("x", DataType::Int32, true))),
     ));
-    let lambda = lambda(["x"], lambda_var);
+    let lambda_var_without_field =
+        Expr::LambdaVariable(LambdaVariable::new("x".into(), None));
+    let lambda = lambda(["x"], lambda_var_with_field + lambda_var_without_field);
     let args = vec![Expr::Literal(list, None), lambda];
 
     for function in datafusion::functions_nested::all_default_higher_order_functions() {

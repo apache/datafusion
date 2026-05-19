@@ -41,6 +41,7 @@ use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator};
 use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
@@ -935,6 +936,10 @@ impl MaterializingSortMergeJoinStream {
                         return Poll::Pending;
                     }
                     Poll::Ready(None) => {
+                        // Release the streamed input pipeline's resources.
+                        let streamed_schema = self.streamed.schema();
+                        self.streamed =
+                            Box::pin(EmptyRecordBatchStream::new(streamed_schema));
                         self.streamed_state = StreamedState::Exhausted;
                     }
                     Poll::Ready(Some(batch)) => {
@@ -1063,6 +1068,10 @@ impl MaterializingSortMergeJoinStream {
                         return Poll::Pending;
                     }
                     Poll::Ready(None) => {
+                        // Release the buffered input pipeline's resources.
+                        let buffered_schema = self.buffered.schema();
+                        self.buffered =
+                            Box::pin(EmptyRecordBatchStream::new(buffered_schema));
                         self.buffered_state = BufferedState::Exhausted;
                         return Poll::Ready(None);
                     }
@@ -1106,6 +1115,11 @@ impl MaterializingSortMergeJoinStream {
                                 return Poll::Pending;
                             }
                             Poll::Ready(None) => {
+                                // Release the buffered input pipeline's resources.
+                                let buffered_schema = self.buffered.schema();
+                                self.buffered = Box::pin(EmptyRecordBatchStream::new(
+                                    buffered_schema,
+                                ));
                                 self.buffered_state = BufferedState::Ready;
                             }
                             Poll::Ready(Some(batch)) => {
@@ -1526,7 +1540,7 @@ impl MaterializingSortMergeJoinStream {
     /// gathers columns across sources. A null-row sentinel at source index 0
     /// handles null right indices (unmatched streamed rows).
     fn materialize_right_columns(
-        &self,
+        &mut self,
         matched_chunks: &[(usize, UInt64Array, UInt64Array)],
         total_matched_rows: usize,
     ) -> Result<Vec<ArrayRef>> {
@@ -1541,6 +1555,19 @@ impl MaterializingSortMergeJoinStream {
                     matched_chunks.iter().map(|c| &c.2 as &dyn Array).collect();
                 as_uint64_array(&compute::concat(&refs)?)?.clone()
             };
+
+            let spill_reservation = self.reservation.new_empty();
+            if matches!(
+                &self.buffered_data.batches[first_batch_idx].batch,
+                BufferedBatchState::Spilled(_)
+            ) {
+                spill_reservation
+                    .grow(self.buffered_data.batches[first_batch_idx].size_estimation);
+                self.join_metrics
+                    .peak_mem_used()
+                    .set_max(self.reservation.size() + spill_reservation.size());
+            }
+
             return fetch_right_columns_by_idxs(
                 &self.buffered_data,
                 first_batch_idx,
@@ -1574,24 +1601,33 @@ impl MaterializingSortMergeJoinStream {
         }
 
         let num_right_cols = self.buffered_schema.fields().len();
-        let mut right_columns = Vec::with_capacity(num_right_cols);
 
         // Read each source batch once (spilled batches require disk I/O).
-        let source_data: Vec<Option<RecordBatch>> = source_batches
-            .iter()
-            .map(|&idx| {
-                let bb = &self.buffered_data.batches[idx];
-                match &bb.batch {
-                    BufferedBatchState::InMemory(batch) => Some(batch.clone()),
-                    BufferedBatchState::Spilled(spill_file) => {
-                        let file = BufReader::new(File::open(spill_file.path()).ok()?);
-                        let reader = StreamReader::try_new(file, None).ok()?;
-                        reader.into_iter().next()?.ok()
-                    }
+        // Track memory for each spilled batch at the point of deserialization
+        // so the pool reflects actual usage as it grows.
+        let spill_reservation = self.reservation.new_empty();
+        let mut source_data: Vec<Option<RecordBatch>> =
+            Vec::with_capacity(source_batches.len());
+        for &idx in &source_batches {
+            let bb = &self.buffered_data.batches[idx];
+            match &bb.batch {
+                BufferedBatchState::InMemory(batch) => {
+                    source_data.push(Some(batch.clone()));
                 }
-            })
-            .collect();
+                BufferedBatchState::Spilled(spill_file) => {
+                    spill_reservation.grow(bb.size_estimation);
+                    self.join_metrics
+                        .peak_mem_used()
+                        .set_max(self.reservation.size() + spill_reservation.size());
 
+                    let file = BufReader::new(File::open(spill_file.path())?);
+                    let reader = StreamReader::try_new(file, None)?;
+                    source_data.push(reader.into_iter().next().transpose()?);
+                }
+            }
+        }
+
+        let mut right_columns = Vec::with_capacity(num_right_cols);
         for col_idx in 0..num_right_cols {
             let dtype = self.buffered_schema.field(col_idx).data_type();
             let null_array = new_null_array(dtype, 1);
@@ -1610,7 +1646,6 @@ impl MaterializingSortMergeJoinStream {
                     }
                 }
             }
-
             right_columns.push(interleave(&source_arrays, &interleave_indices)?);
         }
 

@@ -37,6 +37,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr_common::statistics::Distribution;
 
 use itertools::izip;
@@ -72,7 +73,9 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 /// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
 pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
-    /// Get the data type of this expression, given the schema of the input
+    /// Get the data type of this expression, given the schema of the input.
+    /// Returns an error if the data type cannot be determined, ex. if the
+    /// schema is missing a required field.
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_field(input_schema)?.data_type().to_owned())
     }
@@ -250,6 +253,11 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// statistics accordingly. The default implementation simply creates an
     /// unknown output distribution by combining input ranges. This logic loses
     /// distribution information, but is a safe default.
+    #[deprecated(
+        since = "54.0.0",
+        note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+    )]
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         let children_ranges = children
             .iter()
@@ -298,6 +306,11 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// default implementation simply creates an unknown distribution if it can
     /// narrow the range by propagating ranges. This logic loses distribution
     /// information, but is a safe default.
+    #[deprecated(
+        since = "54.0.0",
+        note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+    )]
+    #[expect(deprecated)]
     fn propagate_statistics(
         &self,
         parent: &Distribution,
