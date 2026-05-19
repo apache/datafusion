@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::MetricsSet;
 use datafusion_physical_plan::{
@@ -36,6 +36,7 @@ use crate::execution::FFI_TaskContext;
 use crate::physical_expr::metrics::FFI_MetricsSet;
 use crate::plan_properties::FFI_PlanProperties;
 use crate::record_batch_stream::FFI_RecordBatchStream;
+use crate::statistics::{deserialize_statistics, serialize_statistics};
 use crate::util::{FFI_Option, FFI_Result};
 use crate::{df_result, sresult, sresult_return};
 
@@ -73,6 +74,15 @@ pub struct FFI_ExecutionPlan {
     /// Snapshot the plan's execution metrics. Returns `None` when the
     /// underlying [`ExecutionPlan::metrics`] returned `None`.
     pub metrics: unsafe extern "C" fn(plan: &Self) -> FFI_Option<FFI_MetricsSet>,
+
+    /// Snapshot partition statistics. `partition == None` corresponds to
+    /// statistics over all partitions; `Some(idx)` corresponds to a specific
+    /// partition. The returned bytes are a prost-encoded
+    /// `datafusion_proto_common::Statistics`.
+    pub partition_statistics: unsafe extern "C" fn(
+        plan: &Self,
+        partition: FFI_Option<usize>,
+    ) -> FFI_Result<SVec<u8>>,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -195,6 +205,17 @@ unsafe extern "C" fn metrics_fn_wrapper(
         .into()
 }
 
+unsafe extern "C" fn partition_statistics_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+    partition: FFI_Option<usize>,
+) -> FFI_Result<SVec<u8>> {
+    let partition: Option<usize> = partition.into();
+    plan.inner()
+        .partition_statistics(partition)
+        .map(|stats| SVec::from(serialize_statistics(stats.as_ref()).as_slice()))
+        .into()
+}
+
 unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
     unsafe {
         debug_assert!(!plan.private_data.is_null());
@@ -287,6 +308,7 @@ impl FFI_ExecutionPlan {
             execute: execute_fn_wrapper,
             repartitioned: repartitioned_fn_wrapper,
             metrics: metrics_fn_wrapper,
+            partition_statistics: partition_statistics_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -454,6 +476,13 @@ impl ExecutionPlan for ForeignExecutionPlan {
             unsafe { (self.plan.metrics)(&self.plan) }.into();
         ffi.map(MetricsSet::from)
     }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let bytes = df_result!(unsafe {
+            (self.plan.partition_statistics)(&self.plan, partition.into())
+        })?;
+        Ok(Arc::new(deserialize_statistics(bytes.as_slice())?))
+    }
 }
 
 #[cfg(any(test, feature = "integration-tests"))]
@@ -468,6 +497,7 @@ pub mod tests {
         props: Arc<PlanProperties>,
         children: Vec<Arc<dyn ExecutionPlan>>,
         metrics: Option<MetricsSet>,
+        statistics: Option<Statistics>,
     }
 
     impl EmptyExec {
@@ -481,11 +511,17 @@ pub mod tests {
                 )),
                 children: Vec::default(),
                 metrics: None,
+                statistics: None,
             }
         }
 
         pub fn with_metrics(mut self, metrics: MetricsSet) -> Self {
             self.metrics = Some(metrics);
+            self
+        }
+
+        pub fn with_statistics(mut self, statistics: Statistics) -> Self {
+            self.statistics = Some(statistics);
             self
         }
     }
@@ -521,6 +557,7 @@ pub mod tests {
                 props: Arc::clone(&self.props),
                 children,
                 metrics: self.metrics.clone(),
+                statistics: self.statistics.clone(),
             }))
         }
 
@@ -534,6 +571,15 @@ pub mod tests {
 
         fn metrics(&self) -> Option<MetricsSet> {
             self.metrics.clone()
+        }
+
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
+            Ok(Arc::new(self.statistics.clone().unwrap_or_else(|| {
+                Statistics::new_unknown(self.props.eq_properties.schema())
+            })))
         }
 
         fn apply_expressions(
@@ -655,6 +701,54 @@ pub mod tests {
 
         let observed = metric_foreign.metrics().expect("metrics should be present");
         assert_eq!(observed.output_rows(), Some(42));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_partition_statistics_round_trip() -> Result<()> {
+        use datafusion_common::stats::Precision;
+        use datafusion_common::{ColumnStatistics, ScalarValue};
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, true),
+        ]));
+
+        // Plans without explicit statistics return Statistics::new_unknown across
+        // the boundary.
+        let bare_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let mut bare_local = FFI_ExecutionPlan::new(bare_plan, None);
+        bare_local.library_marker_id = crate::mock_foreign_marker_id;
+        let bare_foreign: Arc<dyn ExecutionPlan> = (&bare_local).try_into()?;
+        let bare_stats = bare_foreign.partition_statistics(None)?;
+        assert_eq!(bare_stats.as_ref(), &Statistics::new_unknown(&schema));
+
+        // Plans with statistics round-trip them faithfully, including
+        // ScalarValue-typed min/max.
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(7),
+            total_byte_size: Precision::Inexact(128),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(1),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(10))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(-3))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Inexact(6),
+                byte_size: Precision::Exact(28),
+            }],
+        };
+        let stats_plan = Arc::new(
+            EmptyExec::new(Arc::clone(&schema)).with_statistics(original_stats.clone()),
+        );
+        let mut stats_local = FFI_ExecutionPlan::new(stats_plan, None);
+        stats_local.library_marker_id = crate::mock_foreign_marker_id;
+        let stats_foreign: Arc<dyn ExecutionPlan> = (&stats_local).try_into()?;
+
+        let observed = stats_foreign.partition_statistics(None)?;
+        assert_eq!(observed.as_ref(), &original_stats);
+
+        let observed_partition = stats_foreign.partition_statistics(Some(1))?;
+        assert_eq!(observed_partition.as_ref(), &original_stats);
 
         Ok(())
     }
