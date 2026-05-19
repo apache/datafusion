@@ -492,7 +492,7 @@ pub fn ensure_sorting(
     for (idx, (required_ordering, mut child)) in plan
         .required_input_ordering()
         .into_iter()
-        .zip(requirements.children.into_iter())
+        .zip(requirements.children)
         .enumerate()
     {
         let physical_ordering = child.plan.output_ordering();

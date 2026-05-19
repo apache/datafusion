@@ -229,6 +229,7 @@ message AnalyzeNode {
 message ExplainNode {
   LogicalPlanNode input = 1;
   bool verbose = 2;
+  datafusion_common.ExplainFormat format = 3;
 }
 
 message AggregateNode {
@@ -889,11 +890,9 @@ message PhysicalExprNode {
   reserved 17;
 
   // Unique identifier for this expression to do deduplication during deserialization.
-  // When serializing, this is set to a unique identifier for each combination of
-  // expression, process and serialization run.
-  // When deserializing, if this ID has been seen before, the cached Arc is returned
-  // instead of creating a new one, enabling reconstruction of referential integrity
-  // across serde roundtrips.
+  // When serializing, this is set via `PhysicalExpr::expression_id`. When deserializing,
+  // this id is used by the `DeduplicatingProtoConverter` to preserve referential
+  // integrity across serde roundtrips for different expressions with the same id.
   optional uint64 expr_id = 30;
 
   oneof ExprType {
@@ -935,7 +934,17 @@ message PhysicalExprNode {
     PhysicalHashExprNode hash_expr = 21;
 
     PhysicalScalarSubqueryExprNode scalar_subquery = 22;
+
+    PhysicalDynamicFilterNode dynamic_filter = 23;
   }
+}
+
+message PhysicalDynamicFilterNode {
+  repeated PhysicalExprNode children = 1;
+  repeated PhysicalExprNode remapped_children = 2;
+  uint64 generation = 3;
+  PhysicalExprNode inner_expr = 4;
+  bool is_complete = 5;
 }
 
 message PhysicalScalarUdfNode {
@@ -1179,6 +1188,8 @@ message HashJoinExecNode {
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
   bool null_aware = 10;
+  // Optional dynamic filter expression for pushing down to the probe side.
+  PhysicalExprNode dynamic_filter = 11;
 }
 
 enum StreamPartitionMode {
@@ -1310,6 +1321,8 @@ message AggregateExecNode {
   repeated MaybeFilter filter_expr = 10;
   AggLimit limit = 11;
   bool has_grouping_set = 12;
+  // Optional dynamic filter expression for pushing down to the child.
+  PhysicalExprNode dynamic_filter = 13;
 }
 
 message GlobalLimitExecNode {
@@ -1331,6 +1344,8 @@ message SortExecNode {
   // Maximum number of highest/lowest rows to fetch; negative means no limit
   int64 fetch = 3;
   bool preserve_partitioning = 4;
+  // Optional dynamic filter expression for TopK pushdown.
+  PhysicalExprNode dynamic_filter = 5;
 }
 
 message SortPreservingMergeExecNode {

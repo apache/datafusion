@@ -63,7 +63,7 @@ use futures::StreamExt;
 use tokio::fs::File;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();
@@ -514,7 +514,7 @@ async fn test_in_mem_buffer_almost_full() {
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
 
-    let query = "select * from generate_series(1,9000000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,9000000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     // Check not fail
@@ -535,7 +535,7 @@ async fn test_external_sort_zero_merge_reservation() {
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
@@ -599,7 +599,7 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
     let ctx = setup_context(1024 * 1024, 1024 * 1024, spill_compression).await?; // 1MB disk limit, 1MB memory limit
 
     let df = ctx
-        .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1 desc")
         .await
         .unwrap();
 
@@ -627,7 +627,7 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit
 
     let df = ctx
-        .sql("select * from generate_series(1, 10000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 10000) as t1(v1) order by v1 desc")
         .await
         .unwrap();
     let plan = df.create_physical_plan().await.unwrap();
@@ -663,7 +663,7 @@ async fn test_spill_file_compressed_with_zstd() -> Result<()> {
     let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, zstd
 
     let df = ctx
-        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1 desc")
         .await
         .unwrap();
     let plan = df.create_physical_plan().await.unwrap();
@@ -699,7 +699,7 @@ async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
     let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, lz4_frame
 
     let df = ctx
-        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1 desc")
         .await
         .unwrap();
     let plan = df.create_physical_plan().await.unwrap();

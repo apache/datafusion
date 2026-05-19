@@ -15,6 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! FFI types for the deprecated Statistics V2 [`Distribution`] framework.
+//!
+//! These FFI types mirror the deprecated probabilistic distribution types.
+//! See <https://github.com/apache/datafusion/pull/22071> for details.
+
+#![allow(deprecated)]
+
 use datafusion_common::DataFusionError;
 use datafusion_expr::statistics::{
     BernoulliDistribution, Distribution, ExponentialDistribution, GaussianDistribution,

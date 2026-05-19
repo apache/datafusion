@@ -56,6 +56,7 @@ use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
+use crate::unions_to_filter::UnionsToFilter;
 use crate::utils::log_plan;
 
 /// Transforms one [`LogicalPlan`] into another which computes the same results,
@@ -280,6 +281,7 @@ impl Optimizer {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
             Arc::new(RewriteSetComparison::new()),
             Arc::new(OptimizeUnions::new()),
+            Arc::new(UnionsToFilter::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),

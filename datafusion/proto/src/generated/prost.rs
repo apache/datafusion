@@ -351,6 +351,8 @@ pub struct ExplainNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "2")]
     pub verbose: bool,
+    #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "3")]
+    pub format: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateNode {
@@ -1327,16 +1329,14 @@ pub struct PhysicalExtensionNode {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalExprNode {
     /// Unique identifier for this expression to do deduplication during deserialization.
-    /// When serializing, this is set to a unique identifier for each combination of
-    /// expression, process and serialization run.
-    /// When deserializing, if this ID has been seen before, the cached Arc is returned
-    /// instead of creating a new one, enabling reconstruction of referential integrity
-    /// across serde roundtrips.
+    /// When serializing, this is set via `PhysicalExpr::expression_id`. When deserializing,
+    /// this id is used by the `DeduplicatingProtoConverter` to preserve referential
+    /// integrity across serde roundtrips for different expressions with the same id.
     #[prost(uint64, optional, tag = "30")]
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1391,7 +1391,22 @@ pub mod physical_expr_node {
         HashExpr(super::PhysicalHashExprNode),
         #[prost(message, tag = "22")]
         ScalarSubquery(super::PhysicalScalarSubqueryExprNode),
+        #[prost(message, tag = "23")]
+        DynamicFilter(::prost::alloc::boxed::Box<super::PhysicalDynamicFilterNode>),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalDynamicFilterNode {
+    #[prost(message, repeated, tag = "1")]
+    pub children: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub remapped_children: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(uint64, tag = "3")]
+    pub generation: u64,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub inner_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(bool, tag = "5")]
+    pub is_complete: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalScalarUdfNode {
@@ -1759,6 +1774,9 @@ pub struct HashJoinExecNode {
     pub projection: ::prost::alloc::vec::Vec<u32>,
     #[prost(bool, tag = "10")]
     pub null_aware: bool,
+    /// Optional dynamic filter expression for pushing down to the probe side.
+    #[prost(message, optional, tag = "11")]
+    pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -1938,6 +1956,9 @@ pub struct AggregateExecNode {
     pub limit: ::core::option::Option<AggLimit>,
     #[prost(bool, tag = "12")]
     pub has_grouping_set: bool,
+    /// Optional dynamic filter expression for pushing down to the child.
+    #[prost(message, optional, tag = "13")]
+    pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {
@@ -1968,6 +1989,9 @@ pub struct SortExecNode {
     pub fetch: i64,
     #[prost(bool, tag = "4")]
     pub preserve_partitioning: bool,
+    /// Optional dynamic filter expression for TopK pushdown.
+    #[prost(message, optional, tag = "5")]
+    pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortPreservingMergeExecNode {

@@ -102,6 +102,7 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_execution::cache::file_statistics_cache::DEFAULT_FILE_STATISTICS_MEMORY_LIMIT;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -1183,6 +1184,10 @@ impl SessionContext {
                 let duration = Self::parse_duration(variable, value)?;
                 builder.with_object_list_cache_ttl(Some(duration))
             }
+            "file_statistics_cache_limit" => {
+                let limit = Self::parse_capacity_limit(variable, value)?;
+                builder.with_file_statistics_cache_limit(limit)
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
             // Remember to update `reset_runtime_variable()` when adding new options
         };
@@ -1222,9 +1227,13 @@ impl SessionContext {
                 builder =
                     builder.with_object_list_cache_ttl(DEFAULT_LIST_FILES_CACHE_TTL);
             }
+            "file_statistics_cache_limit" => {
+                builder = builder.with_file_statistics_cache_limit(
+                    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+                );
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
-
         *state = SessionStateBuilder::from(state.clone())
             .with_runtime_env(Arc::new(builder.build()?))
             .build();
@@ -1275,7 +1284,7 @@ impl SessionContext {
     }
 
     /// Parse capacity limit from string to number of bytes by allowing units: K, M and G.
-    /// Supports formats like '1.5G', '100M', '512K'
+    /// Supports formats like '1.5G', '100M', '512K'. Capacity limit can be set to 0 with '0'.
     ///
     /// # Examples
     /// ```
@@ -1295,6 +1304,9 @@ impl SessionContext {
             return Err(plan_datafusion_err!(
                 "Empty limit value found for '{config_name}'"
             ));
+        }
+        if limit == "0" {
+            return Ok(0);
         }
         let (number, unit) = limit.split_at(limit.len() - 1);
         let number: f64 = number.parse().map_err(|_| {
@@ -1417,15 +1429,27 @@ impl SessionContext {
             && table_provider.table_type() == table_type
         {
             schema.deregister_table(&table)?;
-            if table_type == TableType::Base
-                && let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache()
-            {
-                lfc.drop_table_entries(&Some(table_ref))?;
-            }
+            self.invalidate_caches(&Some(table_ref.clone()), table_type)?;
             return Ok(true);
         }
-
         Ok(false)
+    }
+
+    fn invalidate_caches(
+        &self,
+        table_ref: &Option<TableReference>,
+        table_type: TableType,
+    ) -> Result<()> {
+        if table_type == TableType::Base {
+            if let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache() {
+                lfc.drop_table_entries(table_ref)?;
+            }
+            if let Some(fsc) = self.runtime_env().cache_manager.get_file_statistic_cache()
+            {
+                fsc.drop_table_entries(table_ref)?;
+            }
+        }
+        Ok(())
     }
 
     async fn create_function(&self, stmt: CreateFunction) -> Result<DataFrame> {
@@ -1688,7 +1712,8 @@ impl SessionContext {
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
+        let provider = ListingTable::try_new(config)?
+            .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
         self.read_table(Arc::new(provider))
     }
 
@@ -1775,7 +1800,9 @@ impl SessionContext {
         provided_schema: Option<SchemaRef>,
         sql_definition: Option<String>,
     ) -> Result<()> {
-        let table_path = ListingTableUrl::parse(table_path)?;
+        let table_ref = table_ref.into();
+        let table_path =
+            ListingTableUrl::parse(table_path)?.with_table_ref(table_ref.clone());
         let resolved_schema = match provided_schema {
             Some(s) => s,
             None => options.infer_schema(&self.state(), &table_path).await?,
@@ -1783,7 +1810,9 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?.with_definition(sql_definition);
+        let table = ListingTable::try_new(config)?
+            .with_definition(sql_definition)
+            .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
         self.register_table(table_ref, Arc::new(table))?;
         Ok(())
     }
@@ -1887,10 +1916,17 @@ impl SessionContext {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_owned();
-        self.state
+        let result = self
+            .state
             .read()
-            .schema_for_ref(table_ref)?
-            .deregister_table(&table)
+            .schema_for_ref(table_ref.clone())?
+            .deregister_table(&table);
+
+        if let Ok(Some(ref table_provider)) = result {
+            self.invalidate_caches(&Some(table_ref), table_provider.table_type())?;
+        }
+
+        result
     }
 
     /// Return `true` if the specified table exists in the schema provider.
@@ -3002,6 +3038,7 @@ mod tests {
 
         // Valid capacity_limit
         for (limit, want) in [
+            ("0", 0),
             ("1.5K", (1.5 * 1024.0) as usize),
             ("2M", (2f64 * 1024.0 * 1024.0) as usize),
             ("1G", (1f64 * 1024.0 * 1024.0 * 1024.0) as usize),

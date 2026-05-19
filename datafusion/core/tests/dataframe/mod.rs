@@ -1204,26 +1204,26 @@ async fn window_using_aggregates() -> Result<()> {
     | first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     |             |          |                 |               |        |     |      | 1  | -85  |
-    | -85         | -101     | 14              | -12.0         | -12    | 83  | -101 | 4  | -54  |
-    | -85         | -101     | 17              | -25.0         | -25    | 83  | -101 | 5  | -31  |
-    | -85         | -12      | 10              | -32.75        | -34    | 83  | -85  | 3  | 13   |
-    | -85         | -25      | 3               | -56.0         | -56    | -25 | -85  | 1  | -5   |
-    | -85         | -31      | 18              | -29.75        | -28    | 83  | -101 | 5  | 36   |
-    | -85         | -38      | 16              | -25.0         | -25    | 83  | -101 | 4  | 65   |
-    | -85         | -43      | 7               | -43.0         | -43    | 83  | -85  | 2  | 45   |
-    | -85         | -48      | 6               | -35.75        | -36    | 83  | -85  | 2  | -43  |
-    | -85         | -5       | 4               | -37.75        | -40    | -5  | -85  | 1  | 83   |
-    | -85         | -54      | 15              | -17.0         | -18    | 83  | -101 | 4  | -38  |
-    | -85         | -56      | 2               | -70.5         | -70    | -56 | -85  | 1  | -25  |
-    | -85         | -72      | 9               | -43.0         | -43    | 83  | -85  | 3  | -12  |
-    | -85         | -85      | 1               | -85.0         | -85    | -85 | -85  | 1  | -56  |
-    | -85         | 13       | 11              | -17.0         | -18    | 83  | -85  | 3  | 14   |
-    | -85         | 13       | 11              | -25.0         | -25    | 83  | -85  | 3  | 13   |
-    | -85         | 14       | 12              | -12.0         | -12    | 83  | -85  | 3  | 17   |
-    | -85         | 17       | 13              | -11.25        | -8     | 83  | -85  | 4  | -101 |
-    | -85         | 45       | 8               | -34.5         | -34    | 83  | -85  | 3  | -72  |
-    | -85         | 65       | 17              | -17.0         | -18    | 83  | -101 | 5  | -101 |
-    | -85         | 83       | 5               | -25.0         | -25    | 83  | -85  | 2  | -48  |
+    | -85         | -101     | 14              | -12.0         | -12.0  | 83  | -101 | 4  | -54  |
+    | -85         | -101     | 17              | -25.0         | -25.0  | 83  | -101 | 5  | -31  |
+    | -85         | -12      | 10              | -32.75        | -34.0  | 83  | -85  | 3  | 13   |
+    | -85         | -25      | 3               | -56.0         | -56.0  | -25 | -85  | 1  | -5   |
+    | -85         | -31      | 18              | -29.75        | -28.0  | 83  | -101 | 5  | 36   |
+    | -85         | -38      | 16              | -25.0         | -25.0  | 83  | -101 | 4  | 65   |
+    | -85         | -43      | 7               | -43.0         | -43.0  | 83  | -85  | 2  | 45   |
+    | -85         | -48      | 6               | -35.75        | -36.5  | 83  | -85  | 2  | -43  |
+    | -85         | -5       | 4               | -37.75        | -40.5  | -5  | -85  | 1  | 83   |
+    | -85         | -54      | 15              | -17.0         | -18.5  | 83  | -101 | 4  | -38  |
+    | -85         | -56      | 2               | -70.5         | -70.5  | -56 | -85  | 1  | -25  |
+    | -85         | -72      | 9               | -43.0         | -43.0  | 83  | -85  | 3  | -12  |
+    | -85         | -85      | 1               | -85.0         | -85.0  | -85 | -85  | 1  | -56  |
+    | -85         | 13       | 11              | -17.0         | -18.5  | 83  | -85  | 3  | 14   |
+    | -85         | 13       | 11              | -25.0         | -25.0  | 83  | -85  | 3  | 13   |
+    | -85         | 14       | 12              | -12.0         | -12.0  | 83  | -85  | 3  | 17   |
+    | -85         | 17       | 13              | -11.25        | -8.5   | 83  | -85  | 4  | -101 |
+    | -85         | 45       | 8               | -34.5         | -34.0  | 83  | -85  | 3  | -72  |
+    | -85         | 65       | 17              | -17.0         | -18.5  | 83  | -101 | 5  | -101 |
+    | -85         | 83       | 5               | -25.0         | -25.0  | 83  | -85  | 2  | -48  |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     "
     );
@@ -3022,20 +3022,20 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
         @r"
-    +---------------+----------------------------------------------------------------------------+
-    | plan_type     | plan                                                                       |
-    +---------------+----------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) AS count(*) ASC NULLS LAST                                  |
-    |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]        |
-    |               |     TableScan: t1 projection=[b]                                           |
-    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                       |
-    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true] |
-    |               |     AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(*)]  |
-    |               |       RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1     |
-    |               |         AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(*)]       |
-    |               |           DataSourceExec: partitions=1, partition_sizes=[1]                |
-    |               |                                                                            |
-    +---------------+----------------------------------------------------------------------------+
+    +---------------+---------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                  |
+    +---------------+---------------------------------------------------------------------------------------+
+    | logical_plan  | Sort: count(*) AS count(*) ASC NULLS LAST                                             |
+    |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]                   |
+    |               |     TableScan: t1 projection=[b]                                                      |
+    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                                  |
+    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]            |
+    |               |     AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(1) as count(*)] |
+    |               |       RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1                |
+    |               |         AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(1) as count(*)]      |
+    |               |           DataSourceExec: partitions=1, partition_sizes=[1]                           |
+    |               |                                                                                       |
+    +---------------+---------------------------------------------------------------------------------------+
     "
     );
     Ok(())
@@ -3268,7 +3268,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet, sort_order_for_reorder=[id@0 ASC NULLS LAST]
     ");
     Ok(())
 }
@@ -3286,7 +3286,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet, sort_order_for_reorder=[id@0 ASC NULLS LAST]
     ");
 
     Ok(())
@@ -3500,9 +3500,9 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |     HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@1, a@0)], projection=[a@3, b@4, count(*)@0, __always_true@2] |
     |               |       CoalescePartitionsExec                                                                                             |
     |               |         ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                   |
-    |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                          |
+    |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(1) as count(*)]                              |
     |               |             RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
-    |               |               AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                               |
+    |               |               AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(1) as count(*)]                                   |
     |               |                 DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
     |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
     |               |                                                                                                                          |
