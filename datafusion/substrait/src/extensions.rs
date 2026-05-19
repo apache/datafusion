@@ -27,7 +27,7 @@ use substrait::proto::extensions::simple_extension_declaration::{
 /// types. This structs facilitates the use of these extensions in DataFusion.
 /// TODO: DF doesn't yet use extensions for type variations <https://github.com/apache/datafusion/issues/11544>
 /// TODO: DF doesn't yet provide valid extensionUris <https://github.com/apache/datafusion/issues/11545>
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq)]
 pub struct Extensions {
     pub functions: HashMap<u32, String>, // anchor -> function name
     pub types: HashMap<u32, String>,     // anchor -> type name
