@@ -1822,8 +1822,10 @@ fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
 fn build_like_match(
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Option<Arc<dyn PhysicalExpr>> {
-    // column LIKE literal => (min, max) LIKE literal split at % => min <= split literal && split literal <= max
+    // column LIKE literal => (min, max) LIKE literal split at unescaped % => min <= split literal && split literal <= max
     // column LIKE 'foo%' => min <= 'foo' && 'foo' <= max
+    // column LIKE 'foo\_%' => min <= 'foo_' && 'foo_' <= max (the _ is escaped)
+    // column LIKE 'foo\%%' => min <= 'foo%' && 'foo%' <= max (the % is escaped)
     // column LIKE '%foo' => min <= '' && '' <= max => true
     // column LIKE '%foo%' => min <= '' && '' <= max => true
     // column LIKE 'foo' => min <= 'foo' && 'foo' <= max
@@ -1836,24 +1838,25 @@ fn build_like_match(
     // check that the scalar is a string literal
     let s = extract_string_literal(scalar_expr)?;
     // ANSI SQL specifies two wildcards: % and _. % matches zero or more characters, _ matches exactly one character.
-    let first_wildcard_index = s.find(['%', '_']);
-    if first_wildcard_index == Some(0) {
-        // there's no filtering we could possibly do, return an error and have this be handled by the unhandled hook
+    let (decoded_prefix, rest) = split_constant_prefix(s);
+    let has_wildcard = !rest.is_empty();
+    if has_wildcard && decoded_prefix.is_empty() {
+        // there's no filtering we could possibly do, return None and have this be handled by the unhandled hook
         return None;
     }
-    let (lower_bound, upper_bound) = if let Some(wildcard_index) = first_wildcard_index {
-        let prefix = &s[..wildcard_index];
+    let (lower_bound, upper_bound) = if has_wildcard {
+        let incremented_prefix = increment_utf8(&decoded_prefix)?;
         let lower_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            prefix.to_string(),
+            decoded_prefix,
         ))));
         let upper_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            increment_utf8(prefix)?,
+            incremented_prefix,
         ))));
         (lower_bound_lit, upper_bound_lit)
     } else {
         // the like expression is a literal and can be converted into a comparison
         let bound = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            s.to_string(),
+            decoded_prefix,
         ))));
         (Arc::clone(&bound), bound)
     };
@@ -1934,19 +1937,20 @@ fn build_not_like_match(
 }
 
 /// Returns unescaped constant prefix of a LIKE pattern (possibly empty) and the remaining pattern (possibly empty)
-fn split_constant_prefix(pattern: &str) -> (&str, &str) {
-    let char_indices = pattern.char_indices().collect::<Vec<_>>();
-    for i in 0..char_indices.len() {
-        let (idx, char) = char_indices[i];
-        if char == '%' || char == '_' {
-            if i != 0 && char_indices[i - 1].1 == '\\' {
-                // ecsaped by `\`
-                continue;
-            }
-            return (&pattern[..idx], &pattern[idx..]);
+fn split_constant_prefix(pattern: &str) -> (String, &str) {
+    let mut prefix = String::with_capacity(pattern.len());
+    let mut iter = pattern.char_indices();
+    while let Some((idx, c)) = iter.next() {
+        match c {
+            '%' | '_' => return (prefix, &pattern[idx..]),
+            '\\' => match iter.next() {
+                Some((_, escaped)) => prefix.push(escaped),
+                None => prefix.push('\\'),
+            },
+            _ => prefix.push(c),
         }
     }
-    (pattern, "")
+    (prefix, "")
 }
 
 /// Increment a UTF8 string by one, returning `None` if it can't be incremented.
