@@ -37,6 +37,7 @@
 #[macro_use]
 pub mod macros;
 
+pub mod array_compact;
 pub mod array_has;
 pub mod arrays_zip;
 pub mod cardinality;
@@ -77,6 +78,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::array_compact::array_compact;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
@@ -128,6 +130,7 @@ pub mod expr_fn {
 /// Return all default nested type functions
 pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
     vec![
+        array_compact::array_compact_udf(),
         string::array_to_string_udf(),
         string::string_to_array_udf(),
         range::range_udf(),
