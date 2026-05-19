@@ -699,7 +699,7 @@ struct DefaultSubstraitLambdaConsumerInner {
     /// Parameters of the lambdas currently in scope, ordered from innermost
     /// to outermost. Index 0 is the lambda being consumed; higher indices
     /// are enclosing lambdas, matching the `steps_out` value used by
-    /// [`Self::lambda_variable`] and `LambdaParameterReference`.
+    /// [`DefaultSubstraitLambdaConsumer::lambda_variable`] and `LambdaParameterReference`.
     lambda_parameters: VecDeque<Vec<FieldRef>>,
     next_lambda_parameter: usize,
 }
